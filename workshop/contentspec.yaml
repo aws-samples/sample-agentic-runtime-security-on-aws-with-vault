@@ -1,0 +1,41 @@
+# AWS Workshop Studio v2 manifest for the Agentic Runtime Security on AWS workshop.
+# Schema: https://docs.aws.amazon.com/workshop-studio/latest/
+
+version: 2.0
+
+defaultLocaleCode: en-US
+localeCodes:
+  - en-US
+
+awsAccountConfig:
+  accountSources:
+    - WorkshopStudio
+  participantRole:
+    managedPolicies:
+      - arn:aws:iam::aws:policy/ReadOnlyAccess
+  regionConfiguration:
+    minAccessibleRegions: 1
+    maxAccessibleRegions: 1
+    accessibleRegions:
+      required:
+        - us-west-2
+    deployableRegions:
+      required:
+        - us-west-2
+
+# NOTE (Phase 1 Open Question 1): Service quota requests are NOT in the verified v2 schema
+# surface. Quota provisioning is documented in workshop/content/20-prerequisites/ as
+# attendee-run `aws service-quotas request-service-quota-increase` commands until
+# Workshop Studio's quota-request mechanism is confirmed. Do NOT add a service-quotas
+# manifest block here speculatively (the v2 schema does not advertise it) -- doing so
+# will fail Workshop Studio submission validation.
+#
+# CONTEXT-locked quotas (must be provisioned before account hand-off, via Workshop Studio
+# admin UI at publish time once contentspec.yaml is uploaded):
+#   - EC2 standard vCPU (code L-1216C47A, target >= 32)
+#   - VPC Elastic IPs (code L-0263D0A3, target >= 6)
+#   - RDS DB instances per region (code L-7B6409FD, target >= 1)
+#   - OpenSearch Serverless OCU indexing (code L-CCD27F9D, target >= 2)
+#   - OpenSearch Serverless OCU search (code L-A8E7DE8E, target >= 2)
+# Workshop Studio admin UI: Catalog Builder -> <workshop> -> Account Configuration ->
+# Service Quotas tab. See TESTING.md "Workshop Studio quota auto-provisioning" section.
