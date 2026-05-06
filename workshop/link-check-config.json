@@ -1,0 +1,31 @@
+{
+  "replacementPatterns": [
+    {
+      "pattern": "^/static/images/",
+      "replacement": "../assets/"
+    },
+    {
+      "pattern": "^/static",
+      "replacement": "{{BASEURL}}/static"
+    },
+    {
+      "pattern": "^/.*/$",
+      "replacement": "{{BASEURL}}/content/index.en.md"
+    },
+    {
+      "pattern": "^/",
+      "replacement": "{{BASEURL}}/content/"
+    }
+  ],
+  "ignorePatterns": [
+    {
+      "pattern": "localhost"
+    },
+    {
+      "pattern": "app.terraform.io"
+    },
+    {
+      "pattern": "developer.hashicorp.com"
+    }
+  ]
+}

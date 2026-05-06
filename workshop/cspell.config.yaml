@@ -1,0 +1,50 @@
+patterns:
+  - name: ws_code_block
+    pattern: "/^:::code[\\s\\S]*?^\\s*:::/gm"
+  - name: markdown_code_block
+    pattern: "/^```[\\s\\S]*?^\\s*```/gm"
+  - name: markdown_code_snippet
+    pattern: "/`(.*)`/g"
+  - name: markdown_video
+    pattern: "/::video.*/g"
+languageSettings:
+  - languageId: markdown
+    ignoreRegExpList:
+      - ws_code_block
+      - markdown_code_block
+      - markdown_code_snippet
+      - markdown_video
+dictionaries:
+  - custom-words
+dictionaryDefinitions:
+  - name: custom-words
+    path: "./.spelling"
+    addWords: true
+# Workshop-specific spell-allowlist (in addition to the .spelling dictionary file).
+# Keep this list in sync with content vocabulary as the workshop evolves.
+words:
+  - agentic
+  - Strands
+  - Bedrock
+  - IVIA
+  - OIDC
+  - CIBA
+  - Karpenter
+  - pgaudit
+  - OpenSearch
+  - kubectl
+  - terraform
+  - workspaces
+  - Vault's
+  - Verify's
+  - OAuth
+  - PKCE
+  - RAR
+  - RFC
+  - JWT
+  - JWS
+  - mTLS
+  - SPIFFE
+  - STS
+  - EBS
+  - EIPs

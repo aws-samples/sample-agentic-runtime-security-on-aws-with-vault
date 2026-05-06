@@ -1,0 +1,43 @@
+{
+  "name": "agentic-runtime-security-aws-workshop",
+  "version": "1.0.0",
+  "description": "AWS workshop content lint pipeline for the Agentic Runtime Security on AWS workshop",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/<your-org>/agentic-runtime-security-aws"
+  },
+  "scripts": {
+    "preview": "bash scripts/preview.sh",
+    "publish-workshop": "bash scripts/publish.sh",
+    "package-assets": "bash scripts/package-assets.sh",
+    "spelling:check": "cspell 'content/**/*.en.md'",
+    "links:check": "markdown-link-check -q -c link-check-config.json content/**/*.en.md",
+    "format:check": "prettier -c .",
+    "format:fix": "prettier -w .",
+    "markdown:check": "markdownlint-cli2 content/**/*.en.md",
+    "lint": "yarn links:check && yarn format:check && yarn markdown:check",
+    "lint:staged": "lint-staged"
+  },
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "cspell": "^8.8.1",
+    "lint-staged": "^15.2.7",
+    "markdown-link-check": "^3.12.1",
+    "markdownlint-cli2": "^0.13.0",
+    "prettier": "^3.2.5",
+    "prettier-plugin-sh": "^0.14.0"
+  },
+  "lint-staged": {
+    "*.{json,yaml}": [
+      "prettier --write"
+    ],
+    "*.en.md": [
+      "prettier --write",
+      "cspell",
+      "markdown-link-check -q -c link-check-config.json",
+      "markdownlint-cli2 content"
+    ]
+  }
+}
