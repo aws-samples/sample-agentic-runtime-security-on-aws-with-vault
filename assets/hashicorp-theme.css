@@ -1,0 +1,131 @@
+/*
+ * HashiCorp branded theme overlay for reveal.js
+ * Based on the HashiCorp slide palette:
+ *   Purple #9B72F2 → Pink #E87CA8 → Peach/Orange #F2A96B
+ * Background: white with subtle lavender-pink gradient corner decoration
+ */
+
+/* ── Branded gradient overlays (controlled via JS on first/last slides) ── */
+
+/* ── Gradient titles (h1, h2) ── */
+.reveal h1,
+.reveal h2 {
+  background: linear-gradient(90deg, #9B72F2 0%, #D47CB8 40%, #E87CA8 60%, #F2A96B 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.reveal h1 {
+  font-size: 2.2em;
+}
+
+.reveal h2 {
+  font-size: 1.6em;
+}
+
+/* ── Subheadings ── */
+.reveal h3 {
+  color: #1A1A2E;
+  font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif;
+  font-weight: 600;
+  font-size: 1.2em;
+}
+
+/* ── Body text ── */
+.reveal {
+  font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif;
+  color: #2D2D3D;
+  font-size: 28px;
+}
+
+.reveal p,
+.reveal li {
+  color: #2D2D3D;
+  line-height: 1.6;
+}
+
+/* ── Bold text ── */
+.reveal strong {
+  color: #1A1A2E;
+}
+
+/* ── Links ── */
+.reveal a {
+  color: #9B72F2;
+}
+.reveal a:hover {
+  color: #7B52D2;
+}
+
+/* ── Tables ── */
+.reveal table {
+  border-collapse: collapse;
+}
+.reveal table th {
+  background: linear-gradient(90deg, #9B72F2, #D47CB8);
+  color: white;
+  font-weight: 600;
+  padding: 8px 14px;
+  border: none;
+}
+.reveal table td {
+  padding: 8px 14px;
+  border-bottom: 1px solid #E8E8F0;
+  color: #2D2D3D;
+}
+.reveal table tr:nth-child(even) td {
+  background: rgba(155, 114, 242, 0.04);
+}
+
+/* ── Code blocks ── */
+.reveal pre {
+  border-radius: 8px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
+}
+
+.reveal code {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+}
+
+.reveal p code,
+.reveal li code {
+  background: rgba(155, 114, 242, 0.1);
+  color: #7B52D2;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+
+/* ── Slide numbers ── */
+.reveal .slide-number {
+  color: #9B9BB0;
+  font-size: 14px;
+}
+
+/* ── Thank You slide ── */
+.thankyou .reveal h1 {
+  background: none;
+  -webkit-background-clip: unset;
+  -webkit-text-fill-color: #1A1A2E;
+  background-clip: unset;
+  color: #1A1A2E;
+  font-size: 2.6em;
+  font-weight: 700;
+}
+
+/* ── Footer copyright ── */
+.reveal::after {
+  content: '\00A9 2026 HASHICORP';
+  position: fixed;
+  bottom: 12px;
+  left: 12px;
+  font-size: 11px;
+  color: #9B9BB0;
+  font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif;
+  letter-spacing: 0.05em;
+  z-index: 50;
+}

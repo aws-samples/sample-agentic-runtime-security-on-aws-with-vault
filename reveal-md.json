@@ -1,0 +1,4 @@
+{
+  "scripts": ["assets/theme-toggle.js"],
+  "css": ["assets/hashicorp-theme.css"]
+}
