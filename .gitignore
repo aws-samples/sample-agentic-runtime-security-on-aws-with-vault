@@ -1,0 +1,54 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+*.tfvars
+*.tfvars.json
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude
+.claude/
+
+# HCP Setup (infrastructure/scripts/hcp-setup — contains account-specific values)
+# Note: *.tfvars above already covers terraform.tfvars globally.
+# These explicit paths are intentionally redundant for clarity and safety.
+infrastructure/scripts/hcp-setup/terraform.tfvars
+infrastructure/scripts/hcp-setup/terraform.tfstate
+infrastructure/scripts/hcp-setup/terraform.tfstate.backup
+infrastructure/scripts/hcp-setup/.terraform/
+infrastructure/scripts/hcp-setup/.terraform.lock.hcl
+
+# Project-specific
+CLAUDE.md
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Workshop Studio
+workshop/public/
+workshop/static/images/
+
+# Node
+node_modules/
+
+# reveal-md exports
+slides.pdf
+slides-site/
