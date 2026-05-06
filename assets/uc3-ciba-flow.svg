@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="15 -5 1230 840" width="1230" height="840">
+  <rect x="15" y="-5" width="1230" height="840" fill="#ffffff"/>
+  <rect x="40" y="70" width="180" height="60" rx="6" ry="6" fill="#d3f9d8" stroke="none"/>
+  <path d="M 40.1 68.3 C 94.0 74.1, 166.0 65.1, 219.0 68.9 M 40.1 68.9 C 94.0 72.4, 166.0 66.7, 219.5 70.3 M 218.9 70.0 C 216.9 88.0, 222.8 112.0, 220.6 128.2 M 221.7 69.8 C 216.8 88.0, 221.7 112.0, 219.1 129.1 M 219.8 131.1 C 166.0 126.1, 94.0 133.2, 39.3 129.9 M 220.9 128.9 C 166.0 127.4, 94.0 134.3, 39.5 129.7 M 40.1 129.3 C 41.8 112.0, 38.0 88.0, 39.3 68.8 M 39.3 131.0 C 43.6 112.0, 37.7 88.0, 39.3 69.9" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="240" y="70" width="180" height="60" rx="6" ry="6" fill="#dbe4ff" stroke="none"/>
+  <path d="M 240.7 70.5 C 294.0 72.7, 366.0 68.1, 418.9 68.3 M 241.4 69.7 C 294.0 73.4, 366.0 65.6, 420.8 70.0 M 419.9 69.0 C 417.8 88.0, 421.2 112.0, 420.0 130.9 M 419.1 68.9 C 416.9 88.0, 423.4 112.0, 419.1 130.7 M 421.2 129.8 C 366.0 125.7, 294.0 133.4, 241.1 130.8 M 419.6 130.7 C 366.0 124.9, 294.0 134.3, 239.1 130.1 M 239.7 128.7 C 241.9 112.0, 237.9 88.0, 240.9 70.8 M 241.1 130.4 C 241.2 112.0, 236.4 88.0, 241.1 70.4" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="440" y="70" width="180" height="60" rx="6" ry="6" fill="#e9ecef" stroke="none"/>
+  <path d="M 440.8 70.7 C 494.0 75.1, 566.0 66.5, 619.1 68.4 M 439.0 71.1 C 494.0 73.7, 566.0 67.8, 621.1 69.2 M 619.5 68.8 C 618.3 88.0, 621.2 112.0, 619.8 130.4 M 620.1 70.4 C 618.0 88.0, 623.0 112.0, 619.2 129.5 M 618.4 130.1 C 566.0 128.0, 494.0 132.9, 438.9 130.9 M 619.4 129.2 C 566.0 125.5, 494.0 134.6, 441.6 130.5 M 438.5 129.5 C 442.9 112.0, 438.8 88.0, 439.5 69.6 M 440.0 129.8 C 441.7 112.0, 437.4 88.0, 441.4 69.5" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="640" y="70" width="180" height="60" rx="6" ry="6" fill="#fff3bf" stroke="none"/>
+  <path d="M 638.9 71.0 C 694.0 71.9, 766.0 67.7, 819.5 70.8 M 641.7 71.6 C 694.0 72.5, 766.0 65.0, 821.3 69.3 M 819.3 71.2 C 817.7 88.0, 821.3 112.0, 819.0 130.6 M 820.5 71.0 C 816.5 88.0, 822.3 112.0, 819.3 129.7 M 818.4 130.0 C 766.0 124.9, 694.0 134.6, 639.7 130.8 M 820.6 130.8 C 766.0 127.4, 694.0 133.1, 639.5 129.2 M 639.5 130.0 C 641.7 112.0, 637.0 88.0, 639.8 71.0 M 640.8 129.7 C 641.4 112.0, 638.8 88.0, 639.7 71.1" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="840" y="70" width="180" height="60" rx="6" ry="6" fill="#ffe3e3" stroke="none"/>
+  <path d="M 838.4 68.8 C 894.0 74.8, 966.0 65.3, 1019.0 71.0 M 841.3 70.9 C 894.0 71.8, 966.0 65.8, 1020.6 71.8 M 1020.2 71.0 C 1018.5 88.0, 1022.9 112.0, 1018.6 128.5 M 1021.0 69.4 C 1017.6 88.0, 1021.6 112.0, 1020.7 129.6 M 1019.5 129.0 C 966.0 127.3, 894.0 133.3, 838.2 130.5 M 1020.1 128.8 C 966.0 126.3, 894.0 133.2, 839.0 131.4 M 838.6 128.6 C 843.1 112.0, 838.6 88.0, 839.1 70.9 M 839.5 129.1 C 842.2 112.0, 836.8 88.0, 841.1 71.5" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="1040" y="70" width="180" height="60" rx="6" ry="6" fill="#ffec99" stroke="none"/>
+  <path d="M 1040.8 71.1 C 1094.0 74.3, 1166.0 68.0, 1220.6 70.8 M 1041.2 71.4 C 1094.0 72.1, 1166.0 67.8, 1221.2 69.6 M 1218.9 70.6 C 1216.9 88.0, 1223.5 112.0, 1219.6 129.1 M 1219.8 71.4 C 1217.3 88.0, 1221.2 112.0, 1221.7 129.6 M 1221.0 128.5 C 1166.0 127.3, 1094.0 133.7, 1041.1 128.7 M 1221.0 129.7 C 1166.0 126.2, 1094.0 132.8, 1040.6 130.3 M 1038.2 131.0 C 1043.0 112.0, 1037.3 88.0, 1039.8 70.4 M 1040.8 129.8 C 1042.9 112.0, 1037.1 88.0, 1039.7 71.3" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="40" y="760" width="1180" height="50" rx="6" ry="6" fill="#ffe3e3" stroke="none"/>
+  <path d="M 39.4 759.1 C 394.0 764.1, 866.0 756.9, 1218.6 759.5 M 39.7 760.4 C 394.0 763.8, 866.0 756.4, 1218.8 759.7 M 1219.5 758.8 C 1217.4 775.0, 1222.8 795.0, 1219.6 810.9 M 1220.7 759.8 C 1217.7 775.0, 1222.6 795.0, 1221.3 811.1 M 1218.9 809.6 C 866.0 806.0, 394.0 812.8, 40.7 808.4 M 1220.3 809.5 C 866.0 805.6, 394.0 813.8, 40.8 808.8 M 38.7 811.1 C 41.5 795.0, 37.9 775.0, 39.8 758.4 M 40.8 811.8 C 42.8 795.0, 38.4 775.0, 40.6 761.7" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M 130.7 129.8 C 126.6 313.0, 134.4 557.0, 130.9 740.4 M 131.1 130.4 C 128.0 313.0, 134.3 557.0, 130.7 739.6" fill="none" stroke="#888888" stroke-width="1" stroke-linecap="round"/>
+  <path d="M 128.9 740.3 C 129.0 736.0, 126.1 731.3, 125.6 725.7 M 130.1 741.5 C 129.3 735.9, 126.1 731.4, 125.8 728.2 M 130.8 741.1 C 131.8 736.8, 132.6 731.7, 134.0 728.9 M 130.1 738.9 C 131.8 736.7, 132.7 731.7, 134.3 729.3" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 330.1 128.3 C 328.2 313.0, 334.8 557.0, 329.4 739.9 M 329.0 129.9 C 325.6 313.0, 332.6 557.0, 329.4 739.8" fill="none" stroke="#888888" stroke-width="1" stroke-linecap="round"/>
+  <path d="M 328.3 739.8 C 329.0 735.9, 325.9 731.2, 325.9 726.4 M 331.6 739.4 C 328.7 735.9, 325.8 731.3, 323.6 726.4 M 328.7 740.0 C 332.2 736.9, 333.0 731.7, 335.6 727.1 M 329.7 740.8 C 332.1 736.7, 333.3 731.8, 336.9 728.5" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 528.5 130.5 C 527.8 313.0, 532.5 557.0, 530.8 740.0 M 530.1 129.9 C 525.3 313.0, 534.9 557.0, 530.3 739.8" fill="none" stroke="#888888" stroke-width="1" stroke-linecap="round"/>
+  <path d="M 530.3 739.5 C 529.0 736.4, 526.4 732.2, 525.9 729.8 M 530.1 741.0 C 529.2 736.5, 526.5 732.3, 525.1 730.0 M 529.3 738.3 C 531.8 736.7, 532.8 731.6, 535.5 727.0 M 530.9 739.6 C 531.7 736.7, 532.8 731.6, 533.6 729.9" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 730.3 130.1 C 727.9 313.0, 732.8 557.0, 729.7 740.6 M 730.5 130.2 C 725.6 313.0, 732.8 557.0, 730.4 740.1" fill="none" stroke="#888888" stroke-width="1" stroke-linecap="round"/>
+  <path d="M 728.8 738.6 C 728.8 736.0, 725.8 731.2, 724.5 727.7 M 731.7 740.4 C 728.8 736.0, 725.6 731.4, 724.4 726.3 M 731.1 739.9 C 732.1 736.5, 733.1 731.1, 735.2 726.1 M 730.2 740.1 C 732.2 736.5, 733.1 731.1, 734.2 726.5" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 928.4 130.1 C 926.3 313.0, 931.8 557.0, 928.4 738.6 M 931.1 130.6 C 926.4 313.0, 933.7 557.0, 931.2 739.5" fill="none" stroke="#888888" stroke-width="1" stroke-linecap="round"/>
+  <path d="M 930.1 740.0 C 929.2 736.2, 926.9 731.5, 926.6 728.7 M 929.3 739.0 C 929.4 736.2, 926.7 731.4, 925.0 727.8 M 930.3 741.0 C 932.1 736.7, 933.1 731.3, 935.8 728.0 M 930.7 741.5 C 931.9 736.5, 933.3 731.3, 936.5 726.9" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 1129.1 128.6 C 1125.0 313.0, 1133.5 557.0, 1130.3 740.3 M 1128.9 130.1 C 1127.9 313.0, 1132.3 557.0, 1129.8 739.6" fill="none" stroke="#888888" stroke-width="1" stroke-linecap="round"/>
+  <path d="M 1130.2 739.0 C 1129.3 736.5, 1127.0 732.5, 1124.4 729.5 M 1130.6 740.7 C 1129.2 736.6, 1126.9 732.4, 1126.4 728.1 M 1129.1 741.0 C 1131.8 736.7, 1132.6 731.8, 1135.1 728.2 M 1130.0 740.3 C 1131.8 736.7, 1132.5 731.7, 1136.2 729.2" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 130.5 160.1 C 163.0 165.0, 207.0 157.2, 240.5 158.8 M 129.2 161.7 C 163.0 163.7, 207.0 155.1, 240.6 159.5" fill="none" stroke="#1971c2" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 239.6 158.6 C 236.4 161.2, 232.6 164.2, 229.7 165.3 M 241.7 159.5 C 236.4 161.2, 232.4 164.2, 229.4 165.6 M 239.4 161.0 C 236.4 158.3, 231.1 157.3, 227.3 156.4 M 240.3 159.2 C 236.4 158.2, 231.1 157.6, 228.0 155.6" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 238.8 230.3 C 300.0 231.9, 380.0 227.2, 439.9 228.9 M 241.2 230.0 C 300.0 233.5, 380.0 226.5, 440.8 231.3" fill="none" stroke="#e67700" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 440.8 229.5 C 436.2 231.2, 431.9 234.5, 428.0 235.1 M 440.2 231.7 C 436.2 231.0, 431.9 234.2, 428.0 236.4 M 440.4 230.5 C 436.4 227.9, 431.3 226.6, 428.6 223.1 M 441.0 230.1 C 436.6 228.0, 431.3 226.7, 426.9 225.5" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 438.3 280.6 C 380.0 276.4, 300.0 282.5, 239.1 279.3 M 439.3 279.0 C 380.0 275.1, 300.0 283.6, 241.4 280.7" fill="none" stroke="#e67700" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 238.2 280.6 C 243.6 278.8, 247.8 275.9, 252.4 274.9 M 240.7 280.1 C 243.6 278.8, 247.8 275.7, 251.1 276.0 M 241.2 279.1 C 243.5 282.0, 248.7 283.1, 253.3 285.1 M 238.9 280.6 C 243.5 282.1, 248.7 282.9, 252.4 286.5" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 240.1 340.1 C 207.0 335.3, 163.0 342.1, 130.2 340.4 M 240.7 339.7 C 207.0 337.9, 163.0 342.6, 130.1 340.5" fill="none" stroke="#e67700" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 129.8 341.1 C 133.7 338.7, 137.8 335.7, 141.1 335.4 M 131.2 341.0 C 133.7 338.6, 137.8 335.8, 141.2 333.6 M 131.1 340.6 C 133.6 342.2, 139.0 343.6, 141.7 346.3 M 130.8 340.6 C 133.6 342.1, 139.1 343.7, 143.7 347.4" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 129.9 420.9 C 283.0 424.9, 487.0 416.2, 638.9 418.4 M 129.2 421.6 C 283.0 424.9, 487.0 416.3, 639.7 420.3" fill="none" stroke="#1971c2" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 641.0 419.5 C 636.3 421.3, 632.1 424.2, 628.8 423.9 M 641.7 418.9 C 636.2 421.0, 632.1 424.1, 628.3 425.4 M 639.3 419.4 C 636.6 418.4, 631.5 417.7, 626.9 414.7 M 640.6 418.9 C 636.5 418.3, 631.4 417.7, 629.2 415.7" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 638.8 468.8 C 487.0 465.1, 283.0 472.2, 130.8 469.2 M 639.2 469.2 C 487.0 468.2, 283.0 472.5, 129.6 469.3" fill="none" stroke="#2f9e44" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 128.7 468.4 C 133.7 468.9, 137.9 465.9, 141.9 464.6 M 129.1 470.3 C 133.7 469.1, 137.8 465.9, 143.1 463.8 M 129.6 469.4 C 133.7 471.5, 139.3 472.3, 143.2 473.6 M 129.0 469.6 C 133.7 471.9, 139.2 472.2, 143.6 474.4" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 130.0 518.5 C 343.0 524.4, 627.0 515.5, 840.3 520.8 M 130.2 519.5 C 343.0 522.1, 627.0 517.1, 839.8 520.2" fill="none" stroke="#2f9e44" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 841.0 518.4 C 836.2 520.6, 831.5 523.3, 828.4 522.6 M 840.6 520.5 C 836.2 520.7, 831.5 523.2, 827.5 523.3 M 840.0 519.3 C 836.7 518.5, 831.7 517.6, 828.4 515.0 M 839.9 521.1 C 836.7 518.2, 831.8 517.7, 829.0 517.4" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 840.1 568.3 C 627.0 567.6, 343.0 574.2, 131.0 570.7 M 839.8 568.8 C 627.0 567.8, 343.0 575.1, 131.4 570.5" fill="none" stroke="#2f9e44" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 129.5 569.2 C 134.0 568.9, 138.4 565.5, 141.8 565.0 M 129.3 570.7 C 134.0 568.9, 138.5 565.6, 143.3 564.2 M 129.5 569.0 C 133.6 571.5, 138.9 572.4, 142.7 573.7 M 128.8 569.7 C 133.6 571.6, 139.0 572.4, 141.9 573.2" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 128.7 619.3 C 403.0 624.6, 767.0 617.8, 1040.3 619.7 M 128.9 618.9 C 403.0 623.8, 767.0 616.2, 1041.6 621.4" fill="none" stroke="#2f9e44" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 1039.2 620.6 C 1036.0 620.9, 1031.2 623.3, 1027.3 624.5 M 1040.6 620.4 C 1036.0 620.7, 1031.3 623.2, 1027.2 623.6 M 1040.9 619.2 C 1036.4 618.2, 1030.8 617.3, 1027.6 615.9 M 1040.6 621.1 C 1036.4 618.1, 1030.9 617.0, 1028.0 614.6" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round"/>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="18" fill="#000000" text-anchor="middle">
+    <text x="590.0" y="35.3">UC3: Privileged action — CIBA out-of-band approval + RAR + may_act</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="12" fill="#000000" text-anchor="middle">
+    <text x="130.0" y="102.7">agent uc3</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="12" fill="#000000" text-anchor="middle">
+    <text x="330.0" y="95.2">IBM Verify</text>
+    <text x="330.0" y="110.2">CIBA endpoint</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="12" fill="#000000" text-anchor="middle">
+    <text x="530.0" y="95.2">user browser</text>
+    <text x="530.0" y="110.2">(CIBA confirm)</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="12" fill="#000000" text-anchor="middle">
+    <text x="730.0" y="95.2">Vault role</text>
+    <text x="730.0" y="110.2">uc3-refund-writer</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="12" fill="#000000" text-anchor="middle">
+    <text x="930.0" y="95.2">RDS Postgres</text>
+    <text x="930.0" y="110.2">(refund table)</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="12" fill="#000000" text-anchor="middle">
+    <text x="1130.0" y="102.7">CloudTrail</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="11" fill="#1971c2" text-anchor="middle">
+    <text x="185.0" y="147.3">1. CIBA backchannel auth req</text>
+    <text x="185.0" y="161.1">RAR: refund $1200 to order #42</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="11" fill="#e67700" text-anchor="middle">
+    <text x="340.0" y="225.3">2. push: approve refund?</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="11" fill="#e67700" text-anchor="middle">
+    <text x="340.0" y="275.4">3. APPROVE</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="11" fill="#e67700" text-anchor="middle">
+    <text x="185.0" y="323.4">4. JWT  may_act.sub=service-account:agent-uc3</text>
+    <text x="185.0" y="337.1">authorization_details=[{type:refund,amount:1200,order:42}]</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="11" fill="#1971c2" text-anchor="middle">
+    <text x="385.0" y="415.4">5. Vault login (role=uc3-refund-writer, TTL=5m)</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="11" fill="#2f9e44" text-anchor="middle">
+    <text x="385.0" y="465.4">6. write creds  TTL=5m  request_id</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="11" fill="#2f9e44" text-anchor="middle">
+    <text x="485.0" y="515.4">7. INSERT refund (1200, order=42)  request_id</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="11" fill="#2f9e44" text-anchor="middle">
+    <text x="485.0" y="565.4">8. OK</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="11" fill="#2f9e44" text-anchor="middle">
+    <text x="585.0" y="615.4">9. AssumeRole + DB events  request_id correlated</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="13" fill="#000000" text-anchor="middle">
+    <text x="630.0" y="776.0">bypass test: forged may_act → Vault rejects (bound_claims mismatch); forged RAR → audit trail shows divergence at IVIA</text>
+  </g>
+</svg>

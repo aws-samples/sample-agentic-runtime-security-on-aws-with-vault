@@ -1,0 +1,115 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="15 -5 1250 820" width="1250" height="820">
+  <rect x="15" y="-5" width="1250" height="820" fill="#ffffff"/>
+  <rect x="40" y="70" width="580" height="720" rx="6" ry="6" fill="#dbe4ff" stroke="none"/>
+  <path d="M 40.1 68.3 C 214.0 74.1, 446.0 65.1, 619.0 68.9 M 40.1 68.9 C 214.0 72.4, 446.0 66.7, 619.5 70.3 M 618.9 70.0 C 615.4 286.0, 624.1 574.0, 620.6 788.2 M 621.7 69.8 C 615.3 286.0, 622.4 574.0, 619.1 789.1 M 619.8 791.1 C 446.0 786.1, 214.0 793.2, 39.3 789.9 M 620.9 788.9 C 446.0 787.4, 214.0 794.3, 39.5 789.7 M 40.1 789.3 C 42.7 574.0, 37.0 286.0, 39.3 68.8 M 39.3 791.0 C 45.2 574.0, 36.7 286.0, 39.3 69.9" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="80" y="160" width="500" height="90" rx="6" ry="6" fill="#ffffff" stroke="none"/>
+  <path d="M 80.7 160.5 C 230.0 162.7, 430.0 158.1, 578.9 158.3 M 81.4 159.7 C 230.0 163.4, 430.0 155.6, 580.8 160.0 M 579.9 159.0 C 576.9 187.0, 581.8 223.0, 580.0 250.9 M 579.1 158.9 C 575.5 187.0, 585.0 223.0, 579.1 250.7 M 581.2 249.8 C 430.0 245.7, 230.0 253.4, 81.1 250.8 M 579.6 250.7 C 430.0 244.9, 230.0 254.3, 79.1 250.1 M 79.7 248.7 C 82.8 223.0, 76.9 187.0, 80.9 160.8 M 81.1 250.4 C 81.8 223.0, 74.8 187.0, 81.1 160.4" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="80" y="270" width="500" height="90" rx="6" ry="6" fill="#ffffff" stroke="none"/>
+  <path d="M 80.8 270.7 C 230.0 275.1, 430.0 266.5, 579.1 268.4 M 79.0 271.1 C 230.0 273.7, 430.0 267.8, 581.1 269.2 M 579.5 268.8 C 577.5 297.0, 581.8 333.0, 579.8 360.4 M 580.1 270.4 C 577.1 297.0, 584.4 333.0, 579.2 359.5 M 578.4 360.1 C 430.0 358.0, 230.0 362.9, 78.9 360.9 M 579.4 359.2 C 430.0 355.5, 230.0 364.6, 81.6 360.5 M 78.5 359.5 C 84.3 333.0, 78.2 297.0, 79.5 269.6 M 80.0 359.8 C 82.4 333.0, 76.2 297.0, 81.4 269.5" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="80" y="380" width="500" height="90" rx="6" ry="6" fill="#ffffff" stroke="none"/>
+  <path d="M 78.9 381.0 C 230.0 381.9, 430.0 377.7, 579.5 380.8 M 81.7 381.6 C 230.0 382.5, 430.0 375.0, 581.3 379.3 M 579.3 381.2 C 576.7 407.0, 581.9 443.0, 579.0 470.6 M 580.5 381.0 C 574.9 407.0, 583.4 443.0, 579.3 469.7 M 578.4 470.0 C 430.0 464.9, 230.0 474.6, 79.7 470.8 M 580.6 470.8 C 430.0 467.4, 230.0 473.1, 79.5 469.2 M 79.5 470.0 C 82.5 443.0, 75.6 407.0, 79.8 381.0 M 80.8 469.7 C 82.0 443.0, 78.2 407.0, 79.7 381.1" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="80" y="490" width="500" height="90" rx="6" ry="6" fill="#ffffff" stroke="none"/>
+  <path d="M 78.4 488.8 C 230.0 494.8, 430.0 485.3, 579.0 491.0 M 81.3 490.9 C 230.0 491.8, 430.0 485.8, 580.6 491.8 M 580.2 491.0 C 577.9 517.0, 584.3 553.0, 578.6 578.5 M 581.0 489.4 C 576.5 517.0, 582.3 553.0, 580.7 579.6 M 579.5 579.0 C 430.0 577.3, 230.0 583.3, 78.2 580.5 M 580.1 578.8 C 430.0 576.3, 230.0 583.2, 79.0 581.4 M 78.6 578.6 C 84.5 553.0, 77.9 517.0, 79.1 490.9 M 79.5 579.1 C 83.2 553.0, 75.3 517.0, 81.1 491.5" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="80" y="600" width="500" height="90" rx="6" ry="6" fill="#ffffff" stroke="none"/>
+  <path d="M 80.8 601.1 C 230.0 604.3, 430.0 598.0, 580.6 600.8 M 81.2 601.4 C 230.0 602.1, 430.0 597.8, 581.2 599.6 M 578.9 600.6 C 575.5 627.0, 585.2 663.0, 579.6 689.1 M 579.8 601.4 C 576.0 627.0, 581.8 663.0, 581.7 689.6 M 581.0 688.5 C 430.0 687.3, 230.0 693.7, 81.1 688.7 M 581.0 689.7 C 430.0 686.2, 230.0 692.8, 80.6 690.3 M 78.2 691.0 C 84.3 663.0, 76.0 627.0, 79.8 600.4 M 80.8 689.8 C 84.3 663.0, 75.8 627.0, 79.7 601.3" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="660" y="70" width="580" height="720" rx="6" ry="6" fill="#fff3bf" stroke="none"/>
+  <path d="M 659.4 69.1 C 834.0 74.1, 1066.0 66.9, 1238.6 69.5 M 659.7 70.4 C 834.0 73.8, 1066.0 66.4, 1238.8 69.7 M 1239.5 68.8 C 1235.5 286.0, 1245.0 574.0, 1239.6 790.9 M 1240.7 69.8 C 1235.9 286.0, 1244.6 574.0, 1241.3 791.1 M 1238.9 789.6 C 1066.0 786.0, 834.0 792.8, 660.7 788.4 M 1240.3 789.5 C 1066.0 785.6, 834.0 793.8, 660.8 788.8 M 658.7 791.1 C 662.6 574.0, 656.3 286.0, 659.8 68.4 M 660.8 791.8 C 664.9 574.0, 657.3 286.0, 660.6 71.7" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="700" y="160" width="500" height="90" rx="6" ry="6" fill="#ffffff" stroke="none"/>
+  <path d="M 700.7 159.8 C 850.0 162.7, 1050.0 157.0, 1200.9 160.4 M 701.1 160.4 C 850.0 162.8, 1050.0 155.9, 1200.7 159.6 M 1199.8 158.6 C 1195.8 187.0, 1203.8 223.0, 1198.9 250.3 M 1200.0 159.4 C 1196.2 187.0, 1202.3 223.0, 1200.1 251.5 M 1199.3 248.2 C 1050.0 244.9, 850.0 252.6, 699.3 250.5 M 1200.4 250.6 C 1050.0 248.1, 850.0 252.9, 699.5 249.5 M 699.4 248.7 C 703.9 223.0, 696.1 187.0, 699.6 158.6 M 698.9 250.7 C 701.9 223.0, 695.5 187.0, 699.2 160.2" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="700" y="270" width="500" height="90" rx="6" ry="6" fill="#ffffff" stroke="none"/>
+  <path d="M 700.5 269.3 C 850.0 272.0, 1050.0 266.6, 1200.5 270.7 M 701.8 269.8 C 850.0 274.4, 1050.0 265.4, 1200.8 271.1 M 1198.3 268.7 C 1196.3 297.0, 1202.8 333.0, 1198.6 360.2 M 1199.3 270.6 C 1195.4 297.0, 1204.9 333.0, 1201.0 359.1 M 1199.1 360.2 C 1050.0 358.0, 850.0 363.1, 701.1 359.4 M 1199.1 361.1 C 1050.0 354.8, 850.0 364.0, 701.4 360.6 M 699.5 359.3 C 704.7 333.0, 695.1 297.0, 699.7 269.2 M 700.7 361.3 C 704.3 333.0, 695.7 297.0, 700.9 270.1" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="700" y="380" width="500" height="90" rx="6" ry="6" fill="#ffffff" stroke="none"/>
+  <path d="M 699.8 379.7 C 850.0 384.7, 1050.0 375.1, 1199.5 380.4 M 701.4 379.5 C 850.0 381.9, 1050.0 375.4, 1200.2 380.6 M 1198.8 380.6 C 1195.8 407.0, 1205.2 443.0, 1199.2 470.8 M 1199.1 381.0 C 1195.8 407.0, 1203.5 443.0, 1200.3 471.1 M 1198.5 468.9 C 1050.0 466.6, 850.0 473.8, 700.3 469.1 M 1201.0 469.8 C 1050.0 467.8, 850.0 474.8, 700.9 469.6 M 699.8 470.5 C 703.4 443.0, 698.2 407.0, 698.8 378.8 M 699.6 469.1 C 702.4 443.0, 696.6 407.0, 699.4 379.5" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="700" y="490" width="500" height="90" rx="6" ry="6" fill="#ffffff" stroke="none"/>
+  <path d="M 701.1 489.9 C 850.0 493.5, 1050.0 486.8, 1200.3 488.6 M 700.2 490.1 C 850.0 493.4, 1050.0 486.2, 1199.4 489.0 M 1198.4 490.1 C 1196.3 517.0, 1201.8 553.0, 1198.4 578.6 M 1201.1 490.6 C 1196.4 517.0, 1203.7 553.0, 1201.2 579.5 M 1201.2 579.1 C 1050.0 574.9, 850.0 584.5, 700.1 580.0 M 1200.8 579.3 C 1050.0 576.7, 850.0 584.2, 699.3 579.0 M 698.9 580.3 C 704.2 553.0, 697.5 517.0, 700.3 489.6 M 700.8 581.6 C 704.0 553.0, 697.6 517.0, 700.1 490.4" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="700" y="600" width="500" height="90" rx="6" ry="6" fill="#ffffff" stroke="none"/>
+  <path d="M 698.7 599.1 C 850.0 602.2, 1050.0 597.2, 1200.4 599.9 M 701.6 600.3 C 850.0 603.3, 1050.0 595.6, 1200.3 599.0 M 1198.5 601.1 C 1194.9 627.0, 1202.9 663.0, 1200.7 689.9 M 1198.9 601.1 C 1195.0 627.0, 1203.2 663.0, 1200.2 690.8 M 1199.7 688.5 C 1050.0 685.2, 850.0 692.8, 699.2 689.2 M 1199.7 691.6 C 1050.0 687.1, 850.0 691.9, 701.2 690.5 M 699.4 689.7 C 703.6 663.0, 695.4 627.0, 701.2 600.2 M 701.1 690.7 C 703.7 663.0, 696.3 627.0, 701.1 599.4" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="580" y="270" width="120" height="60" rx="6" ry="6" fill="#fff3bf" stroke="none"/>
+  <path d="M 578.6 271.1 C 616.0 273.7, 664.0 265.1, 700.0 268.9 M 581.8 271.5 C 616.0 273.5, 664.0 266.5, 700.2 269.2 M 699.0 270.7 C 697.5 288.0, 701.4 312.0, 701.1 328.9 M 701.4 271.4 C 697.8 288.0, 702.4 312.0, 699.6 331.2 M 699.0 329.1 C 664.0 327.7, 616.0 334.0, 580.0 331.2 M 700.5 330.4 C 664.0 325.8, 616.0 334.4, 580.2 329.8 M 580.5 328.3 C 583.1 312.0, 578.0 288.0, 580.4 270.3 M 581.7 330.3 C 582.6 312.0, 578.5 288.0, 578.9 270.3" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M 599.8 304.6 C 630.0 307.3, 670.0 303.1, 700.4 304.4 M 599.8 305.9 C 630.0 309.8, 670.0 300.9, 700.7 306.4" fill="none" stroke="#e67700" stroke-width="3" stroke-linecap="round"/>
+  <path d="M 700.8 303.3 C 696.2 305.9, 692.1 309.2, 686.8 310.4 M 699.1 305.7 C 696.3 305.9, 692.2 309.0, 689.9 310.4 M 698.6 304.8 C 696.4 303.2, 691.2 301.9, 687.5 300.5 M 699.5 306.5 C 696.4 303.1, 691.0 301.8, 686.8 300.1" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round"/>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="18" fill="#000000" text-anchor="middle">
+    <text x="640.0" y="35.3">Identity-plane responsibility split — IBM Verify (left) | HashiCorp Vault (right)</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="20" fill="#000000" text-anchor="middle">
+    <text x="330.0" y="97.0">IBM Verify Identity Access (IVIA)</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="14" fill="#e67700" text-anchor="middle">
+    <text x="330.0" y="126.9">user identity plane</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="15" fill="#000000" text-anchor="middle">
+    <text x="330.0" y="180.8">user authn (IDP)</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="12" fill="#555555" text-anchor="middle">
+    <text x="330.0" y="208.2">username/password, MFA</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="15" fill="#000000" text-anchor="middle">
+    <text x="330.0" y="290.8">OAuth: Authorization Code + PKCE</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="12" fill="#555555" text-anchor="middle">
+    <text x="330.0" y="318.2">scopes (read:own, write:own), code_verifier</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="15" fill="#000000" text-anchor="middle">
+    <text x="330.0" y="400.8">CIBA out-of-band approval</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="12" fill="#555555" text-anchor="middle">
+    <text x="330.0" y="428.2">backchannel auth, push notification, polling</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="15" fill="#000000" text-anchor="middle">
+    <text x="330.0" y="510.8">RAR authorization_details</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="12" fill="#555555" text-anchor="middle">
+    <text x="330.0" y="538.2">RFC 9396 fine-grained intent (refund, amount, order)</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="15" fill="#000000" text-anchor="middle">
+    <text x="330.0" y="620.8">JWT signing key issuance</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="12" fill="#555555" text-anchor="middle">
+    <text x="330.0" y="648.2">OIDC discovery URL, JWKS endpoint, may_act delegation</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="20" fill="#000000" text-anchor="middle">
+    <text x="950.0" y="97.0">HashiCorp Vault</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="14" fill="#1971c2" text-anchor="middle">
+    <text x="950.0" y="126.9">workload identity + secret-broker plane</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="15" fill="#000000" text-anchor="middle">
+    <text x="950.0" y="180.8">workload Kubernetes auth</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="12" fill="#555555" text-anchor="middle">
+    <text x="950.0" y="208.2">ServiceAccount JWT projected, role binds SA → Vault role</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="15" fill="#000000" text-anchor="middle">
+    <text x="950.0" y="290.8">jwt auth (bound to Verify OIDC)</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="12" fill="#555555" text-anchor="middle">
+    <text x="950.0" y="318.2">discovery_url, bound_audiences, bound_claims (may_act.sub)</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="15" fill="#000000" text-anchor="middle">
+    <text x="950.0" y="400.8">Postgres database secrets engine</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="12" fill="#555555" text-anchor="middle">
+    <text x="950.0" y="428.2">creation_statements, revocation_statements, TTL=15m</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="15" fill="#000000" text-anchor="middle">
+    <text x="950.0" y="510.8">AWS secrets engine (STS)</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="12" fill="#555555" text-anchor="middle">
+    <text x="950.0" y="538.2">assumed_role, scoped Bedrock policies, TTL=15m</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="15" fill="#000000" text-anchor="middle">
+    <text x="950.0" y="620.8">audit device → fluent-bit → CloudWatch</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="12" fill="#555555" text-anchor="middle">
+    <text x="950.0" y="648.2">JSON-line audit trail, request_id propagated</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="11" fill="#000000" text-anchor="middle">
+    <text x="640.0" y="284.4">OIDC discovery</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="11" fill="#000000" text-anchor="middle">
+    <text x="640.0" y="304.4">URL trust</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="10" fill="#e67700" text-anchor="middle">
+    <text x="640.0" y="258.5">(JWT signing key handoff)</text>
+  </g>
+</svg>

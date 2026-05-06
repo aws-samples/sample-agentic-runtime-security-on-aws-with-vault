@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="15 -5 1150 810" width="1150" height="810">
+  <rect x="15" y="-5" width="1150" height="810" fill="#ffffff"/>
+  <rect x="60" y="70" width="180" height="60" rx="6" ry="6" fill="#e9ecef" stroke="none"/>
+  <path d="M 60.1 68.3 C 114.0 74.1, 186.0 65.1, 239.0 68.9 M 60.1 68.9 C 114.0 72.4, 186.0 66.7, 239.5 70.3 M 238.9 70.0 C 236.9 88.0, 242.8 112.0, 240.6 128.2 M 241.7 69.8 C 236.8 88.0, 241.7 112.0, 239.1 129.1 M 239.8 131.1 C 186.0 126.1, 114.0 133.2, 59.3 129.9 M 240.9 128.9 C 186.0 127.4, 114.0 134.3, 59.5 129.7 M 60.1 129.3 C 61.8 112.0, 58.0 88.0, 59.3 68.8 M 59.3 131.0 C 63.6 112.0, 57.7 88.0, 59.3 69.9" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="280" y="70" width="180" height="60" rx="6" ry="6" fill="#dbe4ff" stroke="none"/>
+  <path d="M 280.7 70.5 C 334.0 72.7, 406.0 68.1, 458.9 68.3 M 281.4 69.7 C 334.0 73.4, 406.0 65.6, 460.8 70.0 M 459.9 69.0 C 457.8 88.0, 461.2 112.0, 460.0 130.9 M 459.1 68.9 C 456.9 88.0, 463.4 112.0, 459.1 130.7 M 461.2 129.8 C 406.0 125.7, 334.0 133.4, 281.1 130.8 M 459.6 130.7 C 406.0 124.9, 334.0 134.3, 279.1 130.1 M 279.7 128.7 C 281.9 112.0, 277.9 88.0, 280.9 70.8 M 281.1 130.4 C 281.2 112.0, 276.4 88.0, 281.1 70.4" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="500" y="70" width="180" height="60" rx="6" ry="6" fill="#d3f9d8" stroke="none"/>
+  <path d="M 500.8 70.7 C 554.0 75.1, 626.0 66.5, 679.1 68.4 M 499.0 71.1 C 554.0 73.7, 626.0 67.8, 681.1 69.2 M 679.5 68.8 C 678.3 88.0, 681.2 112.0, 679.8 130.4 M 680.1 70.4 C 678.0 88.0, 683.0 112.0, 679.2 129.5 M 678.4 130.1 C 626.0 128.0, 554.0 132.9, 498.9 130.9 M 679.4 129.2 C 626.0 125.5, 554.0 134.6, 501.6 130.5 M 498.5 129.5 C 502.9 112.0, 498.8 88.0, 499.5 69.6 M 500.0 129.8 C 501.7 112.0, 497.4 88.0, 501.4 69.5" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="720" y="70" width="180" height="60" rx="6" ry="6" fill="#fff3bf" stroke="none"/>
+  <path d="M 718.9 71.0 C 774.0 71.9, 846.0 67.7, 899.5 70.8 M 721.7 71.6 C 774.0 72.5, 846.0 65.0, 901.3 69.3 M 899.3 71.2 C 897.7 88.0, 901.3 112.0, 899.0 130.6 M 900.5 71.0 C 896.5 88.0, 902.3 112.0, 899.3 129.7 M 898.4 130.0 C 846.0 124.9, 774.0 134.6, 719.7 130.8 M 900.6 130.8 C 846.0 127.4, 774.0 133.1, 719.5 129.2 M 719.5 130.0 C 721.7 112.0, 717.0 88.0, 719.8 71.0 M 720.8 129.7 C 721.4 112.0, 718.8 88.0, 719.7 71.1" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="940" y="70" width="180" height="60" rx="6" ry="6" fill="#ffe3e3" stroke="none"/>
+  <path d="M 938.4 68.8 C 994.0 74.8, 1066.0 65.3, 1119.0 71.0 M 941.3 70.9 C 994.0 71.8, 1066.0 65.8, 1120.6 71.8 M 1120.2 71.0 C 1118.5 88.0, 1122.9 112.0, 1118.6 128.5 M 1121.0 69.4 C 1117.6 88.0, 1121.6 112.0, 1120.7 129.6 M 1119.5 129.0 C 1066.0 127.3, 994.0 133.3, 938.2 130.5 M 1120.1 128.8 C 1066.0 126.3, 994.0 133.2, 939.0 131.4 M 938.6 128.6 C 943.1 112.0, 938.6 88.0, 939.1 70.9 M 939.5 129.1 C 942.2 112.0, 936.8 88.0, 941.1 71.5" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="40" y="740" width="1080" height="40" rx="6" ry="6" fill="#fff9db" stroke="none"/>
+  <path d="M 40.8 741.1 C 364.0 744.3, 796.0 738.0, 1120.6 740.8 M 41.2 741.4 C 364.0 742.1, 796.0 737.8, 1121.2 739.6 M 1118.9 740.6 C 1117.9 752.0, 1122.4 768.0, 1119.6 779.1 M 1119.8 741.4 C 1118.2 752.0, 1120.8 768.0, 1121.7 779.6 M 1121.0 778.5 C 796.0 777.3, 364.0 783.7, 41.1 778.7 M 1121.0 779.7 C 796.0 776.2, 364.0 782.8, 40.6 780.3 M 38.2 781.0 C 42.0 768.0, 38.2 752.0, 39.8 740.4 M 40.8 779.8 C 42.0 768.0, 38.1 752.0, 39.7 741.3" fill="none" stroke="#000000" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M 149.4 129.1 C 145.0 307.0, 152.1 543.0, 148.6 719.5 M 149.7 130.4 C 146.7 307.0, 153.0 543.0, 148.8 719.7" fill="none" stroke="#888888" stroke-width="1" stroke-linecap="round"/>
+  <path d="M 149.6 720.9 C 148.8 716.0, 146.1 711.4, 145.7 706.1 M 151.3 721.1 C 148.9 716.1, 145.9 711.4, 145.9 706.9 M 149.4 720.1 C 152.2 716.3, 153.4 710.7, 154.3 707.4 M 151.1 721.1 C 152.0 716.5, 153.3 710.7, 154.6 707.2" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 368.9 130.7 C 365.9 307.0, 373.2 543.0, 369.6 720.6 M 371.5 130.6 C 365.3 307.0, 372.1 543.0, 371.0 720.3" fill="none" stroke="#888888" stroke-width="1" stroke-linecap="round"/>
+  <path d="M 368.9 720.1 C 369.1 716.1, 365.9 711.5, 365.6 707.3 M 369.6 719.8 C 368.9 716.0, 366.2 711.5, 365.6 706.7 M 369.4 718.8 C 371.9 716.6, 372.9 711.5, 374.1 709.0 M 369.9 718.8 C 372.0 716.7, 372.7 711.5, 374.5 709.1" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 589.8 130.0 C 586.7 307.0, 594.1 543.0, 588.9 718.9 M 590.0 129.3 C 586.1 307.0, 593.9 543.0, 590.2 719.2" fill="none" stroke="#888888" stroke-width="1" stroke-linecap="round"/>
+  <path d="M 588.6 719.6 C 588.6 716.3, 585.6 712.1, 582.6 707.6 M 591.1 721.3 C 588.5 716.2, 585.7 712.1, 583.8 707.3 M 590.2 720.5 C 591.8 716.7, 592.9 711.8, 596.1 707.4 M 590.5 719.5 C 591.8 716.8, 593.2 711.7, 596.0 709.7" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 810.7 131.1 C 807.2 307.0, 811.9 543.0, 808.5 718.3 M 810.9 129.0 C 807.9 307.0, 812.3 543.0, 810.9 720.7" fill="none" stroke="#888888" stroke-width="1" stroke-linecap="round"/>
+  <path d="M 810.5 719.2 C 808.8 716.5, 805.8 712.4, 803.9 708.3 M 809.1 721.7 C 808.9 716.5, 805.8 712.4, 805.1 710.3 M 809.8 719.7 C 811.7 716.8, 812.7 711.8, 813.8 709.0 M 811.4 719.5 C 811.7 716.7, 812.7 711.8, 814.5 709.2" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 1028.8 130.6 C 1025.8 307.0, 1035.2 543.0, 1029.2 720.8 M 1029.1 131.0 C 1025.8 307.0, 1033.5 543.0, 1030.3 721.1" fill="none" stroke="#888888" stroke-width="1" stroke-linecap="round"/>
+  <path d="M 1030.3 719.1 C 1028.8 716.0, 1025.7 711.5, 1024.3 707.1 M 1030.9 719.6 C 1028.7 716.1, 1025.6 711.4, 1023.9 706.6 M 1029.7 720.4 C 1031.6 716.3, 1032.3 711.0, 1035.3 707.2 M 1029.3 718.8 C 1032.0 716.4, 1032.5 711.0, 1034.6 707.1" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 150.8 159.7 C 189.0 163.3, 241.0 154.9, 280.8 159.9 M 151.6 160.2 C 189.0 164.0, 241.0 155.3, 281.3 160.0" fill="none" stroke="#e67700" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 281.2 158.6 C 276.2 161.0, 271.9 163.6, 268.6 164.4 M 280.1 161.4 C 276.2 160.8, 271.8 163.3, 269.9 164.1 M 280.2 158.7 C 276.3 157.9, 271.0 156.8, 266.1 153.0 M 279.5 160.9 C 276.5 157.7, 271.0 156.7, 268.3 154.8" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 280.2 211.0 C 241.0 205.1, 189.0 215.0, 149.5 209.8 M 279.3 209.7 C 241.0 207.8, 189.0 212.8, 151.0 210.5" fill="none" stroke="#e67700" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 149.7 208.4 C 154.0 208.9, 158.7 206.4, 161.2 204.7 M 151.3 210.5 C 154.1 209.0, 158.7 206.3, 164.5 207.0 M 150.9 208.7 C 153.4 211.8, 158.6 213.0, 161.9 215.2 M 150.8 211.4 C 153.4 212.2, 158.5 213.1, 161.7 216.0" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 149.6 259.1 C 189.0 263.6, 241.0 257.1, 279.2 261.1 M 150.4 260.0 C 189.0 263.9, 241.0 255.5, 279.4 259.9" fill="none" stroke="#e67700" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 279.5 260.3 C 276.2 261.3, 272.0 264.4, 266.7 266.8 M 280.5 259.1 C 276.2 261.4, 271.8 264.4, 269.9 267.2 M 279.0 260.7 C 276.7 258.2, 271.8 257.1, 269.6 254.1 M 281.4 261.4 C 276.7 257.9, 271.7 257.0, 268.1 256.4" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 279.0 309.1 C 241.0 307.7, 189.0 314.0, 150.0 311.2 M 280.5 310.4 C 241.0 305.8, 189.0 314.4, 150.2 309.8" fill="none" stroke="#e67700" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 150.4 310.3 C 154.0 308.9, 158.7 305.5, 163.2 303.6 M 148.9 310.3 C 154.1 308.8, 158.6 305.5, 163.1 305.7 M 150.2 308.7 C 153.6 312.0, 158.9 312.9, 162.1 315.7 M 151.4 311.4 C 153.5 312.0, 158.8 312.5, 162.4 314.4" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 148.4 360.1 C 255.0 363.3, 395.0 357.0, 501.0 361.2 M 151.4 360.1 C 255.0 364.5, 395.0 356.1, 500.9 361.5" fill="none" stroke="#e67700" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 499.9 360.6 C 495.9 360.9, 491.3 363.7, 486.0 363.3 M 499.2 360.2 C 496.1 360.8, 491.2 363.8, 486.9 364.4 M 499.2 360.0 C 496.3 357.8, 490.9 357.1, 487.4 354.6 M 500.2 359.5 C 496.5 358.1, 491.0 357.0, 487.8 355.6" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 499.0 409.9 C 434.0 406.1, 346.0 412.1, 280.3 410.4 M 499.7 411.2 C 434.0 406.1, 346.0 412.7, 280.6 409.9" fill="none" stroke="#e67700" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 280.1 410.9 C 283.9 409.3, 288.5 406.4, 292.5 405.0 M 279.7 411.0 C 283.9 409.5, 288.5 406.8, 291.6 405.1 M 280.7 409.6 C 283.7 411.6, 289.0 412.3, 293.3 414.8 M 281.7 411.4 C 283.5 412.0, 289.1 412.7, 293.6 416.1" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 278.2 459.8 C 346.0 463.8, 434.0 458.0, 499.6 460.2 M 279.1 459.5 C 346.0 465.0, 434.0 455.0, 498.9 461.5" fill="none" stroke="#e67700" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 499.1 459.4 C 496.4 461.2, 492.4 464.2, 487.3 466.7 M 499.2 460.2 C 496.3 461.3, 492.2 464.5, 489.5 466.6 M 499.7 459.4 C 496.5 457.9, 491.4 456.4, 488.9 452.7 M 499.1 460.9 C 496.5 457.9, 491.2 456.7, 488.3 456.1" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 500.7 509.6 C 566.0 511.8, 654.0 505.6, 720.2 510.1 M 499.2 510.5 C 566.0 512.5, 654.0 505.9, 719.0 511.1" fill="none" stroke="#1971c2" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 718.2 510.8 C 716.0 511.3, 711.3 514.7, 705.9 514.2 M 718.8 511.2 C 716.0 511.4, 711.3 514.4, 706.8 515.4 M 720.5 509.7 C 716.8 508.3, 711.8 506.9, 707.0 504.9 M 720.4 510.2 C 716.7 508.1, 711.8 507.1, 710.2 504.1" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 720.9 558.4 C 654.0 557.3, 566.0 563.3, 498.4 560.0 M 719.8 561.8 C 654.0 557.9, 566.0 562.3, 500.4 560.2" fill="none" stroke="#2f9e44" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 500.4 558.8 C 503.8 559.2, 508.4 556.3, 511.9 554.6 M 500.1 560.8 C 503.9 559.0, 508.5 556.3, 512.2 555.0 M 500.6 559.9 C 503.2 561.9, 508.1 563.3, 511.2 565.2 M 501.1 561.4 C 503.1 562.0, 508.0 563.1, 512.2 567.0" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 500.2 608.9 C 632.0 614.4, 808.0 607.6, 938.5 610.7 M 501.3 611.7 C 632.0 611.8, 808.0 607.7, 941.3 610.6" fill="none" stroke="#2f9e44" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 940.3 609.1 C 936.0 610.7, 931.5 613.6, 926.8 612.4 M 940.7 608.9 C 936.1 610.8, 931.5 613.3, 928.6 613.6 M 938.5 608.4 C 936.8 608.2, 931.8 607.2, 927.2 605.4 M 940.1 609.6 C 936.7 608.2, 931.8 607.2, 929.6 604.5" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 940.2 658.3 C 808.0 657.2, 632.0 664.8, 499.4 660.0 M 939.6 659.8 C 808.0 656.9, 632.0 663.5, 498.8 661.0" fill="none" stroke="#2f9e44" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 498.4 660.8 C 504.0 659.4, 508.7 656.6, 511.0 654.1 M 500.9 660.1 C 503.9 659.4, 508.7 656.7, 511.8 654.7 M 500.7 658.9 C 503.7 661.6, 509.2 662.2, 512.8 663.7 M 499.3 660.3 C 503.6 661.6, 509.1 662.4, 512.0 664.3" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round"/>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="18" fill="#000000" text-anchor="middle">
+    <text x="590.0" y="35.3">UC2: Per-user agent — OAuth Authorization Code + PKCE → user-scoped DB creds</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="12" fill="#000000" text-anchor="middle">
+    <text x="150.0" y="102.7">user browser</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="12" fill="#000000" text-anchor="middle">
+    <text x="370.0" y="95.2">IBM Verify (IVIA)</text>
+    <text x="370.0" y="110.2">OAuth + PKCE</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="12" fill="#000000" text-anchor="middle">
+    <text x="590.0" y="102.7">agent uc2</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="12" fill="#000000" text-anchor="middle">
+    <text x="810.0" y="95.2">Vault</text>
+    <text x="810.0" y="110.2">jwt auth</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="12" fill="#000000" text-anchor="middle">
+    <text x="1030.0" y="95.2">RDS Postgres</text>
+    <text x="1030.0" y="110.2">(per-user data)</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="11" fill="#e67700" text-anchor="middle">
+    <text x="215.0" y="155.3">1. /authorize + PKCE</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="11" fill="#e67700" text-anchor="middle">
+    <text x="215.0" y="205.3">2. login UI</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="11" fill="#e67700" text-anchor="middle">
+    <text x="215.0" y="255.3">3. credentials + code_verifier</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="11" fill="#e67700" text-anchor="middle">
+    <text x="215.0" y="305.4">4. authorization code</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="11" fill="#e67700" text-anchor="middle">
+    <text x="325.0" y="355.4">5. code  request_id</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="11" fill="#e67700" text-anchor="middle">
+    <text x="390.0" y="405.4">6. POST /token (code+verifier)</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="11" fill="#e67700" text-anchor="middle">
+    <text x="390.0" y="455.4">7. user JWT (sub=alice, scope=read:own)</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="11" fill="#1971c2" text-anchor="middle">
+    <text x="610.0" y="505.4">8. Vault login: jwt auth  bound_audiences=[agent-uc2]</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="11" fill="#2f9e44" text-anchor="middle">
+    <text x="610.0" y="555.4">9. user/pwd scoped to alice  request_id</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="11" fill="#2f9e44" text-anchor="middle">
+    <text x="720.0" y="605.4">10. SELECT WHERE owner=alice</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="11" fill="#2f9e44" text-anchor="middle">
+    <text x="720.0" y="655.4">11. INSERT rejected (Layer 2 GRANTs)</text>
+  </g>
+  <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="13" fill="#000000" text-anchor="middle">
+    <text x="580.0" y="756.0">scope enforcement: write attempts rejected at Layer 2 (DB GRANTs), even if Layer 1 (Vault role) misconfigured</text>
+  </g>
+</svg>
