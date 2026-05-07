@@ -35,7 +35,7 @@ awsAccountConfig:
 #   - EC2 standard vCPU (code L-1216C47A, target >= 32)
 #   - VPC Elastic IPs (code L-0263D0A3, target >= 6)
 #   - RDS DB instances per region (code L-7B6409FD, target >= 1)
-#   - OpenSearch Serverless OCU indexing (code L-CCD27F9D, target >= 2)
-#   - OpenSearch Serverless OCU search (code L-A8E7DE8E, target >= 2)
+#   - OpenSearch Serverless OCU indexing (code L-50FA809B, target >= 2)
+#   - OpenSearch Serverless OCU search (code L-4E98D4EB, target >= 2)
 # Workshop Studio admin UI: Catalog Builder -> <workshop> -> Account Configuration ->
 # Service Quotas tab. See TESTING.md "Workshop Studio quota auto-provisioning" section.
