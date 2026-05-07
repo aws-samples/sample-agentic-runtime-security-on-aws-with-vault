@@ -559,16 +559,31 @@ if confirm "Run IAM permissions check (iam:SimulatePrincipalPolicy)?"; then
             echo
 
             # Step 4 — required actions
-            # Stacks bootstrap-time IAM actions. 17 actions total — well under the
-            # simulator's 100-action API limit.
+            # Two actions are intentionally NOT simulated here, because the
+            # IAM policy simulator produces unreliable results for them and
+            # the eks-terraform-stacks reference workshop (which uses the
+            # exact same OIDC + role bootstrap flow) does not preflight them:
+            #
+            #   - iam:CreateOpenIDConnectProvider — sandboxed roles (e.g. the
+            #     HashiCorp internal IndividualSandbox inline policy) grant
+            #     this action with a Resource ARN list that matches
+            #     arn:aws:iam::ACCOUNT:oidc-provider/app.terraform.io, but
+            #     simulate-principal-policy still returns implicitDeny even
+            #     when the actual create call succeeds (likely an SCP/inline
+            #     evaluation interaction the simulator can't model). Let
+            #     bootstrap.sh attempt the create — AWS will return a clear
+            #     error if the perm really is missing.
+            #
+            #   - sts:AssumeRoleWithWebIdentity — invoked by HCP Terraform at
+            #     deploy time, not by the local caller. The trust-policy of
+            #     the IAM role we create governs whether HCP can assume it.
+            #     Local-caller simulation here produces a false deny.
             REQUIRED_ACTIONS=(
-                iam:CreateOpenIDConnectProvider
                 iam:CreateRole
                 iam:AttachRolePolicy
                 iam:CreateInstanceProfile
                 iam:PassRole
                 iam:CreateServiceLinkedRole
-                sts:AssumeRoleWithWebIdentity
                 eks:CreateCluster
                 eks:DescribeCluster
                 eks:CreateAddon
@@ -592,6 +607,11 @@ if confirm "Run IAM permissions check (iam:SimulatePrincipalPolicy)?"; then
                 --action-names "${REQUIRED_ACTIONS[@]}" \
                 --query 'EvaluationResults[].[EvalActionName,EvalDecision]' \
                 --output text 2>/dev/null)
+
+            # OIDC provider creation is intentionally NOT preflighted (see
+            # comment above the REQUIRED_ACTIONS block). bootstrap.sh runs
+            # `aws iam create-open-id-connect-provider` directly and surfaces
+            # any real AWS error.
 
             if [ -z "$sim_out" ]; then
                 print_fail "Batched simulator call returned no results (actions=${actions_csv})" \

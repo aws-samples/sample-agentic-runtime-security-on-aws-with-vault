@@ -214,85 +214,20 @@ step_detect_free_tier() {
 #===============================================================================
 # STEP 2: Setup AWS OIDC Provider + IAM Role for HCP Stacks
 #
-# Workshop pedagogical scope = AdministratorAccess (the workshop teaches the
-# 5 control objectives at the workload-identity / data-plane layer; we
-# explicitly avoid teaching IAM least-privilege design alongside it). For
-# production deployments, the scoped policy in setup-aws-oidc.sh of the
-# reference repo can be substituted.
+# Delegates to setup-aws-oidc.sh — same pattern as the eks-terraform-stacks
+# reference repo, so script-by-script comparison stays trivial. Workshop
+# pedagogical scope = AdministratorAccess (set inside setup-aws-oidc.sh).
 #===============================================================================
 step_oidc_setup() {
     step_header "1/7" "Setup AWS OIDC Provider + IAM Role"
 
-    local OIDC_PROVIDER="app.terraform.io"
-    local AWS_ACCOUNT_ID
-    AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text 2>/dev/null)
-    local OIDC_ARN="arn:aws:iam::${AWS_ACCOUNT_ID}:oidc-provider/${OIDC_PROVIDER}"
-    local ROLE_NAME="hcp-stacks-deploy"
-
     if [ "$DRY_RUN" = true ]; then
-        echo -e "${YELLOW}[DRY-RUN] Would create OIDC provider ${OIDC_PROVIDER} + IAM role '${ROLE_NAME}' with AdministratorAccess${NC}"
+        echo -e "${YELLOW}[DRY-RUN] Would run: setup-aws-oidc.sh ${HCP_ORG}${NC}"
+        echo -e "${YELLOW}[DRY-RUN] Would create OIDC provider app.terraform.io + IAM role 'hcp-stacks-deploy' with AdministratorAccess${NC}"
         return 0
     fi
 
-    # OIDC provider — create if missing (409 ignored)
-    if aws iam get-open-id-connect-provider --open-id-connect-provider-arn "$OIDC_ARN" >/dev/null 2>&1; then
-        echo -e "${GREEN}✓ OIDC provider exists: ${OIDC_ARN}${NC}"
-    else
-        echo -e "${YELLOW}Creating OIDC provider for ${OIDC_PROVIDER}...${NC}"
-        # Fetch root CA thumbprint dynamically (HCP rotates certs)
-        local THUMBPRINT
-        THUMBPRINT=$(echo | openssl s_client -servername "$OIDC_PROVIDER" -connect "${OIDC_PROVIDER}:443" -showcerts 2>/dev/null \
-            | awk '/BEGIN CERTIFICATE/,/END CERTIFICATE/{print}' \
-            | awk 'BEGIN{n=0} /BEGIN CERTIFICATE/{n++; cert=""} {cert=cert"\n"$0} /END CERTIFICATE/{certs[n]=cert} END{print certs[n]}' \
-            | openssl x509 -fingerprint -sha1 -noout 2>/dev/null \
-            | sed 's/://g' | awk -F= '{print tolower($2)}')
-        aws iam create-open-id-connect-provider \
-            --url "https://${OIDC_PROVIDER}" \
-            --client-id-list "aws.workload.identity" \
-            --thumbprint-list "$THUMBPRINT" >/dev/null
-        echo -e "${GREEN}✓ OIDC provider created${NC}"
-    fi
-
-    # Trust policy — restricts to this HCP_ORG + project + workspace
-    local TRUST_POLICY
-    TRUST_POLICY=$(jq -n \
-        --arg oidc "$OIDC_ARN" \
-        --arg org "$HCP_ORG" \
-        --arg project "$HCP_PROJECT" \
-        '{
-          Version: "2012-10-17",
-          Statement: [{
-            Effect: "Allow",
-            Principal: {Federated: $oidc},
-            Action: "sts:AssumeRoleWithWebIdentity",
-            Condition: {
-              StringEquals: {
-                "app.terraform.io:aud": "aws.workload.identity"
-              },
-              StringLike: {
-                "app.terraform.io:sub": ("organization:" + $org + ":project:" + $project + ":*")
-              }
-            }
-          }]
-        }')
-
-    if aws iam get-role --role-name "$ROLE_NAME" >/dev/null 2>&1; then
-        echo -e "${GREEN}✓ IAM role '${ROLE_NAME}' exists — updating trust policy${NC}"
-        aws iam update-assume-role-policy --role-name "$ROLE_NAME" --policy-document "$TRUST_POLICY"
-    else
-        echo -e "${YELLOW}Creating IAM role '${ROLE_NAME}'...${NC}"
-        aws iam create-role \
-            --role-name "$ROLE_NAME" \
-            --assume-role-policy-document "$TRUST_POLICY" \
-            --description "HCP Terraform Stacks deploy role for the Agentic Runtime Security workshop" >/dev/null
-        echo -e "${GREEN}✓ IAM role created${NC}"
-    fi
-
-    # AdministratorAccess for the workshop (pedagogical scope, NOT production)
-    aws iam attach-role-policy \
-        --role-name "$ROLE_NAME" \
-        --policy-arn "arn:aws:iam::aws:policy/AdministratorAccess" >/dev/null
-    echo -e "${GREEN}✓ AdministratorAccess attached (workshop pedagogical scope)${NC}"
+    bash "$SCRIPT_DIR/setup-aws-oidc.sh" "$HCP_ORG"
 }
 
 #===============================================================================
