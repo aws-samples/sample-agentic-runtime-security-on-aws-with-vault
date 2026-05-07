@@ -35,7 +35,11 @@ module "vpc_cni_pod_identity" {
 
   associations = {
     main = {
-      cluster_name    = var.cluster_name
+      # Reference module.eks.cluster_name (NOT var.cluster_name) so Terraform
+      # treats the pod-identity association as dependent on the EKS cluster.
+      # Without this, the association is created in parallel with the cluster
+      # and CreatePodIdentityAssociation fails with ResourceNotFoundException.
+      cluster_name    = module.eks.cluster_name
       namespace       = "kube-system"
       service_account = "aws-node"
     }
@@ -53,7 +57,11 @@ module "ebs_csi_pod_identity" {
 
   associations = {
     main = {
-      cluster_name    = var.cluster_name
+      # Reference module.eks.cluster_name (NOT var.cluster_name) so Terraform
+      # treats the pod-identity association as dependent on the EKS cluster.
+      # Without this, the association is created in parallel with the cluster
+      # and CreatePodIdentityAssociation fails with ResourceNotFoundException.
+      cluster_name    = module.eks.cluster_name
       namespace       = "kube-system"
       service_account = "ebs-csi-controller-sa"
     }

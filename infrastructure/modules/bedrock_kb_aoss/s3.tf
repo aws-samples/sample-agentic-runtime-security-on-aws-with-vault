@@ -41,13 +41,21 @@ locals {
   corpus_files = fileset("${path.module}/sample_corpus", "**/*.md")
 }
 
+# Use `content = file(...)` instead of `source = "..."` because HCP Stacks
+# runs plan and apply in different working directories
+# (stack_plan/jobNNN/... vs stack_apply/jobMMM/...). With `source`, the
+# AWS provider's "consistent final plan" check fails because the absolute
+# path differs between phases — even though the file content is identical.
+# `content = file(...)` reads the file at plan time and stores the content
+# as a known value, so the apply phase sees the same value.
+# Trade-off: full file content goes through state. Acceptable here — corpus
+# files are small synthetic markdown (under 5 KB each).
 resource "aws_s3_object" "corpus" {
   for_each = toset(local.corpus_files)
 
-  bucket = aws_s3_bucket.kb_corpus.id
-  key    = each.value
-  source = "${path.module}/sample_corpus/${each.value}"
-  etag   = filemd5("${path.module}/sample_corpus/${each.value}")
-
+  bucket       = aws_s3_bucket.kb_corpus.id
+  key          = each.value
+  content      = file("${path.module}/sample_corpus/${each.value}")
+  etag         = filemd5("${path.module}/sample_corpus/${each.value}")
   content_type = "text/markdown"
 }
