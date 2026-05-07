@@ -12,9 +12,9 @@
 #   - VARSET_NAME defaults to "agentic-runtime-security-config"
 #   - HCP_PROJECT defaults to "Agentic Runtime Security"
 #   - Step 0 detects HCP free tier (Pitfall §2 — free tier EOL 2026-03-31)
-#   - Prereq gate at top of main flow asks "Have you run ./preflight.sh and seen
+#   - Prereq gate at top of main flow asks "Have you run ./check-prerequisites.sh and seen
 #     all checks pass? [y/N]" — replaces the old inline IAM verification
-#     (plan 01-08 closure of UAT Gap 2/3). preflight.sh is the single
+#     (plan 01-08 closure of UAT Gap 2/3). check-prerequisites.sh is the single
 #     pre-flight surface; bootstrap.sh trusts the attendee's confirmation.
 #
 # Steps:
@@ -41,7 +41,7 @@
 #   --dry-run                Show what would be done without executing
 #   --help                   Show this help message
 #
-# Prerequisites (run preflight.sh first):
+# Prerequisites (run check-prerequisites.sh first):
 #   - terraform CLI authenticated (terraform login)
 #   - aws CLI configured (aws configure / AWS_PROFILE / AWS SSO)
 #   - jq, curl, git installed
@@ -204,9 +204,9 @@ step_detect_free_tier() {
 #===============================================================================
 # NOTE: The former Step 1 (inline IAM verification) was REMOVED in plan 01-08.
 # The user's locked design: bootstrap.sh now opens with a single prereq-gate
-# prompt at the top of main flow asking "Have you run ./preflight.sh and seen
+# prompt at the top of main flow asking "Have you run ./check-prerequisites.sh and seen
 # all checks pass? [y/N]". Workshop attendees follow instructions — no
-# defensive re-check needed. preflight.sh is the single pre-flight surface.
+# defensive re-check needed. check-prerequisites.sh is the single pre-flight surface.
 # The 8-step orchestration is renumbered 1-7 (formerly 2-8); step headers
 # below use the new numbering.
 #===============================================================================
@@ -582,10 +582,10 @@ echo -e "  Stack:         ${YELLOW}$STACK_NAME${NC}"
 #-------------------------------------------------------------------------------
 if [ "$DRY_RUN" = false ]; then
     echo
-    read -p "$(echo -e "${YELLOW}?${NC}") Have you run ./preflight.sh and seen all checks pass? [y/N] " -r preflight_ack < /dev/tty
+    read -p "$(echo -e "${YELLOW}?${NC}") Have you run ./check-prerequisites.sh and seen all checks pass? [y/N] " -r preflight_ack < /dev/tty
     if [[ ! "$preflight_ack" =~ ^[Yy]$ ]]; then
         echo
-        echo -e "${RED}Run ./preflight.sh first, then return.${NC}"
+        echo -e "${RED}Run ./check-prerequisites.sh first, then return.${NC}"
         exit 1
     fi
     echo

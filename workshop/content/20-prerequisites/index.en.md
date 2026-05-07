@@ -7,8 +7,8 @@ Before deploying any infrastructure, set up your environment using the workshop'
 
 ## AWS account
 
-- Active AWS account with administrator-equivalent permissions OR the IAM permissions enumerated by `preflight.sh`'s IAM permissions check
-- **Bedrock model access** — the workshop uses **Amazon Nova Pro** invoked via the cross-region inference profile id `us.amazon.nova-pro-v1:0` in `us-west-2`. Amazon's own Nova family is generally enabled by default in fresh AWS accounts (no click-through acceptance), unlike Anthropic Claude models. If `preflight.sh` reports access denied, request access via the [Bedrock console model-access page](https://us-west-2.console.aws.amazon.com/bedrock/home#/modelaccess) and select "Amazon Nova Pro". The bare model id `amazon.nova-pro-v1:0` is rejected for on-demand throughput — always use the `us.` prefix. **Cost note:** Nova Pro on-demand pricing (~$0.80 / 1M input tokens, ~$3.20 / 1M output tokens) is roughly 25% of Claude Sonnet 4.x for comparable workshop traffic; total LLM cost for a single workshop run is typically under $0.10.
+- Active AWS account with administrator-equivalent permissions OR the IAM permissions enumerated by `check-prerequisites.sh`'s IAM permissions check
+- **Bedrock model access** — the workshop uses **Amazon Nova Pro** invoked via the cross-region inference profile id `us.amazon.nova-pro-v1:0` in `us-west-2`. Amazon's own Nova family is generally enabled by default in fresh AWS accounts (no click-through acceptance), unlike Anthropic Claude models. If `check-prerequisites.sh` reports access denied, request access via the [Bedrock console model-access page](https://us-west-2.console.aws.amazon.com/bedrock/home#/modelaccess) and select "Amazon Nova Pro". The bare model id `amazon.nova-pro-v1:0` is rejected for on-demand throughput — always use the `us.` prefix. **Cost note:** Nova Pro on-demand pricing (~$0.80 / 1M input tokens, ~$3.20 / 1M output tokens) is roughly 25% of Claude Sonnet 4.x for comparable workshop traffic; total LLM cost for a single workshop run is typically under $0.10.
 
 ## HCP Terraform
 
@@ -29,7 +29,7 @@ The pre-flight script installs them all and verifies your AWS account in one ste
 The pre-flight script auto-installs all CLI tools (kubectl 1.33.x, helm 3.12+, terraform 1.10+, vault 1.21.x, aws v2, jq, yq), then verifies Bedrock model access, AWS service quotas, and IAM permissions in one shot. It continues past individual failures and emits a consolidated summary with copy-paste remediation for each failure.
 
 ```bash
-bash infrastructure/scripts/preflight.sh
+bash infrastructure/scripts/check-prerequisites.sh
 ```
 
 Available flags:
@@ -55,10 +55,10 @@ The workshop topology requires four service-quota families in `us-west-2` (CONTE
 - **OpenSearch Serverless OCUs — indexing** ≥ 2 (quota code `L-50FA809B`, AWS name: "Default indexing MAX OCU setting", default 10)
 - **OpenSearch Serverless OCUs — search** ≥ 2 (quota code `L-4E98D4EB`, AWS name: "Default search MAX OCU setting", default 10)
 
-`preflight.sh`'s service-quotas section verifies all five quota codes (EC2 + EIP + RDS + AOSS indexing + AOSS search) and prints the exact `aws service-quotas request-service-quota-increase` command to fix any deficit. Before the per-quota loop runs, the script validates each code against the live AWS Service Quotas catalog (`aws service-quotas list-service-quotas --service-code <svc>`) and FAILs fast if any code is unknown — a runtime guardrail against quota-code drift.
+`check-prerequisites.sh`'s service-quotas section verifies all five quota codes (EC2 + EIP + RDS + AOSS indexing + AOSS search) and prints the exact `aws service-quotas request-service-quota-increase` command to fix any deficit. Before the per-quota loop runs, the script validates each code against the live AWS Service Quotas catalog (`aws service-quotas list-service-quotas --service-code <svc>`) and FAILs fast if any code is unknown — a runtime guardrail against quota-code drift.
 
 :::alert{header="Workshop Studio quota auto-provisioning" type="info"}
-AWS Workshop Studio auto-provisions these quotas before account hand-off when the workshop's publisher configures them in the Catalog Builder admin UI (Account Configuration → Service Quotas tab). See `TESTING.md` "Workshop Studio quota auto-provisioning" for the publisher checklist. If you still encounter quota errors during Phase 2 deploy, run `preflight.sh` and follow the printed remediation to request increases manually.
+AWS Workshop Studio auto-provisions these quotas before account hand-off when the workshop's publisher configures them in the Catalog Builder admin UI (Account Configuration → Service Quotas tab). See `TESTING.md` "Workshop Studio quota auto-provisioning" for the publisher checklist. If you still encounter quota errors during Phase 2 deploy, run `check-prerequisites.sh` and follow the printed remediation to request increases manually.
 :::
 
 ## IBM Verify Access licensing

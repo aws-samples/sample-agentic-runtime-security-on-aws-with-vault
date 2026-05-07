@@ -6,9 +6,8 @@ Bootstrapping, end-to-end orchestration, per-component verification, and teardow
 
 | Script | Used By | Purpose | Requirement |
 |--------|---------|---------|-------------|
-| `preflight.sh` | Workshop user | Single entry-point: installs CLI tools (kubectl 1.33.x, helm 3.12+, terraform 1.10+, vault 1.21.x, aws v2, jq, yq), then verifies Bedrock model access, AWS service quotas (EC2 vCPU + EIP + RDS + AOSS OCU indexing/search), and IAM permissions for HCP Stacks bootstrap | PREF-01, PREF-02, PREF-03, PREF-05 |
-| `check-prerequisites.sh` | Workshop user, `workshop-e2e.sh` | Thin wrapper around `preflight.sh` for naming-convention compatibility with the eks-terraform-stacks workshop pattern | (compat) |
-| `bootstrap.sh` | Workshop user | Single-command HCP Terraform setup: project + variable set + OIDC trust + IAM role + Stacks deployment seeding (idempotent). Prompts at the top to confirm `preflight.sh` has been run. Step 1/7 delegates to `setup-aws-oidc.sh` | PREF-04 |
+| `check-prerequisites.sh` | Workshop user, `workshop-e2e.sh` | Single entry-point: installs CLI tools (kubectl 1.33.x, helm 3.12+, terraform 1.10+, vault 1.21.x, aws v2, jq, yq), then verifies Bedrock model access, AWS service quotas (EC2 vCPU + EIP + RDS + AOSS OCU indexing/search), and IAM permissions for HCP Stacks bootstrap. Mirrors `eks-terraform-stacks/infrastructure/scripts/check-prerequisites.sh` (same name, broader workshop-specific checks) | PREF-01, PREF-02, PREF-03, PREF-05 |
+| `bootstrap.sh` | Workshop user | Single-command HCP Terraform setup: project + variable set + OIDC trust + IAM role + Stacks deployment seeding (idempotent). Prompts at the top to confirm `check-prerequisites.sh` has been run. Step 1/7 delegates to `setup-aws-oidc.sh` | PREF-04 |
 | `setup-aws-oidc.sh` | Workshop user, `bootstrap.sh`, `workshop-e2e.sh` | Idempotent: creates the AWS OIDC identity provider for `app.terraform.io`, the IAM role `hcp-stacks-deploy`, and attaches AdministratorAccess (workshop pedagogical scope). Updates trust policy + thumbprint on re-run. Mirrors `eks-terraform-stacks/infrastructure/scripts/setup-aws-oidc.sh` (minor changes: role name + AdministratorAccess instead of scoped policy) | — |
 | `common-checks.sh` | Sourced library (not invoked directly) | Shared bash helpers — color constants, ✓/✗/⚠ unicode markers, FAILURES[] accumulator, `confirm()` y/N prompt, opt-in EXIT-trap summary | (library) |
 | `resolve-region.sh` | Sourced library (not invoked directly) | Shared `resolve_region()` helper — resolves region from CLI arg → `$AWS_REGION` → `infrastructure/deployments.tfdeploy.hcl`. Sets `RESOLVED_REGION`. Honors the canonical-region contract (no `us-west-2` string literals) | (library) |
@@ -26,7 +25,7 @@ Bootstrapping, end-to-end orchestration, per-component verification, and teardow
 
 ```bash
 # 1. Pre-flight (installs CLI tools + runs all checks in one shot)
-./infrastructure/scripts/preflight.sh
+./infrastructure/scripts/check-prerequisites.sh
 
 # 2. Bootstrap HCP Terraform (creates project + variable set + OIDC + IAM)
 ./infrastructure/scripts/bootstrap.sh <HCP_ORG>
@@ -62,7 +61,7 @@ Single-command orchestrator. Phase model:
 
 | Phase | What it does |
 |-------|--------------|
-| 0 | Prerequisites — calls `check-prerequisites.sh` (which wraps `preflight.sh`) |
+| 0 | Prerequisites — calls `check-prerequisites.sh` |
 | 1 | Bootstrap — calls `bootstrap.sh` |
 | 2 | Foundation deploy — git push + HCP plan via API + approve + wait for convergence |
 | 3 | Configure kubectl — single deployment `usw2` (region from `deployments.tfdeploy.hcl`) |
@@ -139,7 +138,7 @@ Phases: shebang consistency, `bash -n` syntax, optional shellcheck (skipped if n
 
 ## Output Conventions
 
-`preflight.sh` and `test-*.sh` emit colored terminal output with `✓ PASS` / `✗ FAIL` / `⚠ WARN` markers via the shared `common-checks.sh` library, plus a single consolidated summary block at the end listing every failure with full inline copy-paste remediation. Default mode is non-interactive (no prompts) so it is CI-safe / Workshop Studio attendee-VM-safe out of the box.
+`check-prerequisites.sh` and `test-*.sh` emit colored terminal output with `✓ PASS` / `✗ FAIL` / `⚠ WARN` markers via the shared `common-checks.sh` library, plus a single consolidated summary block at the end listing every failure with full inline copy-paste remediation. Default mode is non-interactive (no prompts) so it is CI-safe / Workshop Studio attendee-VM-safe out of the box.
 
 ## SVG Regeneration
 

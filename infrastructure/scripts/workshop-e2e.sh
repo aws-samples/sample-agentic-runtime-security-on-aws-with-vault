@@ -3,7 +3,7 @@
 # Workshop End-to-End Orchestration — Agentic Runtime Security on AWS
 #
 # Phases:
-#   Phase 0: Prerequisites (calls check-prerequisites.sh, which wraps preflight.sh)
+#   Phase 0: Prerequisites (calls check-prerequisites.sh, which wraps check-prerequisites.sh)
 #   Phase 1: Bootstrap (calls bootstrap.sh — OIDC + variable set + Stack)
 #   Phase 2: Foundation deploy (git push + HCP plan trigger + approve + wait)
 #   Phase 3: Configure kubectl (single deployment usw2)
