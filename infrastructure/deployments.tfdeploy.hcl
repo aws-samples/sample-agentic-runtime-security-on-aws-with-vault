@@ -67,7 +67,7 @@ deployment_group "usw2" {
 #-------------------------------------------------------------------------------
 
 deployment "usw2" {
-  destroy          = false
+  destroy = true
   deployment_group = deployment_group.usw2
 
   inputs = {
