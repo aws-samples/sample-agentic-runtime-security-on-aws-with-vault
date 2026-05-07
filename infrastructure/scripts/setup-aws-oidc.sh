@@ -187,7 +187,7 @@ else
     aws iam create-role \
         --role-name "$ROLE_NAME" \
         --assume-role-policy-document "$TRUST_POLICY" \
-        --description "IAM role for HCP Terraform Stacks OIDC authentication — Agentic Runtime Security workshop" > /dev/null
+        --description "IAM role for HCP Terraform Stacks OIDC authentication - Agentic Runtime Security workshop" > /dev/null
     echo -e "${GREEN}IAM role created.${NC}"
 fi
 
