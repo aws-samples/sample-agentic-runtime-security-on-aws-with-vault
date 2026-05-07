@@ -1,15 +1,25 @@
 # Workshop Scripts
 
-Scripts for bootstrapping, pre-flight verification, and SVG regeneration for the Agentic Runtime Security on AWS workshop.
+Bootstrapping, end-to-end orchestration, per-component verification, and teardown for the Agentic Runtime Security on AWS workshop.
 
 ## Script Inventory
 
 | Script | Used By | Purpose | Requirement |
 |--------|---------|---------|-------------|
 | `preflight.sh` | Workshop user | Single entry-point: installs CLI tools (kubectl 1.33.x, helm 3.12+, terraform 1.10+, vault 1.21.x, aws v2, jq, yq), then verifies Bedrock model access, AWS service quotas (EC2 vCPU + EIP + RDS + AOSS OCU indexing/search), and IAM permissions for HCP Stacks bootstrap | PREF-01, PREF-02, PREF-03, PREF-05 |
+| `check-prerequisites.sh` | Workshop user, `workshop-e2e.sh` | Thin wrapper around `preflight.sh` for naming-convention compatibility with the eks-terraform-stacks workshop pattern | (compat) |
 | `bootstrap.sh` | Workshop user | Single-command HCP Terraform setup: project + variable set + OIDC trust + IAM role + Stacks deployment seeding (idempotent). Prompts at the top to confirm `preflight.sh` has been run | PREF-04 |
 | `common-checks.sh` | Sourced library (not invoked directly) | Shared bash helpers — color constants, ✓/✗/⚠ unicode markers, FAILURES[] accumulator, `confirm()` y/N prompt, opt-in EXIT-trap summary | (library) |
-| `excalidraw-to-svg.py` | Workshop user, content authors | Converts the six Excalidraw sources in `assets/` to SVG (single-source-of-truth pipeline; SVGs are committed but regenerable) | SCAF-03 |
+| `resolve-region.sh` | Sourced library (not invoked directly) | Shared `resolve_region()` helper — resolves region from CLI arg → `$AWS_REGION` → `infrastructure/deployments.tfdeploy.hcl`. Sets `RESOLVED_REGION`. Honors the canonical-region contract (no `us-west-2` string literals) | (library) |
+| `test-eks.sh` | Workshop user, `test-foundation.sh`, `workshop-e2e.sh` | Verifies workshop EKS cluster: status ACTIVE, ≥2 Ready nodes, 5 managed addons (vpc-cni, coredns, kube-proxy, eks-pod-identity-agent, aws-ebs-csi-driver) ACTIVE, access entry present | — |
+| `test-rds.sh` | Workshop user, `test-foundation.sh`, `workshop-e2e.sh` | Verifies workshop RDS PostgreSQL: status available, engine postgres 17.x, MasterUserSecret present, parameter group has `pgaudit` in `shared_preload_libraries` and `pgaudit.log` set, storage encrypted | — |
+| `test-bedrock-kb.sh` | Workshop user, `test-foundation.sh`, `workshop-e2e.sh` | Verifies Bedrock Knowledge Base: KB status ACTIVE, 3 data sources (hr/customers/finance) AVAILABLE, retrieval smoke query per data source, AOSS collection ACTIVE | — |
+| `test-foundation.sh` | Workshop user, `workshop-e2e.sh` | Wraps `test-eks.sh` + `test-rds.sh` + `test-bedrock-kb.sh`. Aggregates pass/fail. Exits non-zero if any component fails | — |
+| `cleanup-orphaned-resources.sh` | Admin/presenter, `teardown.sh`, `workshop-e2e.sh` | Removes orphaned AWS resources after a failed/incomplete destroy: ENIs, SGs, LBs, NAT GWs, EIPs, IGWs, subnets, route tables, VPCs. Scoped to `Workshop=agentic-runtime-security` tag (override: `--tag Key=Value`). Optional per-cluster mode: `cluster:region ...` | — |
+| `teardown.sh` | Admin/presenter, `workshop-e2e.sh` | Multi-phase teardown: Phase 0 preflight, Phase 1 K8s cleanup (test workloads + IVIA/Vault stubs), Phase 2 HCP destroy=true approval, Phase 3 orphaned-resource sweep, Phase 4 HCP Stack + variable set + IAM role + OIDC delete | — |
+| `e2e-validate.sh` | Admin/presenter | Lints all `*.sh`: shebang consistency, `bash -n` syntax, optional shellcheck, Bash 4+ guard, no `base64 -d` usage. No deployment | — |
+| `workshop-e2e.sh` | Admin/presenter | Full lifecycle orchestrator (Phase 0–8). Phases 5–7 are placeholders for IVIA, Vault, and use-case validation; populated as the corresponding workshop phases are authored | — |
+| `excalidraw-to-svg.py` | Workshop user, content authors | Converts the six Excalidraw sources in `assets/` to SVG (single-source-of-truth pipeline) | SCAF-03 |
 
 ## Workshop User Flow
 
@@ -19,22 +29,116 @@ Scripts for bootstrapping, pre-flight verification, and SVG regeneration for the
 
 # 2. Bootstrap HCP Terraform (creates project + variable set + OIDC + IAM)
 ./infrastructure/scripts/bootstrap.sh <HCP_ORG>
+
+# 3. Deploy via HCP UI (push commit; foundation Stack converges)
+
+# 4. Verify foundation
+./infrastructure/scripts/test-foundation.sh \
+    --cluster-name eks-usw2 \
+    --db-instance-id <db-id> \
+    --knowledge-base-id <kb-id>
+# Each of test-eks.sh / test-rds.sh / test-bedrock-kb.sh can also be run individually.
 ```
 
-`preflight.sh` flags:
-  - `./preflight.sh` — default: auto-install + run all checks straight through (no prompts)
-  - `./preflight.sh --interactive` — prompt before each install AND before each check section
-  - `./preflight.sh --dry-run` — print install plan without executing
-  - `./preflight.sh --help` — usage
+## Per-Component Test Flags
 
-`bootstrap.sh` flags:
-  - `./bootstrap.sh <HCP_ORG>` — interactive: prompts to confirm `preflight.sh` was run, then 7-step orchestration
-  - `./bootstrap.sh <HCP_ORG> --dry-run` — print the 8 step headers (Step 0 free-tier detect + Steps 1-7) without executing; SKIPS the prereq-gate prompt
-  - `./bootstrap.sh --help` — usage
+```bash
+./test-eks.sh        --cluster-name <name>         [--region <region>]
+./test-rds.sh        --db-instance-id <id>         [--region <region>]
+./test-bedrock-kb.sh --knowledge-base-id <kb_id>   [--region <region>]
+./test-foundation.sh --cluster-name <name> --db-instance-id <id> --knowledge-base-id <kb_id> [--region <region>]
+```
+
+Region resolution order: `--region` arg → `$AWS_REGION` env var → `region` value in `infrastructure/deployments.tfdeploy.hcl`. Fail-fast if none resolve.
+
+`test-foundation.sh` also reads `WORKSHOP_CLUSTER_NAME` / `WORKSHOP_DB_INSTANCE_ID` / `WORKSHOP_KB_ID` env vars as fallbacks for missing flags.
+
+## Admin / Presenter Flow
+
+### `workshop-e2e.sh`
+
+Single-command orchestrator. Phase model:
+
+| Phase | What it does |
+|-------|--------------|
+| 0 | Prerequisites — calls `check-prerequisites.sh` (which wraps `preflight.sh`) |
+| 1 | Bootstrap — calls `bootstrap.sh` |
+| 2 | Foundation deploy — git push + HCP plan via API + approve + wait for convergence |
+| 3 | Configure kubectl — single deployment `usw2` (region from `deployments.tfdeploy.hcl`) |
+| 4 | Foundation verify — calls `test-foundation.sh` |
+| 5 | Identity (IVIA) — placeholder; populated when workshop Phase 3 ships |
+| 6 | Vault — placeholder; populated when workshop Phase 4 ships |
+| 7 | Use cases (UC1/UC2/UC3) — placeholder; populated when workshop Phases 5/6 ship |
+| 8 | Teardown — calls `teardown.sh` (unless `--skip-teardown`) |
+
+```bash
+# Full lifecycle: bootstrap → deploy → verify → teardown
+./infrastructure/scripts/workshop-e2e.sh <HCP_ORG>
+
+# Deploy and leave running for inspection
+./infrastructure/scripts/workshop-e2e.sh <HCP_ORG> --interactive --skip-teardown
+
+# Destroy everything (foundation, OIDC, IAM, variable set, Stack)
+./infrastructure/scripts/workshop-e2e.sh <HCP_ORG> --nuke
+
+# Cleanup only (foundation already destroyed; sweep dangling AWS + HCP)
+./infrastructure/scripts/workshop-e2e.sh <HCP_ORG> --cleanup-only
+```
+
+### All `workshop-e2e.sh` flags
+
+| Flag | Purpose |
+|------|---------|
+| `--interactive` | Pause between phases for manual verification |
+| `--skip-teardown` | Leave deployment running after verification |
+| `--teardown-only` | Skip deployment, run teardown only |
+| `--nuke` | Destroy everything: foundation, OIDC, IAM, variable set, Stack |
+| `--cleanup-only` | Skip HCP destroy; clean dangling AWS + HCP only |
+| `--skip-addons` | No-op for now (reserved for Phase 3+ controllers) |
+| `--dry-run` | Preview what would be done without executing |
+| `--project NAME` | HCP project name (default: `agentic-runtime-stacks`) |
+| `--branch NAME` | Git branch to push to (default: `main`) |
+
+### `teardown.sh`
+
+| Phase | What it does |
+|-------|--------------|
+| 0 | Preflight — AWS creds, tools, cluster detection |
+| 1 | K8s pre-destroy — test workloads, IVIA, Vault (last two are stubs until workshop Phase 3 ships) |
+| 2 | HCP destroy=true — sets `destroy = true` and pauses for HCP UI approval (skipped with `--no-wait`) |
+| 3 | Orphaned-resource sweep — calls `cleanup-orphaned-resources.sh` |
+| 4 | HCP Stack + variable set + IAM role + OIDC delete (skipped with `--skip-oidc-cleanup`) |
+
+Flags: `--pre-destroy-only`, `--post-destroy-only`, `--skip-oidc-cleanup`, `--no-wait`, `--dry-run`.
+
+### `cleanup-orphaned-resources.sh`
+
+Two modes:
+
+```bash
+# Tag-scoped sweep (default tag: Workshop=agentic-runtime-security)
+./cleanup-orphaned-resources.sh
+
+# Override tag
+./cleanup-orphaned-resources.sh --tag MyTag=MyValue
+
+# Per-cluster (also cleans up the EKS cluster + nodegroups + log groups + KMS aliases)
+./cleanup-orphaned-resources.sh eks-usw2:us-west-2
+```
+
+### `e2e-validate.sh`
+
+Runs offline lint on every script in this directory. Used by admins before committing script changes:
+
+```bash
+./infrastructure/scripts/e2e-validate.sh
+```
+
+Phases: shebang consistency, `bash -n` syntax, optional shellcheck (skipped if not installed), cross-platform compatibility (no `base64 -d`, Bash 4+ guard on `cleanup-orphaned-resources.sh`).
 
 ## Output Conventions
 
-`preflight.sh` emits colored terminal output with `✓ PASS` / `✗ FAIL` / `⚠ WARN` markers, indented detail under each check, and a single consolidated summary block at the end listing every failure with full inline copy-paste remediation (the exact AWS Console path or `aws` CLI command). No "see external doc" indirection. Default mode is non-interactive (no prompts) so it is CI-safe / Workshop Studio attendee-VM-safe out of the box.
+`preflight.sh` and `test-*.sh` emit colored terminal output with `✓ PASS` / `✗ FAIL` / `⚠ WARN` markers via the shared `common-checks.sh` library, plus a single consolidated summary block at the end listing every failure with full inline copy-paste remediation. Default mode is non-interactive (no prompts) so it is CI-safe / Workshop Studio attendee-VM-safe out of the box.
 
 ## SVG Regeneration
 
