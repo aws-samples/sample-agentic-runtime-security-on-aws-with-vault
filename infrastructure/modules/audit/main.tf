@@ -78,10 +78,18 @@ data "aws_iam_policy_document" "workshop_cmk" {
       identifiers = ["logs.${var.region}.amazonaws.com"]
     }
 
+    # CW Logs encryption-context covers the workshop log groups (vault-audit,
+    # ivia-decision, agent-trace) AND the RDS-managed log group at
+    # /aws/rds/instance/<id>/postgresql, which the rds module creates with
+    # this CMK. Without the rds entry the RDS log group encryption fails on
+    # first apply (Pitfall R3 mitigation).
     condition {
-      test     = "ArnEquals"
+      test     = "ArnLike"
       variable = "kms:EncryptionContext:aws:logs:arn"
-      values   = ["arn:aws:logs:${var.region}:${data.aws_caller_identity.this.account_id}:log-group:/workshop/*"]
+      values = [
+        "arn:aws:logs:${var.region}:${data.aws_caller_identity.this.account_id}:log-group:/workshop/*",
+        "arn:aws:logs:${var.region}:${data.aws_caller_identity.this.account_id}:log-group:/aws/rds/instance/*",
+      ]
     }
   }
 

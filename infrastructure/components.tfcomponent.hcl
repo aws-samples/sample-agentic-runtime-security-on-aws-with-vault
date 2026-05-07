@@ -5,10 +5,16 @@
 # audit foundation + VPC + EKS + addons + RDS + Bedrock KB
 # Reference: ~/git-repos/eks-terraform-stacks/infrastructure/components.tfcomponent.hcl
 #
-# Component dependency graph (waves):
-#   Wave 0: audit, vpc          (no dependencies; parallel)
-#   Wave 1: eks (vpc, audit), rds (vpc, audit), bedrock_kb (audit)
-#   Wave 2: addons (eks)
+# Component dependency graph (resolved automatically by Stacks via input refs):
+#   Wave 0: audit, vpc                                       (no upstreams)
+#   Wave 1: eks (vpc), bedrock_kb_aoss (audit)
+#   Wave 2: rds (vpc + audit + eks), addons (eks),
+#           bedrock_kb_index (bedrock_kb_aoss)
+#
+# Per HCP Stacks docs, component output references in `inputs` are sufficient
+# to express ordering; explicit `depends_on` is reserved for non-obvious
+# barriers (e.g. the IAM-propagation `time_sleep` between bedrock_kb_aoss
+# and bedrock_kb_index, which is otherwise transparent to the dataflow).
 #
 # Karpenter and ArgoCD are intentionally OUT of scope for this workshop
 # (managed node group only; Helm-direct or Stacks for app deployments).
@@ -59,13 +65,12 @@ component "vpc" {
 
 #-------------------------------------------------------------------------------
 # EKS Component (Wave 1)
-# Depends on vpc (subnets) and audit (workshop CMK arn for any CMK-encrypted log groups).
+# Implicit dependency on vpc via vpc_id + private_subnet_ids inputs below.
+# Does NOT consume audit outputs — no audit dependency.
 #-------------------------------------------------------------------------------
 
 component "eks" {
   source = "./modules/eks"
-
-  depends_on = [component.vpc, component.audit]
 
   providers = {
     aws       = provider.aws.main
@@ -86,16 +91,14 @@ component "eks" {
 }
 
 #-------------------------------------------------------------------------------
-# RDS Component (Wave 1)
-# Depends on vpc (db subnet group) and audit (workshop CMK for storage encryption).
+# RDS Component (Wave 2 — depends on eks for cluster_security_group_id)
+# Implicit dependencies via inputs: vpc (vpc_id, private_subnet_ids),
+# audit (workshop_cmk_arn), eks (cluster_security_group_id).
 # PostgreSQL 17 + pgaudit (enabled in Phase 2 to avoid parameter-group reboot churn later).
 #-------------------------------------------------------------------------------
 
 component "rds" {
   source = "./modules/rds"
-
-  # Implicit dependency on component.eks via cluster_security_group_id input.
-  depends_on = [component.vpc, component.audit, component.eks]
 
   providers = {
     aws    = provider.aws.main
@@ -114,16 +117,45 @@ component "rds" {
 }
 
 #-------------------------------------------------------------------------------
-# Bedrock Knowledge Base Component (Wave 1)
-# Depends on audit (workshop CMK for AOSS + S3 corpus encryption).
-# AOSS collection + 3 security/access policies + opensearch_index + KB + 3 data sources
-# (HR handbook + customer records + finance Q&A — multi-domain synthetic corpus).
+# Bedrock Knowledge Base — split into two components to avoid a circular
+# dependency: the Stack-level opensearch provider's URL must reference the
+# AOSS collection endpoint, and the bedrock_kb component would itself USE
+# that opensearch provider — Stacks rejects the resulting cycle.
+#
+# Split:
+#   bedrock_kb_aoss  — owns AOSS collection + 3 policies + IAM + S3 + corpus.
+#                      Does NOT use the opensearch provider. Outputs the
+#                      collection endpoint that the opensearch provider reads.
+#   bedrock_kb_index — owns opensearch_index + KB + 3 data sources. USES the
+#                      opensearch provider. depends_on bedrock_kb_aoss so
+#                      the time_sleep IAM-propagation barrier in aoss is
+#                      enforced before the KB is created.
 #-------------------------------------------------------------------------------
 
-component "bedrock_kb" {
-  source = "./modules/bedrock_kb"
+component "bedrock_kb_aoss" {
+  source = "./modules/bedrock_kb_aoss"
 
-  depends_on = [component.audit]
+  # Implicit dependency on component.audit via workshop_cmk_arn input below.
+
+  providers = {
+    aws  = provider.aws.main
+    time = provider.time.main
+  }
+
+  inputs = {
+    region           = var.region
+    workshop_cmk_arn = component.audit.workshop_cmk_arn
+    tags             = var.tags
+  }
+}
+
+component "bedrock_kb_index" {
+  source = "./modules/bedrock_kb_index"
+
+  # Explicit depends_on documents the IAM-propagation `time_sleep` barrier in
+  # bedrock_kb_aoss/main.tf — input references alone would not surface that
+  # ordering constraint to a reader (the time_sleep is internal to aoss).
+  depends_on = [component.bedrock_kb_aoss]
 
   providers = {
     aws        = provider.aws.main
@@ -132,10 +164,11 @@ component "bedrock_kb" {
   }
 
   inputs = {
-    region           = var.region
-    cluster_name     = var.cluster_name
-    workshop_cmk_arn = component.audit.workshop_cmk_arn
-    tags             = var.tags
+    aoss_collection_arn  = component.bedrock_kb_aoss.aoss_collection_arn
+    kb_role_arn          = component.bedrock_kb_aoss.kb_role_arn
+    embedding_model_arn  = component.bedrock_kb_aoss.embedding_model_arn
+    kb_corpus_bucket_arn = component.bedrock_kb_aoss.kb_corpus_bucket_arn
+    tags                 = var.tags
   }
 }
 
@@ -153,7 +186,8 @@ component "bedrock_kb" {
 component "addons" {
   source = "./modules/addons"
 
-  depends_on = [component.eks]
+  # Implicit dependency on component.eks via cluster_endpoint, cluster_version,
+  # oidc_provider_arn inputs below.
 
   providers = {
     aws        = provider.aws.main

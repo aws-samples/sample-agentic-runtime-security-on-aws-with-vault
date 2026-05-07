@@ -99,13 +99,16 @@ provider "helm" "main" {
   }
 }
 
-# OpenSearch provider — used by bedrock_kb component to create the AOSS vector index.
-# Endpoint is wired in the bedrock_kb module via collection.collection_endpoint.
+# OpenSearch provider — used by component.bedrock_kb_index to create the AOSS
+# vector index. URL points at component.bedrock_kb_aoss.aoss_collection_endpoint
+# (the AOSS collection is created in bedrock_kb_aoss). The split into two
+# components avoids a provider→component→provider cycle: bedrock_kb_aoss does
+# NOT use this provider, so there is no cycle.
 provider "opensearch" "main" {
   config {
-    url         = component.bedrock_kb.aoss_collection_endpoint
-    healthcheck = false
-    aws_region  = var.region
+    url               = component.bedrock_kb_aoss.aoss_collection_endpoint
+    healthcheck       = false
+    aws_region        = var.region
     sign_aws_requests = true
   }
 }

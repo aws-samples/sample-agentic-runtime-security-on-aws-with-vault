@@ -7,7 +7,7 @@ weight: 30
 
 In this module you deploy the AWS foundation that hosts the entire Agentic Runtime Security workshop in a single region: a VPC, an Amazon EKS cluster sized to host (but not yet running) HashiCorp Vault + IBM Verify Identity Access + the three demo agent pods, an Amazon RDS PostgreSQL 17 instance, an Amazon Bedrock Knowledge Base on OpenSearch Serverless, and the audit-correlation foundation (workshop CMK, three CloudWatch log groups, Glue catalog database, Athena workgroup) that every later phase joins against.
 
-You deploy it as **one Terraform Stacks configuration** with **six components** wired through HCP Terraform: `audit`, `vpc`, `eks`, `addons`, `rds`, `bedrock_kb`. A single `terraform stacks apply` builds the entire substrate.
+You deploy it as **one Terraform Stacks configuration** with **seven components** wired through HCP Terraform: `audit`, `vpc`, `eks`, `addons`, `rds`, `bedrock_kb_aoss`, `bedrock_kb_index`. A single `terraform stacks apply` builds the entire substrate. (The Bedrock Knowledge Base is split across two components — `_aoss` owns the AOSS collection / IAM / S3 corpus, `_index` owns the vector index + KB + data sources — to avoid a Stacks circular dependency between the opensearch provider URL and the component that creates the AOSS endpoint.)
 
 Vault, IBM Verify Identity Access, and the agent pods are **not** installed in this phase — Phase 3 owns those workloads. Phase 2's job is to make sure the substrate is correct, the audit-correlation contract is locked, and `kubectl get nodes` returns three Ready nodes.
 
@@ -15,13 +15,13 @@ Vault, IBM Verify Identity Access, and the agent pods are **not** installed in t
 
 ![Reference architecture](/static/images/02-reference-architecture.svg)
 
-The diagram above shows the six Phase 2 components and how they wire together. Three of the six (`audit`, `vpc`, `bedrock_kb`) have no inter-component dependencies inside Phase 2 — they apply in parallel as Wave 0/1. The other three layer on top: `eks` depends on `vpc` + `audit`; `rds` depends on `vpc` + `audit`; `addons` depends on `eks`.
+The diagram above shows the seven Phase 2 components and how they wire together. Three of the seven (`audit`, `vpc`, `bedrock_kb_aoss`) have no inter-component dependencies inside Phase 2 — they apply in parallel as Wave 0/1. The other four layer on top: `eks` depends on `vpc` + `audit`; `rds` depends on `vpc` + `audit` + `eks`; `bedrock_kb_index` depends on `bedrock_kb_aoss`; `addons` depends on `eks`.
 
 ## The audit-correlation contract (load-bearing)
 
 Before any workload lands on this cluster, the workshop pays its **audit-correlation design tax**. Phase 2 ships:
 
-- **One workshop CMK** (`alias/workshop-data`) that encrypts RDS storage, OpenSearch Serverless data, the S3 corpus bucket, and every CloudWatch log group across all six components — one key, one encryption-context story.
+- **One workshop CMK** (`alias/workshop-data`) that encrypts RDS storage, OpenSearch Serverless data, the S3 corpus bucket, and every CloudWatch log group across all seven components — one key, one encryption-context story.
 - **Three pre-created CloudWatch log groups** that Phase 3 fluent-bit DaemonSets ship logs into by ARN: `/workshop/vault-audit`, `/workshop/ivia-decision`, `/workshop/agent-trace`.
 - **A Glue catalog database** (`workshop_logs`) and **Athena workgroup** (`workshop`) that Phase 6's UC3 audit-correlation query runs against.
 
@@ -90,7 +90,7 @@ OpenSearch Serverless is intentionally left **public** — there is no `aoss` in
 
 ### 3. EKS cluster (`eks` component)
 
-The `eks` component wraps `terraform-aws-modules/eks/aws ~> 21.0` plus `terraform-aws-modules/eks-pod-identity/aws ~> 2.0` (twice — once each for `vpc-cni` and `aws-ebs-csi-driver`). It creates:
+The `eks` component wraps `terraform-aws-modules/eks/aws ~> 20.37` plus `terraform-aws-modules/eks-pod-identity/aws ~> 1.12` (twice — once each for `vpc-cni` and `aws-ebs-csi-driver`). The `eks/aws 21.x` and `eks-pod-identity 2.x` series both require AWS provider 6.x; this workshop pins AWS provider `~> 5.0` to match the eks-terraform-stacks reference, so we stay on the latest 1.x / 20.x lines that retain AWS-5 compatibility. It creates:
 
 - **Kubernetes 1.33** control plane in the private subnets.
 - **Managed node group** — m5.xlarge × **desired=3 / min=2 / max=5**, AL2023, on-demand. (Karpenter is **out of scope** for this workshop — the cluster runs with a managed node group only.)
@@ -147,9 +147,16 @@ The `rds` component creates a single-AZ PostgreSQL 17 instance with audit loggin
 - **DB security group** — admits `:5432` from the EKS cluster security group only
 :::
 
-### 6. Bedrock Knowledge Base (`bedrock_kb` component)
+### 6. Bedrock Knowledge Base (`bedrock_kb_aoss` + `bedrock_kb_index` components)
 
-The `bedrock_kb` component is the highest-risk-surface component in Phase 2 — it stitches together six interlocking AWS resources with strict ordering plus a synthetic corpus:
+The Bedrock Knowledge Base is the highest-risk-surface part of Phase 2 — it stitches together six interlocking AWS resources with strict ordering plus a synthetic corpus, **split across two Stacks components**:
+
+- **`bedrock_kb_aoss`** — owns the AOSS collection, the 3 AOSS policies, the IAM service role, the S3 corpus bucket, and the IAM-propagation `time_sleep`. Does NOT use the opensearch provider.
+- **`bedrock_kb_index`** — owns the OpenSearch vector index, the Bedrock Knowledge Base resource, and the 3 data sources. USES the opensearch provider.
+
+**Why split?** The Stack-level opensearch provider's `url` must reference the AOSS collection endpoint (`component.bedrock_kb_aoss.aoss_collection_endpoint`). If the same component that creates the collection also used that provider, Stacks would detect a `provider → component → provider` cycle and reject the configuration. Splitting breaks the cycle: `bedrock_kb_aoss` produces the endpoint output (no opensearch provider), `bedrock_kb_index` consumes the provider (no opensearch provider self-reference).
+
+The combined six-resource dance:
 
 - **3 AOSS policies** — encryption (workshop CMK), network (PUBLIC), data access (KB role + apply principal).
 - **AOSS VECTORSEARCH collection** — `workshop-kb`.
@@ -162,7 +169,7 @@ The `bedrock_kb` component is the highest-risk-surface component in Phase 2 — 
 
 **Triggering ingestion** is a one-time post-apply step (see "Validating the Bedrock KB ingestion" below).
 
-:::alert{header="What you just deployed (bedrock_kb)" type="success"}
+:::alert{header="What you just deployed (bedrock_kb_aoss + bedrock_kb_index)" type="success"}
 - **AOSS collection** — `workshop-kb` (VECTORSEARCH, encrypted with the workshop CMK)
 - **OpenSearch index** — `workshop-kb-index` (Titan v2, 1024-dim, k-NN cosine)
 - **Bedrock Knowledge Base** — `workshop-kb`
@@ -175,7 +182,7 @@ The `bedrock_kb` component is the highest-risk-surface component in Phase 2 — 
 
 The full Stacks deployment is driven from HCP Terraform, not the local CLI. The Stacks configuration uses two files at `infrastructure/`:
 
-- `components.tfcomponent.hcl` — the six component definitions and their `depends_on` graph.
+- `components.tfcomponent.hcl` — the seven component definitions; ordering is implicit via component-output references in `inputs` (the only explicit `depends_on` is `bedrock_kb_index → bedrock_kb_aoss`, which documents the IAM-propagation `time_sleep` barrier).
 - `deployments.tfdeploy.hcl` — the **single source of truth for the canonical region** and the deployment-time inputs (`region`, `cluster_name`, `vpc_cidr`, `azs`).
 
 Step-by-step deploy:
@@ -353,9 +360,24 @@ A single HCP Terraform Stacks apply just created, in dependency order:
 | `eks`        | Kubernetes 1.33 cluster, 3-node managed node group, 5 control-plane log types, Access Entries, 5 managed addons with Pod Identity   |
 | `addons`     | cert-manager + external-dns + AWS Load Balancer Controller (helm provider 2.17)                                                     |
 | `rds`        | PostgreSQL 17 single-AZ, pgaudit + connection logging, master password in Secrets Manager (workshop CMK)                            |
-| `bedrock_kb` | AOSS VECTORSEARCH collection, Titan v2 1024-dim index, KB, 3 data sources, 8-file synthetic corpus in S3 (workshop CMK SSE)         |
+| `bedrock_kb_aoss`  | AOSS VECTORSEARCH collection + 3 policies, IAM service role + 4 inline policies, S3 corpus bucket (workshop CMK SSE), 8 synthetic markdown files |
+| `bedrock_kb_index` | OpenSearch index (Titan v2 1024-dim, k-NN cosine), Bedrock Knowledge Base, 3 data sources (HR / customers / finance)              |
 
 The audit-correlation contract is **locked**: every component encrypts with the workshop CMK, the three audit log groups are pre-created with the right key, and the trace-id propagation contract is documented in [`infrastructure/docs/audit-correlation-queries.md`](https://github.com/IBM/agentic-runtime-security-aws/blob/main/infrastructure/docs/audit-correlation-queries.md).
+
+## Production-grade considerations
+
+Several spots in this Phase 2 code are deliberately simplified to keep the workshop teach-able in a 6-hour window. **Do not copy these directly into a production deployment.** The table below names each simplification, where it lives, and the canonical production pattern. The rest of the workshop's choices — workload-identity discipline, no-standing-privileges, audit-correlation, region pinning, helm 2.17 / opensearch 2.2.0 pins, EKS 1.33 / Pod Identity — *are* production-grade.
+
+| Workshop simplification | Where | Production pattern |
+| --- | --- | --- |
+| EKS API endpoint exposed to `0.0.0.0/0` | `infrastructure/modules/eks/main.tf` (`cluster_endpoint_public_access_cidrs`) | Set `cluster_endpoint_public_access = false` and rely on `cluster_endpoint_private_access = true`; reach the cluster via AWS Client VPN, a bastion, or SSM Session Manager. Or pin `_cidrs` to corporate egress / VPN exit IPs. The `0.0.0.0/0` choice is needed for Workshop Studio attendees, who arrive from random IPs. |
+| AOSS network policy `AllowFromPublic = true` | `infrastructure/modules/bedrock_kb_aoss/aoss.tf` | Set `AllowFromPublic = false` and add a VPC interface endpoint (`aws_vpc_endpoint` with `service_name = "com.amazonaws.<region>.aoss"`). Reference it from the network policy via `SourceVPCEs`. Bedrock KB → AOSS traffic stays inside the VPC. |
+| AOSS data-access policy uses `aoss:*` | `infrastructure/modules/bedrock_kb_aoss/aoss.tf` | Split into two principal-scoped statements: the Bedrock KB role gets `aoss:APIAccessAll` only (read/write data + ingestion), and the Stacks-runner principal gets `aoss:CreateIndex` / `aoss:UpdateIndex` / `aoss:DeleteIndex` / `aoss:DescribeIndex` (index lifecycle). Drop admin actions from both. |
+| `enable_cluster_creator_admin_permissions = true` | `infrastructure/modules/eks/main.tf` | For pipeline-deployed clusters, set this to `false` and explicitly declare `access_entries` per role: platform team gets `AmazonEKSClusterAdminPolicy`, app teams get `AmazonEKSEditPolicy` scoped to namespaces, on-call gets `AmazonEKSViewPolicy`. The deploy role's access entry should be revoked post-bootstrap (Pitfall E3 — without revocation it persists and is hard to audit). |
+| Deploy role attached `AdministratorAccess` | `infrastructure/scripts/setup-aws-oidc.sh` | Replace with the scoped policy from `eks-terraform-stacks/infrastructure/scripts/setup-aws-oidc.sh` lines 184–339, then iterate against your real apply log to add any missing actions. Workshop pedagogy — IAM least-privilege design — is its own multi-day topic; this workshop teaches the workload-identity layer, not IAM design. |
+
+The workshop's deliberate stop point: it teaches **the 5 control objectives at the workload-identity / data-plane layer**. The simplifications above are at the IAM / network-perimeter layer, which a different workshop (or a Hashicorp Validated Design) would tackle.
 
 ## Next steps
 

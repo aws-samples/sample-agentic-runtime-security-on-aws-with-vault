@@ -103,18 +103,26 @@ resource "tfe_project" "workshop" {
 }
 
 #-------------------------------------------------------------------------------
-# Variable Set — project-scoped (bound to the workshop project, not org-wide)
+# Variable Set — ORGANIZATION-scoped (matches the eks-terraform-stacks
+# reference repo's pattern of declaring varsets at the org and assigning
+# them to the project explicitly via tfe_project_variable_set).
 #
-# Note: `parent_project_id` was added to the tfe provider in v0.55+. This
-# binds the variable set to the project so all workspaces / Stacks under the
-# project automatically inherit it. The same field replaces the separate
-# `tfe_project_variable_set` assignment resource the older reference repo used.
+# Org-scoped varsets trickle down: declared once at the org, assigned to
+# the workshop project, inherited by every workspace / Stack under that
+# project. This keeps the cross-Stack reuse story consistent with what
+# attendees see in the eks-stacks workshop.
 #-------------------------------------------------------------------------------
 resource "tfe_variable_set" "workshop" {
-  organization      = var.hcp_org
-  name              = var.varset_name
-  description       = "Variable set for the Agentic Runtime Security workshop Stacks deployment (OIDC role ARN, region, admin ARN)"
-  parent_project_id = tfe_project.workshop.id
+  organization = var.hcp_org
+  name         = var.varset_name
+  description  = "Variable set for the Agentic Runtime Security workshop Stacks deployment (OIDC role ARN, region, admin ARN). Organization-scoped, assigned to the workshop project below."
+}
+
+# Assign the org-scoped varset to the workshop project. Stacks/workspaces
+# under the project inherit the variables automatically.
+resource "tfe_project_variable_set" "assign_to_project" {
+  project_id      = tfe_project.workshop.id
+  variable_set_id = tfe_variable_set.workshop.id
 }
 
 #-------------------------------------------------------------------------------

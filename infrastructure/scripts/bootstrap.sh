@@ -359,8 +359,9 @@ step_terraform_apply() {
 # 3) Parse repo identifier from `git remote get-url origin`.
 # 4) POST /stacks with vcs-repo + working-directory=infrastructure +
 #    project relationship.
-# 5) Assign variable set to stack: POST /varsets/$VS/relationships/stacks
-#    (422 means already assigned — treat as success).
+# Note: variable-set assignment is project-level (tfe_project_variable_set in
+# hcp-setup/main.tf); the Stack inherits automatically. No Stack-level varset
+# assignment here.
 #===============================================================================
 step_create_stack() {
     step_header "6/7" "Create HCP Terraform Stack"
@@ -377,11 +378,11 @@ step_create_stack() {
         return 1
     fi
 
-    # Resolve project_id and varset_id from terraform output of Step 6
+    # Resolve project_id from terraform output of Step 6.
+    # varset_id is no longer needed here — varset assignment lives at the
+    # project level via tfe_project_variable_set in hcp-setup/main.tf.
     local project_id
-    local varset_id
     project_id=$(terraform -chdir="$SCRIPT_DIR/hcp-setup" output -raw project_id 2>/dev/null)
-    varset_id=$(terraform -chdir="$SCRIPT_DIR/hcp-setup" output -raw varset_id 2>/dev/null)
 
     if [ -z "$project_id" ]; then
         echo -e "${RED}Could not resolve project_id from terraform output${NC}"
@@ -516,24 +517,10 @@ step_create_stack() {
         fi
     fi
 
-    # Assign variable set to stack
-    if [ -z "$stack_id" ] || [ -z "$varset_id" ]; then
-        echo -e "${YELLOW}⚠ stack_id or varset_id missing — assign variable set manually in HCP UI${NC}"
-        return 0
-    fi
-
-    local assign_code
-    assign_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-        -H "Authorization: Bearer $TFE_TOKEN" \
-        -H "Content-Type: application/vnd.api+json" \
-        -d "{\"data\":[{\"type\":\"stacks\",\"id\":\"$stack_id\"}]}" \
-        "$TFE_API/varsets/$varset_id/relationships/stacks" 2>/dev/null)
-
-    case "$assign_code" in
-        200|201|204) echo -e "${GREEN}✓ Variable set assigned to Stack${NC}" ;;
-        422)         echo -e "${GREEN}✓ Variable set already assigned to Stack (422)${NC}" ;;
-        *)           echo -e "${YELLOW}⚠ Variable set assignment returned HTTP $assign_code — assign manually in HCP UI${NC}" ;;
-    esac
+    # Variable-set assignment lives at the PROJECT level (declared via
+    # tfe_project_variable_set in hcp-setup/main.tf — applied in Step 5).
+    # Stacks under the project inherit automatically; no Stack-level
+    # assignment is needed here.
 }
 
 #===============================================================================

@@ -60,7 +60,7 @@ output "rds_endpoint" {
 output "kb_id" {
   type        = string
   description = "Bedrock Knowledge Base ID — agents pass this to bedrock-agent-runtime:Retrieve."
-  value       = component.bedrock_kb.knowledge_base_id
+  value       = component.bedrock_kb_index.knowledge_base_id
 }
 
 #-------------------------------------------------------------------------------

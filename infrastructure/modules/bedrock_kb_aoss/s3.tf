@@ -1,5 +1,5 @@
 ################################################################################
-# bedrock_kb Module — S3 corpus bucket + SSE-KMS + corpus upload.
+# bedrock_kb_aoss Module — S3 corpus bucket + SSE-KMS + corpus upload.
 #
 # Bucket holds the synthetic workshop corpus (HR + customers + finance).
 # 8 markdown files under sample_corpus/{hr,customers,finance}/ are uploaded
@@ -13,9 +13,7 @@ resource "aws_s3_bucket" "kb_corpus" {
   tags          = var.tags
 }
 
-################################################################################
 # SSE-KMS using workshop CMK (matches RDS storage + AOSS encryption context).
-################################################################################
 resource "aws_s3_bucket_server_side_encryption_configuration" "kb_corpus" {
   bucket = aws_s3_bucket.kb_corpus.id
 
@@ -28,9 +26,7 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "kb_corpus" {
   }
 }
 
-################################################################################
 # Block all public access — corpus stays private; KB role reads via IAM.
-################################################################################
 resource "aws_s3_bucket_public_access_block" "kb_corpus" {
   bucket = aws_s3_bucket.kb_corpus.id
 
@@ -40,10 +36,7 @@ resource "aws_s3_bucket_public_access_block" "kb_corpus" {
   restrict_public_buckets = true
 }
 
-################################################################################
 # Corpus upload — fileset() over sample_corpus/**/*.md.
-# etag = filemd5() ensures Terraform detects content changes.
-################################################################################
 locals {
   corpus_files = fileset("${path.module}/sample_corpus", "**/*.md")
 }

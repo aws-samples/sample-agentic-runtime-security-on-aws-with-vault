@@ -46,7 +46,7 @@ workshop/static/images/
 # Node
 node_modules/
 
-# reveal-md exports
-slides.pdf
+# reveal-md exports (any rendered slide-deck PDFs at repo root or below)
+*.pdf
 slides-site/
 workshop/tmp/

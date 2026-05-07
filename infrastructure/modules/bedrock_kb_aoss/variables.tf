@@ -1,18 +1,14 @@
 ################################################################################
-# bedrock_kb Module — Variables
-# INFR-04: Bedrock Knowledge Base on OpenSearch Serverless with seeded corpus.
-#
-# This module rolls the KB by hand from primitives (NOT aws-ia/terraform-aws-bedrock)
-# to keep the configuration visible — workshop pedagogy mandate.
+# bedrock_kb_aoss Module — Variables
 ################################################################################
 
 variable "region" {
-  description = "AWS region. Threads through AOSS encryption policies, opensearch provider, and any data sources. Region flows in from the canonical deployments.tfdeploy.hcl variable; no region string literals appear anywhere in this module."
+  description = "AWS region. Threads through AOSS encryption policies and any region-flowed resources. Region flows in from the canonical deployments.tfdeploy.hcl variable; no region string literals appear anywhere in this module."
   type        = string
 }
 
 variable "kb_name" {
-  description = "Bedrock Knowledge Base name. Drives the AOSS policy/collection naming prefix."
+  description = "Bedrock Knowledge Base name. Drives the AOSS policy/collection naming prefix and the IAM role name."
   type        = string
   default     = "workshop-kb"
 }

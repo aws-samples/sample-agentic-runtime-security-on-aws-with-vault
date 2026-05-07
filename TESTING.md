@@ -61,10 +61,14 @@ test -f .gitignore
 test -f slides.md
 test -f reveal-md.json
 
-# Twelve module directories with one-line README stubs
-for d in vpc eks rds bedrock_kb vault verify_access vault_config isva_config \
+# Module directories — bedrock_kb is split into bedrock_kb_aoss + bedrock_kb_index
+# (avoids a Stacks circular dependency between the opensearch provider URL and
+# the component that creates the AOSS collection). README.md presence is
+# optional per CLAUDE.md "minimize .md files" — these dirs may have inline docs only.
+for d in audit vpc eks addons rds bedrock_kb_aoss bedrock_kb_index \
+         vault verify_access vault_config isva_config \
          observability uc1_agent uc2_agent uc3_agent; do
-  test -f "infrastructure/modules/$d/README.md" || echo "MISSING: $d"
+  test -d "infrastructure/modules/$d" || echo "MISSING: $d"
 done
 
 # Scripts directory indexed
