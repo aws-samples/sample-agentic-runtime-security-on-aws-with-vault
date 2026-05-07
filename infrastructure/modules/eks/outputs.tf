@@ -43,3 +43,13 @@ output "kubectl_config_command" {
   description = "Run this to populate ~/.kube/config (INFR-05 — workshop attendee one-liner)"
   value       = "aws eks update-kubeconfig --region ${var.region} --name ${module.eks.cluster_name} --alias workshop"
 }
+
+output "cluster_version" {
+  description = "Kubernetes minor version of the EKS control plane (consumed by addons component for Helm chart compatibility)"
+  value       = module.eks.cluster_version
+}
+
+output "oidc_provider_arn" {
+  description = "ARN of the IAM OIDC provider associated with the EKS cluster (consumed by addons component for IRSA-style role trust where Pod Identity isn't applicable)"
+  value       = module.eks.oidc_provider_arn
+}
