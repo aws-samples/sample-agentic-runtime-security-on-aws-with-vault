@@ -36,14 +36,51 @@ if (( BASH_VERSINFO[0] < 4 )); then
     exit 1
 fi
 
+# Terminal capability probe (Plan 01-09 hardening)
+#
+# If the controlling terminal does not support color (tput colors < 8) OR
+# stdout is not a TTY (e.g., output piped to less / redirected to a file /
+# captured by a CI pipeline), set every color variable to empty so output
+# is monochrome and unambiguous. This eliminates two failure modes:
+#   1. Custom terminal palettes that remap ANSI 32 (green) to a reddish hue
+#      — UAT test 9 surfaced this as user-perceived "passes rendered red"
+#   2. Pipe-captured output where ANSI escapes leak into log files / pagers
+#      as literal "\033[0;31m" garbage
+#
+# Override: set WORKSHOP_FORCE_COLOR=1 in the environment to bypass this
+# probe and always emit color (useful for CI logs that DO render ANSI).
+
+_color_capable=true
+if [ "${WORKSHOP_FORCE_COLOR:-0}" != "1" ]; then
+    if ! command -v tput >/dev/null 2>&1; then
+        _color_capable=false
+    elif ! [ -t 1 ]; then
+        _color_capable=false
+    else
+        _tcolors=$(tput colors 2>/dev/null || echo 0)
+        if [ "${_tcolors:-0}" -lt 8 ]; then
+            _color_capable=false
+        fi
+    fi
+fi
+
 #-------------------------------------------------------------------------------
 # Color constants
 #-------------------------------------------------------------------------------
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+if [ "$_color_capable" = "true" ]; then
+    RED='\033[0;31m'
+    GREEN='\033[0;32m'
+    YELLOW='\033[1;33m'
+    BLUE='\033[0;34m'
+    NC='\033[0m'
+else
+    RED=''
+    GREEN=''
+    YELLOW=''
+    BLUE=''
+    NC=''
+fi
+unset _color_capable _tcolors
 
 #-------------------------------------------------------------------------------
 # Failure accumulator
@@ -53,6 +90,7 @@ NC='\033[0m' # No Color
 # often contain colons (URLs, IAM ARNs, file paths, AWS CLI commands).
 #-------------------------------------------------------------------------------
 declare -a FAILURES=()
+declare -a PASSES=()
 
 #-------------------------------------------------------------------------------
 # Print helpers
@@ -60,7 +98,9 @@ declare -a FAILURES=()
 # Both are stored in FAILURES[] for the summary block.
 #-------------------------------------------------------------------------------
 print_pass() {
-    echo -e "  ${GREEN}✓ PASS${NC} $1"
+    local name="$1"
+    echo -e "  ${GREEN}✓ PASS${NC} $name"
+    PASSES+=("$name")
 }
 
 print_fail() {
@@ -115,13 +155,25 @@ confirm() {
 print_summary() {
     echo
     echo -e "${BLUE}===============================================================================${NC}"
-    if [ ${#FAILURES[@]} -eq 0 ]; then
-        echo -e "${GREEN} ✓ All checks passed${NC}"
+    local pass_count=${#PASSES[@]}
+    local fail_count=${#FAILURES[@]}
+
+    # Green pass-count line — always print if any passes exist
+    if [ "$pass_count" -gt 0 ]; then
+        echo -e "${GREEN} ✓ ${pass_count} check(s) passed${NC}"
+    fi
+
+    if [ "$fail_count" -eq 0 ]; then
+        if [ "$pass_count" -eq 0 ]; then
+            # Edge case: no passes AND no failures (script aborted before any check ran)
+            echo -e "${YELLOW} ⚠ No checks ran${NC}"
+        fi
         echo -e "${BLUE}===============================================================================${NC}"
         return 0
     fi
 
-    echo -e "${RED} ✗ ${#FAILURES[@]} check(s) failed:${NC}"
+    # Red fail-count line + per-failure enumeration
+    echo -e "${RED} ✗ ${fail_count} check(s) failed:${NC}"
     echo -e "${BLUE}===============================================================================${NC}"
     local i=1
     for entry in "${FAILURES[@]}"; do
