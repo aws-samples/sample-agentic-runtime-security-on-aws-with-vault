@@ -14,7 +14,11 @@
 ################################################################################
 
 terraform {
-  required_version = ">= 1.10"
+  # The hcp-setup module only uses the tfe provider (HCP project + variable set).
+  # It does NOT use Stacks features, so it does not need Terraform 1.10+.
+  # Matches eks-terraform-stacks/infrastructure/scripts/hcp-setup/versions.tf,
+  # which also pins ">= 1.0" so attendees with stock Terraform CLIs can bootstrap.
+  required_version = ">= 1.0"
 
   required_providers {
     tfe = {
