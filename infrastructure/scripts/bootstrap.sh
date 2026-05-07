@@ -9,7 +9,7 @@
 # (the canonical pattern source). Workshop-specific edits:
 #   - STACK_NAME defaults to "agentic-runtime-security" (single deployment "usw2",
 #     no region suffix per CONTEXT.md decision: single region us-west-2)
-#   - VARSET_NAME defaults to "agentic-runtime-security-config"
+#   - VARSET_NAME defaults to "agentic-runtime-stacks-config"
 #   - HCP_PROJECT defaults to "Agentic Runtime Security"
 #   - Step 0 detects HCP free tier (Pitfall §2 — free tier EOL 2026-03-31)
 #   - Prereq gate at top of main flow asks "Have you run ./check-prerequisites.sh and seen
@@ -35,7 +35,7 @@
 #
 # Options:
 #   --project NAME           HCP project name (default: "Agentic Runtime Security")
-#   --varset-name NAME       Variable set name (default: "agentic-runtime-security-config")
+#   --varset-name NAME       Variable set name (default: "agentic-runtime-stacks-config")
 #   --stack-name NAME        HCP Stack name (default: "agentic-runtime-security")
 #   --branch NAME            Git branch for VCS connection (default: repo default)
 #   --dry-run                Show what would be done without executing
@@ -71,7 +71,7 @@ TFE_API="https://app.terraform.io/api/v2"
 #-------------------------------------------------------------------------------
 HCP_ORG=""
 HCP_PROJECT="Agentic Runtime Security"
-VARSET_NAME="agentic-runtime-security-config"
+VARSET_NAME="agentic-runtime-stacks-config"
 STACK_NAME="agentic-runtime-security"
 STACK_BRANCH=""
 DRY_RUN=false
@@ -88,7 +88,7 @@ Arguments:
 
 Options:
   --project NAME           HCP project name (default: "Agentic Runtime Security")
-  --varset-name NAME       Variable set name (default: "agentic-runtime-security-config")
+  --varset-name NAME       Variable set name (default: "agentic-runtime-stacks-config")
   --stack-name NAME        HCP Stack name (default: "agentic-runtime-security")
   --branch NAME            Git branch for VCS connection (default: repo default)
   --dry-run                Show what would be done without executing
