@@ -488,9 +488,11 @@ if confirm "Run AWS service quotas check?"; then
             #    Workshop topology: EKS managed node group + RDS host = ~28 vCPU peak.
             #    Requirement: 32.
             check_quota "EC2 Standard vCPU"           ec2  L-1216C47A 32
-            # 2. VPC Elastic IPs per region — default 5; workshop needs 6 (3 NAT GW
-            #    + 1 IVIA admin EIP + 2 spare for re-deploys).
-            check_quota "VPC Elastic IPs"             ec2  L-0263D0A3 6
+            # 2. VPC Elastic IPs per region — workshop deploys single-NAT (Phase 2
+            #    cost-optimized decision, NOT multi-AZ NAT). Real need: 1 NAT GW +
+            #    1 IVIA admin EIP + 2 spare for re-deploys = 4. Default account
+            #    quota of 5 is sufficient.
+            check_quota "VPC Elastic IPs"             ec2  L-0263D0A3 4
             # 3. RDS DB instances per region — default 40, but explicit verify.
             check_quota "RDS DB instances per region" rds  L-7B6409FD 1
             # 4. AOSS OCU indexing — default 10; workshop KB needs 2.
