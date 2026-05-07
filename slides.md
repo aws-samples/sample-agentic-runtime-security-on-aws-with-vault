@@ -16,7 +16,10 @@ revealOptions:
 
 ### IBM Verify Identity Access + HashiCorp Vault on EKS
 
-<img src="assets/hashicorp_logo.png" style="width: 140px; margin-top: 30px;" />
+<div style="display:flex; gap:40px; align-items:center; justify-content:center; margin-top:30px;">
+  <img src="assets/hashicorp_logo.png" style="width: 140px;" alt="HashiCorp" />
+  <img src="assets/aws-logo.png" style="width: 140px;" alt="AWS" />
+</div>
 
 **Presenter:** _<presenter name placeholder>_
 
