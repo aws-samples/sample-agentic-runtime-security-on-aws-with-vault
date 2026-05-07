@@ -96,6 +96,21 @@ MODEL_ID="us.amazon.nova-pro-v1:0"
 AWS_REGION="${AWS_REGION:-us-west-2}"
 export AWS_PAGER=""
 
+# ---- Minimum tool versions (enforced in the "Verify CLI tool versions" section) ----
+# Terraform 1.10 is the floor: Stacks features (terraform stacks plan / apply)
+# require 1.10+. The hcp-setup module deliberately keeps a looser >= 1.0 pin
+# so attendees can bootstrap with stock CLIs, but the workshop's actual Stacks
+# deploy needs 1.10+ at the local CLI to dry-run / plan.
+TERRAFORM_MIN_VERSION="1.10.0"
+
+# ---- Portable semver compare (returns 0 if $1 >= $2) ----
+# Uses `sort -V` (GNU version-sort, available on macOS 10.14+ and all Linux).
+version_gte() {
+    local current="$1"
+    local min="$2"
+    [ "$(printf '%s\n%s\n' "$current" "$min" | sort -V -r | head -1)" = "$current" ]
+}
+
 # ---- Banner ----
 echo
 echo -e "${BLUE}===============================================================================${NC}"
@@ -337,6 +352,36 @@ EOF"
     esac
 else
     print_warn "Skipped CLI install section"
+fi
+
+echo
+
+# =============================================================================
+# SECTION 1.5: Verify CLI tool versions
+#
+# Catches the "tool is installed but stale" case the install loop above misses
+# (e.g. brew already had terraform 1.5.7 at install time and brew install
+# becomes a no-op). Currently scoped to terraform; can extend to helm/vault
+# version pins as needed.
+# =============================================================================
+echo -e "${BLUE}=== Verify CLI tool versions ===${NC}"
+
+# terraform >= TERRAFORM_MIN_VERSION
+if command -v terraform >/dev/null 2>&1; then
+    # Prefer `version -json` (TF >= 0.13). Fallback to plain text for older.
+    tf_current=$(terraform version -json 2>/dev/null | jq -r '.terraform_version // empty' 2>/dev/null)
+    if [ -z "$tf_current" ]; then
+        tf_current=$(terraform version 2>/dev/null | head -1 | sed -E 's/^Terraform v([0-9.]+).*/\1/')
+    fi
+    if [ -n "$tf_current" ] && version_gte "$tf_current" "$TERRAFORM_MIN_VERSION"; then
+        print_pass "terraform v${tf_current} (>= ${TERRAFORM_MIN_VERSION} required for Stacks)"
+    else
+        print_fail "terraform v${tf_current:-unknown} is below ${TERRAFORM_MIN_VERSION}" \
+            "Stacks features (terraform stacks plan / apply) require >= ${TERRAFORM_MIN_VERSION}. Upgrade: macOS \`brew upgrade terraform\` | Linux apt \`sudo apt-get install --only-upgrade terraform\` | Linux yum \`sudo yum upgrade terraform\` | Or download the latest from https://developer.hashicorp.com/terraform/install"
+    fi
+else
+    print_fail "terraform not found" \
+        "Install via the install loop above, or manually from https://developer.hashicorp.com/terraform/install. Minimum: ${TERRAFORM_MIN_VERSION}"
 fi
 
 echo
