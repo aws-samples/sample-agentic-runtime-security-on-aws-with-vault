@@ -25,6 +25,9 @@
 #                        resources (ENIs, SGs, EIPs, VPCs) + HCP objects
 #                        (OIDC, IAM role, variable set, Stack)
 #   --skip-addons       (no-op for now; reserved for future controllers)
+#   --skip-prereq-gate  (no-op at this level; passed automatically to
+#                        bootstrap.sh in Phase 1 since Phase 0 already runs
+#                        check-prerequisites.sh — accepted for CLI symmetry)
 #   --dry-run           Show what would be done without executing
 #   --project NAME      HCP project name (default: "Agentic Runtime Security")
 #   --branch NAME       Git branch to push to (default: "main")
@@ -160,6 +163,13 @@ while [ $# -gt 0 ]; do
         --nuke)           NUKE=true ;;
         --cleanup-only)   CLEANUP_ONLY=true; NUKE=true ;;
         --skip-addons)    SKIP_ADDONS=true ;;
+        --skip-prereq-gate)
+            # No-op at this level. workshop-e2e.sh ALWAYS passes
+            # --skip-prereq-gate to bootstrap.sh internally because Phase 0
+            # already ran check-prerequisites.sh. Accepted here for CLI
+            # symmetry — users who pass it through from the bootstrap.sh
+            # surface get a clean run instead of an "Unknown option" error.
+            ;;
         --dry-run)        DRY_RUN=true ;;
         --project)        HCP_PROJECT="$2"; shift ;;
         --branch)         GIT_BRANCH="$2"; shift ;;
