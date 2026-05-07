@@ -52,8 +52,7 @@ variable "aws_account_id" {
 
 variable "aws_region" {
   type        = string
-  default     = "us-west-2"
-  description = "AWS region for the workshop deployment (CONTEXT.md mandates us-west-2)"
+  description = "AWS region for the workshop deployment. Single-region per CONTEXT.md; canonical value lives in deployments.tfdeploy.hcl and is mirrored into the variable set by bootstrap.sh."
 }
 
 variable "iam_role_arn" {
@@ -89,7 +88,7 @@ variable "varset_name" {
 resource "tfe_project" "workshop" {
   organization = var.hcp_org
   name         = var.project_name
-  description  = "Agentic Runtime Security on AWS workshop — Stacks-managed deployments in single region us-west-2"
+  description  = "Agentic Runtime Security on AWS workshop — Stacks-managed single-region deployment (canonical region locked in deployments.tfdeploy.hcl)"
 
   # The TFE API lowercases the organization name on return (e.g. "DevOpsOscar"
   # → "devopsoscar"), causing Terraform to see an inconsistent result.
@@ -133,7 +132,7 @@ resource "tfe_variable" "aws_region" {
   key             = "aws_region"
   value           = var.aws_region
   category        = "terraform"
-  description     = "AWS region (single-region workshop, locked to us-west-2)"
+  description     = "AWS region (single-region workshop; canonical value lives in deployments.tfdeploy.hcl)"
 }
 
 resource "tfe_variable" "admin_principal_arn" {
