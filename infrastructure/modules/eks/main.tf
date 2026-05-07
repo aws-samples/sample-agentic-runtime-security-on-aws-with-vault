@@ -1,7 +1,7 @@
 ################################################################################
 # EKS Module — workshop foundation
 #
-# Wraps terraform-aws-modules/eks/aws ~> 21.0 to provide:
+# Wraps terraform-aws-modules/eks/aws ~> 20.37 to provide:
 #   - EKS 1.33 control plane (public + private endpoint)
 #   - All 5 control-plane log types (CONTEXT decision; supports OBJ-5 forensics)
 #   - Managed node group: m5.xlarge × desired=3 / min=2 / max=5 / AL2023 / on-demand
@@ -9,12 +9,16 @@
 #   - 5 managed addons: vpc-cni, coredns, kube-proxy, eks-pod-identity-agent, aws-ebs-csi-driver
 #   - Pod Identity Associations on vpc-cni + aws-ebs-csi-driver (RESEARCH Pattern 3)
 #
-# IMPORTANT — terraform-aws-modules/eks/aws v21 input naming:
-# v21 dropped the `cluster_` prefix on many inputs (`cluster_name` → `name`,
-# `cluster_version` → `kubernetes_version`, `cluster_addons` → `addons`,
-# `cluster_endpoint_*` → `endpoint_*`, `cluster_enabled_log_types` →
-# `enabled_log_types`). Output names still carry the `cluster_` prefix
-# (e.g. `cluster_endpoint`, `cluster_certificate_authority_data`).
+# Module pinned to ~> 20.37 (matches eks-terraform-stacks reference) — v21 of
+# terraform-aws-modules/eks/aws requires AWS provider 6.x, but our Stacks
+# config locks AWS to ~> 5.0 (workshop CONTEXT.md decision). v20.37 supports
+# the same 5 managed addons + Pod Identity Associations + Access Entries
+# feature set we depend on, just under the older `cluster_*`-prefixed input
+# names. v20 input shapes:
+#   - `cluster_name`, `cluster_version`, `cluster_addons`
+#   - `cluster_endpoint_public_access[_cidrs]`, `cluster_endpoint_private_access`
+#   - `cluster_enabled_log_types`
+# Output names are unchanged across v20/v21 (cluster_endpoint, etc.).
 #
 # Karpenter and ArgoCD are deliberately OUT of scope for this workshop —
 # managed node group only; Helm-direct or Stacks for app deployments.
@@ -31,20 +35,20 @@
 
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
-  version = "~> 21.0"
+  version = "~> 20.37"
 
-  name               = var.cluster_name
-  kubernetes_version = "1.33"
+  cluster_name    = var.cluster_name
+  cluster_version = "1.33"
 
   # Endpoint configuration (CONTEXT decision)
   # Public + private: kubectl from attendee laptop works (public);
   # in-cluster traffic stays via private endpoint.
-  endpoint_public_access       = true
-  endpoint_public_access_cidrs = ["0.0.0.0/0"] # Workshop Studio: any IP — auth still required via Access Entries
-  endpoint_private_access      = true
+  cluster_endpoint_public_access       = true
+  cluster_endpoint_public_access_cidrs = ["0.0.0.0/0"] # Workshop Studio: any IP — auth still required via Access Entries
+  cluster_endpoint_private_access      = true
 
   # All 5 control-plane log types (CONTEXT decision; supports OBJ-5 forensics).
-  enabled_log_types = ["api", "audit", "authenticator", "controllerManager", "scheduler"]
+  cluster_enabled_log_types = ["api", "audit", "authenticator", "controllerManager", "scheduler"]
 
   # Let EKS manage its own CloudWatch log group to avoid ResourceAlreadyExistsException
   # during Terraform Stacks deferred re-apply cycles.
@@ -79,7 +83,7 @@ module "eks" {
   # Managed addons with Pod Identity Associations (RESEARCH Pattern 3).
   # before_compute=true on vpc-cni and eks-pod-identity-agent is CRITICAL —
   # nodes need CNI + Pod Identity agent before they reach Ready (Pitfall E1).
-  addons = {
+  cluster_addons = {
     vpc-cni = {
       most_recent    = true
       before_compute = true

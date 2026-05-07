@@ -49,11 +49,11 @@ component "vpc" {
   }
 
   inputs = {
-    name     = var.cluster_name
-    vpc_cidr = var.vpc_cidr
-    azs      = var.azs
-    region   = var.region
-    tags     = var.tags
+    cluster_name = var.cluster_name
+    vpc_cidr     = var.vpc_cidr
+    azs          = var.azs
+    region       = var.region
+    tags         = var.tags
   }
 }
 
@@ -94,7 +94,8 @@ component "eks" {
 component "rds" {
   source = "./modules/rds"
 
-  depends_on = [component.vpc, component.audit]
+  # Implicit dependency on component.eks via cluster_security_group_id input.
+  depends_on = [component.vpc, component.audit, component.eks]
 
   providers = {
     aws    = provider.aws.main
@@ -102,13 +103,13 @@ component "rds" {
   }
 
   inputs = {
-    region              = var.region
-    cluster_name        = var.cluster_name
-    vpc_id              = component.vpc.vpc_id
-    private_subnet_ids  = component.vpc.private_subnet_ids
-    rds_instance_class  = var.rds_instance_class
-    workshop_cmk_arn    = component.audit.workshop_cmk_arn
-    tags                = var.tags
+    identifier                = "${var.cluster_name}-pg"
+    vpc_id                    = component.vpc.vpc_id
+    private_subnet_ids        = component.vpc.private_subnet_ids
+    cluster_security_group_id = component.eks.cluster_security_group_id
+    workshop_cmk_arn          = component.audit.workshop_cmk_arn
+    instance_class            = var.rds_instance_class
+    tags                      = var.tags
   }
 }
 

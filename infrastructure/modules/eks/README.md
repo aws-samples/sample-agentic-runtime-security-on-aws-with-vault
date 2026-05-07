@@ -8,7 +8,7 @@ Entries) and **INFR-05** (workshop-attendee `kubectl` one-liner).
 
 ## Overview
 
-Wraps **`terraform-aws-modules/eks/aws ~> 21.0`** plus
+Wraps **`terraform-aws-modules/eks/aws ~> 20.37`** plus
 **`terraform-aws-modules/eks-pod-identity/aws ~> 1.12`** (twice — once each for
 the vpc-cni and aws-ebs-csi-driver Pod Identity targets). The cluster sits in
 the private subnets created by the `vpc` component (Plan 02-02), and its

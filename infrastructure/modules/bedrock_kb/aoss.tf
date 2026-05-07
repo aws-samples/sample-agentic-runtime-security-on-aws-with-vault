@@ -119,17 +119,18 @@ resource "aws_opensearchserverless_collection" "kb" {
 }
 
 ################################################################################
-# 5. opensearch provider — provider switch from terraform-provider-aws to
-#    opensearch-project/opensearch for the vector index.
+# 5. opensearch provider configuration is intentionally NOT declared here.
 #
-#    Pitfall B3: pinned EXACT = 2.2.0 in required_providers above.
+# Stacks rejects inline `provider "opensearch" {}` blocks inside component
+# modules ("Inline provider configuration not allowed"). The opensearch
+# provider is configured at the Stack level in
+# infrastructure/providers.tfcomponent.hcl as `provider "opensearch" "main"`,
+# wired to component.bedrock_kb.aoss_collection_endpoint, and passed to this
+# component via `providers = { opensearch = provider.opensearch.main }` in
+# infrastructure/components.tfcomponent.hcl.
+#
+# Pitfall B3: provider version pinned EXACT = 2.2.0 at the Stack level.
 ################################################################################
-provider "opensearch" {
-  url               = aws_opensearchserverless_collection.kb.collection_endpoint
-  aws_region        = var.region
-  healthcheck       = false
-  sign_aws_requests = true
-}
 
 ################################################################################
 # 6. Vector index for the Bedrock Knowledge Base.
