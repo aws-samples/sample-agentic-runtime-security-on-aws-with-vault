@@ -7,7 +7,7 @@
 ################################################################################
 
 variable "region" {
-  description = "AWS region. Threads through AOSS encryption policies, opensearch provider, and any data sources. NO us-west-2 string literals anywhere in this module — region flows in from the canonical deployments.tfdeploy.hcl variable."
+  description = "AWS region. Threads through AOSS encryption policies, opensearch provider, and any data sources. Region flows in from the canonical deployments.tfdeploy.hcl variable; no region string literals appear anywhere in this module."
   type        = string
 }
 
