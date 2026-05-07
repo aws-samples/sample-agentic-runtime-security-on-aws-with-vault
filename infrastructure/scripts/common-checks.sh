@@ -79,6 +79,32 @@ print_info() {
 }
 
 #-------------------------------------------------------------------------------
+# Interactive confirm helper
+#
+# Prompts y/N from the controlling TTY (works even when caller piped stdin).
+# Honors WORKSHOP_AUTO_YES=1 (auto-yes via flag) and non-TTY environments
+# (auto-yes when stdin is not a terminal — preserves CI / Workshop Studio
+# attendee VM compatibility). Returns 0 on Y, 1 on N or empty.
+#
+# Usage:
+#   if confirm "Install kubectl?"; then run "brew install kubernetes-cli"; fi
+#-------------------------------------------------------------------------------
+confirm() {
+    local prompt="${1:-Continue?}"
+    # Auto-yes when --interactive is NOT in effect (WORKSHOP_AUTO_YES=1) or
+    # stdin is not a terminal (CI / piped input). The caller controls the
+    # default by setting or unsetting WORKSHOP_AUTO_YES before calling.
+    if [ "${WORKSHOP_AUTO_YES:-0}" = "1" ] || [ ! -t 0 ]; then
+        echo -e "  ${YELLOW}? ${prompt} [y/N]${NC} (auto-yes)"
+        return 0
+    fi
+    local reply
+    # Read from /dev/tty so the prompt works even if caller piped stdin
+    read -p "  $(echo -e "${YELLOW}?${NC}") ${prompt} [y/N] " -r reply < /dev/tty
+    [[ "$reply" =~ ^[Yy]$ ]]
+}
+
+#-------------------------------------------------------------------------------
 # Summary block
 #
 # Prints a consolidated summary listing every accumulated failure with its
