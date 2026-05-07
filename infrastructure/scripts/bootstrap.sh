@@ -75,6 +75,7 @@ VARSET_NAME="agentic-runtime-stacks-config"
 STACK_NAME="agentic-runtime-security"
 STACK_BRANCH=""
 DRY_RUN=false
+SKIP_PREREQ_GATE=false
 
 usage() {
     cat <<USAGE
@@ -92,6 +93,9 @@ Options:
   --stack-name NAME        HCP Stack name (default: "agentic-runtime-security")
   --branch NAME            Git branch for VCS connection (default: repo default)
   --dry-run                Show what would be done without executing
+  --skip-prereq-gate       Skip the "Have you run check-prerequisites.sh?" prompt
+                           (set automatically when invoked from workshop-e2e.sh,
+                           which already runs check-prerequisites.sh in Phase 0)
   --help                   Show this help message
 
 Examples:
@@ -113,6 +117,7 @@ while [ $# -gt 0 ]; do
         --stack-name)   shift; STACK_NAME="${1:?--stack-name requires a value}" ;;
         --branch)       shift; STACK_BRANCH="${1:?--branch requires a value}" ;;
         --dry-run)      DRY_RUN=true ;;
+        --skip-prereq-gate) SKIP_PREREQ_GATE=true ;;
         -*) echo -e "${RED}Error: Unknown option: $1${NC}"; usage; exit 1 ;;
         *)
             if [ "$POSITIONAL_SET" = false ]; then
@@ -580,7 +585,7 @@ echo -e "  Stack:         ${YELLOW}$STACK_NAME${NC}"
 # defensively re-run preflight here; we just confirm the attendee has run it.
 # Skipped in --dry-run mode (no real action, gate is moot).
 #-------------------------------------------------------------------------------
-if [ "$DRY_RUN" = false ]; then
+if [ "$DRY_RUN" = false ] && [ "$SKIP_PREREQ_GATE" = false ]; then
     echo
     read -p "$(echo -e "${YELLOW}?${NC}") Have you run ./check-prerequisites.sh and seen all checks pass? [y/N] " -r preflight_ack < /dev/tty
     if [[ ! "$preflight_ack" =~ ^[Yy]$ ]]; then

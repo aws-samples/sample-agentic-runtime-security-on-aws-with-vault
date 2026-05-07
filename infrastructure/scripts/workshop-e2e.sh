@@ -527,7 +527,7 @@ phase_bootstrap() {
     phase_header "Phase 1: Bootstrap (OIDC + Variable Set + Stack)"
 
     if [ "$DRY_RUN" = true ]; then
-        print_info "[DRY-RUN] Would run: bootstrap.sh $HCP_ORG --project \"$HCP_PROJECT\" --branch $GIT_BRANCH"
+        print_info "[DRY-RUN] Would run: bootstrap.sh $HCP_ORG --project \"$HCP_PROJECT\" --branch $GIT_BRANCH --skip-prereq-gate"
         return 0
     fi
 
@@ -563,7 +563,7 @@ phase_bootstrap() {
         print_info "Verifying variable set is current..."
         terraform -chdir="$SCRIPT_DIR/hcp-setup" apply -auto-approve -input=false >/dev/null 2>&1 || {
             print_warn "Variable set refresh failed — re-running bootstrap"
-            bash "$SCRIPT_DIR/bootstrap.sh" "$HCP_ORG" --project "$HCP_PROJECT" --branch "$GIT_BRANCH"
+            bash "$SCRIPT_DIR/bootstrap.sh" "$HCP_ORG" --project "$HCP_PROJECT" --branch "$GIT_BRANCH" --skip-prereq-gate
             return $?
         }
         print_success "Variable set verified"
@@ -578,7 +578,7 @@ phase_bootstrap() {
         print_warn "Stack not found — running bootstrap to create it"
     fi
 
-    bash "$SCRIPT_DIR/bootstrap.sh" "$HCP_ORG" --project "$HCP_PROJECT" --branch "$GIT_BRANCH"
+    bash "$SCRIPT_DIR/bootstrap.sh" "$HCP_ORG" --project "$HCP_PROJECT" --branch "$GIT_BRANCH" --skip-prereq-gate
 }
 
 #===============================================================================
@@ -873,7 +873,7 @@ phase_nuke() {
 
         if [ ! -f "$SCRIPT_DIR/hcp-setup/terraform.tfstate" ]; then
             print_info "Variable set state missing — recreating via bootstrap..."
-            bash "$SCRIPT_DIR/bootstrap.sh" "$HCP_ORG" --project "$HCP_PROJECT" --branch "$GIT_BRANCH" 2>&1 || {
+            bash "$SCRIPT_DIR/bootstrap.sh" "$HCP_ORG" --project "$HCP_PROJECT" --branch "$GIT_BRANCH" --skip-prereq-gate 2>&1 || {
                 print_error "Bootstrap failed"; exit 1
             }
             print_success "Variable set recreated"
@@ -881,7 +881,7 @@ phase_nuke() {
             terraform -chdir="$SCRIPT_DIR/hcp-setup" apply -auto-approve -input=false >/dev/null 2>&1 && \
                 print_success "Variable set verified" || {
                 print_info "Variable set refresh failed — recreating..."
-                bash "$SCRIPT_DIR/bootstrap.sh" "$HCP_ORG" --project "$HCP_PROJECT" --branch "$GIT_BRANCH" 2>&1 || {
+                bash "$SCRIPT_DIR/bootstrap.sh" "$HCP_ORG" --project "$HCP_PROJECT" --branch "$GIT_BRANCH" --skip-prereq-gate 2>&1 || {
                     print_error "Bootstrap failed"; exit 1
                 }
             }
