@@ -4,7 +4,7 @@ This document describes how to test the workshop end-to-end. The workshop is bui
 
 ## End-to-End Validation
 
-Before running the full workshop or after making changes, validate that the repo skeleton, slide deck preview, SVG regeneration pipeline, and four pre-flight scripts all work against your AWS account.
+Before running the full workshop or after making changes, validate that the repo skeleton, slide deck preview, SVG regeneration pipeline, and consolidated `preflight.sh` script all work against your AWS account.
 
 ### E2E Workshop Flow Checklist
 
@@ -17,10 +17,7 @@ Steps marked [WAIT] require waiting for HCP Terraform to apply.
 - [ ] `npx reveal-md slides.md` opens the slide deck in a browser
 - [ ] `npx reveal-md slides.md --print slides.pdf` exports the deck to PDF
 - [ ] `python3 infrastructure/scripts/excalidraw-to-svg.py` regenerates all six SVGs in `assets/` from their `.excalidraw` sources
-- [ ] `./infrastructure/scripts/install-prereqs.sh` installs kubectl 1.33.x, helm 3.12+, terraform 1.10+, vault 1.21.x, aws v2, jq, yq on macOS or Linux
-- [ ] `./infrastructure/scripts/check-bedrock-access.sh` verifies `anthropic.claude-sonnet-4-6` model access (PREF-01)
-- [ ] `./infrastructure/scripts/check-quotas.sh` verifies EC2 vCPU + EIP + RDS + AOSS OCU service quotas (PREF-02)
-- [ ] `./infrastructure/scripts/check-permissions.sh` verifies IAM permissions for Stacks deployment (PREF-03)
+- [ ] `./infrastructure/scripts/preflight.sh` installs CLI tools (kubectl 1.33.x, helm 3.12+, terraform 1.10+, vault 1.21.x, aws v2, jq, yq) and verifies Bedrock model access (PREF-01) + AWS service quotas (PREF-02) + IAM permissions (PREF-03) + companion to PREF-05
 - [ ] `./infrastructure/scripts/bootstrap.sh <HCP_ORG>` creates HCP project + variable set + OIDC trust + IAM role for Stacks (PREF-04)
 
 #### Phase 2: Foundation Infrastructure
@@ -51,7 +48,7 @@ Steps marked [WAIT] require waiting for HCP Terraform to apply.
 
 ## Phase 1: Scaffold Verification
 
-The Phase 1 deliverables are the workshop's outer shell — repo skeleton, slide deck, six diagrams, four pre-flight scripts plus an installer, Workshop Studio config, and the `10-introduction/` / `20-prerequisites/` / `99-credits/` content modules. No AWS infrastructure deploys in this phase.
+The Phase 1 deliverables are the workshop's outer shell — repo skeleton, slide deck, six diagrams, consolidated `preflight.sh` + `bootstrap.sh` scripts, Workshop Studio config, and the `10-introduction/` / `20-prerequisites/` / `99-credits/` content modules. No AWS infrastructure deploys in this phase.
 
 ### Repo skeleton verification
 
@@ -102,14 +99,11 @@ Must regenerate all six SVGs in `assets/` from their `.excalidraw` sources witho
 
 ### Pre-flight script verification
 
-Each script emits colored `✓ PASS` / `✗ FAIL` / `⚠ WARN` markers, indented detail, and a consolidated summary block at the end. Failures include full inline copy-paste remediation (AWS Console path or `aws` CLI command). Scripts continue running through all checks rather than fail-fast (CI-safe, no interactive prompts).
+`preflight.sh` emits colored `✓ PASS` / `✗ FAIL` / `⚠ WARN` markers, indented detail, and a consolidated summary block at the end. Failures include full inline copy-paste remediation (AWS Console path or `aws` CLI command). It continues running through all checks rather than fail-fast (default mode is CI-safe, no interactive prompts; pass `--interactive` for per-section confirmation).
 
 ```bash
-./infrastructure/scripts/check-bedrock-access.sh   # PREF-01
-./infrastructure/scripts/check-quotas.sh           # PREF-02
-./infrastructure/scripts/check-permissions.sh      # PREF-03
+./infrastructure/scripts/preflight.sh              # PREF-01 + PREF-02 + PREF-03 + PREF-05
 ./infrastructure/scripts/bootstrap.sh <HCP_ORG>    # PREF-04
-./infrastructure/scripts/install-prereqs.sh        # PREF-05
 ```
 
 ## Workshop Studio quota auto-provisioning (publisher action)
@@ -123,14 +117,14 @@ must configure them in the Workshop Studio admin UI at publish time:
    - EC2 standard vCPUs — quota code `L-1216C47A` — desired value 32
    - VPC Elastic IPs — quota code `L-0263D0A3` — desired value 6
    - RDS DB instances per region — quota code `L-7B6409FD` — desired value 1
-   - OpenSearch Serverless OCUs (indexing) — quota code `L-CCD27F9D` — desired value 2
-   - OpenSearch Serverless OCUs (search) — quota code `L-A8E7DE8E` — desired value 2
+   - OpenSearch Serverless OCUs (indexing) — quota code `L-50FA809B` — desired value 2 (AWS quota name: "Default indexing MAX OCU setting", default 10)
+   - OpenSearch Serverless OCUs (search) — quota code `L-4E98D4EB` — desired value 2 (AWS quota name: "Default search MAX OCU setting", default 10)
 
 Workshop Studio submits these increases on the attendee account before hand-off, so attendees do
 not hit ceilings during Phase 2 deploy. The CONTEXT-locked decision (`01-CONTEXT.md` line 94)
 enumerates the four service families; the AOSS family splits into two distinct OCU codes.
-Attendees can also self-verify via `infrastructure/scripts/check-quotas.sh` and request increases
-manually if Workshop Studio's auto-provisioning has not yet completed.
+Attendees can also self-verify via `infrastructure/scripts/preflight.sh` (its quotas section) and
+request increases manually if Workshop Studio's auto-provisioning has not yet completed.
 
 ---
 
@@ -149,7 +143,7 @@ brew install bash
 
 **base64 decoding:** Scripts use `base64 --decode` (long flag) instead of platform-specific short flags (`-d` on GNU/Linux, `-D` on BSD/macOS). The `--decode` flag works on both implementations.
 
-**Package managers:** `install-prereqs.sh` detects Darwin vs Linux. macOS uses Homebrew; Linux uses the system package manager (apt/yum). No interactive prompts (CI-safe).
+**Package managers:** `preflight.sh` detects Darwin vs Linux. macOS uses Homebrew; Linux uses the system package manager (apt/yum). Default mode is CI-safe (no interactive prompts); pass `--interactive` for per-install confirmation.
 
 ---
 
@@ -165,9 +159,6 @@ brew install bash
 | `workshop/contentspec.yaml` | Workshop Studio v2 schema (region, role, content modules) |
 | `workshop/content/NN-*/index.en.md` | Workshop Studio content modules |
 | `infrastructure/modules/*/` | Terraform Stacks components (one per phase deliverable) |
-| `infrastructure/scripts/install-prereqs.sh` | Auto-installer for kubectl/helm/terraform/vault/aws/jq/yq |
-| `infrastructure/scripts/bootstrap.sh` | HCP Terraform org/varset/OIDC/IAM setup |
-| `infrastructure/scripts/check-bedrock-access.sh` | PREF-01: Bedrock model access verification |
-| `infrastructure/scripts/check-quotas.sh` | PREF-02: service quota verification |
-| `infrastructure/scripts/check-permissions.sh` | PREF-03: IAM permission verification |
+| `infrastructure/scripts/preflight.sh` | Single entry-point: installs CLI prereqs (PREF-05) + Bedrock access (PREF-01) + service quotas (PREF-02) + IAM permissions (PREF-03) |
+| `infrastructure/scripts/bootstrap.sh` | HCP Terraform org/varset/OIDC/IAM setup (PREF-04) |
 | `infrastructure/scripts/excalidraw-to-svg.py` | SVG regeneration pipeline |
