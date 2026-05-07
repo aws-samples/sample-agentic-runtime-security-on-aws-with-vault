@@ -1,37 +1,40 @@
 # Workshop Scripts
 
-Scripts for bootstrapping, pre-flight verification, and SVG regeneration for the Agentic Runtime Security on AWS workshop. The set mirrors `~/git-repos/eks-terraform-stacks/infrastructure/scripts/` and adds the workshop-specific pre-flight checks (Bedrock model access, AWS service quotas, IAM permissions) plus an installer that auto-installs every required CLI tool so attendees do not install anything manually.
+Scripts for bootstrapping, pre-flight verification, and SVG regeneration for the Agentic Runtime Security on AWS workshop.
 
 ## Script Inventory
 
 | Script | Used By | Purpose | Requirement |
 |--------|---------|---------|-------------|
-| `install-prereqs.sh` | Workshop user | Auto-installs kubectl 1.33.x, helm 3.12+, terraform 1.10+, vault 1.21.x, aws v2, jq, yq on macOS or Linux (CI-safe, no interactive prompts) | PREF-05 (companion) |
-| `check-bedrock-access.sh` | Workshop user | Verifies `anthropic.claude-sonnet-4-6` model access in `us-west-2` and emits remediation if access is OFF | PREF-01 |
-| `check-quotas.sh` | Workshop user | Verifies EC2 standard vCPUs (32), VPC EIPs (6), RDS DB instances per region (1), and OpenSearch Serverless OCUs (2 indexing + 2 search) | PREF-02 |
-| `check-permissions.sh` | Workshop user | Verifies the calling principal has IAM permissions sufficient for Stacks deployment | PREF-03 |
-| `bootstrap.sh` | Workshop user | Single-command HCP Terraform setup: project + variable set + OIDC trust + IAM role + Stacks deployment seeding (idempotent) | PREF-04 |
+| `preflight.sh` | Workshop user | Single entry-point: installs CLI tools (kubectl 1.33.x, helm 3.12+, terraform 1.10+, vault 1.21.x, aws v2, jq, yq), then verifies Bedrock model access, AWS service quotas (EC2 vCPU + EIP + RDS + AOSS OCU indexing/search), and IAM permissions for HCP Stacks bootstrap | PREF-01, PREF-02, PREF-03, PREF-05 |
+| `bootstrap.sh` | Workshop user | Single-command HCP Terraform setup: project + variable set + OIDC trust + IAM role + Stacks deployment seeding (idempotent). Prompts at the top to confirm `preflight.sh` has been run | PREF-04 |
+| `common-checks.sh` | Sourced library (not invoked directly) | Shared bash helpers — color constants, ✓/✗/⚠ unicode markers, FAILURES[] accumulator, `confirm()` y/N prompt, opt-in EXIT-trap summary | (library) |
 | `excalidraw-to-svg.py` | Workshop user, content authors | Converts the six Excalidraw sources in `assets/` to SVG (single-source-of-truth pipeline; SVGs are committed but regenerable) | SCAF-03 |
 
 ## Workshop User Flow
 
 ```bash
-# 1. Install all CLI tools (one-time, before pre-flight checks)
-./infrastructure/scripts/install-prereqs.sh
+# 1. Pre-flight (installs CLI tools + runs all checks in one shot)
+./infrastructure/scripts/preflight.sh
 
-# 2. Pre-flight verification (all four scripts continue through failures
-#    and emit a single consolidated summary at the end)
-./infrastructure/scripts/check-bedrock-access.sh
-./infrastructure/scripts/check-quotas.sh
-./infrastructure/scripts/check-permissions.sh
-
-# 3. Bootstrap HCP Terraform (creates project + variable set + OIDC + IAM)
+# 2. Bootstrap HCP Terraform (creates project + variable set + OIDC + IAM)
 ./infrastructure/scripts/bootstrap.sh <HCP_ORG>
 ```
 
+`preflight.sh` flags:
+  - `./preflight.sh` — default: auto-install + run all checks straight through (no prompts)
+  - `./preflight.sh --interactive` — prompt before each install AND before each check section
+  - `./preflight.sh --dry-run` — print install plan without executing
+  - `./preflight.sh --help` — usage
+
+`bootstrap.sh` flags:
+  - `./bootstrap.sh <HCP_ORG>` — interactive: prompts to confirm `preflight.sh` was run, then 7-step orchestration
+  - `./bootstrap.sh <HCP_ORG> --dry-run` — print the 8 step headers (Step 0 free-tier detect + Steps 1-7) without executing; SKIPS the prereq-gate prompt
+  - `./bootstrap.sh --help` — usage
+
 ## Output Conventions
 
-Each pre-flight script emits colored terminal output with `✓ PASS` / `✗ FAIL` / `⚠ WARN` markers, indented detail under each check, and a single consolidated summary block at the end listing every failure with full inline copy-paste remediation (the exact AWS Console path or `aws` CLI command). No "see external doc" indirection. All scripts are CI-safe (no interactive prompts) and continue running through failures rather than fail-fast — so a single run surfaces all blockers at once.
+`preflight.sh` emits colored terminal output with `✓ PASS` / `✗ FAIL` / `⚠ WARN` markers, indented detail under each check, and a single consolidated summary block at the end listing every failure with full inline copy-paste remediation (the exact AWS Console path or `aws` CLI command). No "see external doc" indirection. Default mode is non-interactive (no prompts) so it is CI-safe / Workshop Studio attendee-VM-safe out of the box.
 
 ## SVG Regeneration
 
