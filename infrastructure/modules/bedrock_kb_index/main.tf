@@ -4,10 +4,12 @@
 # Sibling of bedrock_kb_aoss. Closes the six-resource dance from
 # RESEARCH Pattern 4: items 8 + 9 (KB + data sources). Items 1-7 (3 AOSS
 # policies, AOSS collection, IAM role + policies, time_sleep) live in
-# bedrock_kb_aoss.
+# bedrock_kb_aoss; item 6 (the AOSS vector index) lives in index.tf in
+# THIS module, but is created via aws_cloudformation_stack rather than the
+# opensearch provider — see the comment at the top of index.tf for why.
 #
-# field_mapping pins the index field names that match the opensearch_index
-# resource declared in index.tf:
+# field_mapping pins the index field names that match the
+# AWS::OpenSearchServerless::Index resource declared in index.tf:
 #   - vector_field   = "bedrock-knowledge-base-default-vector"
 #   - text_field     = "AMAZON_BEDROCK_TEXT_CHUNK"
 #   - metadata_field = "AMAZON_BEDROCK_METADATA"
@@ -40,7 +42,7 @@ resource "aws_bedrockagent_knowledge_base" "kb" {
 
   tags = var.tags
 
-  depends_on = [opensearch_index.kb]
+  depends_on = [aws_cloudformation_stack.kb_index]
 }
 
 ################################################################################

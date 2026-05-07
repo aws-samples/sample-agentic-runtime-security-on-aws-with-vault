@@ -16,6 +16,11 @@ variable "aoss_collection_arn" {
   type        = string
 }
 
+variable "aoss_collection_endpoint" {
+  description = "AOSS collection endpoint URL — populated from component.bedrock_kb_aoss.aoss_collection_endpoint. Consumed by aws_cloudformation_stack.kb_index template (CollectionEndpoint property of AWS::OpenSearchServerless::Index)."
+  type        = string
+}
+
 variable "kb_role_arn" {
   description = "IAM role ARN for the KB — populated from component.bedrock_kb_aoss.kb_role_arn. Bedrock service principal assumes this role at runtime."
   type        = string

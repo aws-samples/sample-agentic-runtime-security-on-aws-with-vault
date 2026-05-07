@@ -31,14 +31,12 @@ required_providers {
     version = "~> 2.25"
   }
 
-  # Pinned EXACTLY to 2.2.0 — newer versions broken with AOSS auth (Pitfall B3).
-  # Provider versions after 2.2.0 changed how SigV4 signing interacts with AOSS
-  # endpoints; result is 403s during opensearch_index create. Required for
-  # Bedrock KB vector index creation (AOSS will not auto-create the index — Pitfall B2).
-  opensearch = {
-    source  = "opensearch-project/opensearch"
-    version = "= 2.2.0"
-  }
+  # opensearch-project/opensearch is intentionally NOT declared. The AOSS
+  # vector index for the Bedrock Knowledge Base is created via
+  # aws_cloudformation_stack (AWS::OpenSearchServerless::Index) in
+  # modules/bedrock_kb_index/index.tf — driven by the OIDC-authenticated
+  # aws.main provider, no second credential chain to bridge. See the
+  # comment at the top of bedrock_kb_index/index.tf for the rationale.
 
   tls = {
     source  = "hashicorp/tls"
@@ -96,20 +94,6 @@ provider "helm" "main" {
       cluster_ca_certificate = base64decode(component.eks.cluster_certificate_authority_data)
       token                  = component.eks.cluster_token
     }
-  }
-}
-
-# OpenSearch provider — used by component.bedrock_kb_index to create the AOSS
-# vector index. URL points at component.bedrock_kb_aoss.aoss_collection_endpoint
-# (the AOSS collection is created in bedrock_kb_aoss). The split into two
-# components avoids a provider→component→provider cycle: bedrock_kb_aoss does
-# NOT use this provider, so there is no cycle.
-provider "opensearch" "main" {
-  config {
-    url               = component.bedrock_kb_aoss.aoss_collection_endpoint
-    healthcheck       = false
-    aws_region        = var.region
-    sign_aws_requests = true
   }
 }
 

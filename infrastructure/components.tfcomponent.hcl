@@ -157,18 +157,21 @@ component "bedrock_kb_index" {
   # ordering constraint to a reader (the time_sleep is internal to aoss).
   depends_on = [component.bedrock_kb_aoss]
 
+  # Note: no opensearch provider — the AOSS vector index is created via
+  # aws_cloudformation_stack (AWS::OpenSearchServerless::Index) using the
+  # OIDC-authenticated aws.main provider. See bedrock_kb_index/index.tf
+  # for the why.
   providers = {
-    aws        = provider.aws.main
-    opensearch = provider.opensearch.main
-    time       = provider.time.main
+    aws = provider.aws.main
   }
 
   inputs = {
-    aoss_collection_arn  = component.bedrock_kb_aoss.aoss_collection_arn
-    kb_role_arn          = component.bedrock_kb_aoss.kb_role_arn
-    embedding_model_arn  = component.bedrock_kb_aoss.embedding_model_arn
-    kb_corpus_bucket_arn = component.bedrock_kb_aoss.kb_corpus_bucket_arn
-    tags                 = var.tags
+    aoss_collection_arn      = component.bedrock_kb_aoss.aoss_collection_arn
+    aoss_collection_endpoint = component.bedrock_kb_aoss.aoss_collection_endpoint
+    kb_role_arn              = component.bedrock_kb_aoss.kb_role_arn
+    embedding_model_arn      = component.bedrock_kb_aoss.embedding_model_arn
+    kb_corpus_bucket_arn     = component.bedrock_kb_aoss.kb_corpus_bucket_arn
+    tags                     = var.tags
   }
 }
 
