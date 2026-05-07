@@ -32,6 +32,20 @@ terraform {
 
 data "aws_caller_identity" "this" {}
 
+# data.aws_caller_identity.this.arn returns the assumed-role STS ARN at
+# apply time (e.g. arn:aws:sts::ACCOUNT:assumed-role/hcp-stacks-deploy/SESSION).
+# AOSS data-access policies match Principal against the underlying IAM role
+# ARN, NOT the STS session ARN. Use aws_iam_session_context to resolve the
+# session back to the role ARN that issued it.
+#
+# Without this resolution, CloudFormation's AWS::OpenSearchServerless::Index
+# handler (in modules/bedrock_kb_index/index.tf) calls AOSS CreateIndex under
+# the deploy role, AOSS evaluates the data-access policy, doesn't see the role
+# in the Principal list, and returns AccessDenied.
+data "aws_iam_session_context" "this" {
+  arn = data.aws_caller_identity.this.arn
+}
+
 ################################################################################
 # 1. AOSS encryption policy — workshop CMK (NOT AWS-owned key).
 #    Matches RDS + log group encryption context per Phase 2 KMS reuse decision.
@@ -95,7 +109,7 @@ resource "aws_opensearchserverless_access_policy" "kb_data" {
       ]
       Principal = [
         aws_iam_role.bedrock_kb.arn,
-        data.aws_caller_identity.this.arn
+        data.aws_iam_session_context.this.issuer_arn,
       ]
     }
   ])
