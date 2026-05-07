@@ -60,7 +60,7 @@ Out of scope: model fine-tuning, prompt-injection defense at the LLM layer, and 
 The workshop is organized into seven phases, executed in order:
 
 1. **Phase 1 — Scaffold and Pre-Flight.** Repository scaffolding, slide deck, diagrams, and pre-flight environment validation scripts (the module you're reading right now is part of Phase 1's content output).
-2. **Phase 2 — Foundational Infrastructure.** VPC, EKS cluster (with Karpenter), RDS PostgreSQL, and Bedrock Knowledge Base — all deployed via Terraform Stacks.
+2. **Phase 2 — Foundational Infrastructure.** VPC, EKS cluster, RDS PostgreSQL, and Bedrock Knowledge Base — all deployed via Terraform Stacks.
 3. **Phase 3 — Platform: Vault and IBM Verify Access.** Self-hosted Vault and IVIA on EKS, including OIDC discovery seam configuration.
 4. **Phase 4 — UC1.** Non-personalized read-only Strands agent; Vault Kubernetes auth method; JIT Postgres + Bedrock credentials.
 5. **Phase 5 — UC2.** OAuth Authorization Code + PKCE; Vault `jwt` auth method; per-user database GRANTs; Kubernetes NetworkPolicy egress controls.
