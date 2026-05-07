@@ -17,7 +17,7 @@
 #            from a Stack whose IAM role / OIDC provider was deleted by a
 #            prior teardown attempt.
 #
-# Single deployment: `eks-usw2` in the canonical workshop region (resolved
+# Single deployment: `agentic-runtime-usw2` in the canonical workshop region (resolved
 # from $AWS_REGION or infrastructure/deployments.tfdeploy.hcl). No 3-region
 # loops — Phase 1 of this workshop is single-region by deliberate decision.
 #
@@ -115,7 +115,7 @@ Options:
   --no-wait              Skip pause for HCP manual steps
   --help                 Show this help message
 
-Default cluster: eks-usw2 (region resolved from \$AWS_REGION or
+Default cluster: agentic-runtime-usw2 (region resolved from \$AWS_REGION or
                  infrastructure/deployments.tfdeploy.hcl).
 
 Examples:
@@ -123,7 +123,7 @@ Examples:
   $0 --dry-run                      # Preview all phases
   $0 --pre-destroy-only             # K8s cleanup only
   $0 --post-destroy-only            # Orphaned resource + HCP cleanup
-  $0 eks-usw2:\$AWS_REGION          # Explicit cluster:region
+  $0 agentic-runtime-usw2:\$AWS_REGION          # Explicit cluster:region
 USAGE
 }
 
@@ -172,7 +172,7 @@ if [ ${#CLUSTER_LIST[@]} -eq 0 ]; then
         echo -e "${RED}Error: could not resolve region. Set AWS_REGION or pass cluster:region pairs.${NC}" >&2
         exit 1
     fi
-    CLUSTER_LIST=("eks-usw2:${DEFAULT_REGION}")
+    CLUSTER_LIST=("agentic-runtime-usw2:${DEFAULT_REGION}")
 fi
 
 #-------------------------------------------------------------------------------

@@ -248,6 +248,150 @@ cleanup_cloudwatch_logs() {
     fi
 }
 
+cleanup_iam_cluster_roles() {
+    local cluster=$1
+    echo -n "  IAM roles tagged ${WORKSHOP_TAG_KEY}=${WORKSHOP_TAG_VAL}... "
+    # Tag-only sweep — name prefix is unsafe across multi-project accounts AND
+    # too narrow (terraform-aws-modules generates names like
+    # 'default-eks-node-group-*' that don't include the cluster name).
+    local role_names=""
+    local all_roles
+    all_roles=$(aws iam list-roles --query 'Roles[].RoleName' --output text 2>/dev/null)
+    for r in $all_roles; do
+        local tag_match
+        tag_match=$(aws iam list-role-tags --role-name "$r" \
+            --query "Tags[?Key=='${WORKSHOP_TAG_KEY}' && Value=='${WORKSHOP_TAG_VAL}'].Value" \
+            --output text 2>/dev/null)
+        if [[ -n "$tag_match" && "$tag_match" != "None" ]]; then
+            role_names="$role_names $r"
+        fi
+    done
+    if [[ -z "$role_names" || "$role_names" == "None" ]]; then
+        echo -e "${YELLOW}none found${NC}"; return 0
+    fi
+    echo ""
+    for role in $role_names; do
+        echo -n "    Role: ${role}... "
+        local attached
+        attached=$(aws iam list-attached-role-policies --role-name "$role" \
+            --query 'AttachedPolicies[].PolicyArn' --output text 2>/dev/null)
+        for p in $attached; do
+            aws iam detach-role-policy --role-name "$role" --policy-arn "$p" &>/dev/null
+        done
+        local inline
+        inline=$(aws iam list-role-policies --role-name "$role" \
+            --query 'PolicyNames[]' --output text 2>/dev/null)
+        for p in $inline; do
+            aws iam delete-role-policy --role-name "$role" --policy-name "$p" &>/dev/null
+        done
+        if aws iam delete-role --role-name "$role" &>/dev/null; then
+            echo -e "${GREEN}deleted${NC}"
+        else
+            echo -e "${RED}failed${NC}"
+        fi
+    done
+}
+
+cleanup_eks_oidc_provider() {
+    local cluster=$1 region=$2
+    echo -n "  EKS IAM OIDC provider for ${cluster}... "
+    # Find the OIDC provider whose URL matches the (possibly-deleted) cluster's
+    # issuer. If the cluster still exists, we can read .identity.oidc.issuer.
+    # If it's already deleted, fall back to deleting any oidc.eks.<region>
+    # provider that is NOT referenced by any current EKS cluster in the region.
+    local issuer=""
+    if aws eks describe-cluster --name "$cluster" --region "$region" &>/dev/null; then
+        issuer=$(aws eks describe-cluster --name "$cluster" --region "$region" \
+            --query 'cluster.identity.oidc.issuer' --output text 2>/dev/null)
+    fi
+
+    # Build the set of issuers in use by remaining EKS clusters in the region
+    local in_use_issuers=""
+    local clusters_now
+    clusters_now=$(aws eks list-clusters --region "$region" --query 'clusters[]' --output text 2>/dev/null)
+    for c in $clusters_now; do
+        local i
+        i=$(aws eks describe-cluster --name "$c" --region "$region" \
+            --query 'cluster.identity.oidc.issuer' --output text 2>/dev/null)
+        in_use_issuers="$in_use_issuers $i"
+    done
+
+    local providers
+    providers=$(aws iam list-open-id-connect-providers \
+        --query 'OpenIDConnectProviderList[].Arn' --output text 2>/dev/null)
+
+    local count=0
+    for arn in $providers; do
+        # Only target EKS-cluster OIDC providers in this region
+        [[ "$arn" == *"oidc.eks.${region}.amazonaws.com/id/"* ]] || continue
+        local arn_url="https://${arn#*oidc-provider/}"
+
+        # Match by exact issuer if known, else by "not in use"
+        local should_delete=false
+        if [[ -n "$issuer" && "$arn_url" == "$issuer" ]]; then
+            should_delete=true
+        elif [[ -z "$issuer" ]]; then
+            # Cluster gone: delete only if not referenced by any current cluster
+            local in_use=false
+            for u in $in_use_issuers; do
+                [[ "$arn_url" == "$u" ]] && in_use=true
+            done
+            [[ "$in_use" == false ]] && should_delete=true
+        fi
+
+        if [[ "$should_delete" == true ]]; then
+            if aws iam delete-open-id-connect-provider --open-id-connect-provider-arn "$arn" &>/dev/null; then
+                ((count++))
+            fi
+        fi
+    done
+
+    if [[ $count -eq 0 ]]; then
+        echo -e "${YELLOW}none to delete${NC}"
+    else
+        echo -e "${GREEN}deleted $count provider(s)${NC}"
+    fi
+}
+
+cleanup_workshop_kms() {
+    local region=$1
+    echo -n "  KMS keys tagged ${WORKSHOP_TAG_KEY}=${WORKSHOP_TAG_VAL}... "
+    local key_ids
+    key_ids=$(aws kms list-keys --region "$region" --query 'Keys[].KeyId' --output text 2>/dev/null)
+    local matching=""
+    for k in $key_ids; do
+        # Skip AWS-managed keys (their tag list call errors)
+        local tag
+        tag=$(aws kms list-resource-tags --region "$region" --key-id "$k" \
+            --query "Tags[?TagKey=='${WORKSHOP_TAG_KEY}' && TagValue=='${WORKSHOP_TAG_VAL}'].TagValue" \
+            --output text 2>/dev/null)
+        if [[ -n "$tag" && "$tag" != "None" ]]; then
+            matching="$matching $k"
+        fi
+    done
+    if [[ -z "$matching" ]]; then
+        echo -e "${YELLOW}none found${NC}"; return 0
+    fi
+    echo ""
+    for k in $matching; do
+        # Delete any aliases pointing at this key first
+        local aliases
+        aliases=$(aws kms list-aliases --region "$region" \
+            --query "Aliases[?TargetKeyId=='${k}'].AliasName" --output text 2>/dev/null)
+        for a in $aliases; do
+            aws kms delete-alias --region "$region" --alias-name "$a" &>/dev/null \
+                && echo -e "    Deleted alias ${a}" || echo -e "    ${RED}Failed alias ${a}${NC}"
+        done
+        echo -n "    Scheduling key deletion (7-day window): ${k}... "
+        if aws kms schedule-key-deletion --region "$region" --key-id "$k" \
+                --pending-window-in-days 7 &>/dev/null; then
+            echo -e "${GREEN}scheduled${NC}"
+        else
+            echo -e "${YELLOW}skipped (may be already pending)${NC}"
+        fi
+    done
+}
+
 cleanup_kms_alias() {
     local cluster=$1 region=$2
     local alias_name="alias/eks/${cluster}"
@@ -316,6 +460,40 @@ cleanup_enis() {
         fi
     done
     echo -e "    ${GREEN}deleted $count ENI(s)${NC}"
+}
+
+cleanup_vpc_endpoints() {
+    local vpc_id=$1 region=$2
+    echo -n "  VPC Endpoints in ${vpc_id}... "
+    if [[ "$vpc_id" == "None" || -z "$vpc_id" ]]; then
+        echo -e "${YELLOW}no VPC (skipped)${NC}"; return 0
+    fi
+    local vpce_ids
+    vpce_ids=$(aws ec2 describe-vpc-endpoints --region "$region" \
+        --filters "Name=vpc-id,Values=${vpc_id}" \
+        --query "VpcEndpoints[?State!='deleted' && State!='deleting'].VpcEndpointId" \
+        --output text 2>/dev/null)
+    if [[ -z "$vpce_ids" || "$vpce_ids" == "None" ]]; then
+        echo -e "${YELLOW}none found${NC}"; return 0
+    fi
+    echo ""
+    echo -n "    Deleting endpoints: $vpce_ids... "
+    # shellcheck disable=SC2086
+    aws ec2 delete-vpc-endpoints --region "$region" --vpc-endpoint-ids $vpce_ids &>/dev/null
+    echo -e "${GREEN}initiated${NC}"
+    echo -n "    Waiting for endpoints + ENIs to release"
+    local waited=0 remaining
+    while [[ $waited -lt 180 ]]; do
+        remaining=$(aws ec2 describe-vpc-endpoints --region "$region" \
+            --filters "Name=vpc-id,Values=${vpc_id}" \
+            --query "VpcEndpoints[?State!='deleted'].VpcEndpointId" \
+            --output text 2>/dev/null)
+        if [[ -z "$remaining" || "$remaining" == "None" ]]; then
+            echo -e " ${GREEN}done${NC}"; return 0
+        fi
+        sleep 10; waited=$((waited + 10)); echo -n "."
+    done
+    echo -e " ${YELLOW}timeout (continuing)${NC}"
 }
 
 cleanup_elbs() {
@@ -539,6 +717,9 @@ USAGE
             cleanup_eks_cluster   "$cluster" "$region" || errors=$((errors + 1))
             cleanup_cloudwatch_logs "$cluster" "$region" || errors=$((errors + 1))
             cleanup_kms_alias       "$cluster" "$region" || errors=$((errors + 1))
+            cleanup_eks_oidc_provider "$cluster" "$region" || errors=$((errors + 1))
+            cleanup_iam_cluster_roles "$cluster"        || errors=$((errors + 1))
+            cleanup_workshop_kms    "$region"           || errors=$((errors + 1))
 
             local vpc_ids
             vpc_ids=$(get_vpc_ids_for_cluster "$cluster" "$region")
@@ -546,6 +727,7 @@ USAGE
                 for vpc_id in $vpc_ids; do
                     print_info "VPC: ${vpc_id}"
                     cleanup_elbs           "$vpc_id" "$region" || errors=$((errors + 1))
+                    cleanup_vpc_endpoints  "$vpc_id" "$region" || errors=$((errors + 1))
                     cleanup_enis           "$vpc_id" "$region" || errors=$((errors + 1))
                     cleanup_security_groups "$region" "$vpc_id" || errors=$((errors + 1))
                     cleanup_vpc_resources  "$region" "$vpc_id" || errors=$((errors + 1))
@@ -570,11 +752,16 @@ USAGE
             for vpc_id in $vpc_ids; do
                 print_info "VPC: ${vpc_id}"
                 cleanup_elbs           "$vpc_id" "$DEFAULT_REGION" || errors=$((errors + 1))
+                cleanup_vpc_endpoints  "$vpc_id" "$DEFAULT_REGION" || errors=$((errors + 1))
                 cleanup_enis           "$vpc_id" "$DEFAULT_REGION" || errors=$((errors + 1))
                 cleanup_security_groups "$DEFAULT_REGION" "$vpc_id" || errors=$((errors + 1))
                 cleanup_vpc_resources  "$DEFAULT_REGION" "$vpc_id" || errors=$((errors + 1))
             done
         fi
+        # Tag-scoped cross-VPC sweeps (run once after VPC loop)
+        cleanup_workshop_kms "$DEFAULT_REGION" || errors=$((errors + 1))
+        # IAM is global — pass dummy cluster arg for log line
+        cleanup_iam_cluster_roles "tag-scoped" || errors=$((errors + 1))
     fi
 
     echo ""
