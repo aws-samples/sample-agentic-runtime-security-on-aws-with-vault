@@ -34,4 +34,4 @@ admin_principal_arn = "arn:aws:iam::123456789012:role/your-admin-role"
 # Optional overrides — defaults below are the workshop-locked values; change
 # only if your org already has a project/varset by these names that conflicts.
 project_name        = "Agentic Runtime Security"
-varset_name         = "agentic-runtime-security-config"
+varset_name         = "agentic-runtime-stacks-config"

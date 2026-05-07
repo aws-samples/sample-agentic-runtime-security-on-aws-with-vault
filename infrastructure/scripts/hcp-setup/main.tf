@@ -78,7 +78,7 @@ variable "project_name" {
 
 variable "varset_name" {
   type        = string
-  default     = "agentic-runtime-security-config"
+  default     = "agentic-runtime-stacks-config"
   description = "HCP variable set name"
 }
 
