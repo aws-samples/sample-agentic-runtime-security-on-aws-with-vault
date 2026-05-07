@@ -54,12 +54,22 @@ module "eks" {
   # during Terraform Stacks deferred re-apply cycles.
   create_cloudwatch_log_group = false
 
-  # K8s Secrets envelope encryption deliberately uses the AWS-managed key.
-  # Do NOT add an encryption_config block referencing a customer-managed CMK
-  # here — Vault is the credential broker; K8s Secrets are largely empty.
-  # Module v21 default: create_kms_key=false will skip CMK creation (paired
-  # with no encryption_config below).
-  create_kms_key = false
+  # K8s Secrets envelope encryption is OFF — Vault is the credential broker
+  # in this architecture, K8s Secrets are largely empty (cert-manager TLS
+  # material + Vault Helm internals only), and AWS already encrypts the
+  # underlying etcd volume at rest. Adding a customer-managed CMK on top
+  # would be defensive theater. The customer-controlled-key teaching moments
+  # live in Vault auto-unseal CMK (Phase 3) + RDS storage CMK (Plan 02-04)
+  # + KB / CloudWatch CMK reuse.
+  #
+  # Two settings together: create_kms_key = false skips CMK creation, AND
+  # cluster_encryption_config = {} disables envelope encryption entirely.
+  # WITHOUT the {} override the module's default
+  # `{ resources = ["secrets"] }` triggers an internal for_each that
+  # references provider_key_arn (a field absent from the default), causing
+  # the plan to fail with two "Unsupported attribute" diagnostics.
+  create_kms_key            = false
+  cluster_encryption_config = {}
 
   # EKS Access Entries — replaces legacy aws-auth ConfigMap (CONTEXT decision).
   # Creator admin permissions ensure the HCP-deploy role is admin during apply
