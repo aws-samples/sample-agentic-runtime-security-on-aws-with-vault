@@ -45,6 +45,16 @@ bash infrastructure/scripts/bootstrap.sh <YOUR_HCP_ORG>
 
 `bootstrap.sh` is idempotent — safe to re-run.
 
+### Verify your terminal renders colors
+
+The pre-flight script uses ✓ green for passes and ✗ red for failures. If your terminal has a custom palette (some Solarized variants remap green to a reddish hue), you may misread results. Run this one-liner BEFORE the real pre-flight to confirm your terminal renders ANSI colors correctly:
+
+```bash
+bash -c 'source infrastructure/scripts/common-checks.sh && print_pass "color check passes (should be GREEN)" && print_fail "color check fails (should be RED)" "ignore"'
+```
+
+Expected: ✓ PASS line in green, ✗ FAIL line in red. If both render the same color, your terminal palette is broken — switch terminals (iTerm2 default, Terminal.app default) or set `WORKSHOP_FORCE_COLOR=1` to force ANSI escapes if you trust your downstream pager. If output is monochrome and you expected color: stdout is being captured / piped — run directly in your terminal.
+
 ## Service quotas
 
 The workshop topology requires four service-quota families in `us-west-2` (CONTEXT-locked decision):
