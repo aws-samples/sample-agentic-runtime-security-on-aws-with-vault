@@ -110,8 +110,9 @@ aws eks update-kubeconfig --region <region> --name <cluster_name> --alias worksh
 ```
 
 `<region>` and `<cluster_name>` interpolate from `var.region` and
-`module.eks.cluster_name` — there is no string literal `us-west-2` anywhere in
-this module (canonical-region contract per ROADMAP success criterion #3).
+`module.eks.cluster_name` — there is no hard-coded region literal anywhere in
+this module (canonical-region contract per ROADMAP success criterion #3 — the
+only place a region string lives is `deployments.tfdeploy.hcl`).
 
 ## Pitfalls addressed
 
