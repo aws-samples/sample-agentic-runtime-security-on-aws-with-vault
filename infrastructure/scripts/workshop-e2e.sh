@@ -302,19 +302,34 @@ hcp_wait_for_config() {
     local elapsed=0
 
     while [ $elapsed -lt $timeout ]; do
-        local status
-        status=$(curl -s \
+        local cfg_json status err_msg
+        cfg_json=$(curl -s \
             -H "Authorization: Bearer $TFE_TOKEN" \
             -H "Content-Type: application/vnd.api+json" \
-            "$TFE_API/stack-configurations/$config_id" 2>/dev/null \
-            | jq -r '.data.attributes.status // "unknown"')
+            "$TFE_API/stack-configurations/$config_id" 2>/dev/null)
+        status=$(echo "$cfg_json" | jq -r '.data.attributes.status // "unknown"')
+        # Some Stacks failure modes (e.g. source-bundle-too-large) populate
+        # error-message before transitioning the status to "errored". Bail
+        # the moment an error message appears, regardless of status.
+        err_msg=$(echo "$cfg_json" | jq -r '.data.attributes."error-message" // empty')
+
+        if [ -n "$err_msg" ]; then
+            print_error "Configuration reported error-message: $err_msg"
+            print_error "Final status: $status (config_id=$config_id)"
+            echo "$status"
+            return 1
+        fi
 
         case "$status" in
             "$target_status"|converged|applied|completed)
                 echo "$status"
                 return 0
                 ;;
-            errored|canceled|abandoned)
+            # Terminal failure states. The first three are the documented
+            # Stacks/Terraform errored states; preparing_failed +
+            # creation_failed cover source-bundle / archive-too-large
+            # failures observed in practice.
+            errored|canceled|abandoned|preparing_failed|creation_failed|discarded)
                 print_error "Configuration reached terminal state: $status"
                 echo "$status"
                 return 1
