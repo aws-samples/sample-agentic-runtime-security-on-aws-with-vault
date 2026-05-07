@@ -39,6 +39,13 @@
 #   --stack-name NAME        HCP Stack name (default: "agentic-runtime-security")
 #   --branch NAME            Git branch for VCS connection (default: repo default)
 #   --dry-run                Show what would be done without executing
+#   --skip-prereq-gate       Skip the "Have you run check-prerequisites.sh?" prompt.
+#                            Set automatically when workshop-e2e.sh invokes this
+#                            script (Phase 0 of workshop-e2e already runs
+#                            check-prerequisites.sh, so the gate is redundant
+#                            and would block the e2e flow on stdin). Direct
+#                            invocations should NOT pass this flag — the gate
+#                            exists to prevent attendees from skipping prereqs.
 #   --help                   Show this help message
 #
 # Prerequisites (run check-prerequisites.sh first):
