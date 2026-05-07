@@ -6,7 +6,7 @@ weight: 0
 Welcome to the Agentic Runtime Security on AWS workshop. Over the next ~3 hours you will deploy a real implementation of the five control objectives for AI agentic systems — every agent has a verifiable identity, no standing privileges, actions are tied to user intent, enforcement happens at the point of use, and audit evidence is correlated across all three trust planes — using the IBM Verify Identity Access + HashiCorp Vault stack on AWS EKS.
 
 :::alert{header="Pre-flight required" type="warning"}
-Before deploying any infrastructure, run `infrastructure/scripts/install-prereqs.sh` then the four pre-flight checks (`check-bedrock-access.sh`, `check-quotas.sh`, `check-permissions.sh`, `bootstrap.sh`).
+Before deploying any infrastructure, run `infrastructure/scripts/preflight.sh` (consolidated install + Bedrock + quotas + IAM checks) then `infrastructure/scripts/bootstrap.sh <HCP_ORG>`.
 :::
 
 ## What you'll build

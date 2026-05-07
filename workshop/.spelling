@@ -1,8 +1,6 @@
 Terraform
 HCP
 HashiCorp
-Karpenter
-ArgoCD
 kubectl
 kubeconfig
 EKS
@@ -13,7 +11,6 @@ IAM
 tfstacks
 tfvars
 deprovisioning
-NodePool
 gitops
 addon
 addons
@@ -21,6 +18,7 @@ autoscaler
 agentic
 Strands
 Bedrock
+Nova
 IVIA
 CIBA
 pgaudit
@@ -42,7 +40,6 @@ sidecar
 sidecars
 podspec
 podspecs
-Karpenter
 namespace
 namespaces
 runtime

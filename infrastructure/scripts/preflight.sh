@@ -5,8 +5,9 @@
 # Single entry-point that:
 #   1. Installs missing CLI prereqs (kubectl 1.33.x, helm 3.12+, terraform 1.10+,
 #      vault 1.21.x, aws v2, jq, yq) — macOS Homebrew or Linux apt/yum
-#   2. Verifies Amazon Bedrock model access (anthropic.claude-sonnet-4-6 +
-#      us.anthropic.claude-sonnet-4-6 inference profile) in us-west-2
+#   2. Verifies Amazon Bedrock model access (us.amazon.nova-pro-v1:0
+#      Amazon Nova Pro cross-region inference profile) in us-west-2 via
+#      a 1-token Converse invocation
 #   3. Verifies AWS service quotas in us-west-2 (EC2 vCPU >= 32,
 #      VPC EIP >= 6, RDS DB instances >= 1, AOSS OCU indexing >= 2,
 #      AOSS OCU search >= 2)
@@ -85,9 +86,13 @@ export COMMON_CHECKS_SUMMARY=0
 # shellcheck source=common-checks.sh
 source "$SCRIPT_DIR/common-checks.sh"
 
-# Workshop-locked model + region (CONTEXT.md decisions)
-MODEL_ID="anthropic.claude-sonnet-4-6"
-INFERENCE_PROFILE_ID="us.anthropic.claude-sonnet-4-6"
+# Workshop-locked model + region.
+# Amazon Nova Pro is invoked exclusively via the cross-region inference
+# profile id (us.amazon.nova-pro-v1:0); Bedrock rejects on-demand invocation
+# of the bare id amazon.nova-pro-v1:0 with ValidationException. There is no
+# separate "base model" / "profile" distinction to verify — the CRIS id IS
+# the only id that works. Single canonical constant.
+MODEL_ID="us.amazon.nova-pro-v1:0"
 AWS_REGION="${AWS_REGION:-us-west-2}"
 export AWS_PAGER=""
 
@@ -339,67 +344,46 @@ echo
 # =============================================================================
 # SECTION 2: Check Bedrock access (PREF-01)
 #
-# Three checks (ported verbatim from deleted check-bedrock-access.sh):
-#   1. Base model agreement available (foundation-model-availability:
-#      agreementAvailability.status == AVAILABLE)
-#   2. Base model entitlement available (entitlementAvailability == AVAILABLE)
-#   3. Cross-region inference profile us.anthropic.claude-sonnet-4-6 exists
+# Workshop LLM is Amazon Nova Pro on Bedrock, invoked via the cross-region
+# inference profile id us.amazon.nova-pro-v1:0. Bedrock rejects on-demand
+# invocation of the bare id (amazon.nova-pro-v1:0) with ValidationException;
+# only the us.* CRIS id works.
+#
+# Single check: 1-token Converse invocation. Success returning text is the
+# only definitive access signal. AWS CLI stderr is captured and surfaced in
+# the FAIL message so ValidationException (wrong id) is distinguished from
+# AccessDeniedException (model access not enabled).
+#
+# Note: agreement/entitlement APIs are NOT used. Amazon Nova models are
+# generally enabled by default in fresh AWS accounts without click-through
+# acceptance (unlike Anthropic Claude). The Converse round-trip is the
+# only honest signal of "ready to use".
 # =============================================================================
 echo -e "${BLUE}=== Check Bedrock access ===${NC}"
-echo -e "  Region:            ${AWS_REGION}"
-echo -e "  Model:             ${MODEL_ID}"
-echo -e "  Inference Profile: ${INFERENCE_PROFILE_ID}"
+echo -e "  Region: ${AWS_REGION}"
+echo -e "  Model:  ${MODEL_ID}"
 echo
 
-if confirm "Run Bedrock model access check (anthropic.claude-sonnet-4-6)?"; then
-    # Pre-flight: AWS credentials
+if confirm "Run Bedrock model access check (${MODEL_ID})?"; then
     if ! aws sts get-caller-identity --output text --query 'Account' >/dev/null 2>&1; then
         print_fail "AWS credentials not configured" \
             "Run 'aws configure' (or set AWS_PROFILE / AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY). Workshop attendees: see workshop/content/20-prerequisites/."
     else
-        # Check 1: Base model agreement available
-        echo -e "${BLUE}[1/3] Base model agreement (${MODEL_ID})${NC}"
-        agreement_status=$(aws bedrock get-foundation-model-availability \
-            --model-id "$MODEL_ID" \
-            --region "$AWS_REGION" \
-            --query 'agreementAvailability.status' \
-            --output text 2>/dev/null || echo "ERROR")
-
-        if [ "$agreement_status" = "AVAILABLE" ]; then
-            print_pass "Base model agreement is AVAILABLE"
+        echo -e "${BLUE}[1/1] 1-token Converse invocation against ${MODEL_ID}${NC}"
+        bedrock_err=$(mktemp)
+        if aws bedrock-runtime converse \
+                --region "$AWS_REGION" \
+                --model-id "$MODEL_ID" \
+                --messages '[{"role":"user","content":[{"text":"hi"}]}]' \
+                --inference-config '{"maxTokens":1}' \
+                --output text >/dev/null 2>"$bedrock_err"; then
+            print_pass "Model ${MODEL_ID} invocation succeeded"
         else
-            print_fail "Base model agreement is '${agreement_status}' (expected AVAILABLE)" \
-                "Visit https://${AWS_REGION}.console.aws.amazon.com/bedrock/home?region=${AWS_REGION}#/modelaccess and request access for '${MODEL_ID}' (Anthropic Claude Sonnet 4.6). Approval is typically immediate for Anthropic models."
+            err=$(cat "$bedrock_err" 2>/dev/null)
+            print_fail "Model ${MODEL_ID} invocation failed: ${err}" \
+                "If 'AccessDeniedException': visit https://${AWS_REGION}.console.aws.amazon.com/bedrock/home?region=${AWS_REGION}#/modelaccess and request access for 'Amazon Nova Pro' (Amazon family is usually enabled by default; click-through acceptance is rarely needed). If 'ValidationException' on the model id: ensure the 'us.' inference-profile prefix is present — the bare id 'amazon.nova-pro-v1:0' is rejected for on-demand throughput. If 'ResourceNotFoundException': model not in ${AWS_REGION} — verify region."
         fi
-
-        # Check 2: Base model entitlement available
-        echo -e "${BLUE}[2/3] Base model entitlement (${MODEL_ID})${NC}"
-        entitlement_status=$(aws bedrock get-foundation-model-availability \
-            --model-id "$MODEL_ID" \
-            --region "$AWS_REGION" \
-            --query 'entitlementAvailability' \
-            --output text 2>/dev/null || echo "ERROR")
-
-        if [ "$entitlement_status" = "AVAILABLE" ]; then
-            print_pass "Base model entitlement is AVAILABLE"
-        else
-            print_fail "Base model entitlement is '${entitlement_status}' (expected AVAILABLE)" \
-                "Entitlement reflects account-level access; if 'NOT_AVAILABLE' or 'PENDING', complete model access at https://${AWS_REGION}.console.aws.amazon.com/bedrock/home?region=${AWS_REGION}#/modelaccess. If status persists, contact AWS support — entitlement provisioning can lag behind agreement approval by a few minutes."
-        fi
-
-        # Check 3: Cross-region inference profile exists
-        echo -e "${BLUE}[3/3] Cross-region inference profile (${INFERENCE_PROFILE_ID})${NC}"
-        profile_id=$(aws bedrock list-inference-profiles \
-            --region "$AWS_REGION" \
-            --query "inferenceProfileSummaries[?inferenceProfileId=='${INFERENCE_PROFILE_ID}'].inferenceProfileId" \
-            --output text 2>/dev/null || echo "")
-
-        if [ "$profile_id" = "$INFERENCE_PROFILE_ID" ]; then
-            print_pass "Inference profile ${INFERENCE_PROFILE_ID} is provisioned"
-        else
-            print_fail "Inference profile ${INFERENCE_PROFILE_ID} not found in ${AWS_REGION}" \
-                "Cross-region inference profiles are auto-provisioned by AWS once the base model is granted. If still missing 10+ minutes after Check 1 passes, contact AWS support and reference inference profile id '${INFERENCE_PROFILE_ID}'. Alternative diagnostics: aws bedrock list-inference-profiles --region ${AWS_REGION} --query 'inferenceProfileSummaries[].inferenceProfileId'."
-        fi
+        rm -f "$bedrock_err"
     fi
 else
     print_warn "Skipped Bedrock access check"
@@ -501,8 +485,8 @@ if confirm "Run AWS service quotas check?"; then
             # ---- 5 quota checks (CORRECTED AOSS CODES) ----
             # 1. EC2 Standard vCPU (Running On-Demand Standard A/C/D/H/I/M/R/T/Z)
             #    Default account quota is typically 5 (new account) or 32+ (mature).
-            #    Workshop topology: EKS managed node group + Karpenter headroom +
-            #    RDS host = ~28 vCPU peak. Requirement: 32.
+            #    Workshop topology: EKS managed node group + RDS host = ~28 vCPU peak.
+            #    Requirement: 32.
             check_quota "EC2 Standard vCPU"           ec2  L-1216C47A 32
             # 2. VPC Elastic IPs per region — default 5; workshop needs 6 (3 NAT GW
             #    + 1 IVIA admin EIP + 2 spare for re-deploys).

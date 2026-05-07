@@ -8,7 +8,7 @@ Before deploying any infrastructure, set up your environment using the workshop'
 ## AWS account
 
 - Active AWS account with administrator-equivalent permissions OR the IAM permissions enumerated by `preflight.sh`'s IAM permissions check
-- **Bedrock model access** — request access to `anthropic.claude-sonnet-4-6` in the `us-west-2` region via the [Bedrock console model-access page](https://us-west-2.console.aws.amazon.com/bedrock/home#/modelaccess). Cross-region inference profile `us.anthropic.claude-sonnet-4-6` is auto-provisioned by AWS once base-model access is granted.
+- **Bedrock model access** — the workshop uses **Amazon Nova Pro** invoked via the cross-region inference profile id `us.amazon.nova-pro-v1:0` in `us-west-2`. Amazon's own Nova family is generally enabled by default in fresh AWS accounts (no click-through acceptance), unlike Anthropic Claude models. If `preflight.sh` reports access denied, request access via the [Bedrock console model-access page](https://us-west-2.console.aws.amazon.com/bedrock/home#/modelaccess) and select "Amazon Nova Pro". The bare model id `amazon.nova-pro-v1:0` is rejected for on-demand throughput — always use the `us.` prefix. **Cost note:** Nova Pro on-demand pricing (~$0.80 / 1M input tokens, ~$3.20 / 1M output tokens) is roughly 25% of Claude Sonnet 4.x for comparable workshop traffic; total LLM cost for a single workshop run is typically under $0.10.
 
 ## HCP Terraform
 
@@ -44,16 +44,6 @@ bash infrastructure/scripts/bootstrap.sh <YOUR_HCP_ORG>
 ```
 
 `bootstrap.sh` is idempotent — safe to re-run.
-
-### Verify your terminal renders colors
-
-The pre-flight script uses ✓ green for passes and ✗ red for failures. If your terminal has a custom palette (some Solarized variants remap green to a reddish hue), you may misread results. Run this one-liner BEFORE the real pre-flight to confirm your terminal renders ANSI colors correctly:
-
-```bash
-bash -c 'source infrastructure/scripts/common-checks.sh && print_pass "color check passes (should be GREEN)" && print_fail "color check fails (should be RED)" "ignore"'
-```
-
-Expected: ✓ PASS line in green, ✗ FAIL line in red. If both render the same color, your terminal palette is broken — switch terminals (iTerm2 default, Terminal.app default) or set `WORKSHOP_FORCE_COLOR=1` to force ANSI escapes if you trust your downstream pager. If output is monochrome and you expected color: stdout is being captured / piped — run directly in your terminal.
 
 ## Service quotas
 

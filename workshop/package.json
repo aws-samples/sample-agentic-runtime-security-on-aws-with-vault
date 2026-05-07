@@ -1,11 +1,11 @@
 {
   "name": "agentic-runtime-security-aws-workshop",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "AWS workshop content lint pipeline for the Agentic Runtime Security on AWS workshop",
   "private": true,
   "repository": {
     "type": "git",
-    "url": "https://github.com/<your-org>/agentic-runtime-security-aws"
+    "url": "https://github.com/sharepointoscar/agentic-runtime-security-aws"
   },
   "scripts": {
     "preview": "bash scripts/preview.sh",

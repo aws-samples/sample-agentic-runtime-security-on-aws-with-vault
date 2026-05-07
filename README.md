@@ -22,21 +22,20 @@ Deeper diagrams (per-use-case flows, audit correlation) are produced in Phase 1 
 
 ## Prerequisites
 
-Workshop attendees do not install CLI tools manually. The Phase 1 deliverables include an installer script that auto-installs every required tool, plus four pre-flight checks that validate the AWS account before deployment.
+Workshop attendees do not install CLI tools manually. A single consolidated `preflight.sh` script auto-installs every required CLI and verifies the AWS account in one shot; `bootstrap.sh` then wires up HCP Terraform.
 
 ```bash
-# 1. Install all CLI tools (kubectl 1.33.x, helm 3.12+, terraform 1.10+,
-#    vault 1.21.x, aws v2, jq, yq) — macOS or Linux
-./infrastructure/scripts/install-prereqs.sh
+# 1. Single pre-flight: install CLI tools (kubectl 1.33.x, helm 3.12+,
+#    terraform 1.10+, vault 1.21.x, aws v2, jq, yq) AND verify
+#    Bedrock access (us.amazon.nova-pro-v1:0 — Amazon Nova Pro via
+#    cross-region inference profile) + service quotas + IAM permissions
+./infrastructure/scripts/preflight.sh
 
-# 2. Run the four pre-flight checks
-./infrastructure/scripts/check-bedrock-access.sh   # PREF-01: anthropic.claude-sonnet-4-6 model access
-./infrastructure/scripts/check-quotas.sh           # PREF-02: EC2 vCPU + EIP + RDS + AOSS OCU
-./infrastructure/scripts/check-permissions.sh      # PREF-03: IAM permissions for Stacks deployment
-./infrastructure/scripts/bootstrap.sh <HCP_ORG>    # PREF-04: HCP Terraform org/varset/OIDC/IAM setup
+# 2. Bootstrap HCP Terraform org/varset/OIDC/IAM
+./infrastructure/scripts/bootstrap.sh <HCP_ORG>
 ```
 
-Each pre-flight script emits colored `✓ PASS` / `✗ FAIL` / `⚠ WARN` markers and a single consolidated summary at the end with full inline copy-paste remediation for any failure (no "see external doc" indirection).
+`preflight.sh` emits colored `✓ PASS` / `✗ FAIL` / `⚠ WARN` markers and a single consolidated summary with full inline copy-paste remediation for any failure (no "see external doc" indirection). Flags: `--interactive` (prompt before each install + each check section), `--dry-run` (print install plan), `--help`.
 
 ### Slide deck preview
 
@@ -60,7 +59,7 @@ The deploy story will cover applying the Terraform Stacks `vpc` + `eks` + `rds` 
 
 *Cleanup instructions populated in Phase 7 (Cleanup, Summary, Appendices).*
 
-The cleanup story will cover the one-shot `infrastructure/scripts/teardown.sh` that decommissions all workshop resources (Stacks deployments, EKS, RDS, Bedrock KB + OpenSearch Serverless, Vault PVCs, IBM Verify Access snapshots, Karpenter NodePools, audit log groups, Secrets Manager entries, ENIs, Load Balancers, EBS volumes) with no orphans surviving — so the same account can immediately host a second workshop run.
+The cleanup story will cover the one-shot `infrastructure/scripts/teardown.sh` that decommissions all workshop resources (Stacks deployments, EKS, RDS, Bedrock KB + OpenSearch Serverless, Vault PVCs, IBM Verify Access snapshots, audit log groups, Secrets Manager entries, ENIs, Load Balancers, EBS volumes) with no orphans surviving — so the same account can immediately host a second workshop run.
 
 ## Project Structure
 
@@ -102,11 +101,9 @@ The cleanup story will cover the one-shot `infrastructure/scripts/teardown.sh` t
     │   ├── uc2_agent/               # Phase 5
     │   └── uc3_agent/               # Phase 6
     └── scripts/
-        ├── install-prereqs.sh       # CLI tool auto-installer
-        ├── bootstrap.sh             # HCP Terraform org/varset/OIDC/IAM setup
-        ├── check-bedrock-access.sh  # PREF-01
-        ├── check-quotas.sh          # PREF-02
-        ├── check-permissions.sh     # PREF-03
+        ├── preflight.sh             # PREF-01/02/03/05 — install CLIs + verify Bedrock + quotas + IAM
+        ├── bootstrap.sh             # PREF-04 — HCP Terraform org/varset/OIDC/IAM setup
+        ├── common-checks.sh         # shared bash library (print_pass/fail, confirm, print_summary)
         └── excalidraw-to-svg.py     # SVG regeneration pipeline
 ```
 
@@ -117,7 +114,6 @@ The cleanup story will cover the one-shot `infrastructure/scripts/teardown.sh` t
 - [Terraform Stacks Documentation](https://developer.hashicorp.com/terraform/language/stacks)
 - [HashiCorp Validated Design — Organizing Resources](https://developer.hashicorp.com/validated-designs/terraform-operating-guides-adoption/organizing-resources#terraform-stacks)
 - [AWS EKS Blueprints for Terraform](https://github.com/aws-ia/terraform-aws-eks-blueprints)
-- [Karpenter Blueprints](https://github.com/aws-samples/karpenter-blueprints)
 - [HashiCorp Vault on Kubernetes (Helm)](https://developer.hashicorp.com/vault/docs/platform/k8s/helm)
 - [IBM Verify Identity Access](https://www.ibm.com/products/verify-identity-access)
 - [Strands Agents](https://strandsagents.com/)
