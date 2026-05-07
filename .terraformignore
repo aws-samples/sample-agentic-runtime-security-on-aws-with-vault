@@ -1,0 +1,38 @@
+# HCP Terraform Stacks source-bundle exclusions
+#
+# Stacks source bundles include the entire VCS-tracked repo (not just the
+# Stack working_directory). This file tells Terraform/HCP to exclude paths
+# that are not part of the deploy. Without it, large workshop / docs / asset
+# files inflate the bundle past HCP's source-bundle size limit and the
+# plan errors with: "creating source bundle archive: source bundle is too large".
+
+# Workshop authoring artifacts (Workshop Studio content + reveal-md preview build)
+workshop/
+
+# Project planning + research (GSD planning state, never deployed)
+.planning/
+
+# Source assets for the workshop (Excalidraw diagrams, brand PNGs, AWS logo)
+# These produce SVGs in workshop/static/images/ which are also excluded.
+assets/
+
+# Top-level slide deck + reveal-md config
+slides.md
+reveal-md.json
+
+# Documentation files (referenced from infrastructure/docs/ which IS included)
+README.md
+TESTING.md
+LICENSE
+
+# Repo-local AI assistant guidance
+CLAUDE.md
+.claude/
+
+# Python venv if anyone runs the excalidraw-to-svg pipeline locally
+.venv/
+
+# IDE + OS noise
+.idea/
+.vscode/
+.DS_Store

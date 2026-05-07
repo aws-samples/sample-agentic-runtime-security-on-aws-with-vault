@@ -49,3 +49,4 @@ node_modules/
 # reveal-md exports
 slides.pdf
 slides-site/
+workshop/tmp/
