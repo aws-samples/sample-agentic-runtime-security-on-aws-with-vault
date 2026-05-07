@@ -3,7 +3,7 @@
 # Workshop Bootstrap Script (PREF-04)
 #
 # Single-command bootstrap that orchestrates the full Agentic Runtime Security
-# workshop setup (8 steps, all idempotent — safe to re-run).
+# workshop setup (1 prereq-gate prompt + 8 steps, all idempotent — safe to re-run).
 #
 # Adapted from ~/git-repos/eks-terraform-stacks/infrastructure/scripts/bootstrap.sh
 # (the canonical pattern source). Workshop-specific edits:
@@ -12,20 +12,20 @@
 #   - VARSET_NAME defaults to "agentic-runtime-security-config"
 #   - HCP_PROJECT defaults to "Agentic Runtime Security"
 #   - Step 0 detects HCP free tier (Pitfall §2 — free tier EOL 2026-03-31)
-#   - Step 1 calls check-permissions.sh (NOT a generic check-prerequisites);
-#     the workshop's check-*.sh trio plus install-prereqs.sh cover the broader
-#     pre-flight surface
+#   - Prereq gate at top of main flow asks "Have you run ./preflight.sh and seen
+#     all checks pass? [y/N]" — replaces the old inline IAM verification
+#     (plan 01-08 closure of UAT Gap 2/3). preflight.sh is the single
+#     pre-flight surface; bootstrap.sh trusts the attendee's confirmation.
 #
 # Steps:
 #   0. Detect HCP free tier (FAIL if free; workshop requires Standard tier)
-#   1. Validate prerequisites (check-permissions.sh + presence of CLI tools)
-#   2. Create AWS OIDC provider + IAM role for Stacks
-#   3. Ensure EC2 Spot service-linked role
-#   4. Resolve admin principal ARN (assumed-role → IAM role rewrite)
-#   5. Write hcp-setup/terraform.tfvars from current environment
-#   6. Run terraform init + apply in hcp-setup (creates project + variable set)
-#   7. Create the HCP Terraform Stack via the HCP API + assign variable set
-#   8. Print success summary with next steps
+#   1. Create AWS OIDC provider + IAM role for Stacks
+#   2. Ensure EC2 Spot service-linked role
+#   3. Resolve admin principal ARN (assumed-role → IAM role rewrite)
+#   4. Write hcp-setup/terraform.tfvars from current environment
+#   5. Run terraform init + apply in hcp-setup (creates project + variable set)
+#   6. Create the HCP Terraform Stack via the HCP API + assign variable set
+#   7. Print success summary with next steps
 #
 # Usage:
 #   ./bootstrap.sh <HCP_ORG> [OPTIONS]
@@ -41,7 +41,7 @@
 #   --dry-run                Show what would be done without executing
 #   --help                   Show this help message
 #
-# Prerequisites (run install-prereqs.sh first):
+# Prerequisites (run preflight.sh first):
 #   - terraform CLI authenticated (terraform login)
 #   - aws CLI configured (aws configure / AWS_PROFILE / AWS SSO)
 #   - jq, curl, git installed
@@ -158,7 +158,7 @@ load_tfe_token() {
 # fit within plan limits. FAIL if the org is on a free / starter / trial plan.
 #===============================================================================
 step_detect_free_tier() {
-    step_header "0/8" "Detect HCP Terraform Subscription Tier"
+    step_header "0/7" "Detect HCP Terraform Subscription Tier"
 
     if [ "$DRY_RUN" = true ]; then
         echo -e "${YELLOW}[DRY-RUN] Would query HCP API for org '$HCP_ORG' subscription plan${NC}"
@@ -202,41 +202,14 @@ step_detect_free_tier() {
 }
 
 #===============================================================================
-# STEP 1: Validate Prerequisites
-#
-# Single-source-of-truth: defer to check-permissions.sh for the full IAM
-# action surface. CLI-tool installation is install-prereqs.sh's responsibility,
-# not bootstrap.sh's — but we still gate on `command -v` for the three CLIs
-# this script actually uses (terraform, aws, jq).
+# NOTE: The former Step 1 (inline IAM verification) was REMOVED in plan 01-08.
+# The user's locked design: bootstrap.sh now opens with a single prereq-gate
+# prompt at the top of main flow asking "Have you run ./preflight.sh and seen
+# all checks pass? [y/N]". Workshop attendees follow instructions — no
+# defensive re-check needed. preflight.sh is the single pre-flight surface.
+# The 8-step orchestration is renumbered 1-7 (formerly 2-8); step headers
+# below use the new numbering.
 #===============================================================================
-step_prerequisites() {
-    step_header "1/8" "Validate Prerequisites"
-
-    if [ "$DRY_RUN" = true ]; then
-        echo -e "${YELLOW}[DRY-RUN] Would run: check-permissions.sh${NC}"
-        return 0
-    fi
-
-    # Hard gate on CLI tools the rest of bootstrap.sh requires
-    for cmd in terraform aws jq curl; do
-        if ! command -v "$cmd" >/dev/null 2>&1; then
-            echo -e "${RED}✗ Required CLI not found: $cmd${NC}"
-            echo -e "${YELLOW}Fix: run infrastructure/scripts/install-prereqs.sh first${NC}"
-            exit 1
-        fi
-    done
-
-    # Defer to check-permissions.sh for IAM verification
-    if [ -x "$SCRIPT_DIR/check-permissions.sh" ]; then
-        if ! bash "$SCRIPT_DIR/check-permissions.sh"; then
-            echo
-            echo -e "${RED}IAM permissions check failed. Fix the issues above and re-run.${NC}"
-            exit 1
-        fi
-    else
-        echo -e "${YELLOW}⚠ check-permissions.sh not found or not executable — skipping IAM verification${NC}"
-    fi
-}
 
 #===============================================================================
 # STEP 2: Setup AWS OIDC Provider + IAM Role for HCP Stacks
@@ -248,7 +221,7 @@ step_prerequisites() {
 # reference repo can be substituted.
 #===============================================================================
 step_oidc_setup() {
-    step_header "2/8" "Setup AWS OIDC Provider + IAM Role"
+    step_header "1/7" "Setup AWS OIDC Provider + IAM Role"
 
     local OIDC_PROVIDER="app.terraform.io"
     local OIDC_ARN="arn:aws:iam::$(aws sts get-caller-identity --query Account --output text 2>/dev/null):oidc-provider/${OIDC_PROVIDER}"
@@ -324,7 +297,7 @@ step_oidc_setup() {
 # STEP 3: Ensure EC2 Spot Service-Linked Role
 #===============================================================================
 step_spot_slr() {
-    step_header "3/8" "Ensure EC2 Spot Service-Linked Role"
+    step_header "2/7" "Ensure EC2 Spot Service-Linked Role"
 
     if [ "$DRY_RUN" = true ]; then
         echo -e "${YELLOW}[DRY-RUN] Would check/create AWSServiceRoleForEC2Spot${NC}"
@@ -356,7 +329,7 @@ step_spot_slr() {
 # rewrite for EKS access entry compatibility.
 #===============================================================================
 step_get_admin_arn() {
-    step_header "4/8" "Resolve Admin Principal ARN"
+    step_header "3/7" "Resolve Admin Principal ARN"
 
     if [ "$DRY_RUN" = true ]; then
         ADMIN_PRINCIPAL_ARN="arn:aws:iam::123456789012:role/dry-run-placeholder"
@@ -385,7 +358,7 @@ step_get_admin_arn() {
 # STEP 5: Write hcp-setup/terraform.tfvars
 #===============================================================================
 step_write_tfvars() {
-    step_header "5/8" "Write hcp-setup/terraform.tfvars"
+    step_header "4/7" "Write hcp-setup/terraform.tfvars"
 
     local IAM_ROLE_ARN="arn:aws:iam::${AWS_ACCOUNT_ID}:role/hcp-stacks-deploy"
     local TFVARS_FILE="$SCRIPT_DIR/hcp-setup/terraform.tfvars"
@@ -411,7 +384,7 @@ TFVARS
 # STEP 6: terraform init + apply in hcp-setup
 #===============================================================================
 step_terraform_apply() {
-    step_header "6/8" "Terraform init + apply (HCP project + variable set)"
+    step_header "5/7" "Terraform init + apply (HCP project + variable set)"
 
     local HCP_SETUP_DIR="$SCRIPT_DIR/hcp-setup"
 
@@ -441,7 +414,7 @@ step_terraform_apply() {
 #    (422 means already assigned — treat as success).
 #===============================================================================
 step_create_stack() {
-    step_header "7/8" "Create HCP Terraform Stack"
+    step_header "6/7" "Create HCP Terraform Stack"
 
     if [ "$DRY_RUN" = true ]; then
         echo -e "${YELLOW}[DRY-RUN] Would create Stack '$STACK_NAME' with VCS connection${NC}"
@@ -618,7 +591,7 @@ step_create_stack() {
 # STEP 8: Success Summary
 #===============================================================================
 step_summary() {
-    step_header "8/8" "Summary"
+    step_header "7/7" "Summary"
     echo
     echo -e "${GREEN}===============================================================================${NC}"
     echo -e "${GREEN} ✓ Bootstrap Complete${NC}"
@@ -663,8 +636,25 @@ echo -e "  Variable Set:  ${YELLOW}$VARSET_NAME${NC}"
 echo -e "  Stack:         ${YELLOW}$STACK_NAME${NC}"
 [ "$DRY_RUN" = true ] && echo -e "  Mode:          ${YELLOW}DRY RUN${NC}"
 
+#-------------------------------------------------------------------------------
+# Prereq gate (replaces the former inline Step 1 IAM verification)
+#
+# Workshop is human-driven: attendees follow instructions. We don't
+# defensively re-run preflight here; we just confirm the attendee has run it.
+# Skipped in --dry-run mode (no real action, gate is moot).
+#-------------------------------------------------------------------------------
+if [ "$DRY_RUN" = false ]; then
+    echo
+    read -p "$(echo -e "${YELLOW}?${NC}") Have you run ./preflight.sh and seen all checks pass? [y/N] " -r preflight_ack < /dev/tty
+    if [[ ! "$preflight_ack" =~ ^[Yy]$ ]]; then
+        echo
+        echo -e "${RED}Run ./preflight.sh first, then return.${NC}"
+        exit 1
+    fi
+    echo
+fi
+
 step_detect_free_tier
-step_prerequisites
 step_oidc_setup
 step_spot_slr
 step_get_admin_arn
