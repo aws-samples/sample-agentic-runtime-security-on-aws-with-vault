@@ -224,7 +224,9 @@ step_oidc_setup() {
     step_header "1/7" "Setup AWS OIDC Provider + IAM Role"
 
     local OIDC_PROVIDER="app.terraform.io"
-    local OIDC_ARN="arn:aws:iam::$(aws sts get-caller-identity --query Account --output text 2>/dev/null):oidc-provider/${OIDC_PROVIDER}"
+    local AWS_ACCOUNT_ID
+    AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text 2>/dev/null)
+    local OIDC_ARN="arn:aws:iam::${AWS_ACCOUNT_ID}:oidc-provider/${OIDC_PROVIDER}"
     local ROLE_NAME="hcp-stacks-deploy"
 
     if [ "$DRY_RUN" = true ]; then
@@ -440,7 +442,7 @@ step_create_stack() {
     fi
 
     # Idempotency: check if a Stack with this name already exists in the org
-    local stack_data existing_stack_id existing_count
+    local stack_data existing_stack_id
     stack_data=$(curl -s \
         -H "Authorization: Bearer $TFE_TOKEN" \
         -H "Content-Type: application/vnd.api+json" \

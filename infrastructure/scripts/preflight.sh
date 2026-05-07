@@ -110,7 +110,7 @@ run() {
     if [ "$DRY_RUN" = true ]; then
         echo -e "  ${YELLOW}[dry-run]${NC} $*"
     else
-        eval "$@"
+        "$@"
     fi
 }
 
@@ -587,7 +587,7 @@ if confirm "Run IAM permissions check (iam:SimulatePrincipalPolicy)?"; then
             # Run the simulator once; output JSON of EvalActionName + EvalDecision.
             sim_out=$(aws iam simulate-principal-policy \
                 --policy-source-arn "$PRINCIPAL_ARN" \
-                --action-names ${REQUIRED_ACTIONS[@]} \
+                --action-names "${REQUIRED_ACTIONS[@]}" \
                 --query 'EvaluationResults[].[EvalActionName,EvalDecision]' \
                 --output text 2>/dev/null)
 
