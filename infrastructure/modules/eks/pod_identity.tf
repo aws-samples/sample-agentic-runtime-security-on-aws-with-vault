@@ -5,7 +5,7 @@
 #   - vpc-cni  → ENI / IP address management on nodes
 #   - aws-ebs-csi-driver → EBS volume create/attach for PVCs
 #
-# These wrap terraform-aws-modules/eks-pod-identity/aws ~> 2.0 — a role-policy
+# These wrap terraform-aws-modules/eks-pod-identity/aws ~> 1.12 — a role-policy
 # factory with flag-based attachment for known managed-addon policies. The
 # `iam_role_arn` from each module is wired back into main.tf's
 # `addons.<name>.pod_identity_association[].role_arn`.
@@ -27,7 +27,7 @@
 
 module "vpc_cni_pod_identity" {
   source  = "terraform-aws-modules/eks-pod-identity/aws"
-  version = "~> 2.0"
+  version = "~> 1.12"
 
   name                      = "${var.cluster_name}-vpc-cni"
   attach_aws_vpc_cni_policy = true
@@ -46,7 +46,7 @@ module "vpc_cni_pod_identity" {
 
 module "ebs_csi_pod_identity" {
   source  = "terraform-aws-modules/eks-pod-identity/aws"
-  version = "~> 2.0"
+  version = "~> 1.12"
 
   name                      = "${var.cluster_name}-ebs-csi"
   attach_aws_ebs_csi_policy = true
