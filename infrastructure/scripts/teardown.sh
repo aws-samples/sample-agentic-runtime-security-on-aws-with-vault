@@ -128,6 +128,18 @@ fi
 
 CW_LOG_PREFIXES=("/workshop/" "/aws/eks/${DEFAULT_CLUSTER}/" "/aws/rds/instance/${DEFAULT_CLUSTER}-pg")
 
+# HCP organization — source-of-truth is the `hcp_org` terraform variable in
+# infrastructure/scripts/hcp-setup/terraform.tfvars (written by bootstrap.sh
+# from the operator's shell). Override with $HCP_ORG env var.
+HCP_SETUP_TFVARS="${SCRIPT_DIR}/hcp-setup/terraform.tfvars"
+HCP_ORG="${HCP_ORG:-}"
+if [ -z "$HCP_ORG" ] && [ -f "$HCP_SETUP_TFVARS" ]; then
+    HCP_ORG=$(grep -E '^\s*hcp_org\s*=\s*"' "$HCP_SETUP_TFVARS" 2>/dev/null \
+        | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+fi
+# Don't fail-fast here — phase_hcp_cleanup may be skipped (--aws-only mode).
+# Validation deferred to that phase.
+
 #-------------------------------------------------------------------------------
 # TFE token loader
 #-------------------------------------------------------------------------------
@@ -807,56 +819,56 @@ phase_hcp_cleanup() {
     load_tfe_token
     local hcp_setup_dir="$SCRIPT_DIR/hcp-setup"
 
+    if [ -z "$HCP_ORG" ]; then
+        print_error "Could not resolve HCP org from $HCP_SETUP_TFVARS or \$HCP_ORG."
+        print_info "Run bootstrap.sh first to populate hcp-setup/terraform.tfvars."
+        return 1
+    fi
+    print_info "HCP org: $HCP_ORG"
+
     #-- Stack delete via API
     step_header "Delete HCP Terraform Stack"
     if [ -z "${TFE_TOKEN:-}" ]; then
         print_warn "TFE_TOKEN not set — skipping Stack delete (manual: HCP UI > Stack > Settings)"
     else
-        local hcp_org=""
-        [ -f "$hcp_setup_dir/terraform.tfvars" ] && hcp_org=$(grep -E '^\s*tfc_organization' \
-            "$hcp_setup_dir/terraform.tfvars" 2>/dev/null | head -1 | awk -F'"' '{print $2}')
-
-        if [ -z "$hcp_org" ]; then
-            print_warn "Could not resolve HCP org — skipping Stack delete"
+        local stack_id
+        stack_id=$(curl -s -H "Authorization: Bearer $TFE_TOKEN" \
+            -H "Content-Type: application/vnd.api+json" \
+            "$TFE_API/organizations/$HCP_ORG/stacks" 2>/dev/null \
+            | jq -r --arg n "$HCP_STACK_NAME" '.data[] | select(.attributes.name==$n) | .id' | head -1)
+        if [ -z "$stack_id" ]; then
+            print_info "No HCP Stack '$HCP_STACK_NAME' found in org '$HCP_ORG'"
         else
-            local stack_id
-            stack_id=$(curl -s -H "Authorization: Bearer $TFE_TOKEN" \
+            print_info "Stack id: $stack_id"
+            # Disconnect VCS to stop new runs, then cancel any active runs.
+            curl -s -X PATCH -H "Authorization: Bearer $TFE_TOKEN" \
                 -H "Content-Type: application/vnd.api+json" \
-                "$TFE_API/organizations/$hcp_org/stacks" 2>/dev/null \
-                | jq -r --arg n "$HCP_STACK_NAME" '.data[] | select(.attributes.name==$n) | .id' | head -1)
-            if [ -z "$stack_id" ]; then
-                print_info "No HCP Stack '$HCP_STACK_NAME' found"
-            else
-                # Disconnect VCS to stop new runs, then cancel any active runs.
-                curl -s -X PATCH -H "Authorization: Bearer $TFE_TOKEN" \
+                -d '{"data":{"type":"stacks","attributes":{"vcs-repo":null}}}' \
+                "$TFE_API/stacks/$stack_id" >/dev/null 2>&1
+            for cid in $(curl -s -H "Authorization: Bearer $TFE_TOKEN" \
                     -H "Content-Type: application/vnd.api+json" \
-                    -d '{"data":{"type":"stacks","attributes":{"vcs-repo":null}}}' \
-                    "$TFE_API/stacks/$stack_id" >/dev/null 2>&1
-                for cid in $(curl -s -H "Authorization: Bearer $TFE_TOKEN" \
-                        -H "Content-Type: application/vnd.api+json" \
-                        "$TFE_API/stacks/$stack_id/stack-configurations?page%5Bsize%5D=20" 2>/dev/null \
-                        | jq -r '.data[].id'); do
-                    curl -s -H "Authorization: Bearer $TFE_TOKEN" \
-                        -H "Content-Type: application/vnd.api+json" \
-                        "$TFE_API/stack-configurations/$cid/stack-deployment-runs" 2>/dev/null \
-                        | jq -r '.data[] | select(.attributes.status != "abandoned" and .attributes.status != "failed" and .attributes.status != "succeeded") | .id' \
-                        | while read -r rid; do
-                            [ -n "$rid" ] && curl -s -X POST \
-                                -H "Authorization: Bearer $TFE_TOKEN" \
-                                -H "Content-Type: application/vnd.api+json" \
-                                "$TFE_API/stack-deployment-runs/$rid/cancel" >/dev/null 2>&1
-                        done
-                done
-                local code
-                code=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
-                    -H "Authorization: Bearer $TFE_TOKEN" \
+                    "$TFE_API/stacks/$stack_id/stack-configurations?page%5Bsize%5D=20" 2>/dev/null \
+                    | jq -r '.data[].id'); do
+                curl -s -H "Authorization: Bearer $TFE_TOKEN" \
                     -H "Content-Type: application/vnd.api+json" \
-                    "$TFE_API/stacks/$stack_id" 2>/dev/null)
-                case "$code" in
-                    200|204|404) print_success "HCP Stack deleted (HTTP $code)" ;;
-                    *)           print_warn "Stack delete returned HTTP $code — check HCP UI" ;;
-                esac
-            fi
+                    "$TFE_API/stack-configurations/$cid/stack-deployment-runs" 2>/dev/null \
+                    | jq -r '.data[] | select(.attributes.status != "abandoned" and .attributes.status != "failed" and .attributes.status != "succeeded") | .id' \
+                    | while read -r rid; do
+                        [ -n "$rid" ] && curl -s -X POST \
+                            -H "Authorization: Bearer $TFE_TOKEN" \
+                            -H "Content-Type: application/vnd.api+json" \
+                            "$TFE_API/stack-deployment-runs/$rid/cancel" >/dev/null 2>&1
+                    done
+            done
+            local code
+            code=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+                -H "Authorization: Bearer $TFE_TOKEN" \
+                -H "Content-Type: application/vnd.api+json" \
+                "$TFE_API/stacks/$stack_id" 2>/dev/null)
+            case "$code" in
+                200|204|404) print_success "HCP Stack deleted (HTTP $code)" ;;
+                *)           print_warn "Stack delete returned HTTP $code — check HCP UI" ;;
+            esac
         fi
     fi
 
