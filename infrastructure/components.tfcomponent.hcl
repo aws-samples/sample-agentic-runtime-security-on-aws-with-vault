@@ -132,8 +132,28 @@ component "rds" {
 #                      enforced before the KB is created.
 #-------------------------------------------------------------------------------
 
-# --- KB components temporarily removed for region migration (us-west-2 → us-east-1).
-# --- Stacks will destroy the us-west-2 state. Re-add in next push.
+# --- KB components removed for region migration (us-west-2 → us-east-1).
+# --- `removed` blocks tell Stacks to destroy the us-west-2 state.
+# --- Replace with component blocks pointing to provider.aws.kb in step 2.
+
+removed {
+  source = "./modules/bedrock_kb_aoss"
+  from   = component.bedrock_kb_aoss
+
+  providers = {
+    aws  = provider.aws.main
+    time = provider.time.main
+  }
+}
+
+removed {
+  source = "./modules/bedrock_kb_index"
+  from   = component.bedrock_kb_index
+
+  providers = {
+    aws = provider.aws.main
+  }
+}
 
 #-------------------------------------------------------------------------------
 # EKS Blueprints Addons Component (Wave 2)
