@@ -1,17 +1,21 @@
 #!/usr/bin/env bash
 #===============================================================================
-# test-foundation.sh — wrapper that runs all 3 component tests in sequence
+# test-foundation.sh — verify the entire workshop foundation in one command
 #
-# Calls test-eks.sh, test-rds.sh, test-bedrock-kb.sh with the IDs derived from
-# CLI args (or env vars). Prints a banner per component and exits non-zero if
-# any sub-script failed.
+# Calls test-eks.sh, test-rds.sh, test-bedrock-kb.sh, then checks audit log
+# groups and the region contract. Aggregates results.
 #
 # Usage:
 #   ./test-foundation.sh \
 #       --cluster-name <name> \
-#       --db-instance-id <id> \
 #       --knowledge-base-id <kb_id> \
+#       [--db-instance-id <id>] \
 #       [--region <region>]
+#
+# Auto-derived when not provided:
+#   --db-instance-id  defaults to ${cluster_name}-pg (Stacks convention)
+#   --region          resolved from deployments.tfdeploy.hcl
+#   KB region         parsed from kb_region in deployments.tfdeploy.hcl
 #
 # Env-var fallback:
 #   WORKSHOP_CLUSTER_NAME, WORKSHOP_DB_INSTANCE_ID, WORKSHOP_KB_ID
@@ -33,11 +37,16 @@ while [ $# -gt 0 ]; do
         --region)            CLI_REGION="$2"; shift ;;
         --help|-h)
             cat <<USAGE
-Usage: $0 --cluster-name <name> --db-instance-id <id> --knowledge-base-id <kb> [--region <region>]
+Usage: $0 --cluster-name <name> --knowledge-base-id <kb> [--db-instance-id <id>] [--region <region>]
 
-Wraps test-eks.sh + test-rds.sh + test-bedrock-kb.sh. Aggregates results.
+Verifies foundation: EKS, RDS, Bedrock KB, audit log groups, region contract.
 
-Env-var fallback (any unset --flag falls back to env):
+Auto-derived:
+  --db-instance-id  defaults to \${cluster_name}-pg
+  --region          from deployments.tfdeploy.hcl
+  KB region         from kb_region in deployments.tfdeploy.hcl
+
+Env-var fallback:
   WORKSHOP_CLUSTER_NAME, WORKSHOP_DB_INSTANCE_ID, WORKSHOP_KB_ID
 USAGE
             exit 0
@@ -61,6 +70,24 @@ source "$SCRIPT_DIR/resolve-region.sh"
 resolve_region "$CLI_REGION" || exit 1
 REGION="$RESOLVED_REGION"
 
+# Auto-derive DB instance ID from cluster name convention
+if [ -z "$DB_ID" ] && [ -n "$CLUSTER_NAME" ]; then
+    DB_ID="${CLUSTER_NAME}-pg"
+fi
+
+# Resolve KB region from deployments.tfdeploy.hcl (kb_region input)
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+TFDEPLOY="${REPO_ROOT}/infrastructure/deployments.tfdeploy.hcl"
+KB_REGION=""
+if [ -f "$TFDEPLOY" ]; then
+    KB_REGION=$(grep -E '^\s*kb_region\s*=\s*"' "$TFDEPLOY" 2>/dev/null \
+        | head -1 \
+        | sed -E 's/.*"([^"]+)".*/\1/')
+fi
+if [ -z "$KB_REGION" ]; then
+    KB_REGION="$REGION"
+fi
+
 missing=()
 [ -z "$CLUSTER_NAME" ] && missing+=("--cluster-name / WORKSHOP_CLUSTER_NAME")
 [ -z "$DB_ID" ]        && missing+=("--db-instance-id / WORKSHOP_DB_INSTANCE_ID")
@@ -70,6 +97,16 @@ if [ "${#missing[@]}" -gt 0 ]; then
     for m in "${missing[@]}"; do echo "  - $m" >&2; done
     exit 1
 fi
+
+echo
+echo -e "${BLUE}===============================================================================${NC}"
+echo -e "${BLUE}  Foundation Verification${NC}"
+echo -e "${BLUE}===============================================================================${NC}"
+echo -e "  Cluster:     ${CLUSTER_NAME}"
+echo -e "  DB instance: ${DB_ID}"
+echo -e "  KB id:       ${KB_ID}"
+echo -e "  Region:      ${REGION}"
+echo -e "  KB region:   ${KB_REGION}"
 
 run_component() {
     local label="$1"; shift
@@ -95,13 +132,74 @@ run_component "RDS"        "$SCRIPT_DIR/test-rds.sh" \
     || failures=$((failures + 1))
 
 run_component "Bedrock KB" "$SCRIPT_DIR/test-bedrock-kb.sh" \
-    --knowledge-base-id "$KB_ID" --region "$REGION" \
+    --knowledge-base-id "$KB_ID" --region "$KB_REGION" \
     || failures=$((failures + 1))
+
+#-------------------------------------------------------------------------------
+# Audit log groups — verify the 3 pre-created log groups exist with KMS
+#-------------------------------------------------------------------------------
+echo
+echo -e "${BLUE}===============================================================================${NC}"
+echo -e "${BLUE}  Audit Log Groups${NC}"
+echo -e "${BLUE}===============================================================================${NC}"
+
+EXPECTED_LOG_GROUPS=("/workshop/vault-audit" "/workshop/ivia-decision" "/workshop/agent-trace")
+audit_ok=true
+for lg in "${EXPECTED_LOG_GROUPS[@]}"; do
+    lg_json=$(aws logs describe-log-groups --log-group-name-prefix "$lg" \
+        --region "$REGION" --query "logGroups[?logGroupName=='${lg}']" \
+        --output json 2>/dev/null)
+    lg_count=$(echo "$lg_json" | jq 'length' 2>/dev/null)
+    if [ "${lg_count:-0}" -ge 1 ]; then
+        kms_key=$(echo "$lg_json" | jq -r '.[0].kmsKeyId // "none"')
+        if [ "$kms_key" != "none" ]; then
+            print_pass "Log group ${lg}: exists (KMS-encrypted)"
+        else
+            print_fail "Log group ${lg}: exists but NOT KMS-encrypted" \
+                "Re-apply the audit module to attach the workshop CMK to ${lg}."
+            audit_ok=false
+        fi
+    else
+        print_fail "Log group ${lg}: NOT FOUND" \
+            "Re-apply the foundation Stack — the audit component should create ${lg}."
+        audit_ok=false
+    fi
+done
+[ "$audit_ok" = false ] && failures=$((failures + 1))
+
+#-------------------------------------------------------------------------------
+# Region contract — no canonical region literal outside deployments.tfdeploy.hcl
+# Excludes .terraform/ directories (vendored third-party module test files).
+#-------------------------------------------------------------------------------
+echo
+echo -e "${BLUE}===============================================================================${NC}"
+echo -e "${BLUE}  Region Contract${NC}"
+echo -e "${BLUE}===============================================================================${NC}"
+
+DEPLOY_FILE="infrastructure/deployments.tfdeploy.hcl"
+leaks=$(grep -rn "$REGION" \
+    --include='*.tf' \
+    --include='*.hcl' \
+    --include='*.tfcomponent.hcl' \
+    --include='*.tfdeploy.hcl' \
+    "$REPO_ROOT/infrastructure/" 2>/dev/null \
+    | grep -v "deployments.tfdeploy.hcl" \
+    | grep -v "/.terraform/" \
+    | grep -v ':\s*#\|:\s*//' || true)
+
+if [ -z "$leaks" ]; then
+    print_pass "No region literal '${REGION}' outside ${DEPLOY_FILE}"
+else
+    leak_count=$(echo "$leaks" | wc -l | tr -d ' ')
+    print_fail "${leak_count} region literal leak(s) found outside ${DEPLOY_FILE}" \
+        "Replace hard-coded '${REGION}' with var.region in these files: $(echo "$leaks" | awk -F: '{print $1}' | sort -u | tr '\n' ' ')"
+    failures=$((failures + 1))
+fi
 
 echo
 echo -e "${BLUE}===============================================================================${NC}"
 if [ "$failures" -eq 0 ]; then
-    echo -e "${GREEN}  Foundation verification: ALL 3 components passed${NC}"
+    echo -e "${GREEN}  Foundation verification: ALL components passed${NC}"
 else
     echo -e "${RED}  Foundation verification: ${failures} component(s) FAILED${NC}"
 fi
