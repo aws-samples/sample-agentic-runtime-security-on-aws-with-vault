@@ -91,7 +91,7 @@ data "aws_bedrock_inference_profile" "embedding" {
   inference_profile_id = "us.cohere.embed-v4:0"
 }
 
-# 3/4 — Bedrock InvokeModel on the embedding model.
+# 3/4 — Bedrock InvokeModel + GetInferenceProfile for the embedding CRIS.
 resource "aws_iam_role_policy" "kb_bedrock" {
   depends_on = [time_sleep.wait_for_kb_role_propagation]
   name       = "${var.kb_name}-bedrock"
@@ -103,7 +103,15 @@ resource "aws_iam_role_policy" "kb_bedrock" {
       {
         Effect   = "Allow"
         Action   = ["bedrock:InvokeModel"]
-        Resource = data.aws_bedrock_inference_profile.embedding.models[*].model_arn
+        Resource = concat(
+          [data.aws_bedrock_inference_profile.embedding.inference_profile_arn],
+          data.aws_bedrock_inference_profile.embedding.models[*].model_arn,
+        )
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["bedrock:GetInferenceProfile"]
+        Resource = data.aws_bedrock_inference_profile.embedding.inference_profile_arn
       }
     ]
   })
