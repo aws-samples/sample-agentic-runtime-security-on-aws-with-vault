@@ -43,9 +43,14 @@ resource "aws_db_parameter_group" "pg17_audit" {
 
   # Skip system-catalog noise — pgaudit defaults to logging catalog reads which
   # explode log volume without serving the audit-correlation query templates.
+  # Use "0" (not "off") — the RDS API normalizes boolean strings to "0"/"1"
+  # at storage time, so a TF value of "off" produces perpetual drift on
+  # subsequent plans (TF compares "off" to AWS-stored "0"). Seen in stack run
+  # sdr-m4miM2QRJasVkSiF (2026-05-08) where this parameter alone caused 10+
+  # plan/apply rounds.
   parameter {
     name  = "pgaudit.log_catalog"
-    value = "off"
+    value = "0"
   }
 
   # ---------------------------------------------------------------------------

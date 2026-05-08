@@ -56,6 +56,14 @@ resource "aws_s3_object" "corpus" {
   bucket       = aws_s3_bucket.kb_corpus.id
   key          = each.value
   content      = file("${path.module}/sample_corpus/${each.value}")
-  etag         = filemd5("${path.module}/sample_corpus/${each.value}")
   content_type = "text/markdown"
+
+  # source_hash (NOT etag) is the AWS provider's content-tracking attribute
+  # that works with SSE-KMS. For SSE-KMS objects S3 returns an opaque
+  # server-computed ETag (not the plaintext MD5), so an `etag = filemd5(...)`
+  # comparison perpetually drifts on this bucket — see stack run
+  # sdr-m4miM2QRJasVkSiF (2026-05-08) where 2 of 8 corpus objects looped
+  # because they got re-uploaded after the bucket flipped from AES256 to
+  # SSE-KMS mid-deploy. source_hash is local-only state, no S3 comparison.
+  source_hash = filemd5("${path.module}/sample_corpus/${each.value}")
 }
