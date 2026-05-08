@@ -65,12 +65,10 @@ required_providers {
     version = "~> 4.0"
   }
 
-  # restapi provider — TEMPORARILY DISABLED (isva_config + ivia disabled).
-  # Re-enable together with ivia + isva_config components.
-  # restapi = {
-  #   source  = "Mastercard/restapi"
-  #   version = "~> 1.19"
-  # }
+  restapi = {
+    source  = "Mastercard/restapi"
+    version = "~> 1.19"
+  }
 }
 
 #-------------------------------------------------------------------------------
@@ -159,16 +157,14 @@ provider "vault" "main" {
   }
 }
 
-# restapi provider — TEMPORARILY DISABLED (isva_config + ivia disabled).
-# Re-enable together with ivia + isva_config components.
-# provider "restapi" "main" {
-#   config {
-#     uri      = "https://${component.ivia.ivia_service_endpoint}"
-#     insecure = true
-#     headers = {
-#       "Content-Type" = "application/json"
-#     }
-#     username = var.ivia_admin_username
-#     password = var.ivia_admin_password
-#   }
-# }
+provider "restapi" "main" {
+  config {
+    uri      = "https://${component.ivia.ivia_service_endpoint}"
+    insecure = true
+    headers = {
+      "Content-Type" = "application/json"
+    }
+    username = var.ivia_admin_username
+    password = var.ivia_admin_password
+  }
+}
