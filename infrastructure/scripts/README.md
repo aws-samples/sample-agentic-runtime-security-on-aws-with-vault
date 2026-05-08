@@ -15,8 +15,7 @@ Bootstrapping, end-to-end orchestration, per-component verification, and teardow
 | `test-rds.sh` | Workshop user, `test-foundation.sh`, `workshop-e2e.sh` | Verifies workshop RDS PostgreSQL: status available, engine postgres 17.x, MasterUserSecret present, parameter group has `pgaudit` in `shared_preload_libraries` and `pgaudit.log` set, storage encrypted | — |
 | `test-bedrock-kb.sh` | Workshop user, `test-foundation.sh`, `workshop-e2e.sh` | Verifies Bedrock Knowledge Base: KB status ACTIVE, 3 data sources (hr/customers/finance) AVAILABLE, retrieval smoke query per data source, AOSS collection ACTIVE | — |
 | `test-foundation.sh` | Workshop user, `workshop-e2e.sh` | Wraps `test-eks.sh` + `test-rds.sh` + `test-bedrock-kb.sh`. Aggregates pass/fail. Exits non-zero if any component fails | — |
-| `cleanup-orphaned-resources.sh` | Admin/presenter, `teardown.sh`, `workshop-e2e.sh` | Removes orphaned AWS resources after a failed/incomplete destroy: ENIs, SGs, LBs, NAT GWs, EIPs, IGWs, subnets, route tables, VPCs. Scoped to `Workshop=agentic-runtime-security` tag (override: `--tag Key=Value`). Optional per-cluster mode: `cluster:region ...` | — |
-| `teardown.sh` | Admin/presenter, `workshop-e2e.sh` | Multi-phase teardown: Phase 0 preflight, Phase 1 K8s cleanup (test workloads + IVIA/Vault stubs), Phase 2 HCP destroy=true approval, Phase 3 orphaned-resource sweep, Phase 4 HCP Stack + variable set + IAM role + OIDC delete | — |
+| `teardown.sh` | Admin/presenter, `workshop-e2e.sh` | Single-file workshop nuke. Default: K8s drain + AWS resource sweep (tag-scoped) + HCP Stack/varset/IAM/OIDC delete. Flags: `--aws-only` (just AWS resources), `--hcp-only` (just HCP infra), `--dry-run`, `--help` | — |
 | `e2e-validate.sh` | Admin/presenter | Lints all `*.sh`: shebang consistency, `bash -n` syntax, optional shellcheck, Bash 4+ guard, no `base64 -d` usage. No deployment | — |
 | `workshop-e2e.sh` | Admin/presenter | Full lifecycle orchestrator (Phase 0–8). Phases 5–7 are placeholders for IVIA, Vault, and use-case validation; populated as the corresponding workshop phases are authored | — |
 | `excalidraw-to-svg.py` | Workshop user, content authors | Converts the six Excalidraw sources in `assets/` to SVG (single-source-of-truth pipeline) | SCAF-03 |
@@ -101,30 +100,19 @@ Single-command orchestrator. Phase model:
 
 ### `teardown.sh`
 
-| Phase | What it does |
-|-------|--------------|
-| 0 | Preflight — AWS creds, tools, cluster detection |
-| 1 | K8s pre-destroy — test workloads, IVIA, Vault (last two are stubs until workshop Phase 3 ships) |
-| 2 | HCP destroy=true — sets `destroy = true` and pauses for HCP UI approval (skipped with `--no-wait`) |
-| 3 | Orphaned-resource sweep — calls `cleanup-orphaned-resources.sh` |
-| 4 | HCP Stack + variable set + IAM role + OIDC delete (skipped with `--skip-oidc-cleanup`) |
-
-Flags: `--pre-destroy-only`, `--post-destroy-only`, `--skip-oidc-cleanup`, `--no-wait`, `--dry-run`.
-
-### `cleanup-orphaned-resources.sh`
-
-Two modes:
+Single nuke command — wipes everything the workshop provisioned.
 
 ```bash
-# Tag-scoped sweep (default tag: Workshop=agentic-runtime-security)
-./cleanup-orphaned-resources.sh
-
-# Override tag
-./cleanup-orphaned-resources.sh --tag MyTag=MyValue
-
-# Per-cluster (also cleans up the EKS cluster + nodegroups + log groups + KMS aliases)
-./cleanup-orphaned-resources.sh eks-usw2:us-west-2
+./teardown.sh             # Full: AWS resources + HCP infra
+./teardown.sh --aws-only  # Just AWS resources (K8s drain + tag-scoped sweep)
+./teardown.sh --hcp-only  # Just HCP infra (Stack, varset, IAM role, OIDC)
+./teardown.sh --dry-run   # Preview without executing
+./teardown.sh --help      # Usage
 ```
+
+Discovery: `Workshop=agentic-runtime-security` tag + the well-known names this workshop uses (cluster `agentic-runtime-usw2`, S3 buckets prefixed `workshop-kb-corpus`, Glue DB `workshop_logs`, Athena workgroup `workshop`, CW log groups `/workshop/*`, RDS instance `<cluster>-pg`).
+
+Sweeps EKS pod-identity associations, node groups, cluster, RDS, AOSS, S3, Bedrock KB, Glue/Athena, CW log groups, KMS, IAM roles, EKS cluster IAM OIDC, and per-VPC: ELBs, endpoints, ENIs, SGs, NAT/EIP/IGW/subnets/RTs/VPC.
 
 ### `e2e-validate.sh`
 
@@ -134,7 +122,7 @@ Runs offline lint on every script in this directory. Used by admins before commi
 ./infrastructure/scripts/e2e-validate.sh
 ```
 
-Phases: shebang consistency, `bash -n` syntax, optional shellcheck (skipped if not installed), cross-platform compatibility (no `base64 -d`, Bash 4+ guard on `cleanup-orphaned-resources.sh`).
+Phases: shebang consistency, `bash -n` syntax, optional shellcheck (skipped if not installed), cross-platform compatibility (no `base64 -d`).
 
 ## Output Conventions
 

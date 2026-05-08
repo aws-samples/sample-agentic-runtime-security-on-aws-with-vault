@@ -2,51 +2,53 @@
 #===============================================================================
 # Workshop Teardown — Agentic Runtime Security on AWS
 #
-# Adapted from ~/git-repos/eks-terraform-stacks/infrastructure/scripts/teardown.sh
+# Single-file teardown. Wipes EVERYTHING the workshop provisioned.
 #
-# Single-command teardown that orchestrates the full workshop cleanup:
-#   Phase 0: Preflight checks (AWS creds, tools, cluster detection)
-#   Phase 1: Pre-destroy K8s cleanup (test workloads, IVIA, Vault stubs)
-#   Phase 2: HCP destroy=true via API (push config, approve plans, wait)
-#            Falls back to a manual pause when TFE_TOKEN is not available.
-#   Phase 3: Post-destroy orphaned AWS resource cleanup
-#            (delegates to cleanup-orphaned-resources.sh — sweeps ENIs, SGs,
-#             VPC, NAT/EIP/IGW/RT/subnets, classic + v2 LBs)
-#   Phase 4: HCP Stack + variable set + IAM role + OIDC provider deletion
-#            Includes retry-with-OIDC-recreation when removing deployments
-#            from a Stack whose IAM role / OIDC provider was deleted by a
-#            prior teardown attempt.
+# Usage:
+#   teardown.sh                Full nuke: AWS resources + HCP infra
+#   teardown.sh --aws-only     Only AWS resources (K8s drain + tag-scoped sweep)
+#   teardown.sh --hcp-only     Only HCP infra (Stack, varset, IAM role, OIDC)
+#   teardown.sh --dry-run      Preview without executing
+#   teardown.sh --help         Show this help
 #
-# Single deployment: `agentic-runtime-usw2` in the canonical workshop region (resolved
-# from $AWS_REGION or infrastructure/deployments.tfdeploy.hcl). No 3-region
-# loops — Phase 1 of this workshop is single-region by deliberate decision.
+# Discovery: Workshop tag `Workshop=agentic-runtime-security` + the well-known
+# names this workshop uses (cluster `agentic-runtime-usw2`, S3 buckets prefixed
+# `workshop-kb-corpus`, Glue DB `workshop_logs`, Athena workgroup `workshop`,
+# CW log groups `/workshop/*`, RDS instance `<cluster>-pg`).
 #
-# Usage: ./scripts/teardown.sh [OPTIONS] [cluster:region ...]
-#
-# Options:
-#   --dry-run              Show what would be done without executing
-#   --pre-destroy-only     Phase 0+1 only (K8s cleanup)
-#   --post-destroy-only    Phase 0+3+4 only (orphaned AWS + HCP cleanup)
-#   --skip-oidc-cleanup    Skip IAM role + OIDC provider deletion in Phase 4
-#   --no-wait              Skip pause for HCP manual steps (when TFE_TOKEN unset)
-#   --help                 Show this help message
+# Default behavior is "skip the HCP destroy plan and just nuke." If the deploy
+# already broke (orphans exist with HCP state diverged from AWS), there is no
+# value in waiting for a destroy plan that will fail or no-op.
 #===============================================================================
 
 set -e
-
-# Disable AWS CLI pager to prevent vi/less from capturing output
 export AWS_PAGER=""
 
-#-------------------------------------------------------------------------------
-# Script directory + repo root
-#-------------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 #-------------------------------------------------------------------------------
-# Color constants (inline — keep parity with eks-stacks teardown.sh; do NOT
-# source common-checks.sh here because that installs an EXIT trap that
-# emits a "checks passed" summary, which is wrong for a teardown orchestrator.)
+# Workshop constants
+#-------------------------------------------------------------------------------
+WORKSHOP_TAG_KEY="Workshop"
+WORKSHOP_TAG_VAL="agentic-runtime-security"
+HCP_ROLE_NAME="hcp-stacks-deploy"
+HCP_STACK_NAME="agentic-runtime-security"
+HCP_PROJECT_NAME="Agentic Runtime Security"
+HCP_VARSET_NAME="agentic-runtime-stacks-config"
+TFE_API="https://app.terraform.io/api/v2"
+
+# Default cluster — workshop is single-region single-cluster.
+DEFAULT_CLUSTER="agentic-runtime-usw2"
+
+# Known name-prefixes the workshop uses (for resources without tag visibility).
+S3_BUCKET_PREFIXES=("workshop-kb-corpus" "workshop-athena-results")
+GLUE_DB_NAMES=("workshop_logs")
+ATHENA_WG_NAMES=("workshop")
+CW_LOG_PREFIXES=("/workshop/" "/aws/eks/${DEFAULT_CLUSTER}/" "/aws/rds/instance/${DEFAULT_CLUSTER}-pg")
+
+#-------------------------------------------------------------------------------
+# Colors + print helpers
 #-------------------------------------------------------------------------------
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -54,129 +56,68 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-#-------------------------------------------------------------------------------
-# Workshop conventions
-#-------------------------------------------------------------------------------
-HCP_ROLE_NAME="hcp-stacks-deploy"
-HCP_STACK_NAME="agentic-runtime-security"
-# shellcheck disable=SC2034 # reserved for future --project flag wiring (parity with bootstrap.sh)
-HCP_PROJECT_NAME="Agentic Runtime Security"
-# Variable-set name as configured in infrastructure/deployments.tfdeploy.hcl
-# (`store "varset" "config" { name = "agentic-runtime-stacks-config" }`)
-HCP_VARSET_NAME="agentic-runtime-stacks-config"
-WORKSHOP_TAG="Workshop=agentic-runtime-security"
-TFE_API="https://app.terraform.io/api/v2"
-
-#-------------------------------------------------------------------------------
-# Defaults
-#-------------------------------------------------------------------------------
-DRY_RUN=false
-PRE_DESTROY_ONLY=false
-POST_DESTROY_ONLY=false
-SKIP_OIDC_CLEANUP=false
-NO_WAIT=false
-CLUSTER_LIST=()
-
-#-------------------------------------------------------------------------------
-# Helper Functions
-#-------------------------------------------------------------------------------
-step_header() {
-    local step_num="$1"
-    local step_name="$2"
-    echo ""
-    echo -e "${BLUE}--- Step $step_num: $step_name ---${NC}"
-}
-
 phase_header() {
-    local phase="$1"
     echo ""
     echo -e "${BLUE}================================================================${NC}"
-    echo -e "${BLUE}  $phase${NC}"
+    echo -e "${BLUE}  $1${NC}"
     echo -e "${BLUE}================================================================${NC}"
 }
-
+step_header() { echo -e "\n${YELLOW}--- $1 ---${NC}"; }
 print_success() { echo -e "${GREEN}  $1${NC}"; }
 print_error()   { echo -e "${RED}  $1${NC}"; }
 print_info()    { echo -e "${BLUE}  $1${NC}"; }
 print_warn()    { echo -e "${YELLOW}  $1${NC}"; }
 
+#-------------------------------------------------------------------------------
+# CLI defaults + parsing
+#-------------------------------------------------------------------------------
+DRY_RUN=false
+AWS_ONLY=false
+HCP_ONLY=false
+
 usage() {
-    cat <<USAGE
-
-Usage: $0 [OPTIONS] [cluster:region ...]
-
-Orchestrates the full workshop teardown.
-
-Options:
-  --dry-run              Show what would be done without executing
-  --pre-destroy-only     Phase 0+1 only (K8s cleanup)
-  --post-destroy-only    Phase 0+3+4 only (orphaned AWS + HCP cleanup)
-  --skip-oidc-cleanup    Skip IAM role + OIDC provider deletion
-  --no-wait              Skip pause for HCP manual steps
-  --help                 Show this help message
-
-Default cluster: agentic-runtime-usw2 (region resolved from \$AWS_REGION or
-                 infrastructure/deployments.tfdeploy.hcl).
-
-Examples:
-  $0                                # Full teardown
-  $0 --dry-run                      # Preview all phases
-  $0 --pre-destroy-only             # K8s cleanup only
-  $0 --post-destroy-only            # Orphaned resource + HCP cleanup
-  $0 agentic-runtime-usw2:\$AWS_REGION          # Explicit cluster:region
-USAGE
+    sed -n '2,21p' "$0"
+    exit 0
 }
 
-#-------------------------------------------------------------------------------
-# Argument parsing
-#-------------------------------------------------------------------------------
 while [ $# -gt 0 ]; do
     case "$1" in
-        --help|-h)             usage; exit 0 ;;
-        --dry-run)             DRY_RUN=true ;;
-        --pre-destroy-only)    PRE_DESTROY_ONLY=true ;;
-        --post-destroy-only)   POST_DESTROY_ONLY=true ;;
-        --skip-oidc-cleanup)   SKIP_OIDC_CLEANUP=true ;;
-        --no-wait)             NO_WAIT=true ;;
-        -*)
-            echo -e "${RED}Error: Unknown option: $1${NC}" >&2
+        --aws-only) AWS_ONLY=true ;;
+        --hcp-only) HCP_ONLY=true ;;
+        --dry-run)  DRY_RUN=true ;;
+        --help|-h)  usage ;;
+        *)
+            echo -e "${RED}Unknown option: $1${NC}" >&2
             usage
-            exit 1
             ;;
-        *)                     CLUSTER_LIST+=("$1") ;;
     esac
     shift
 done
 
-if [ "$PRE_DESTROY_ONLY" = true ] && [ "$POST_DESTROY_ONLY" = true ]; then
-    echo -e "${RED}Error: --pre-destroy-only and --post-destroy-only are mutually exclusive${NC}" >&2
+if [ "$AWS_ONLY" = true ] && [ "$HCP_ONLY" = true ]; then
+    echo -e "${RED}Error: --aws-only and --hcp-only are mutually exclusive${NC}" >&2
     exit 1
 fi
 
 #-------------------------------------------------------------------------------
-# Region resolution (canonical-region contract: no region literal here —
-# resolve from $AWS_REGION or infrastructure/deployments.tfdeploy.hcl)
+# Region resolution (canonical contract: only deployments.tfdeploy.hcl carries
+# the literal "us-west-2" — everything else reads it from there or $AWS_REGION).
 #-------------------------------------------------------------------------------
-DEFAULT_REGION="${AWS_REGION:-}"
-if [ -z "$DEFAULT_REGION" ]; then
+REGION="${AWS_REGION:-}"
+if [ -z "$REGION" ]; then
     TF_DEPLOY="${REPO_ROOT}/infrastructure/deployments.tfdeploy.hcl"
     if [ -f "$TF_DEPLOY" ]; then
-        DEFAULT_REGION=$(grep -E '^\s*region\s*=\s*"' "$TF_DEPLOY" 2>/dev/null \
+        REGION=$(grep -E '^\s*region\s*=\s*"' "$TF_DEPLOY" 2>/dev/null \
             | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
     fi
 fi
-
-# Default cluster list — single deployment usw2
-if [ ${#CLUSTER_LIST[@]} -eq 0 ]; then
-    if [ -z "$DEFAULT_REGION" ]; then
-        echo -e "${RED}Error: could not resolve region. Set AWS_REGION or pass cluster:region pairs.${NC}" >&2
-        exit 1
-    fi
-    CLUSTER_LIST=("agentic-runtime-usw2:${DEFAULT_REGION}")
+if [ -z "$REGION" ]; then
+    echo -e "${RED}Error: could not resolve region. Set AWS_REGION.${NC}" >&2
+    exit 1
 fi
 
 #-------------------------------------------------------------------------------
-# TFE token loader (auto-load from ~/.terraform.d/credentials.tfrc.json)
+# TFE token loader
 #-------------------------------------------------------------------------------
 load_tfe_token() {
     if [ -z "${TFE_TOKEN:-}" ] && [ -f "$HOME/.terraform.d/credentials.tfrc.json" ]; then
@@ -187,905 +128,772 @@ load_tfe_token() {
 }
 
 #===============================================================================
-# PHASE 0: Preflight
+# K8S CLEANUP
+# Drain LB-controller-managed services (NLB/ALB) so VPC delete doesn't fail with
+# DependencyViolation. Best-effort — silently skipped if cluster unreachable.
 #===============================================================================
-phase_preflight() {
-    phase_header "Phase 0: Preflight Checks"
+phase_k8s_cleanup() {
+    phase_header "K8s Cleanup (drain LB controller resources)"
 
-    step_header "0.1" "Verify required tools"
-    local missing=0
-    for tool in aws kubectl terraform jq curl; do
-        if command -v "$tool" &>/dev/null; then
-            print_success "$tool found"
-        else
-            print_error "$tool not found"
-            missing=1
-        fi
-    done
-    if [ $missing -eq 1 ]; then
-        print_error "Install missing tools before proceeding"
-        exit 1
-    fi
-
-    step_header "0.2" "Verify AWS credentials"
-    if aws sts get-caller-identity &>/dev/null; then
-        local account_id
-        account_id=$(aws sts get-caller-identity --query 'Account' --output text)
-        print_success "AWS authenticated (account: $account_id)"
-    else
-        print_error "AWS credentials not configured. Run 'aws configure' first."
-        exit 1
-    fi
-
-    step_header "0.3" "Verify hcp-setup module"
-    if [ -f "$SCRIPT_DIR/hcp-setup/main.tf" ]; then
-        print_success "hcp-setup module found"
-    else
-        print_warn "hcp-setup module not found at $SCRIPT_DIR/hcp-setup/"
-        print_info "Stack/varset deletion in Phase 4 will be skipped"
-    fi
-
-    step_header "0.4" "Detect active clusters"
-    ACTIVE_CLUSTERS=()
-    for item in "${CLUSTER_LIST[@]}"; do
-        local cluster="${item%%:*}"
-        local region="${item##*:}"
-        if [ "$DRY_RUN" = true ]; then
-            print_info "[DRY-RUN] Would check: $cluster in $region"
-            ACTIVE_CLUSTERS+=("$item")
-        else
-            if aws eks describe-cluster --name "$cluster" --region "$region" &>/dev/null; then
-                print_success "$cluster ($region) -- exists"
-                ACTIVE_CLUSTERS+=("$item")
-            else
-                print_warn "$cluster ($region) -- not found, skipping"
-            fi
-        fi
-    done
-
-    echo ""
-    print_info "Cluster targeted: ${CLUSTER_LIST[*]}"
-    print_info "Active cluster:   ${ACTIVE_CLUSTERS[*]:-none}"
-    print_info "Region:           ${DEFAULT_REGION:-<unresolved>}"
     if [ "$DRY_RUN" = true ]; then
-        print_warn "DRY RUN MODE -- no changes will be made"
+        print_info "[DRY-RUN] Would update kubeconfig and delete workloads + LBs"
+        return 0
+    fi
+
+    if ! aws eks describe-cluster --name "$DEFAULT_CLUSTER" --region "$REGION" &>/dev/null; then
+        print_info "Cluster $DEFAULT_CLUSTER not found — skipping K8s cleanup"
+        return 0
+    fi
+
+    aws eks update-kubeconfig --name "$DEFAULT_CLUSTER" --region "$REGION" \
+        --alias "$DEFAULT_CLUSTER" >/dev/null 2>&1 || {
+        print_warn "Could not update kubeconfig — skipping K8s cleanup"
+        return 0
+    }
+    kubectl config use-context "$DEFAULT_CLUSTER" >/dev/null 2>&1 || true
+    print_success "Kubeconfig set to $DEFAULT_CLUSTER"
+
+    # Delete workshop namespaces (vault, verify-access, etc.) so any LB Services
+    # in them get torn down by the LB controller.
+    for ns in vault verify-access; do
+        if kubectl get namespace "$ns" &>/dev/null; then
+            print_info "Deleting namespace $ns..."
+            kubectl delete namespace "$ns" --ignore-not-found --timeout=120s 2>/dev/null || true
+        fi
+    done
+
+    # Force-delete any LBs still in the cluster's VPC.
+    local vpc_id
+    vpc_id=$(aws eks describe-cluster --name "$DEFAULT_CLUSTER" --region "$REGION" \
+        --query 'cluster.resourcesVpcConfig.vpcId' --output text 2>/dev/null)
+    if [ -n "$vpc_id" ] && [ "$vpc_id" != "None" ]; then
+        local lbs
+        lbs=$(aws elbv2 describe-load-balancers --region "$REGION" \
+            --query "LoadBalancers[?VpcId=='${vpc_id}'].LoadBalancerArn" --output text 2>/dev/null)
+        for arn in $lbs; do
+            [[ -z "$arn" || "$arn" == "None" ]] && continue
+            print_info "Force-deleting LB $arn"
+            aws elbv2 delete-load-balancer --load-balancer-arn "$arn" --region "$REGION" &>/dev/null || true
+        done
     fi
 }
 
 #===============================================================================
-# PHASE 1: Pre-destroy K8s cleanup
-#
-# Karpenter and ArgoCD are OUT of scope for this workshop (see CLAUDE.md) so
-# the equivalent eks-stacks blocks are intentionally absent. IVIA + Vault
-# placeholders below will be populated when workshop Phase 3/4 ships.
+# AWS SWEEP — tag-scoped + name-prefix-scoped
+# Order matters: dependencies first (data sources before parents, ENIs/endpoints
+# before VPC, etc.).
 #===============================================================================
 
-# Wait for LB-controller-managed AWS resources (NLBs, ALBs, k8s-* SGs) to be
-# cleaned up after K8s Service deletion. Without this, VPC delete in Phase 3
-# fails with DependencyViolation. Adapted verbatim from eks-stacks.
-cleanup_lb_resources_cluster() {
-    local cluster="$1"
-    local region="$2"
+#----- EKS pod-identity associations (must run before cluster delete) ----------
+sweep_eks_pod_identity() {
+    if ! aws eks describe-cluster --name "$DEFAULT_CLUSTER" --region "$REGION" &>/dev/null; then
+        print_info "EKS pod-identity: cluster gone, skipping"; return 0
+    fi
+    local assocs
+    assocs=$(aws eks list-pod-identity-associations --cluster-name "$DEFAULT_CLUSTER" --region "$REGION" \
+        --query 'associations[].associationId' --output text 2>/dev/null)
+    if [[ -z "$assocs" || "$assocs" == "None" ]]; then
+        print_info "EKS pod-identity: none found"; return 0
+    fi
+    for a in $assocs; do
+        echo -n "    Deleting pod-identity association $a... "
+        if aws eks delete-pod-identity-association --cluster-name "$DEFAULT_CLUSTER" \
+                --association-id "$a" --region "$REGION" &>/dev/null; then
+            echo -e "${GREEN}done${NC}"
+        else
+            echo -e "${RED}failed${NC}"
+        fi
+    done
+}
 
-    local vpc_id
-    vpc_id=$(aws eks describe-cluster --name "$cluster" --region "$region" \
-        --query 'cluster.resourcesVpcConfig.vpcId' --output text 2>/dev/null)
-    if [ -z "$vpc_id" ] || [ "$vpc_id" = "None" ]; then
-        print_warn "Could not determine VPC ID for $cluster -- skipping LB resource cleanup"
-        return 0
+#----- EKS node groups + cluster -----------------------------------------------
+sweep_eks_nodegroups() {
+    if ! aws eks describe-cluster --name "$DEFAULT_CLUSTER" --region "$REGION" &>/dev/null; then
+        print_info "EKS node groups: cluster gone, skipping"; return 0
+    fi
+    local ngs
+    ngs=$(aws eks list-nodegroups --cluster-name "$DEFAULT_CLUSTER" --region "$REGION" \
+        --query 'nodegroups[]' --output text 2>/dev/null)
+    if [[ -z "$ngs" ]]; then
+        print_info "EKS node groups: none"; return 0
+    fi
+    for ng in $ngs; do
+        echo -n "    Deleting node group $ng... "
+        aws eks delete-nodegroup --cluster-name "$DEFAULT_CLUSTER" --nodegroup-name "$ng" \
+            --region "$REGION" &>/dev/null && echo -e "${GREEN}initiated${NC}" || echo -e "${RED}failed${NC}"
+    done
+    echo -n "    Waiting for node groups to delete"
+    local waited=0
+    while [[ $waited -lt 600 ]]; do
+        local rem
+        rem=$(aws eks list-nodegroups --cluster-name "$DEFAULT_CLUSTER" --region "$REGION" \
+            --query 'nodegroups[]' --output text 2>/dev/null)
+        [[ -z "$rem" ]] && { echo -e " ${GREEN}done${NC}"; return 0; }
+        sleep 15; waited=$((waited + 15)); echo -n "."
+    done
+    echo -e " ${YELLOW}timeout (continuing)${NC}"
+}
+
+sweep_eks_cluster() {
+    if ! aws eks describe-cluster --name "$DEFAULT_CLUSTER" --region "$REGION" &>/dev/null; then
+        print_info "EKS cluster: gone"; return 0
+    fi
+    echo -n "    Deleting EKS cluster $DEFAULT_CLUSTER... "
+    aws eks delete-cluster --name "$DEFAULT_CLUSTER" --region "$REGION" &>/dev/null \
+        && echo -e "${GREEN}initiated${NC}" || { echo -e "${RED}failed${NC}"; return 1; }
+    echo -n "    Waiting for cluster delete"
+    local waited=0
+    while [[ $waited -lt 900 ]]; do
+        if ! aws eks describe-cluster --name "$DEFAULT_CLUSTER" --region "$REGION" &>/dev/null; then
+            echo -e " ${GREEN}done${NC}"; return 0
+        fi
+        sleep 30; waited=$((waited + 30)); echo -n "."
+    done
+    echo -e " ${YELLOW}timeout${NC}"
+}
+
+sweep_eks_oidc_provider() {
+    local issuer="" in_use=""
+    aws eks describe-cluster --name "$DEFAULT_CLUSTER" --region "$REGION" &>/dev/null \
+        && issuer=$(aws eks describe-cluster --name "$DEFAULT_CLUSTER" --region "$REGION" \
+            --query 'cluster.identity.oidc.issuer' --output text 2>/dev/null)
+    for c in $(aws eks list-clusters --region "$REGION" --query 'clusters[]' --output text 2>/dev/null); do
+        in_use="$in_use $(aws eks describe-cluster --name "$c" --region "$REGION" \
+            --query 'cluster.identity.oidc.issuer' --output text 2>/dev/null)"
+    done
+    local count=0
+    for arn in $(aws iam list-open-id-connect-providers \
+            --query 'OpenIDConnectProviderList[].Arn' --output text 2>/dev/null); do
+        [[ "$arn" == *"oidc.eks.${REGION}.amazonaws.com/id/"* ]] || continue
+        local arn_url="https://${arn#*oidc-provider/}"
+        local should_delete=false
+        if [[ -n "$issuer" && "$arn_url" == "$issuer" ]]; then
+            should_delete=true
+        elif [[ -z "$issuer" ]]; then
+            local seen=false
+            for u in $in_use; do [[ "$arn_url" == "$u" ]] && seen=true; done
+            [[ "$seen" == false ]] && should_delete=true
+        fi
+        [[ "$should_delete" == true ]] && \
+            aws iam delete-open-id-connect-provider --open-id-connect-provider-arn "$arn" &>/dev/null \
+            && count=$((count + 1))
+    done
+    if [[ $count -eq 0 ]]; then print_info "EKS OIDC providers: none to delete"
+    else print_success "EKS OIDC providers: deleted $count"; fi
+}
+
+#----- RDS ---------------------------------------------------------------------
+sweep_rds() {
+    local instances
+    instances=$(aws rds describe-db-instances --region "$REGION" \
+        --query "DBInstances[?TagList[?Key=='${WORKSHOP_TAG_KEY}' && Value=='${WORKSHOP_TAG_VAL}']].DBInstanceIdentifier" \
+        --output text 2>/dev/null)
+    if [[ -z "$instances" || "$instances" == "None" ]]; then
+        # Fallback: name prefix
+        instances=$(aws rds describe-db-instances --region "$REGION" \
+            --query "DBInstances[?starts_with(DBInstanceIdentifier,'${DEFAULT_CLUSTER}')].DBInstanceIdentifier" \
+            --output text 2>/dev/null)
     fi
 
-    print_info "Checking for LB-controller-managed AWS resources in VPC $vpc_id..."
+    for db in $instances; do
+        [[ -z "$db" || "$db" == "None" ]] && continue
+        # Disable deletion protection (idempotent)
+        aws rds modify-db-instance --db-instance-identifier "$db" --region "$REGION" \
+            --no-deletion-protection --apply-immediately &>/dev/null || true
+        echo -n "    Deleting RDS instance $db... "
+        if aws rds delete-db-instance --db-instance-identifier "$db" --region "$REGION" \
+                --skip-final-snapshot --delete-automated-backups &>/dev/null; then
+            echo -e "${GREEN}initiated${NC}"
+        else
+            echo -e "${YELLOW}skipped (may already be deleting)${NC}"
+        fi
+    done
+    # Wait for instances to be gone
+    if [[ -n "$instances" ]]; then
+        echo -n "    Waiting for RDS instances to delete"
+        local waited=0
+        while [[ $waited -lt 900 ]]; do
+            local rem
+            rem=$(aws rds describe-db-instances --region "$REGION" \
+                --query "DBInstances[?starts_with(DBInstanceIdentifier,'${DEFAULT_CLUSTER}')].DBInstanceIdentifier" \
+                --output text 2>/dev/null)
+            [[ -z "$rem" || "$rem" == "None" ]] && { echo -e " ${GREEN}done${NC}"; break; }
+            sleep 20; waited=$((waited + 20)); echo -n "."
+        done
+        [[ $waited -ge 900 ]] && echo -e " ${YELLOW}timeout${NC}"
+    fi
 
-    # Wait for LoadBalancers to be deleted (triggered by K8s Service deletion)
-    local timeout=180
-    local elapsed=0
-    while [ $elapsed -lt $timeout ]; do
-        local lb_arns
-        lb_arns=$(aws elbv2 describe-load-balancers --region "$region" \
-            --query "LoadBalancers[?VpcId=='${vpc_id}'].LoadBalancerArn" --output text 2>/dev/null)
-        if [ -z "$lb_arns" ] || [ "$lb_arns" = "None" ]; then
-            print_success "No LoadBalancers remaining in VPC"
-            break
-        fi
-        if [ $elapsed -eq 0 ]; then
-            print_info "LoadBalancers still being deleted by LB controller..."
-        fi
-        print_info "Waiting for LB deletion... (${elapsed}s/${timeout}s)"
-        sleep 15
-        elapsed=$((elapsed + 15))
+    # Subnet groups + parameter groups (workshop-named)
+    local sgs
+    sgs=$(aws rds describe-db-subnet-groups --region "$REGION" \
+        --query "DBSubnetGroups[?starts_with(DBSubnetGroupName,'${DEFAULT_CLUSTER}')].DBSubnetGroupName" \
+        --output text 2>/dev/null)
+    for s in $sgs; do
+        [[ -z "$s" || "$s" == "None" ]] && continue
+        echo -n "    Deleting RDS subnet group $s... "
+        aws rds delete-db-subnet-group --db-subnet-group-name "$s" --region "$REGION" &>/dev/null \
+            && echo -e "${GREEN}done${NC}" || echo -e "${RED}failed${NC}"
     done
 
-    # Force-delete any LoadBalancers that didn't get cleaned up
-    local force_deleted=false
-    local remaining_lbs
-    remaining_lbs=$(aws elbv2 describe-load-balancers --region "$region" \
-        --query "LoadBalancers[?VpcId=='${vpc_id}'].LoadBalancerArn" --output text 2>/dev/null)
-    if [ -n "$remaining_lbs" ] && [ "$remaining_lbs" != "None" ]; then
-        force_deleted=true
-        print_warn "Force-deleting orphaned LoadBalancers..."
-        for lb_arn in $remaining_lbs; do
-            aws elbv2 delete-load-balancer --region "$region" --load-balancer-arn "$lb_arn" 2>/dev/null || true
-            print_info "Deleted: $lb_arn"
+    local pgs
+    pgs=$(aws rds describe-db-parameter-groups --region "$REGION" \
+        --query "DBParameterGroups[?starts_with(DBParameterGroupName,'${DEFAULT_CLUSTER}')].DBParameterGroupName" \
+        --output text 2>/dev/null)
+    for p in $pgs; do
+        [[ -z "$p" || "$p" == "None" ]] && continue
+        echo -n "    Deleting RDS param group $p... "
+        aws rds delete-db-parameter-group --db-parameter-group-name "$p" --region "$REGION" &>/dev/null \
+            && echo -e "${GREEN}done${NC}" || echo -e "${RED}failed${NC}"
+    done
+
+    # Enhanced monitoring role (rds-monitoring-role-* by convention)
+    local mon_roles
+    mon_roles=$(aws iam list-roles \
+        --query "Roles[?starts_with(RoleName,'${DEFAULT_CLUSTER}-rds-monitoring')].RoleName" \
+        --output text 2>/dev/null)
+    for r in $mon_roles; do
+        [[ -z "$r" || "$r" == "None" ]] && continue
+        echo -n "    Deleting RDS monitoring role $r... "
+        for p in $(aws iam list-attached-role-policies --role-name "$r" --query 'AttachedPolicies[].PolicyArn' --output text 2>/dev/null); do
+            aws iam detach-role-policy --role-name "$r" --policy-arn "$p" &>/dev/null
         done
+        aws iam delete-role --role-name "$r" &>/dev/null \
+            && echo -e "${GREEN}done${NC}" || echo -e "${RED}failed${NC}"
+    done
+}
+
+#----- AOSS (collection + 3 policies) ------------------------------------------
+sweep_aoss() {
+    local cols
+    cols=$(aws opensearchserverless list-collections --region "$REGION" \
+        --query 'collectionSummaries[].id' --output text 2>/dev/null)
+    if [[ -n "$cols" && "$cols" != "None" ]]; then
+        for cid in $cols; do
+            echo -n "    Deleting AOSS collection $cid... "
+            aws opensearchserverless delete-collection --id "$cid" --region "$REGION" &>/dev/null \
+                && echo -e "${GREEN}initiated${NC}" || echo -e "${YELLOW}skipped${NC}"
+        done
+        # Wait briefly for collection delete to free policies
         sleep 30
     fi
 
-    # If we force-deleted LBs, restart the LB controller to clear cached state
-    if [ "$force_deleted" = true ]; then
-        print_info "Restarting AWS Load Balancer Controller to clear stale state..."
-        kubectl rollout restart deployment -n kube-system aws-load-balancer-controller 2>/dev/null || true
-        kubectl rollout status deployment -n kube-system aws-load-balancer-controller --timeout=120s 2>/dev/null || \
-            print_warn "LB controller restart timed out -- continuing anyway"
-        print_success "LB controller restarted"
-    fi
-
-    # Delete orphaned k8s-* security groups
-    local orphan_sgs
-    orphan_sgs=$(aws ec2 describe-security-groups --region "$region" \
-        --filters "Name=vpc-id,Values=${vpc_id}" \
-        --query "SecurityGroups[?starts_with(GroupName,'k8s-')].GroupId" --output text 2>/dev/null)
-    if [ -n "$orphan_sgs" ] && [ "$orphan_sgs" != "None" ]; then
-        print_info "Cleaning up orphaned k8s-* security groups..."
-
-        # Pass 1: strip rules ON the k8s-* SGs themselves
-        for sg in $orphan_sgs; do
-            local ingress_rules
-            ingress_rules=$(aws ec2 describe-security-group-rules --region "$region" \
-                --filters "Name=group-id,Values=$sg" \
-                --query 'SecurityGroupRules[?!IsEgress].SecurityGroupRuleId' --output text 2>/dev/null)
-            if [ -n "$ingress_rules" ] && [ "$ingress_rules" != "None" ]; then
-                # shellcheck disable=SC2086
-                aws ec2 revoke-security-group-ingress --region "$region" --group-id "$sg" \
-                    --security-group-rule-ids $ingress_rules 2>/dev/null || true
-            fi
-            local egress_rules
-            egress_rules=$(aws ec2 describe-security-group-rules --region "$region" \
-                --filters "Name=group-id,Values=$sg" \
-                --query 'SecurityGroupRules[?IsEgress].SecurityGroupRuleId' --output text 2>/dev/null)
-            if [ -n "$egress_rules" ] && [ "$egress_rules" != "None" ]; then
-                # shellcheck disable=SC2086
-                aws ec2 revoke-security-group-egress --region "$region" --group-id "$sg" \
-                    --security-group-rule-ids $egress_rules 2>/dev/null || true
-            fi
+    for kind in encryption network; do
+        for n in $(aws opensearchserverless list-security-policies --region "$REGION" --type "$kind" \
+                --query 'securityPolicySummaries[].name' --output text 2>/dev/null); do
+            [[ -z "$n" || "$n" == "None" ]] && continue
+            echo -n "    Deleting AOSS $kind policy $n... "
+            aws opensearchserverless delete-security-policy --name "$n" --type "$kind" --region "$REGION" &>/dev/null \
+                && echo -e "${GREEN}done${NC}" || echo -e "${YELLOW}skipped${NC}"
         done
+    done
+    for n in $(aws opensearchserverless list-access-policies --region "$REGION" --type data \
+            --query 'accessPolicySummaries[].name' --output text 2>/dev/null); do
+        [[ -z "$n" || "$n" == "None" ]] && continue
+        echo -n "    Deleting AOSS data policy $n... "
+        aws opensearchserverless delete-access-policy --name "$n" --type data --region "$REGION" &>/dev/null \
+            && echo -e "${GREEN}done${NC}" || echo -e "${YELLOW}skipped${NC}"
+    done
+}
 
-        # Pass 2: strip rules in OTHER VPC SGs that reference k8s-* SGs
-        local all_vpc_sgs
-        all_vpc_sgs=$(aws ec2 describe-security-groups --region "$region" \
-            --filters "Name=vpc-id,Values=${vpc_id}" \
-            --query "SecurityGroups[].GroupId" --output text 2>/dev/null)
-        for sg in $orphan_sgs; do
-            for other_sg in $all_vpc_sgs; do
-                [ "$other_sg" = "$sg" ] && continue
-                local cross_refs
-                cross_refs=$(aws ec2 describe-security-group-rules --region "$region" \
-                    --filters "Name=group-id,Values=$other_sg" \
-                    --query "SecurityGroupRules[?ReferencedGroupInfo.GroupId=='${sg}'].SecurityGroupRuleId" \
-                    --output text 2>/dev/null)
-                if [ -n "$cross_refs" ] && [ "$cross_refs" != "None" ]; then
-                    print_info "Removing cross-reference rules in $other_sg -> $sg"
-                    for rule_id in $cross_refs; do
-                        aws ec2 revoke-security-group-ingress --region "$region" \
-                            --group-id "$other_sg" --security-group-rule-ids "$rule_id" 2>/dev/null || \
-                        aws ec2 revoke-security-group-egress --region "$region" \
-                            --group-id "$other_sg" --security-group-rule-ids "$rule_id" 2>/dev/null || true
-                    done
-                fi
-            done
+#----- S3 buckets (workshop-named) ---------------------------------------------
+sweep_s3_buckets() {
+    for prefix in "${S3_BUCKET_PREFIXES[@]}"; do
+        local buckets
+        buckets=$(aws s3api list-buckets --query "Buckets[?starts_with(Name,'${prefix}')].Name" --output text 2>/dev/null)
+        for b in $buckets; do
+            [[ -z "$b" || "$b" == "None" ]] && continue
+            echo -n "    Emptying S3 bucket $b... "
+            aws s3 rm "s3://${b}" --recursive --quiet 2>/dev/null || true
+            # Delete versions + delete-markers (if versioned)
+            aws s3api delete-objects --bucket "$b" --region "$REGION" --delete \
+                "$(aws s3api list-object-versions --bucket "$b" --region "$REGION" \
+                    --query '{Objects:Versions[].{Key:Key,VersionId:VersionId}}' --output json 2>/dev/null)" &>/dev/null || true
+            aws s3api delete-objects --bucket "$b" --region "$REGION" --delete \
+                "$(aws s3api list-object-versions --bucket "$b" --region "$REGION" \
+                    --query '{Objects:DeleteMarkers[].{Key:Key,VersionId:VersionId}}' --output json 2>/dev/null)" &>/dev/null || true
+            echo -e "${GREEN}emptied${NC}"
+            echo -n "    Deleting S3 bucket $b... "
+            aws s3api delete-bucket --bucket "$b" --region "$REGION" &>/dev/null \
+                && echo -e "${GREEN}done${NC}" || echo -e "${RED}failed${NC}"
         done
+    done
+}
 
-        # Pass 3: delete the k8s-* SGs (dependencies should be cleared now)
-        for sg in $orphan_sgs; do
-            aws ec2 delete-security-group --region "$region" --group-id "$sg" 2>/dev/null && \
-                print_success "Deleted SG: $sg" || \
-                print_warn "Could not delete SG: $sg (may still have dependencies)"
+#----- Bedrock KB (data sources first, then KB) --------------------------------
+sweep_bedrock_kb() {
+    local kbs
+    kbs=$(aws bedrock-agent list-knowledge-bases --region "$REGION" \
+        --query 'knowledgeBaseSummaries[].knowledgeBaseId' --output text 2>/dev/null)
+    if [[ -z "$kbs" || "$kbs" == "None" ]]; then
+        print_info "Bedrock KB: none"; return 0
+    fi
+    for kb in $kbs; do
+        [[ -z "$kb" || "$kb" == "None" ]] && continue
+        local dss
+        dss=$(aws bedrock-agent list-data-sources --knowledge-base-id "$kb" --region "$REGION" \
+            --query 'dataSourceSummaries[].dataSourceId' --output text 2>/dev/null)
+        for ds in $dss; do
+            [[ -z "$ds" || "$ds" == "None" ]] && continue
+            echo -n "    Deleting KB data source $ds... "
+            aws bedrock-agent delete-data-source --knowledge-base-id "$kb" --data-source-id "$ds" \
+                --region "$REGION" &>/dev/null && echo -e "${GREEN}done${NC}" || echo -e "${RED}failed${NC}"
         done
-    else
-        print_success "No orphaned k8s-* security groups found"
+        echo -n "    Deleting Bedrock KB $kb... "
+        aws bedrock-agent delete-knowledge-base --knowledge-base-id "$kb" --region "$REGION" &>/dev/null \
+            && echo -e "${GREEN}done${NC}" || echo -e "${RED}failed${NC}"
+    done
+}
+
+#----- Glue + Athena -----------------------------------------------------------
+sweep_glue_athena() {
+    for db in "${GLUE_DB_NAMES[@]}"; do
+        if aws glue get-database --name "$db" --region "$REGION" &>/dev/null; then
+            echo -n "    Deleting Glue DB $db... "
+            aws glue delete-database --name "$db" --region "$REGION" &>/dev/null \
+                && echo -e "${GREEN}done${NC}" || echo -e "${RED}failed${NC}"
+        fi
+    done
+    for wg in "${ATHENA_WG_NAMES[@]}"; do
+        if aws athena get-work-group --work-group "$wg" --region "$REGION" &>/dev/null; then
+            echo -n "    Deleting Athena workgroup $wg... "
+            aws athena delete-work-group --work-group "$wg" --region "$REGION" --recursive-delete-option &>/dev/null \
+                && echo -e "${GREEN}done${NC}" || echo -e "${RED}failed${NC}"
+        fi
+    done
+}
+
+#----- CloudWatch log groups (/workshop/*, /aws/eks/*, /aws/rds/*) -------------
+sweep_cw_log_groups() {
+    for prefix in "${CW_LOG_PREFIXES[@]}"; do
+        local groups
+        groups=$(aws logs describe-log-groups --region "$REGION" --log-group-name-prefix "$prefix" \
+            --query 'logGroups[].logGroupName' --output text 2>/dev/null)
+        for g in $groups; do
+            [[ -z "$g" || "$g" == "None" ]] && continue
+            echo -n "    Deleting log group $g... "
+            aws logs delete-log-group --log-group-name "$g" --region "$REGION" &>/dev/null \
+                && echo -e "${GREEN}done${NC}" || echo -e "${RED}failed${NC}"
+        done
+    done
+}
+
+#----- KMS (workshop-tagged keys + their aliases) ------------------------------
+sweep_kms() {
+    # Aliases first (eks/<cluster> + workshop-data + any with workshop in name)
+    local aliases
+    aliases=$(aws kms list-aliases --region "$REGION" \
+        --query "Aliases[?contains(AliasName,'workshop') || contains(AliasName,'agentic') || AliasName=='alias/eks/${DEFAULT_CLUSTER}'].AliasName" \
+        --output text 2>/dev/null)
+    for a in $aliases; do
+        [[ -z "$a" || "$a" == "None" ]] && continue
+        echo -n "    Deleting KMS alias $a... "
+        aws kms delete-alias --alias-name "$a" --region "$REGION" &>/dev/null \
+            && echo -e "${GREEN}done${NC}" || echo -e "${YELLOW}skipped${NC}"
+    done
+    # Keys by tag — schedule deletion (7-day window minimum)
+    for k in $(aws kms list-keys --region "$REGION" --query 'Keys[].KeyId' --output text 2>/dev/null); do
+        local state
+        state=$(aws kms describe-key --region "$REGION" --key-id "$k" --query 'KeyMetadata.KeyState' --output text 2>/dev/null)
+        [[ "$state" == "PendingDeletion" ]] && continue
+        local tag
+        tag=$(aws kms list-resource-tags --region "$REGION" --key-id "$k" \
+            --query "Tags[?TagKey=='${WORKSHOP_TAG_KEY}' && TagValue=='${WORKSHOP_TAG_VAL}'].TagValue" \
+            --output text 2>/dev/null)
+        if [[ -n "$tag" && "$tag" != "None" ]]; then
+            echo -n "    Scheduling KMS key $k for deletion (7-day)... "
+            aws kms schedule-key-deletion --region "$REGION" --key-id "$k" --pending-window-in-days 7 &>/dev/null \
+                && echo -e "${GREEN}done${NC}" || echo -e "${YELLOW}skipped${NC}"
+        fi
+    done
+}
+
+#----- IAM roles (workshop-tagged) ---------------------------------------------
+sweep_iam_roles() {
+    local matched=""
+    for r in $(aws iam list-roles --query 'Roles[].RoleName' --output text 2>/dev/null); do
+        # Skip the HCP role — that's handled by hcp-only path
+        [[ "$r" == "$HCP_ROLE_NAME" ]] && continue
+        local tag
+        tag=$(aws iam list-role-tags --role-name "$r" \
+            --query "Tags[?Key=='${WORKSHOP_TAG_KEY}' && Value=='${WORKSHOP_TAG_VAL}'].Value" \
+            --output text 2>/dev/null)
+        [[ -n "$tag" && "$tag" != "None" ]] && matched="$matched $r"
+    done
+    if [[ -z "$matched" ]]; then
+        print_info "IAM roles (Workshop tag): none"; return 0
     fi
+    for r in $matched; do
+        echo -n "    Deleting IAM role $r... "
+        for p in $(aws iam list-attached-role-policies --role-name "$r" --query 'AttachedPolicies[].PolicyArn' --output text 2>/dev/null); do
+            aws iam detach-role-policy --role-name "$r" --policy-arn "$p" &>/dev/null
+        done
+        for p in $(aws iam list-role-policies --role-name "$r" --query 'PolicyNames[]' --output text 2>/dev/null); do
+            aws iam delete-role-policy --role-name "$r" --policy-name "$p" &>/dev/null
+        done
+        for ip in $(aws iam list-instance-profiles-for-role --role-name "$r" --query 'InstanceProfiles[].InstanceProfileName' --output text 2>/dev/null); do
+            aws iam remove-role-from-instance-profile --instance-profile-name "$ip" --role-name "$r" &>/dev/null
+        done
+        aws iam delete-role --role-name "$r" &>/dev/null \
+            && echo -e "${GREEN}done${NC}" || echo -e "${RED}failed${NC}"
+    done
 }
 
-# Delete any LoadBalancer Services / test workloads that may have created
-# AWS LBs out-of-band. Workshop content does not currently ship test
-# workloads, so this is a no-op fast path; left in place so Phase 3/4
-# content can extend without restructuring.
-cleanup_test_workloads() {
-    local cluster="$1"
-    print_info "Cleaning up test workloads on ${cluster} (none expected)..."
-    # TODO(phase-3/4): delete workshop demo workloads here when they ship
-    print_success "Test workload sweep complete"
+#----- VPC sweep (endpoints, ELBs, ENIs, SGs, NAT, IGW, subnets, RTs, VPC) -----
+sweep_vpc_endpoints() {
+    local vpc=$1
+    local vpces
+    vpces=$(aws ec2 describe-vpc-endpoints --region "$REGION" --filters "Name=vpc-id,Values=${vpc}" \
+        --query "VpcEndpoints[?State!='deleted' && State!='deleting'].VpcEndpointId" --output text 2>/dev/null)
+    [[ -z "$vpces" || "$vpces" == "None" ]] && { print_info "VPC endpoints in $vpc: none"; return 0; }
+    echo -n "    Deleting VPC endpoints in $vpc... "
+    # shellcheck disable=SC2086
+    aws ec2 delete-vpc-endpoints --region "$REGION" --vpc-endpoint-ids $vpces &>/dev/null
+    echo -e "${GREEN}initiated${NC}"
+    echo -n "    Waiting for endpoint ENIs to release"
+    local waited=0 rem
+    while [[ $waited -lt 180 ]]; do
+        rem=$(aws ec2 describe-vpc-endpoints --region "$REGION" --filters "Name=vpc-id,Values=${vpc}" \
+            --query "VpcEndpoints[?State!='deleted'].VpcEndpointId" --output text 2>/dev/null)
+        [[ -z "$rem" || "$rem" == "None" ]] && { echo -e " ${GREEN}done${NC}"; return 0; }
+        sleep 10; waited=$((waited + 10)); echo -n "."
+    done
+    echo -e " ${YELLOW}timeout${NC}"
 }
 
-# IVIA placeholder — populated when workshop Phase 3/4 ships the IBM Verify
-# Identity Access Helm release + verify-access namespace.
-cleanup_ivia_cluster() {
-    local cluster="$1"
-    if kubectl --context "$cluster" get namespace verify-access &>/dev/null; then
-        print_info "Cleaning up IVIA on ${cluster}..."
-        # TODO(phase-3/4): helm uninstall + remove CRDs before namespace delete
-        kubectl --context "$cluster" delete namespace verify-access --ignore-not-found --timeout=120s 2>/dev/null || true
-        print_success "IVIA namespace deleted"
-    else
-        print_info "IVIA namespace not found on $cluster -- skipping"
+sweep_vpc_elbs() {
+    local vpc=$1
+    local arns
+    arns=$(aws elbv2 describe-load-balancers --region "$REGION" \
+        --query "LoadBalancers[?VpcId=='${vpc}'].LoadBalancerArn" --output text 2>/dev/null)
+    for arn in $arns; do
+        [[ -z "$arn" || "$arn" == "None" ]] && continue
+        echo -n "    Deleting ELBv2 $arn... "
+        aws elbv2 delete-load-balancer --load-balancer-arn "$arn" --region "$REGION" &>/dev/null \
+            && echo -e "${GREEN}done${NC}" || echo -e "${RED}failed${NC}"
+    done
+    local classics
+    classics=$(aws elb describe-load-balancers --region "$REGION" \
+        --query "LoadBalancerDescriptions[?VPCId=='${vpc}'].LoadBalancerName" --output text 2>/dev/null)
+    for n in $classics; do
+        [[ -z "$n" || "$n" == "None" ]] && continue
+        echo -n "    Deleting classic ELB $n... "
+        aws elb delete-load-balancer --load-balancer-name "$n" --region "$REGION" &>/dev/null \
+            && echo -e "${GREEN}done${NC}" || echo -e "${RED}failed${NC}"
+    done
+}
+
+sweep_vpc_enis() {
+    local vpc=$1
+    local in_use waited=0
+    in_use=$(aws ec2 describe-network-interfaces --region "$REGION" \
+        --filters "Name=vpc-id,Values=${vpc}" "Name=status,Values=in-use" \
+        --query 'length(NetworkInterfaces)' --output text 2>/dev/null || echo 0)
+    if [[ "$in_use" -gt 0 ]]; then
+        echo -n "    Waiting for $in_use in-use ENIs in $vpc"
+        while [[ $waited -lt 300 ]]; do
+            in_use=$(aws ec2 describe-network-interfaces --region "$REGION" \
+                --filters "Name=vpc-id,Values=${vpc}" "Name=status,Values=in-use" \
+                --query 'length(NetworkInterfaces)' --output text 2>/dev/null || echo 0)
+            [[ "$in_use" -eq 0 ]] && { echo -e " ${GREEN}released${NC}"; break; }
+            sleep 10; waited=$((waited + 10)); echo -n "."
+        done
+        [[ "$in_use" -gt 0 ]] && echo -e " ${YELLOW}timeout ($in_use still in-use)${NC}"
     fi
+    local available
+    available=$(aws ec2 describe-network-interfaces --region "$REGION" \
+        --filters "Name=vpc-id,Values=${vpc}" "Name=status,Values=available" \
+        --query 'NetworkInterfaces[].NetworkInterfaceId' --output text 2>/dev/null)
+    for eni in $available; do
+        [[ -z "$eni" || "$eni" == "None" ]] && continue
+        aws ec2 delete-network-interface --network-interface-id "$eni" --region "$REGION" &>/dev/null
+    done
 }
 
-# Vault placeholder — populated when workshop Phase 3/4 ships the HashiCorp
-# Vault Helm release + vault namespace.
-cleanup_vault_cluster() {
-    local cluster="$1"
-    if kubectl --context "$cluster" get namespace vault &>/dev/null; then
-        print_info "Cleaning up Vault on ${cluster}..."
-        # TODO(phase-3/4): vault operator step-down + helm uninstall before namespace delete
-        kubectl --context "$cluster" delete namespace vault --ignore-not-found --timeout=120s 2>/dev/null || true
-        print_success "Vault namespace deleted"
-    else
-        print_info "Vault namespace not found on $cluster -- skipping"
-    fi
+sweep_vpc_security_groups() {
+    local vpc=$1
+    local sgs
+    sgs=$(aws ec2 describe-security-groups --region "$REGION" \
+        --filters "Name=vpc-id,Values=${vpc}" \
+        --query "SecurityGroups[?GroupName!='default'].GroupId" --output text 2>/dev/null)
+    [[ -z "$sgs" || "$sgs" == "None" ]] && { print_info "SGs in $vpc: only default"; return 0; }
+    # Strip rules first to break circular deps
+    for sg in $sgs; do
+        for rid in $(aws ec2 describe-security-group-rules --region "$REGION" --filters "Name=group-id,Values=$sg" \
+                --query 'SecurityGroupRules[?!IsEgress].SecurityGroupRuleId' --output text 2>/dev/null); do
+            [[ -z "$rid" || "$rid" == "None" ]] && continue
+            aws ec2 revoke-security-group-ingress --group-id "$sg" --region "$REGION" --security-group-rule-ids "$rid" &>/dev/null
+        done
+        for rid in $(aws ec2 describe-security-group-rules --region "$REGION" --filters "Name=group-id,Values=$sg" \
+                --query 'SecurityGroupRules[?IsEgress].SecurityGroupRuleId' --output text 2>/dev/null); do
+            [[ -z "$rid" || "$rid" == "None" ]] && continue
+            aws ec2 revoke-security-group-egress --group-id "$sg" --region "$REGION" --security-group-rule-ids "$rid" &>/dev/null
+        done
+    done
+    for sg in $sgs; do
+        echo -n "    Deleting SG $sg... "
+        aws ec2 delete-security-group --group-id "$sg" --region "$REGION" &>/dev/null \
+            && echo -e "${GREEN}done${NC}" || echo -e "${YELLOW}deferred (deps)${NC}"
+    done
 }
 
-phase_pre_destroy() {
-    phase_header "Phase 1: Pre-Destroy K8s Cleanup"
+sweep_vpc_resources() {
+    local vpc=$1
 
-    if [ ${#ACTIVE_CLUSTERS[@]} -eq 0 ]; then
-        print_warn "No active clusters found -- skipping Phase 1"
+    # NAT GWs
+    # shellcheck disable=SC2016
+    for nat in $(aws ec2 describe-nat-gateways --region "$REGION" --filter "Name=vpc-id,Values=${vpc}" \
+            --query 'NatGateways[?State!=`deleted`].NatGatewayId' --output text 2>/dev/null); do
+        [[ -z "$nat" || "$nat" == "None" ]] && continue
+        echo -n "    Deleting NAT GW $nat... "
+        aws ec2 delete-nat-gateway --nat-gateway-id "$nat" --region "$REGION" &>/dev/null \
+            && echo -e "${GREEN}initiated${NC}"
+    done
+    echo -n "    Waiting for NAT GWs to delete"
+    local waited=0
+    while [[ $waited -lt 120 ]]; do
+        # shellcheck disable=SC2016
+        local rem
+        rem=$(aws ec2 describe-nat-gateways --region "$REGION" --filter "Name=vpc-id,Values=${vpc}" \
+            --query 'NatGateways[?State!=`deleted`].NatGatewayId' --output text 2>/dev/null)
+        [[ -z "$rem" || "$rem" == "None" ]] && { echo -e " ${GREEN}done${NC}"; break; }
+        sleep 10; waited=$((waited + 10)); echo -n "."
+    done
+
+    # EIPs (unassociated)
+    for alloc in $(aws ec2 describe-addresses --region "$REGION" --filters "Name=domain,Values=vpc" \
+            --query "Addresses[?NetworkInterfaceId==null || NetworkInterfaceId==''].AllocationId" --output text 2>/dev/null); do
+        [[ -z "$alloc" || "$alloc" == "None" ]] && continue
+        aws ec2 release-address --allocation-id "$alloc" --region "$REGION" &>/dev/null \
+            && print_success "Released EIP $alloc"
+    done
+
+    # IGW
+    for igw in $(aws ec2 describe-internet-gateways --region "$REGION" \
+            --filters "Name=attachment.vpc-id,Values=${vpc}" \
+            --query 'InternetGateways[].InternetGatewayId' --output text 2>/dev/null); do
+        [[ -z "$igw" || "$igw" == "None" ]] && continue
+        aws ec2 detach-internet-gateway --internet-gateway-id "$igw" --vpc-id "$vpc" --region "$REGION" &>/dev/null
+        echo -n "    Deleting IGW $igw... "
+        aws ec2 delete-internet-gateway --internet-gateway-id "$igw" --region "$REGION" &>/dev/null \
+            && echo -e "${GREEN}done${NC}" || echo -e "${RED}failed${NC}"
+    done
+
+    # Subnets
+    for s in $(aws ec2 describe-subnets --region "$REGION" --filters "Name=vpc-id,Values=${vpc}" \
+            --query 'Subnets[].SubnetId' --output text 2>/dev/null); do
+        [[ -z "$s" || "$s" == "None" ]] && continue
+        echo -n "    Deleting subnet $s... "
+        aws ec2 delete-subnet --subnet-id "$s" --region "$REGION" &>/dev/null \
+            && echo -e "${GREEN}done${NC}" || echo -e "${RED}failed${NC}"
+    done
+
+    # Route tables (non-main)
+    for rt in $(aws ec2 describe-route-tables --region "$REGION" --filters "Name=vpc-id,Values=${vpc}" \
+            --query "RouteTables[?Associations[0].Main!=\`true\`].RouteTableId" --output text 2>/dev/null); do
+        [[ -z "$rt" || "$rt" == "None" ]] && continue
+        echo -n "    Deleting RT $rt... "
+        aws ec2 delete-route-table --route-table-id "$rt" --region "$REGION" &>/dev/null \
+            && echo -e "${GREEN}done${NC}" || echo -e "${RED}failed${NC}"
+    done
+
+    # VPC itself
+    echo -n "    Deleting VPC $vpc... "
+    aws ec2 delete-vpc --vpc-id "$vpc" --region "$REGION" &>/dev/null \
+        && echo -e "${GREEN}done${NC}" || echo -e "${RED}failed (residual deps?)${NC}"
+}
+
+#----- AWS sweep orchestrator --------------------------------------------------
+phase_aws_sweep() {
+    phase_header "AWS Resource Sweep (tag: ${WORKSHOP_TAG_KEY}=${WORKSHOP_TAG_VAL})"
+
+    if [ "$DRY_RUN" = true ]; then
+        print_info "[DRY-RUN] Would sweep: EKS pod-identity, node groups, cluster, RDS,"
+        print_info "  AOSS, S3, Bedrock KB, Glue/Athena, CW logs, KMS, IAM roles, VPC + deps"
         return 0
     fi
 
-    step_header "1.1" "Per-cluster K8s cleanup"
+    if ! aws sts get-caller-identity &>/dev/null; then
+        print_error "AWS credentials not configured"; exit 1
+    fi
+    print_info "AWS account: $(aws sts get-caller-identity --query Account --output text)"
+    print_info "Region:      $REGION"
 
-    for item in "${ACTIVE_CLUSTERS[@]}"; do
-        local cluster="${item%%:*}"
-        local region="${item##*:}"
+    step_header "EKS pod-identity associations"
+    sweep_eks_pod_identity || true
 
-        echo ""
-        print_info "=== $cluster ($region) ==="
+    step_header "EKS node groups"
+    sweep_eks_nodegroups || true
 
-        if [ "$DRY_RUN" = true ]; then
-            print_info "[DRY-RUN] Would update kubeconfig for $cluster"
-            print_info "[DRY-RUN] Would clean up test workloads, IVIA, Vault namespaces"
-            print_info "[DRY-RUN] Would wait for LB-controller AWS resources (NLBs, k8s-* SGs)"
-            continue
-        fi
+    step_header "EKS cluster"
+    sweep_eks_cluster || true
 
-        # Update kubeconfig for this cluster
-        aws eks update-kubeconfig --name "$cluster" --region "$region" --alias "$cluster" >/dev/null 2>&1 || {
-            print_warn "Could not update kubeconfig for $cluster -- skipping K8s cleanup"
-            continue
-        }
-        kubectl config use-context "$cluster" >/dev/null 2>&1 || true
-        print_success "Kubeconfig updated for $cluster"
+    step_header "RDS (instance + subnet + param + monitoring role)"
+    sweep_rds || true
 
-        cleanup_test_workloads     "$cluster"
-        cleanup_ivia_cluster       "$cluster"
-        cleanup_vault_cluster      "$cluster"
-        cleanup_lb_resources_cluster "$cluster" "$region"
-    done
+    step_header "Bedrock Knowledge Base + data sources"
+    sweep_bedrock_kb || true
 
-    echo ""
-    print_success "Phase 1 complete"
+    step_header "AOSS (collection + 3 policies)"
+    sweep_aoss || true
+
+    step_header "S3 buckets (workshop-named)"
+    sweep_s3_buckets || true
+
+    step_header "Glue catalog DB + Athena workgroup"
+    sweep_glue_athena || true
+
+    step_header "EKS cluster IAM OIDC provider"
+    sweep_eks_oidc_provider || true
+
+    step_header "CloudWatch log groups"
+    sweep_cw_log_groups || true
+
+    step_header "KMS aliases + workshop-tagged keys (7-day deletion window)"
+    sweep_kms || true
+
+    step_header "IAM roles tagged Workshop (excluding HCP role)"
+    sweep_iam_roles || true
+
+    # Per-VPC sweeps — find all VPCs tagged or named for the workshop
+    local vpcs
+    vpcs=$(aws ec2 describe-vpcs --region "$REGION" \
+        --filters "Name=tag:${WORKSHOP_TAG_KEY},Values=${WORKSHOP_TAG_VAL}" \
+        --query 'Vpcs[].VpcId' --output text 2>/dev/null)
+    if [[ -z "$vpcs" || "$vpcs" == "None" ]]; then
+        vpcs=$(aws ec2 describe-vpcs --region "$REGION" \
+            --filters "Name=tag:Name,Values=${DEFAULT_CLUSTER}*" \
+            --query 'Vpcs[].VpcId' --output text 2>/dev/null)
+    fi
+    if [[ -z "$vpcs" || "$vpcs" == "None" ]]; then
+        print_info "No workshop VPCs found"
+    else
+        for vpc in $vpcs; do
+            step_header "VPC $vpc"
+            sweep_vpc_elbs           "$vpc" || true
+            sweep_vpc_endpoints      "$vpc" || true
+            sweep_vpc_enis           "$vpc" || true
+            sweep_vpc_security_groups "$vpc" || true
+            sweep_vpc_resources      "$vpc" || true
+        done
+    fi
+
+    print_success "AWS sweep complete"
 }
 
 #===============================================================================
-# PHASE 2: HCP destroy=true via API (with manual fallback)
-#
-# Sets destroy=true in the deployment block, pushes the change, triggers a
-# plan, approves the destroy plan, and waits for convergence. When TFE_TOKEN
-# is unavailable, falls back to a manual pause prompting the user to commit
-# and approve via the HCP UI.
+# HCP CLEANUP — delete Stack, variable set, AWS IAM role for HCP, OIDC provider
 #===============================================================================
-
-phase_hcp_destroy() {
-    phase_header "Phase 2: HCP Stack Destroy (destroy=true)"
+phase_hcp_cleanup() {
+    phase_header "HCP Cleanup (Stack + variable set + IAM role + OIDC provider)"
 
     if [ "$DRY_RUN" = true ]; then
-        print_info "[DRY-RUN] Would set destroy=true and trigger HCP destroy plan"
+        print_info "[DRY-RUN] Would delete HCP Stack '$HCP_STACK_NAME', variable set,"
+        print_info "          IAM role '$HCP_ROLE_NAME', OIDC provider 'app.terraform.io'"
         return 0
     fi
 
     load_tfe_token
-
-    local deploy_file="${REPO_ROOT}/infrastructure/deployments.tfdeploy.hcl"
-    if [ ! -f "$deploy_file" ]; then
-        print_warn "No deployments.tfdeploy.hcl -- skipping Phase 2"
-        return 0
-    fi
-
-    step_header "2.1" "Set destroy=true on deployment"
-    sed -i.bak 's/destroy[[:space:]]*=[[:space:]]*false/destroy          = true/g' "$deploy_file"
-    rm -f "${deploy_file}.bak"
-    if grep -qE 'destroy[[:space:]]*=[[:space:]]*true' "$deploy_file"; then
-        print_success "deployments.tfdeploy.hcl now has destroy=true"
-    else
-        print_warn "Could not confirm destroy=true edit -- inspect manually"
-    fi
-
-    # If we don't have an API token, fall back to manual pause
-    if [ -z "${TFE_TOKEN:-}" ]; then
-        step_header "2.2" "Manual HCP destroy approval (no TFE_TOKEN)"
-        cat <<EOF
-
-  Manual steps:
-    1. Commit + push:
-         git add infrastructure/deployments.tfdeploy.hcl
-         git commit -m "teardown: destroy=true"
-         git push
-    2. In HCP Terraform UI, approve the destroy plan for stack '${HCP_STACK_NAME}'
-    3. Wait for the deployment to converge
-
-EOF
-        if [ "$NO_WAIT" = true ]; then
-            print_info "--no-wait set; not pausing"
-        elif [ -t 0 ]; then
-            read -r -p "  Press Enter when HCP destroy is complete... " _
-        else
-            print_warn "stdin not a TTY -- assuming HCP destroy already complete"
-        fi
-        return 0
-    fi
-
-    #---------------------------------------------------------------------------
-    # API-driven path: commit + push + approve + wait for convergence
-    #---------------------------------------------------------------------------
-    step_header "2.2" "Resolve HCP organization and stack"
-
-    local hcp_org=""
-    if [ -f "$SCRIPT_DIR/hcp-setup/terraform.tfvars" ]; then
-        hcp_org=$(grep -E '^\s*tfc_organization|^\s*hcp_org' "$SCRIPT_DIR/hcp-setup/terraform.tfvars" 2>/dev/null \
-            | head -1 | awk -F'"' '{print $2}')
-    fi
-    if [ -z "$hcp_org" ] && [ -d "$SCRIPT_DIR/hcp-setup" ]; then
-        hcp_org=$(terraform -chdir="$SCRIPT_DIR/hcp-setup" output -raw organization 2>/dev/null || true)
-    fi
-
-    if [ -z "$hcp_org" ]; then
-        print_warn "Could not resolve HCP org -- skipping API-driven destroy"
-        print_info "Approve destroy plan manually in HCP UI for stack '${HCP_STACK_NAME}'"
-        return 0
-    fi
-    print_success "HCP org: $hcp_org"
-
-    local stack_id
-    stack_id=$(curl -s \
-        -H "Authorization: Bearer $TFE_TOKEN" \
-        -H "Content-Type: application/vnd.api+json" \
-        "$TFE_API/organizations/$hcp_org/stacks" 2>/dev/null \
-        | jq -r --arg n "$HCP_STACK_NAME" '.data[] | select(.attributes.name==$n) | .id' 2>/dev/null \
-        | head -1)
-
-    if [ -z "$stack_id" ]; then
-        print_warn "Stack '${HCP_STACK_NAME}' not found in org $hcp_org -- skipping"
-        return 0
-    fi
-    print_success "Stack id: $stack_id"
-
-    step_header "2.3" "Commit + push destroy=true config"
-    local git_branch
-    git_branch=$(git -C "$REPO_ROOT" branch --show-current 2>/dev/null)
-
-    # Capture pre-push config id so we can detect the new run
-    local pre_push_config
-    pre_push_config=$(curl -s \
-        -H "Authorization: Bearer $TFE_TOKEN" \
-        -H "Content-Type: application/vnd.api+json" \
-        "$TFE_API/stacks/$stack_id/stack-configurations?page%5Bsize%5D=1" 2>/dev/null \
-        | jq -r '.data[0].id // empty' 2>/dev/null)
-
-    if [ -n "$git_branch" ]; then
-        git -C "$REPO_ROOT" add "$deploy_file" 2>/dev/null || true
-        if ! git -C "$REPO_ROOT" diff --cached --quiet 2>/dev/null; then
-            git -C "$REPO_ROOT" commit -m "teardown: destroy=true" >/dev/null 2>&1
-            git -C "$REPO_ROOT" push origin "$git_branch" >/dev/null 2>&1 \
-                && print_success "Pushed destroy=true to $git_branch" \
-                || print_warn "Could not push to $git_branch (continuing — HCP may auto-fetch)"
-        else
-            print_info "Nothing to commit (config already destroy=true) -- triggering API fetch"
-            curl -s -X POST \
-                -H "Authorization: Bearer $TFE_TOKEN" \
-                -H "Content-Type: application/vnd.api+json" \
-                -d '{"data":{"attributes":{}}}' \
-                "$TFE_API/stacks/$stack_id/stack-configurations?source=fetch" >/dev/null 2>&1
-        fi
-    else
-        print_warn "Not on a git branch -- skipping push"
-    fi
-
-    if [ "$NO_WAIT" = true ]; then
-        print_info "--no-wait set -- not waiting for destroy convergence"
-        return 0
-    fi
-
-    step_header "2.4" "Approve destroy plan + wait for convergence"
-    print_info "Polling stack-configurations (up to 20 min)..."
-    local approved=false
-    local wait=0
-    local max_wait=1200
-    while [ $wait -lt $max_wait ]; do
-        local latest
-        latest=$(curl -s \
-            -H "Authorization: Bearer $TFE_TOKEN" \
-            -H "Content-Type: application/vnd.api+json" \
-            "$TFE_API/stacks/$stack_id/stack-configurations?page%5Bsize%5D=1" 2>/dev/null)
-        local status config_id
-        status=$(echo "$latest" | jq -r '.data[0].attributes.status // "unknown"' 2>/dev/null)
-        config_id=$(echo "$latest" | jq -r '.data[0].id // empty' 2>/dev/null)
-
-        case "$status" in
-            planned)
-                if [ "$approved" = false ] && [ -n "$config_id" ]; then
-                    print_info "Plan ready -- approving destroy..."
-                    local groups
-                    groups=$(curl -s \
-                        -H "Authorization: Bearer $TFE_TOKEN" \
-                        -H "Content-Type: application/vnd.api+json" \
-                        "$TFE_API/stack-configurations/$config_id/stack-deployment-groups" 2>/dev/null \
-                        | jq -r '.data[].id' 2>/dev/null)
-                    for gid in $groups; do
-                        curl -s -X POST \
-                            -H "Authorization: Bearer $TFE_TOKEN" \
-                            -H "Content-Type: application/vnd.api+json" \
-                            -d '{"reason":"teardown: destroy deployments"}' \
-                            "$TFE_API/stack-deployment-groups/$gid/approve-all-plans" >/dev/null 2>&1
-                    done
-                    approved=true
-                    print_success "Destroy plan approved"
-                fi
-                ;;
-            converged|completed)
-                if [ "$config_id" != "$pre_push_config" ]; then
-                    print_success "Destroy converged"
-                    return 0
-                fi
-                ;;
-            errored|failed)
-                if [ "$config_id" != "$pre_push_config" ]; then
-                    print_warn "Destroy config $status -- inspect HCP UI"
-                    return 0
-                fi
-                ;;
-        esac
-
-        sleep 15
-        wait=$((wait + 15))
-        if [ $((wait % 60)) -eq 0 ]; then
-            print_info "Status: $status (${wait}s/${max_wait}s)"
-        fi
-    done
-    print_warn "Timeout waiting for destroy convergence -- continuing"
-}
-
-#===============================================================================
-# PHASE 3: Post-destroy orphaned AWS resource cleanup
-#===============================================================================
-phase_post_destroy() {
-    phase_header "Phase 3: Post-Destroy (Orphaned Resource Cleanup)"
-
-    if [ "$DRY_RUN" = true ]; then
-        print_info "[DRY-RUN] Would run: cleanup-orphaned-resources.sh ${CLUSTER_LIST[*]}"
-        return 0
-    fi
-
-    print_info "Running orphaned resource cleanup..."
-    echo ""
-
-    # cleanup-orphaned-resources.sh requires Bash 4+ (associative arrays)
-    local bash_cmd="bash"
-    if [[ "$(uname)" == "Darwin" ]] && [[ -x /opt/homebrew/bin/bash ]]; then
-        bash_cmd="/opt/homebrew/bin/bash"
-    fi
-
-    if $bash_cmd "$SCRIPT_DIR/cleanup-orphaned-resources.sh" "${CLUSTER_LIST[@]}"; then
-        print_success "Orphaned resource cleanup complete"
-    else
-        print_warn "Orphaned resource cleanup finished with errors"
-        print_info "Re-run cleanup-orphaned-resources.sh or clean up manually"
-    fi
-}
-
-#===============================================================================
-# PHASE 4: HCP Stack + variable set + IAM role + OIDC provider deletion
-#
-# Includes retry-with-OIDC-recreation: if a previous teardown deleted the
-# IAM role / OIDC provider while a Stack still has deployments, HCP cannot
-# run the destroy plan needed to remove them. Detect that case and re-run
-# setup-aws-oidc.sh to recreate the credentials before pushing destroy=true.
-#===============================================================================
-
-phase_oidc_cleanup() {
-    phase_header "Phase 4: HCP Stack + Variable Set + IAM + OIDC Cleanup"
-
-    if [ "$DRY_RUN" = true ]; then
-        print_info "[DRY-RUN] Would delete HCP Stack, variable set, IAM role, OIDC provider"
-        return 0
-    fi
-
-    load_tfe_token
-
     local hcp_setup_dir="$SCRIPT_DIR/hcp-setup"
-    local stack_deleted=false
 
-    #---------------------------------------------------------------------------
-    # Step 4.1: Delete HCP Stack via API
-    #---------------------------------------------------------------------------
-    step_header "4.1" "Delete HCP Terraform Stack"
-
+    #-- Stack delete via API
+    step_header "Delete HCP Terraform Stack"
     if [ -z "${TFE_TOKEN:-}" ]; then
-        print_warn "TFE_TOKEN not available -- skipping Stack deletion"
-        print_info "Set with: export TFE_TOKEN=\$(jq -r '.credentials[\"app.terraform.io\"].token' ~/.terraform.d/credentials.tfrc.json)"
+        print_warn "TFE_TOKEN not set — skipping Stack delete (manual: HCP UI > Stack > Settings)"
     else
-        # Resolve org
         local hcp_org=""
-        if [ -f "$hcp_setup_dir/terraform.tfvars" ]; then
-            hcp_org=$(grep -E '^\s*tfc_organization|^\s*hcp_org' "$hcp_setup_dir/terraform.tfvars" 2>/dev/null \
-                | head -1 | awk -F'"' '{print $2}')
-        fi
-        if [ -z "$hcp_org" ] && [ -d "$hcp_setup_dir" ]; then
-            hcp_org=$(terraform -chdir="$hcp_setup_dir" output -raw organization 2>/dev/null || true)
-        fi
+        [ -f "$hcp_setup_dir/terraform.tfvars" ] && hcp_org=$(grep -E '^\s*tfc_organization' \
+            "$hcp_setup_dir/terraform.tfvars" 2>/dev/null | head -1 | awk -F'"' '{print $2}')
 
         if [ -z "$hcp_org" ]; then
-            print_warn "Could not determine HCP org -- skipping Stack deletion"
-            print_info "Delete manually: HCP Terraform > Stack > Settings > Destruction and Deletion"
+            print_warn "Could not resolve HCP org — skipping Stack delete"
         else
             local stack_id
-            stack_id=$(curl -s \
-                -H "Authorization: Bearer $TFE_TOKEN" \
+            stack_id=$(curl -s -H "Authorization: Bearer $TFE_TOKEN" \
                 -H "Content-Type: application/vnd.api+json" \
                 "$TFE_API/organizations/$hcp_org/stacks" 2>/dev/null \
-                | jq -r --arg n "$HCP_STACK_NAME" '.data[] | select(.attributes.name==$n) | .id' 2>/dev/null \
-                | head -1)
-
+                | jq -r --arg n "$HCP_STACK_NAME" '.data[] | select(.attributes.name==$n) | .id' | head -1)
             if [ -z "$stack_id" ]; then
-                stack_deleted=true
-                print_info "No HCP Stack '${HCP_STACK_NAME}' found -- already deleted"
+                print_info "No HCP Stack '$HCP_STACK_NAME' found"
             else
-                # Check for deployments still attached to the Stack
-                local deploy_count
-                deploy_count=$(curl -s \
-                    -H "Authorization: Bearer $TFE_TOKEN" \
+                # Disconnect VCS to stop new runs, then cancel any active runs.
+                curl -s -X PATCH -H "Authorization: Bearer $TFE_TOKEN" \
                     -H "Content-Type: application/vnd.api+json" \
-                    "$TFE_API/stacks/$stack_id/stack-deployments" 2>/dev/null \
-                    | jq '.data | length' 2>/dev/null)
-
-                if [ "${deploy_count:-0}" -gt 0 ]; then
-                    print_info "$deploy_count deployment(s) still attached -- removing before Stack delete"
-
-                    # Retry-with-OIDC-recreation: HCP needs valid credentials to
-                    # process the destroy plan that removes deployments.
-                    local account_id_pre
-                    account_id_pre=$(aws sts get-caller-identity --query 'Account' --output text 2>/dev/null)
-                    local oidc_arn_pre="arn:aws:iam::${account_id_pre}:oidc-provider/app.terraform.io"
-
-                    if ! aws iam get-open-id-connect-provider --open-id-connect-provider-arn "$oidc_arn_pre" &>/dev/null || \
-                       ! aws iam get-role --role-name "$HCP_ROLE_NAME" &>/dev/null; then
-                        print_info "OIDC/IAM credentials missing -- recreating for deployment removal..."
-                        if [ -x "$SCRIPT_DIR/setup-aws-oidc.sh" ]; then
-                            bash "$SCRIPT_DIR/setup-aws-oidc.sh" "$hcp_org" 2>&1 || {
-                                print_error "OIDC setup failed"
-                                return 1
-                            }
-                            print_success "OIDC + IAM role recreated"
-                        else
-                            print_warn "setup-aws-oidc.sh not found -- cannot recreate OIDC"
-                        fi
-                    fi
-
-                    # Ensure variable set exists (HCP needs the store block)
-                    if [ -f "$hcp_setup_dir/terraform.tfvars" ]; then
-                        print_info "Ensuring variable set exists..."
-                        terraform -chdir="$hcp_setup_dir" init -input=false >/dev/null 2>&1 || true
-                        terraform -chdir="$hcp_setup_dir" apply -auto-approve -input=false >/dev/null 2>&1 \
-                            && print_success "Variable set ready" \
-                            || print_warn "Variable set apply had issues (continuing)"
-                    fi
-
-                    # Push destroy=true config so HCP runs a valid destroy plan
-                    local deploy_file="${REPO_ROOT}/infrastructure/deployments.tfdeploy.hcl"
-                    if [ -f "$deploy_file" ]; then
-                        sed -i.bak 's/destroy[[:space:]]*=[[:space:]]*false/destroy          = true/g' "$deploy_file"
-                        rm -f "${deploy_file}.bak"
-                    fi
-
-                    local git_branch
-                    git_branch=$(git -C "$REPO_ROOT" branch --show-current 2>/dev/null)
-
-                    local pre_push_config
-                    pre_push_config=$(curl -s \
-                        -H "Authorization: Bearer $TFE_TOKEN" \
+                    -d '{"data":{"type":"stacks","attributes":{"vcs-repo":null}}}' \
+                    "$TFE_API/stacks/$stack_id" >/dev/null 2>&1
+                for cid in $(curl -s -H "Authorization: Bearer $TFE_TOKEN" \
                         -H "Content-Type: application/vnd.api+json" \
-                        "$TFE_API/stacks/$stack_id/stack-configurations?page%5Bsize%5D=1" 2>/dev/null \
-                        | jq -r '.data[0].id // empty' 2>/dev/null)
-
-                    if [ -n "$git_branch" ] && [ -f "$deploy_file" ]; then
-                        git -C "$REPO_ROOT" add "$deploy_file" 2>/dev/null || true
-                        if ! git -C "$REPO_ROOT" diff --cached --quiet 2>/dev/null; then
-                            git -C "$REPO_ROOT" commit -m "teardown: destroy=true" >/dev/null 2>&1
-                            git -C "$REPO_ROOT" push origin "$git_branch" >/dev/null 2>&1 || true
-                            print_success "Pushed destroy=true to $git_branch"
-                        else
-                            print_info "Triggering config fetch via API..."
-                            curl -s -X POST \
+                        "$TFE_API/stacks/$stack_id/stack-configurations?page%5Bsize%5D=20" 2>/dev/null \
+                        | jq -r '.data[].id'); do
+                    curl -s -H "Authorization: Bearer $TFE_TOKEN" \
+                        -H "Content-Type: application/vnd.api+json" \
+                        "$TFE_API/stack-configurations/$cid/stack-deployment-runs" 2>/dev/null \
+                        | jq -r '.data[] | select(.attributes.status != "abandoned" and .attributes.status != "failed" and .attributes.status != "succeeded") | .id' \
+                        | while read -r rid; do
+                            [ -n "$rid" ] && curl -s -X POST \
                                 -H "Authorization: Bearer $TFE_TOKEN" \
                                 -H "Content-Type: application/vnd.api+json" \
-                                -d '{"data":{"attributes":{}}}' \
-                                "$TFE_API/stacks/$stack_id/stack-configurations?source=fetch" >/dev/null 2>&1
-                        fi
-                    fi
-
-                    # Wait for destroy plan to converge (approve along the way)
-                    print_info "Waiting for destroy config to converge (up to 12 min)..."
-                    local dep_wait=0
-                    local approved_destroy=false
-                    while [ $dep_wait -lt 720 ]; do
-                        local latest_config
-                        latest_config=$(curl -s \
-                            -H "Authorization: Bearer $TFE_TOKEN" \
-                            -H "Content-Type: application/vnd.api+json" \
-                            "$TFE_API/stacks/$stack_id/stack-configurations?page%5Bsize%5D=1" 2>/dev/null)
-                        local config_status config_id
-                        config_status=$(echo "$latest_config" | jq -r '.data[0].attributes.status // "unknown"' 2>/dev/null)
-                        config_id=$(echo "$latest_config" | jq -r '.data[0].id // empty' 2>/dev/null)
-
-                        case "$config_status" in
-                            planned)
-                                if [ "$approved_destroy" = false ] && [ -n "$config_id" ]; then
-                                    print_info "Plans ready -- approving..."
-                                    local groups
-                                    groups=$(curl -s \
-                                        -H "Authorization: Bearer $TFE_TOKEN" \
-                                        -H "Content-Type: application/vnd.api+json" \
-                                        "$TFE_API/stack-configurations/$config_id/stack-deployment-groups" 2>/dev/null \
-                                        | jq -r '.data[].id' 2>/dev/null)
-                                    for gid in $groups; do
-                                        curl -s -X POST \
-                                            -H "Authorization: Bearer $TFE_TOKEN" \
-                                            -H "Content-Type: application/vnd.api+json" \
-                                            -d '{"reason":"teardown: destroy deployments"}' \
-                                            "$TFE_API/stack-deployment-groups/$gid/approve-all-plans" >/dev/null 2>&1
-                                    done
-                                    approved_destroy=true
-                                    print_success "Destroy plans approved"
-                                fi
-                                ;;
-                            converged|completed)
-                                if [ "$config_id" != "$pre_push_config" ]; then
-                                    print_success "Destroy config converged"
-                                    break
-                                fi
-                                ;;
-                            errored|failed)
-                                if [ "$config_id" != "$pre_push_config" ]; then
-                                    print_warn "Config $config_status -- deployment removal may not complete"
-                                    break
-                                fi
-                                ;;
-                        esac
-
-                        sleep 15
-                        dep_wait=$((dep_wait + 15))
-                        if [ $((dep_wait % 60)) -eq 0 ]; then
-                            print_info "Config status: $config_status (${dep_wait}s/720s)"
-                        fi
-                    done
-
-                    # Now remove deployment blocks entirely
-                    print_info "Removing deployment blocks from config..."
-                    if [ -f "$deploy_file" ]; then
-                        cat > "$deploy_file" <<'MINIMAL_HCL'
-# Teardown: deployment blocks removed for Stack deletion
-identity_token "aws" {
-  audience = ["aws.workload.identity"]
-}
-MINIMAL_HCL
-                    fi
-
-                    if [ -n "$git_branch" ] && [ -f "$deploy_file" ]; then
-                        git -C "$REPO_ROOT" add "$deploy_file" 2>/dev/null || true
-                        if ! git -C "$REPO_ROOT" diff --cached --quiet 2>/dev/null; then
-                            git -C "$REPO_ROOT" commit -m "teardown: remove deployment blocks" >/dev/null 2>&1
-                            git -C "$REPO_ROOT" push origin "$git_branch" >/dev/null 2>&1 || true
-                            print_success "Pushed empty config to $git_branch"
-                        fi
-                    fi
-
-                    # Wait for deployments to disappear
-                    print_info "Waiting for deployment records to be removed (up to 5 min)..."
-                    dep_wait=0
-                    while [ $dep_wait -lt 300 ]; do
-                        deploy_count=$(curl -s \
-                            -H "Authorization: Bearer $TFE_TOKEN" \
-                            -H "Content-Type: application/vnd.api+json" \
-                            "$TFE_API/stacks/$stack_id/stack-deployments" 2>/dev/null \
-                            | jq '.data | length' 2>/dev/null)
-                        if [ "${deploy_count:-0}" -eq 0 ]; then
-                            print_success "All deployments removed from Stack"
-                            break
-                        fi
-                        sleep 15
-                        dep_wait=$((dep_wait + 15))
-                        if [ $((dep_wait % 60)) -eq 0 ]; then
-                            print_info "$deploy_count deployment(s) remaining (${dep_wait}s/300s)"
-                        fi
-                    done
-                fi
-
-                # Delete the Stack
-                print_info "Deleting Stack '${HCP_STACK_NAME}'..."
-                local delete_response
-                delete_response=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+                                "$TFE_API/stack-deployment-runs/$rid/cancel" >/dev/null 2>&1
+                        done
+                done
+                local code
+                code=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
                     -H "Authorization: Bearer $TFE_TOKEN" \
                     -H "Content-Type: application/vnd.api+json" \
                     "$TFE_API/stacks/$stack_id" 2>/dev/null)
-
-                case "$delete_response" in
-                    200|204)
-                        stack_deleted=true
-                        print_success "HCP Stack delete initiated"
-                        ;;
-                    404)
-                        stack_deleted=true
-                        print_info "Stack already deleted"
-                        ;;
-                    422)
-                        # Stack has active runs -- disconnect VCS, cancel runs, retry
-                        print_warn "Stack has active runs -- force-cleaning..."
-                        curl -s -X PATCH \
-                            -H "Authorization: Bearer $TFE_TOKEN" \
-                            -H "Content-Type: application/vnd.api+json" \
-                            -d '{"data":{"type":"stacks","attributes":{"vcs-repo":null}}}' \
-                            "$TFE_API/stacks/$stack_id" >/dev/null 2>&1
-                        print_info "VCS disconnected"
-
-                        local config_ids
-                        config_ids=$(curl -s \
-                            -H "Authorization: Bearer $TFE_TOKEN" \
-                            -H "Content-Type: application/vnd.api+json" \
-                            "$TFE_API/stacks/$stack_id/stack-configurations?page%5Bsize%5D=20" 2>/dev/null \
-                            | jq -r '.data[].id' 2>/dev/null)
-                        for cid in $config_ids; do
-                            curl -s \
-                                -H "Authorization: Bearer $TFE_TOKEN" \
-                                -H "Content-Type: application/vnd.api+json" \
-                                "$TFE_API/stack-configurations/$cid/stack-deployment-runs" 2>/dev/null \
-                                | jq -r '.data[] | select(.attributes.status != "abandoned" and .attributes.status != "failed" and .attributes.status != "succeeded") | .id' 2>/dev/null \
-                                | while read -r rid; do
-                                    [ -n "$rid" ] && curl -s -X POST \
-                                        -H "Authorization: Bearer $TFE_TOKEN" \
-                                        -H "Content-Type: application/vnd.api+json" \
-                                        "$TFE_API/stack-deployment-runs/$rid/cancel" >/dev/null 2>&1
-                                done
-                        done
-                        print_info "All pending runs canceled"
-
-                        sleep 5
-                        delete_response=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
-                            -H "Authorization: Bearer $TFE_TOKEN" \
-                            -H "Content-Type: application/vnd.api+json" \
-                            "$TFE_API/stacks/$stack_id" 2>/dev/null)
-                        if [ "$delete_response" = "204" ] || [ "$delete_response" = "200" ] || [ "$delete_response" = "404" ]; then
-                            stack_deleted=true
-                            print_success "HCP Stack deleted"
-                        else
-                            print_warn "Stack deletion still returned HTTP $delete_response"
-                            print_info "Delete manually: HCP Terraform > Stack > Settings > Destruction and Deletion"
-                        fi
-                        ;;
-                    *)
-                        print_warn "Stack deletion returned HTTP $delete_response"
-                        print_info "Delete manually: HCP Terraform > Stack > Settings > Destruction and Deletion"
-                        ;;
+                case "$code" in
+                    200|204|404) print_success "HCP Stack deleted (HTTP $code)" ;;
+                    *)           print_warn "Stack delete returned HTTP $code — check HCP UI" ;;
                 esac
-
-                # Wait for Stack to be fully gone
-                if [ "$stack_deleted" = true ] && [ -n "$stack_id" ]; then
-                    print_info "Waiting for Stack to be fully deleted (up to 2 min)..."
-                    local stack_wait=0
-                    while [ $stack_wait -lt 120 ]; do
-                        local check_response
-                        check_response=$(curl -s -o /dev/null -w "%{http_code}" \
-                            -H "Authorization: Bearer $TFE_TOKEN" \
-                            -H "Content-Type: application/vnd.api+json" \
-                            "$TFE_API/stacks/$stack_id" 2>/dev/null)
-                        if [ "$check_response" = "404" ]; then
-                            print_success "Stack fully deleted"
-                            break
-                        fi
-                        sleep 5
-                        stack_wait=$((stack_wait + 5))
-                    done
-                fi
             fi
         fi
     fi
 
-    #---------------------------------------------------------------------------
-    # Step 4.2: Destroy HCP variable set + project (terraform destroy)
-    # Project must be empty (no Stack) for this to succeed.
-    #---------------------------------------------------------------------------
-    step_header "4.2" "Destroy HCP variable set '${HCP_VARSET_NAME}'"
-
-    if [ "$stack_deleted" = false ]; then
-        print_warn "Stack not deleted -- skipping variable set destroy"
-        print_info "Re-run teardown after Stack is deleted"
-    elif [ ! -f "$hcp_setup_dir/terraform.tfstate" ]; then
-        print_info "No terraform.tfstate in hcp-setup/ -- skipping variable set destroy"
+    #-- Variable set + project (terraform destroy in hcp-setup)
+    step_header "Destroy variable set + project (terraform destroy in hcp-setup/)"
+    if [ ! -f "$hcp_setup_dir/terraform.tfstate" ]; then
+        print_info "No hcp-setup terraform state — skipping"
     elif [ -z "${TFE_TOKEN:-}" ]; then
-        print_warn "TFE_TOKEN not set -- skipping variable set destroy"
+        print_warn "TFE_TOKEN not set — skipping"
     else
-        print_info "Running terraform destroy in hcp-setup/..."
         if terraform -chdir="$hcp_setup_dir" destroy -auto-approve -input=false; then
             print_success "Variable set + project destroyed"
         else
-            print_error "terraform destroy failed in hcp-setup/"
-            print_info "Run manually: cd $hcp_setup_dir && terraform destroy"
+            print_warn "terraform destroy in hcp-setup/ had errors — check HCP UI"
         fi
     fi
 
-    #---------------------------------------------------------------------------
-    # Step 4.3: Delete IAM role + Step 4.4: Delete OIDC provider
-    #---------------------------------------------------------------------------
+    #-- AWS IAM role for HCP (hcp-stacks-deploy)
+    step_header "Delete AWS IAM role $HCP_ROLE_NAME"
+    if aws iam get-role --role-name "$HCP_ROLE_NAME" &>/dev/null; then
+        for p in $(aws iam list-attached-role-policies --role-name "$HCP_ROLE_NAME" \
+                --query 'AttachedPolicies[].PolicyArn' --output text); do
+            aws iam detach-role-policy --role-name "$HCP_ROLE_NAME" --policy-arn "$p" 2>/dev/null || true
+        done
+        for p in $(aws iam list-role-policies --role-name "$HCP_ROLE_NAME" \
+                --query 'PolicyNames[]' --output text); do
+            aws iam delete-role-policy --role-name "$HCP_ROLE_NAME" --policy-name "$p" 2>/dev/null || true
+        done
+        aws iam delete-role --role-name "$HCP_ROLE_NAME" 2>/dev/null \
+            && print_success "Deleted IAM role $HCP_ROLE_NAME" \
+            || print_error "Could not delete $HCP_ROLE_NAME"
+    else
+        print_info "IAM role $HCP_ROLE_NAME not found"
+    fi
+
+    #-- AWS OIDC provider for app.terraform.io
+    step_header "Delete AWS OIDC provider app.terraform.io"
     local account_id
-    account_id=$(aws sts get-caller-identity --query 'Account' --output text 2>/dev/null)
-
-    if [ -z "$account_id" ]; then
-        print_error "Could not retrieve AWS Account ID -- skipping IAM/OIDC cleanup"
-        return 1
-    fi
-
-    local oidc_provider_arn="arn:aws:iam::${account_id}:oidc-provider/app.terraform.io"
-
-    if [ "$SKIP_OIDC_CLEANUP" = true ]; then
-        print_info "--skip-oidc-cleanup set -- leaving IAM role + OIDC provider intact"
-        return 0
-    fi
-
-    step_header "4.3" "Delete IAM role: $HCP_ROLE_NAME"
-    if [ "$stack_deleted" = false ]; then
-        print_warn "Stack not deleted -- keeping IAM role (HCP needs it for destroy plans)"
-    elif aws iam get-role --role-name "$HCP_ROLE_NAME" &>/dev/null; then
-        print_info "Detaching policies from $HCP_ROLE_NAME..."
-        local attached_policies
-        attached_policies=$(aws iam list-attached-role-policies --role-name "$HCP_ROLE_NAME" \
-            --query 'AttachedPolicies[].PolicyArn' --output text 2>/dev/null)
-        for policy in $attached_policies; do
-            aws iam detach-role-policy --role-name "$HCP_ROLE_NAME" --policy-arn "$policy" 2>/dev/null || true
-            print_success "Detached $policy"
-        done
-
-        # Inline policies
-        local inline_policies
-        inline_policies=$(aws iam list-role-policies --role-name "$HCP_ROLE_NAME" \
-            --query 'PolicyNames[]' --output text 2>/dev/null)
-        for inline in $inline_policies; do
-            aws iam delete-role-policy --role-name "$HCP_ROLE_NAME" --policy-name "$inline" 2>/dev/null || true
-        done
-
-        if aws iam delete-role --role-name "$HCP_ROLE_NAME" 2>/dev/null; then
-            print_success "IAM role deleted: $HCP_ROLE_NAME"
-        else
-            print_error "Could not delete role $HCP_ROLE_NAME -- inspect for remaining dependencies"
-        fi
+    account_id=$(aws sts get-caller-identity --query Account --output text 2>/dev/null)
+    local oidc_arn="arn:aws:iam::${account_id}:oidc-provider/app.terraform.io"
+    if aws iam get-open-id-connect-provider --open-id-connect-provider-arn "$oidc_arn" &>/dev/null; then
+        aws iam delete-open-id-connect-provider --open-id-connect-provider-arn "$oidc_arn" 2>/dev/null \
+            && print_success "Deleted OIDC provider" \
+            || print_error "Could not delete OIDC provider"
     else
-        print_info "IAM role $HCP_ROLE_NAME not found -- skipping"
+        print_info "OIDC provider not found"
     fi
 
-    step_header "4.4" "Delete OIDC provider: app.terraform.io"
-    if [ "$stack_deleted" = false ]; then
-        print_warn "Stack not deleted -- keeping OIDC provider"
-    elif aws iam get-open-id-connect-provider --open-id-connect-provider-arn "$oidc_provider_arn" &>/dev/null; then
-        print_warn "If other HCP Terraform stacks in this account use this OIDC provider, recreate with setup-aws-oidc.sh"
-        if aws iam delete-open-id-connect-provider --open-id-connect-provider-arn "$oidc_provider_arn" 2>/dev/null; then
-            print_success "OIDC provider deleted"
-        else
-            print_error "Could not delete OIDC provider"
-        fi
-    else
-        print_info "OIDC provider not found -- skipping"
-    fi
-
-    echo ""
-    print_success "Phase 4 complete: HCP Stack, variable set, IAM role, and OIDC provider cleaned up"
+    print_success "HCP cleanup complete"
 }
 
 #===============================================================================
@@ -1095,51 +903,27 @@ echo ""
 echo -e "${BLUE}================================================================${NC}"
 echo -e "${BLUE}  Agentic Runtime Security Workshop -- Teardown${NC}"
 echo -e "${BLUE}================================================================${NC}"
+if [ "$DRY_RUN" = true ]; then print_warn "DRY RUN MODE — no changes will be made"; fi
 
-# Phase 0 always runs
-phase_preflight
-
-if [ "$PRE_DESTROY_ONLY" = true ]; then
-    phase_pre_destroy
-elif [ "$POST_DESTROY_ONLY" = true ]; then
-    phase_post_destroy
-    phase_oidc_cleanup
+if [ "$AWS_ONLY" = true ]; then
+    print_info "Mode: AWS-only (K8s drain + tag-scoped resource sweep)"
+    phase_k8s_cleanup
+    phase_aws_sweep
+elif [ "$HCP_ONLY" = true ]; then
+    print_info "Mode: HCP-only (Stack + varset + IAM role + OIDC)"
+    phase_hcp_cleanup
 else
-    phase_pre_destroy
-    phase_hcp_destroy
-    phase_post_destroy
-    phase_oidc_cleanup
+    print_info "Mode: FULL (AWS resources + HCP infra)"
+    phase_k8s_cleanup
+    phase_aws_sweep
+    phase_hcp_cleanup
 fi
 
-#===============================================================================
-# Final Summary
-#===============================================================================
 echo ""
-phase_header "Teardown Summary"
-
+phase_header "Teardown Complete"
 if [ "$DRY_RUN" = true ]; then
-    print_warn "DRY RUN -- no changes were made"
-    print_info "Run without --dry-run to execute"
-elif [ "$PRE_DESTROY_ONLY" = true ]; then
-    print_success "Phase 1 complete: K8s resources cleaned"
-    echo ""
-    print_info "Next steps:"
-    echo "    1. Set destroy=true in deployments.tfdeploy.hcl, commit + push"
-    echo "    2. Approve destroy plan in HCP Terraform"
-    echo "    3. Run: ./scripts/teardown.sh --post-destroy-only"
-elif [ "$POST_DESTROY_ONLY" = true ] && [ "$SKIP_OIDC_CLEANUP" = true ]; then
-    print_success "Phase 3 complete: orphaned AWS resources cleaned up"
-    print_info "Phase 4 partial (--skip-oidc-cleanup): IAM role + OIDC provider preserved"
-elif [ "$POST_DESTROY_ONLY" = true ]; then
-    print_success "Phase 3+4 complete: orphaned resources, Stack, variable set, OIDC cleaned up"
-elif [ "$NO_WAIT" = true ]; then
-    print_success "Teardown phases 1+3 dispatched (--no-wait)"
-    echo ""
-    print_info "Verify HCP Terraform destroy plan completed before re-running for Phase 4"
+    print_warn "DRY RUN — no changes were made"
 else
-    print_success "Teardown complete -- all resources cleaned up (including HCP Stack)"
-    echo ""
-    print_info "Workshop tag scope: ${WORKSHOP_TAG}"
+    print_success "All targeted resources have been removed (KMS keys: 7-day deletion window)"
 fi
-
 echo ""

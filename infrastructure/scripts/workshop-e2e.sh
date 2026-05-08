@@ -618,10 +618,8 @@ phase_deploy_foundation() {
         return 0
     fi
 
-    # Clean up orphaned resources from any previous failed deploy
-    step_header "Cleaning up orphaned resources from prior runs..."
-    bash "$SCRIPT_DIR/cleanup-orphaned-resources.sh" 2>&1 || \
-        print_warn "Orphaned resource cleanup had warnings (continuing)"
+    # If a prior deploy failed, run `./scripts/teardown.sh --aws-only` first.
+    # The deploy phase no longer auto-cleans — one tool, one job.
 
     # Find the stack
     step_header "Finding HCP Terraform Stack..."
@@ -774,60 +772,13 @@ phase_teardown() {
     phase_header "Phase 8: Teardown"
 
     if [ "$DRY_RUN" = true ]; then
-        print_info "[DRY-RUN] Would run: teardown.sh --pre-destroy-only"
-        print_info "[DRY-RUN] Would set destroy=true, commit, push"
-        print_info "[DRY-RUN] Would trigger HCP destroy via API"
-        print_info "[DRY-RUN] Would run: teardown.sh --post-destroy-only"
+        print_info "[DRY-RUN] Would run: teardown.sh (full nuke: AWS + HCP)"
         return 0
     fi
 
-    pause_if_interactive "About to start teardown. This will destroy all foundation resources."
+    pause_if_interactive "About to start teardown. This will destroy all workshop resources."
 
-    # Phase 1: Pre-destroy (K8s cleanup — IVIA, Vault, test workloads)
-    step_header "Running pre-destroy cleanup..."
-    bash "$SCRIPT_DIR/teardown.sh" --pre-destroy-only 2>&1 || \
-        print_warn "Pre-destroy had warnings (continuing)"
-
-    # Set destroy=true on the foundation deployment
-    step_header "Setting destroy=true on usw2 deployment..."
-    local deploy_file="$PROJECT_ROOT/infrastructure/deployments.tfdeploy.hcl"
-    sed -i.bak 's/destroy[[:space:]]*=[[:space:]]*false/destroy = true/g' "$deploy_file"
-    rm -f "${deploy_file}.bak"
-
-    # Wait for VCS-triggered destroy plan (don't create a competing API config)
-    local stack_id
-    stack_id=$(hcp_find_stack "$HCP_ORG") || {
-        print_error "Could not find Stack — complete teardown manually in HCP UI"
-        return 1
-    }
-
-    local old_config_id
-    old_config_id=$(hcp_get_latest_config "$stack_id")
-
-    git_commit_and_push "teardown: set destroy=true on usw2" \
-        "infrastructure/deployments.tfdeploy.hcl"
-
-    if [ "$GIT_PUSHED" = true ]; then
-        hcp_wait_for_vcs_plan "$stack_id" "$old_config_id" 2400 || {
-            print_warn "Destroy may not have fully completed — check HCP UI"
-            print_info "You can run orphaned resource cleanup manually:"
-            echo "    ./scripts/teardown.sh --post-destroy-only"
-            return 1
-        }
-    else
-        hcp_deploy_and_wait "$stack_id" "Destroy foundation (usw2)" 2400 || {
-            print_warn "Destroy may not have fully completed — check HCP UI"
-            print_info "You can run orphaned resource cleanup manually:"
-            echo "    ./scripts/teardown.sh --post-destroy-only"
-            return 1
-        }
-    fi
-
-    # Phase 3+4: Post-destroy cleanup (orphaned AWS + HCP Stack/varset/IAM/OIDC)
-    step_header "Running post-destroy cleanup..."
-    bash "$SCRIPT_DIR/teardown.sh" --post-destroy-only 2>&1 || \
-        print_warn "Post-destroy had warnings"
-
+    bash "$SCRIPT_DIR/teardown.sh" 2>&1 || print_warn "Teardown had warnings"
     print_success "Teardown complete"
 }
 
@@ -996,10 +947,10 @@ phase_nuke() {
         }
     fi
 
-    # 3a: Orphaned AWS resource cleanup (ENIs, SGs, EIPs, LBs, VPCs)
-    step_header "Cleaning up orphaned AWS resources..."
-    bash "$SCRIPT_DIR/teardown.sh" --post-destroy-only --skip-oidc-cleanup 2>&1 || \
-        print_warn "Orphaned resource cleanup had warnings"
+    # 3a: AWS resource sweep (everything tagged Workshop=*)
+    step_header "Sweeping AWS workshop resources..."
+    bash "$SCRIPT_DIR/teardown.sh" --aws-only 2>&1 || \
+        print_warn "AWS sweep had warnings"
 
     # 3b: Delete HCP Stack via API
     if [ -n "$stack_id" ]; then

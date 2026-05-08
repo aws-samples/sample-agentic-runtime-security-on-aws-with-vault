@@ -2,7 +2,7 @@
 ################################################################################
 # E2E Validation Runner
 # Lints workshop scripts: shebang, bash -n syntax, optional shellcheck,
-# Bash 4+ guard on cleanup-orphaned-resources.sh, and "no base64 -d" usage.
+# "no base64 -d" usage (macOS uses -D).
 # Does NOT deploy or connect to any services.
 #
 # Usage: ./e2e-validate.sh
@@ -79,10 +79,6 @@ echo -e "${YELLOW}Phase 4: Cross-Platform Compatibility${NC}"
 # No "base64 -d" usage (macOS uses -D); [b] trick prevents self-match
 # shellcheck disable=SC2016
 check "No base64 -d usage" bash -c '! grep -n "| [b]ase64 -d" "$1"/*.sh' _ "$SCRIPT_DIR"
-
-# cleanup-orphaned-resources.sh has Bash 4+ guard (uses declare -A)
-check "Bash 4+ guard in cleanup-orphaned-resources.sh" \
-    grep -q "BASH_VERSINFO" "$SCRIPT_DIR/cleanup-orphaned-resources.sh"
 
 # No unguarded associative arrays
 # shellcheck disable=SC2016
