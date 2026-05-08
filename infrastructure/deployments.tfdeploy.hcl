@@ -94,6 +94,10 @@ deployment "usw2" {
       ManagedBy   = "terraform-stacks"
     }
 
+    # UC1 Agent image — attendees set this after ECR push (Phase 4 lab step).
+    # Replace with the actual ECR URI: <account>.dkr.ecr.us-west-2.amazonaws.com/uc1-agent:<tag>
+    uc1_agent_image = "<placeholder-ecr-uri>"
+
     # OIDC authentication
     role_arn       = store.varset.config.aws_role_arn
     identity_token = identity_token.aws.jwt

@@ -86,6 +86,67 @@ variable "rds_instance_class" {
 }
 
 #-------------------------------------------------------------------------------
+# IBM Verify Identity Access (IVIA) Configuration
+#-------------------------------------------------------------------------------
+
+variable "icr_entitlement_key" {
+  type        = string
+  sensitive   = true
+  description = "IBM Container Registry entitlement key for pulling IVIA images (icr.io/ivia/ivia-oidc-provider). Attendees obtain from IBM."
+}
+
+#-------------------------------------------------------------------------------
+# Vault Configuration
+# vault_token: Vault root/initial token used ONLY for bootstrap config in
+# vault_config component. Never used by UC agents (they use K8s auth).
+# Ephemeral = true so the token is not stored in Stacks state.
+# NOTE: rds_master_password is NOT here — vault_config fetches it from
+#       Secrets Manager via rds_master_user_secret_arn + data source.
+#-------------------------------------------------------------------------------
+
+variable "vault_token" {
+  type        = string
+  sensitive   = true
+  ephemeral   = true
+  description = "Vault root token for initial vault_config bootstrap. Ephemeral — not stored in Stacks state. Rotated after first apply."
+}
+
+#-------------------------------------------------------------------------------
+# IVIA Admin Credentials
+# Used by the restapi provider in isva_config component (Wave 5) to
+# authenticate to the IVIA Config Service REST API.
+#-------------------------------------------------------------------------------
+
+variable "ivia_admin_username" {
+  type        = string
+  description = "IVIA admin username for the Config Service REST API (default: admin)."
+  default     = "admin"
+}
+
+variable "ivia_admin_password" {
+  type        = string
+  sensitive   = true
+  description = "IVIA admin password for the Config Service REST API. Provided via HCP Terraform variable set."
+}
+
+#-------------------------------------------------------------------------------
+# UC1 Agent Configuration
+# uc1_agent_image: set by attendees after ECR push (Phase 4 lab step).
+# bedrock_model_id: defaults to Nova Pro CRIS profile — no deployments override needed.
+#-------------------------------------------------------------------------------
+
+variable "uc1_agent_image" {
+  type        = string
+  description = "ECR image URI for the UC1 agent container. Built from infrastructure/modules/uc1_agent/agent/Dockerfile."
+}
+
+variable "bedrock_model_id" {
+  type        = string
+  description = "Bedrock model ID for agent LLM calls. Uses cross-region inference profile."
+  default     = "us.amazon.nova-pro-v1:0"
+}
+
+#-------------------------------------------------------------------------------
 # Resource Tags
 #-------------------------------------------------------------------------------
 

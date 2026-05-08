@@ -54,18 +54,16 @@ module "eks_blueprints_addons" {
   # ---------------------------------------------------------------------------
 
   # cert-manager — TLS issuer for Vault, IVIA, and ALB-fronted services.
-  # Disabled until Phase 3 (Vault, IVIA) is built and needs TLS.
-  enable_cert_manager = false
+  # Enabled in Phase 3 (Vault and IVIA require TLS certificate management).
+  enable_cert_manager = true
 
   # external-dns — automatic Route53 record management for ALB-fronted
   # Services. Disabled until Phase 4+ (Strands agents with ALB Ingress).
   enable_external_dns = false
 
   # AWS Load Balancer Controller — provisions ALBs from Kubernetes Ingress.
-  # Disabled until Phase 4+ (Strands agents with ALB Ingress). Re-enable with
-  # `wait = true`, `replicaCount = 2`, and
-  # `serviceMutatorWebhook.failurePolicy = Ignore` (NOT the `Config` suffix).
-  enable_aws_load_balancer_controller = false
+  # Enabled in Phase 3 (Vault and IVIA Ingress resources require LBC).
+  enable_aws_load_balancer_controller = true
 
   # ---------------------------------------------------------------------------
   # Explicitly disabled — out of scope for this workshop.

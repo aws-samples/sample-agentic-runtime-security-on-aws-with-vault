@@ -10,7 +10,9 @@
 #   Phase 4: Foundation verify (calls test-foundation.sh — EKS + RDS + Bedrock KB)
 #   Phase 5: Identity (IVIA) — placeholder, populated when workshop Phase 3 ships
 #   Phase 6: Vault — placeholder, populated when workshop Phase 4 ships
-#   Phase 7: Use cases (UC1/UC2/UC3) — placeholder, populated when workshop Phases 5/6 ship
+#   Phase 7a: Use Case 1 — Non-Personalized Read-Only (ECR build+push, Stacks deploy, verify-uc1.sh)
+#   Phase 7b: Use Case 2 — OAuth Personalized Read-Only (placeholder; Phase 5)
+#   Phase 7c: Use Case 3 — CIBA Privileged (placeholder; Phase 6)
 #   Phase 8: Teardown (calls teardown.sh — unless --skip-teardown)
 #
 # Usage: ./workshop-e2e.sh <HCP_ORG> [OPTIONS]
@@ -753,29 +755,201 @@ phase_verify_foundation() {
 }
 
 #===============================================================================
-# PHASE 5: Identity (IVIA) — placeholder
+# PHASE 5: Identity (IVIA) — verify IVIA pods + OIDC discovery
 #===============================================================================
-phase_identity_placeholder() {
+phase_identity() {
     phase_header "Phase 5: Identity (IVIA)"
-    print_info "[Phase 5 — placeholder; populated when workshop Phase 3 (IVIA) ships]"
-    return 0
+
+    if [ "$DRY_RUN" = true ]; then
+        print_info "[DRY-RUN] Would check IVIA pods running and OIDC discovery endpoint"
+        return 0
+    fi
+
+    local ivia_ns="verify-access"
+    local vault_ns="vault"
+    local oidc_url="https://isvaop.verify-access.svc.cluster.local:8436/.well-known/openid-configuration"
+
+    # Check IVIA pods
+    local running_ivia
+    running_ivia=$(kubectl get pods -n "${ivia_ns}" --no-headers 2>/dev/null | grep -c Running || true)
+    if [ "${running_ivia:-0}" -ge 1 ]; then
+        print_success "IVIA: ${running_ivia} pod(s) Running in ${ivia_ns}"
+    else
+        print_warn "IVIA: no pods Running in ${ivia_ns} — IVIA may still be starting"
+    fi
+
+    # Check OIDC discovery via vault-0 (in-cluster path)
+    local ivia_issuer
+    ivia_issuer=$(kubectl exec -n "${vault_ns}" vault-0 -- \
+        curl -sk "${oidc_url}" 2>/dev/null \
+        | jq -r '.issuer // empty' 2>/dev/null || echo "")
+    if [ -n "${ivia_issuer}" ]; then
+        print_success "IVIA OIDC discovery: issuer = ${ivia_issuer}"
+    else
+        print_warn "IVIA OIDC discovery: issuer not reachable (IVIA may still be initializing)"
+    fi
+
+    pause_if_interactive "IVIA verification complete."
 }
 
 #===============================================================================
-# PHASE 6: Vault — placeholder
+# PHASE 6: Vault — verify pods, seal status, Raft peers, audit device
 #===============================================================================
-phase_vault_placeholder() {
+phase_vault() {
     phase_header "Phase 6: Vault"
-    print_info "[Phase 6 — placeholder; populated when workshop Phase 4 (Vault) ships]"
+
+    if [ "$DRY_RUN" = true ]; then
+        print_info "[DRY-RUN] Would run: test-vault-verify.sh"
+        return 0
+    fi
+
+    bash "$SCRIPT_DIR/test-vault-verify.sh" \
+        || print_warn "Platform verification reported failures (see above)"
+
+    pause_if_interactive "Vault verification complete."
+}
+
+#===============================================================================
+# PHASE 7a: Use Case 1 — Non-Personalized Read-Only
+#===============================================================================
+phase_uc1() {
+    phase_header "Phase 7a: Use Case 1 — Non-Personalized Read-Only"
+
+    if [ "$DRY_RUN" = true ]; then
+        print_info "[DRY-RUN] Would create ECR repo, build+push UC1 agent image"
+        print_info "[DRY-RUN] Would update uc1_agent_image in deployments.tfdeploy.hcl"
+        print_info "[DRY-RUN] Would trigger Stacks plan+apply, then run verify-uc1.sh"
+        return 0
+    fi
+
+    local account_id
+    account_id=$(aws sts get-caller-identity --query 'Account' --output text 2>/dev/null)
+    local ecr_repo="workshop/uc1-agent"
+    local image_tag="latest"
+    local ecr_uri="${account_id}.dkr.ecr.${WORKSHOP_REGION}.amazonaws.com/${ecr_repo}:${image_tag}"
+    local agent_dir="$PROJECT_ROOT/infrastructure/modules/uc1_agent/agent"
+
+    # Step 1: Create ECR repository (idempotent)
+    step_header "Creating ECR repository (if needed)..."
+    if aws ecr describe-repositories --repository-names "$ecr_repo" \
+            --region "$WORKSHOP_REGION" &>/dev/null; then
+        print_success "ECR repo exists: $ecr_repo"
+    else
+        aws ecr create-repository --repository-name "$ecr_repo" \
+            --region "$WORKSHOP_REGION" \
+            --image-scanning-configuration scanOnPush=true \
+            --output text --query 'repository.repositoryUri' >/dev/null 2>&1
+        print_success "ECR repo created: $ecr_repo"
+    fi
+
+    # Step 2: Build the UC1 agent container image
+    step_header "Building UC1 agent container image..."
+    docker build -t "${ecr_repo}:${image_tag}" "$agent_dir" || {
+        print_error "Docker build failed"
+        return 1
+    }
+    print_success "Image built: ${ecr_repo}:${image_tag}"
+
+    # Step 3: Authenticate to ECR and push
+    step_header "Pushing image to ECR..."
+    aws ecr get-login-password --region "$WORKSHOP_REGION" \
+        | docker login --username AWS --password-stdin \
+            "${account_id}.dkr.ecr.${WORKSHOP_REGION}.amazonaws.com" >/dev/null 2>&1
+
+    docker tag "${ecr_repo}:${image_tag}" "$ecr_uri"
+    docker push "$ecr_uri" >/dev/null 2>&1 || {
+        print_error "Docker push failed"
+        return 1
+    }
+    print_success "Image pushed: $ecr_uri"
+
+    # Step 4: Update uc1_agent_image in deployments.tfdeploy.hcl
+    step_header "Updating uc1_agent_image in deployments.tfdeploy.hcl..."
+    local deploy_file="$PROJECT_ROOT/infrastructure/deployments.tfdeploy.hcl"
+    local current_image
+    current_image=$(grep 'uc1_agent_image' "$deploy_file" | sed -E 's/.*"([^"]+)".*/\1/')
+
+    if [ "$current_image" = "$ecr_uri" ]; then
+        print_info "uc1_agent_image already set to $ecr_uri"
+    else
+        sed -i.bak "s|uc1_agent_image *= *\"[^\"]*\"|uc1_agent_image = \"${ecr_uri}\"|" "$deploy_file"
+        rm -f "${deploy_file}.bak"
+        print_success "uc1_agent_image = $ecr_uri"
+    fi
+
+    # Step 5: Find Stack and trigger deploy
+    step_header "Finding HCP Terraform Stack..."
+    local stack_id
+    stack_id=$(hcp_find_stack "$HCP_ORG") || {
+        print_error "Could not find Stack in HCP Terraform"
+        return 1
+    }
+    print_success "Stack found: $stack_id"
+
+    local old_config_id
+    old_config_id=$(hcp_get_latest_config "$stack_id")
+
+    git_commit_and_push "deploy: set uc1_agent_image for UC1 agent deployment" \
+        "infrastructure/deployments.tfdeploy.hcl"
+
+    if [ "$GIT_PUSHED" = true ]; then
+        step_header "Waiting for VCS-triggered deploy (UC1 agent)..."
+        hcp_wait_for_vcs_plan "$stack_id" "$old_config_id" 1800 || {
+            print_error "UC1 deploy failed. Check HCP Terraform UI for details."
+            return 1
+        }
+    else
+        step_header "Triggering Stacks plan (UC1 agent)..."
+        hcp_deploy_and_wait "$stack_id" "UC1 agent deploy" 1800 || {
+            print_error "UC1 deploy failed. Check HCP Terraform UI for details."
+            return 1
+        }
+    fi
+    print_success "UC1 agent deployed via Stacks"
+
+    # Step 6: Wait for pod readiness
+    step_header "Waiting for UC1 agent pod to be ready..."
+    local uc1_ready=false
+    local wait_elapsed=0
+    while [ $wait_elapsed -lt 120 ]; do
+        if kubectl get pods -n uc1 -l app=uc1-agent --no-headers 2>/dev/null | grep -q Running; then
+            uc1_ready=true
+            break
+        fi
+        sleep 10
+        wait_elapsed=$((wait_elapsed + 10))
+        if [ $((wait_elapsed % 30)) -eq 0 ]; then
+            print_info "Waiting for UC1 pod (${wait_elapsed}s/120s)..."
+        fi
+    done
+
+    if [ "$uc1_ready" = true ]; then
+        print_success "UC1 agent pod is Running"
+    else
+        print_warn "UC1 agent pod not Running after 120s — verify-uc1.sh will report details"
+    fi
+
+    # Step 7: Verify
+    pause_if_interactive "About to verify UC1 deployment"
+    bash "$SCRIPT_DIR/verify-uc1.sh" 2>&1 || print_warn "UC1 verification had warnings"
+    print_success "UC1 verification complete"
+}
+
+#===============================================================================
+# PHASE 7b: Use Case 2 — OAuth Personalized Read-Only (placeholder)
+#===============================================================================
+phase_uc2_placeholder() {
+    phase_header "Phase 7b: Use Case 2 — OAuth Personalized Read-Only"
+    print_info "[Phase 7b — placeholder; populated when Phase 5 (UC2) ships]"
     return 0
 }
 
 #===============================================================================
-# PHASE 7: Use Cases (UC1/UC2/UC3) — placeholder
+# PHASE 7c: Use Case 3 — CIBA Privileged (placeholder)
 #===============================================================================
-phase_use_cases_placeholder() {
-    phase_header "Phase 7: Use Cases (UC1/UC2/UC3)"
-    print_info "[Phase 7 — placeholder; populated when workshop Phases 5/6 (use cases) ship]"
+phase_uc3_placeholder() {
+    phase_header "Phase 7c: Use Case 3 — CIBA Privileged"
+    print_info "[Phase 7c — placeholder; populated when Phase 6 (UC3) ships]"
     return 0
 }
 
@@ -1073,9 +1247,11 @@ phase_bootstrap
 phase_deploy_foundation
 phase_configure_kubectl
 phase_verify_foundation
-phase_identity_placeholder
-phase_vault_placeholder
-phase_use_cases_placeholder
+phase_identity
+phase_vault
+phase_uc1
+phase_uc2_placeholder
+phase_uc3_placeholder
 
 if [ "$SKIP_TEARDOWN" = false ]; then
     phase_teardown
