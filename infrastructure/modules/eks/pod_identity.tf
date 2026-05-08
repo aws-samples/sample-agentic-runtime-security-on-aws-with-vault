@@ -33,17 +33,14 @@ module "vpc_cni_pod_identity" {
   attach_aws_vpc_cni_policy = true
   aws_vpc_cni_enable_ipv4   = true
 
-  associations = {
-    main = {
-      # Reference module.eks.cluster_name (NOT var.cluster_name) so Terraform
-      # treats the pod-identity association as dependent on the EKS cluster.
-      # Without this, the association is created in parallel with the cluster
-      # and CreatePodIdentityAssociation fails with ResourceNotFoundException.
-      cluster_name    = module.eks.cluster_name
-      namespace       = "kube-system"
-      service_account = "aws-node"
-    }
-  }
+  # NO `associations` block — the actual aws_eks_pod_identity_association is
+  # created atomically by EKS itself via CreateAddon when main.tf passes
+  # `pod_identity_association = [{ role_arn, service_account }]` to the
+  # vpc-cni addon. Defining `associations` here too creates a duplicate
+  # aws_eks_pod_identity_association that races CreateAddon and fails with
+  # `409 ResourceInUseException: Association already exists` (seen in run
+  # sdr-JQgSj7r9mV2ufm9M, 2026-05-07). This module now contributes only the
+  # IAM role; main.tf's cluster_addons block contributes the association.
 
   tags = var.tags
 }
@@ -55,17 +52,8 @@ module "ebs_csi_pod_identity" {
   name                      = "${var.cluster_name}-ebs-csi"
   attach_aws_ebs_csi_policy = true
 
-  associations = {
-    main = {
-      # Reference module.eks.cluster_name (NOT var.cluster_name) so Terraform
-      # treats the pod-identity association as dependent on the EKS cluster.
-      # Without this, the association is created in parallel with the cluster
-      # and CreatePodIdentityAssociation fails with ResourceNotFoundException.
-      cluster_name    = module.eks.cluster_name
-      namespace       = "kube-system"
-      service_account = "ebs-csi-controller-sa"
-    }
-  }
+  # See vpc_cni_pod_identity above — the association is owned by the EKS
+  # aws-ebs-csi-driver addon's inline pod_identity_association, not here.
 
   tags = var.tags
 }
