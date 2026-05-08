@@ -130,6 +130,23 @@ variable "ivia_admin_password" {
 }
 
 #-------------------------------------------------------------------------------
+# UC1 Agent Configuration
+# uc1_agent_image: set by attendees after ECR push (Phase 4 lab step).
+# bedrock_model_id: defaults to Nova Pro CRIS profile — no deployments override needed.
+#-------------------------------------------------------------------------------
+
+variable "uc1_agent_image" {
+  type        = string
+  description = "ECR image URI for the UC1 agent container. Built from infrastructure/modules/uc1_agent/agent/Dockerfile."
+}
+
+variable "bedrock_model_id" {
+  type        = string
+  description = "Bedrock model ID for agent LLM calls. Uses cross-region inference profile."
+  default     = "us.amazon.nova-pro-v1:0"
+}
+
+#-------------------------------------------------------------------------------
 # Resource Tags
 #-------------------------------------------------------------------------------
 

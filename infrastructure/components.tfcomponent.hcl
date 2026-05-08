@@ -1,8 +1,10 @@
 ################################################################################
 # Component Definitions
 # Agentic Runtime Security Workshop — Phase 2 Foundation + Phase 3 Platform
+#                                   + Phase 4 Use Case 1 Agent
 # Single-region stack (canonical region locked in deployments.tfdeploy.hcl):
 # audit foundation + VPC + EKS + addons + RDS + Bedrock KB + Vault + IVIA
+# + vault_config + isva_config + uc1_agent
 # Reference: ~/git-repos/eks-terraform-stacks/infrastructure/components.tfcomponent.hcl
 #
 # Component dependency graph (resolved automatically by Stacks via input refs):
@@ -14,6 +16,7 @@
 #   Wave 4: ivia (eks + rds + vault + audit + addons)
 #   Wave 5: vault_config (vault + eks + rds + ivia),
 #           isva_config  (ivia + vault_config)
+#   Wave 6: uc1_agent (vault_config + rds + bedrock_kb_index + eks)
 #
 # Per HCP Stacks docs, component output references in `inputs` are sufficient
 # to express ordering; explicit `depends_on` is reserved for non-obvious
@@ -326,5 +329,33 @@ component "isva_config" {
     vault_config_jwt_auth_path = component.vault_config.jwt_auth_path
     ivia_admin_username        = var.ivia_admin_username
     ivia_admin_password        = var.ivia_admin_password
+  }
+}
+
+#-------------------------------------------------------------------------------
+# UC1 Agent Component (Wave 6)
+# Non-personalized read-only Strands agent. Authenticates to Vault via
+# Kubernetes auth (SA JWT), receives JIT Postgres + Bedrock STS credentials.
+# Implicit ordering via vault_config, rds, bedrock_kb_index, eks inputs.
+#-------------------------------------------------------------------------------
+component "uc1_agent" {
+  source = "./modules/uc1_agent"
+
+  providers = {
+    kubernetes = provider.kubernetes.main
+  }
+
+  inputs = {
+    vault_addr        = component.vault.vault_endpoint
+    vault_role        = component.vault_config.uc1_role_name
+    rds_address       = component.rds.address
+    rds_port          = component.rds.port
+    rds_db_name       = component.rds.db_name
+    knowledge_base_id = component.bedrock_kb_index.knowledge_base_id
+    region            = var.region
+    kb_region         = var.kb_region
+    agent_image       = var.uc1_agent_image
+    bedrock_model_id  = var.bedrock_model_id
+    tags              = var.tags
   }
 }
