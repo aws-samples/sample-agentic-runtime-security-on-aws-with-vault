@@ -49,9 +49,21 @@ npx reveal-md slides.md
 npx reveal-md slides.md --print slides.pdf
 ```
 
+### Workshop content preview
+
+Preview the Workshop Studio content locally (downloads the AWS preview utility on first run):
+
+```bash
+./workshop/scripts/preview.sh
+```
+
 ## Deploy
 
-*Deploy instructions populated in Phase 2 (Foundation Infrastructure).*
+After prerequisites and bootstrap, run the end-to-end deploy + verification:
+
+```bash
+./infrastructure/scripts/workshop-e2e.sh <HCP_ORG> --interactive --skip-teardown
+```
 
 The deploy story will cover applying the Terraform Stacks `vpc` + `eks` + `rds` + `bedrock_kb` + (later) `vault` + `verify_access` + `vault_config` + `isva_config` + (later) `uc1_agent` + `uc2_agent` + `uc3_agent` + `observability` components on HCP Terraform, plus the `aws eks update-kubeconfig` one-liner to reach the cluster from `kubectl`.
 
