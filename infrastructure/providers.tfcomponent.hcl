@@ -65,12 +65,12 @@ required_providers {
     version = "~> 4.0"
   }
 
-  # restapi provider — required by isva_config component (Wave 5).
-  # Mastercard/restapi manages IVIA Config Service REST API objects.
-  restapi = {
-    source  = "Mastercard/restapi"
-    version = "~> 1.19"
-  }
+  # restapi provider — TEMPORARILY DISABLED (isva_config + ivia disabled).
+  # Re-enable together with ivia + isva_config components.
+  # restapi = {
+  #   source  = "Mastercard/restapi"
+  #   version = "~> 1.19"
+  # }
 }
 
 #-------------------------------------------------------------------------------
@@ -159,17 +159,16 @@ provider "vault" "main" {
   }
 }
 
-# restapi provider — IVIA Config Service REST API.
-# uri uses the ivia ClusterIP service endpoint (no scheme — provider prepends https://).
-# Pitfall 5: insecure=true required for self-signed IVIA certificate (workshop only).
-provider "restapi" "main" {
-  config {
-    uri      = "https://${component.ivia.ivia_service_endpoint}"
-    insecure = true
-    headers = {
-      "Content-Type" = "application/json"
-    }
-    username = var.ivia_admin_username
-    password = var.ivia_admin_password
-  }
-}
+# restapi provider — TEMPORARILY DISABLED (isva_config + ivia disabled).
+# Re-enable together with ivia + isva_config components.
+# provider "restapi" "main" {
+#   config {
+#     uri      = "https://${component.ivia.ivia_service_endpoint}"
+#     insecure = true
+#     headers = {
+#       "Content-Type" = "application/json"
+#     }
+#     username = var.ivia_admin_username
+#     password = var.ivia_admin_password
+#   }
+# }
