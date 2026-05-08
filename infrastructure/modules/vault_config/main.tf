@@ -202,9 +202,12 @@ resource "vault_policy" "uc1_readonly" {
 
   policy = <<-EOT
     # UC1: Read-only agent policy
-    # Allows: kubernetes auth login, database creds, Vault identity lookup
+    # Allows: kubernetes auth login, database creds, Vault-vended Bedrock STS creds, Vault identity lookup
     path "database/creds/uc1-readonly" {
       capabilities = ["read"]
+    }
+    path "aws/sts/bedrock-reader" {
+      capabilities = ["read", "update"]
     }
     path "auth/token/lookup-self" {
       capabilities = ["read"]
@@ -265,7 +268,7 @@ resource "vault_policy" "uc3_refund_writer" {
 resource "vault_kubernetes_auth_backend_role" "uc1" {
   backend                          = vault_auth_backend.kubernetes.path
   role_name                        = "uc1"
-  bound_service_account_names      = ["uc1-agent"]
+  bound_service_account_names      = ["uc1-retriever-sa"]
   bound_service_account_namespaces = ["uc1"]
   token_policies                   = [vault_policy.uc1_readonly.name]
   token_ttl                        = 3600 # 1 hour
@@ -275,7 +278,7 @@ resource "vault_kubernetes_auth_backend_role" "uc1" {
 resource "vault_kubernetes_auth_backend_role" "uc2" {
   backend                          = vault_auth_backend.kubernetes.path
   role_name                        = "uc2"
-  bound_service_account_names      = ["uc2-agent"]
+  bound_service_account_names      = ["uc2-personal-retriever-sa"]
   bound_service_account_namespaces = ["uc2"]
   token_policies                   = [vault_policy.uc2_personal.name]
   token_ttl                        = 3600
@@ -285,7 +288,7 @@ resource "vault_kubernetes_auth_backend_role" "uc2" {
 resource "vault_kubernetes_auth_backend_role" "uc3" {
   backend                          = vault_auth_backend.kubernetes.path
   role_name                        = "uc3"
-  bound_service_account_names      = ["uc3-agent"]
+  bound_service_account_names      = ["uc3-privileged-actor-sa"]
   bound_service_account_namespaces = ["uc3"]
   token_policies                   = [vault_policy.uc3_refund_writer.name]
   token_ttl                        = 3600
