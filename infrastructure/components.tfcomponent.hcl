@@ -132,49 +132,8 @@ component "rds" {
 #                      enforced before the KB is created.
 #-------------------------------------------------------------------------------
 
-component "bedrock_kb_aoss" {
-  source = "./modules/bedrock_kb_aoss"
-
-  # Uses provider.aws.kb (us-east-1) — Nova 2 Multimodal Embeddings is
-  # us-east-1 only; AOSS + S3 corpus must be co-located with the KB.
-  # No dependency on component.audit — KB creates its own CMK in us-east-1
-  # (KMS keys are regional; the us-west-2 audit CMK can't be used cross-region).
-
-  providers = {
-    aws  = provider.aws.kb
-    time = provider.time.main
-  }
-
-  inputs = {
-    region = var.kb_region
-    tags   = var.tags
-  }
-}
-
-component "bedrock_kb_index" {
-  source = "./modules/bedrock_kb_index"
-
-  # Explicit depends_on documents the IAM-propagation `time_sleep` barrier in
-  # bedrock_kb_aoss/main.tf — input references alone would not surface that
-  # ordering constraint to a reader (the time_sleep is internal to aoss).
-  depends_on = [component.bedrock_kb_aoss]
-
-  # Uses provider.aws.kb (us-east-1) — co-located with AOSS + embedding model.
-  providers = {
-    aws = provider.aws.kb
-  }
-
-  inputs = {
-    aoss_collection_arn      = component.bedrock_kb_aoss.aoss_collection_arn
-    aoss_collection_endpoint = component.bedrock_kb_aoss.aoss_collection_endpoint
-    kb_role_arn              = component.bedrock_kb_aoss.kb_role_arn
-    embedding_model_arn      = component.bedrock_kb_aoss.embedding_model_arn
-    kb_corpus_bucket_arn     = component.bedrock_kb_aoss.kb_corpus_bucket_arn
-    kb_multimodal_bucket_arn = component.bedrock_kb_aoss.kb_multimodal_bucket_arn
-    kb_multimodal_bucket_id  = component.bedrock_kb_aoss.kb_multimodal_bucket_id
-    tags                     = var.tags
-  }
-}
+# --- KB components temporarily removed for region migration (us-west-2 → us-east-1).
+# --- Stacks will destroy the us-west-2 state. Re-add in next push.
 
 #-------------------------------------------------------------------------------
 # EKS Blueprints Addons Component (Wave 2)
