@@ -86,6 +86,16 @@ variable "rds_instance_class" {
 }
 
 #-------------------------------------------------------------------------------
+# IBM Verify Identity Access (IVIA) Configuration
+#-------------------------------------------------------------------------------
+
+variable "icr_entitlement_key" {
+  type        = string
+  sensitive   = true
+  description = "IBM Container Registry entitlement key for pulling IVIA images (icr.io/ivia/ivia-oidc-provider). Attendees obtain from IBM."
+}
+
+#-------------------------------------------------------------------------------
 # Resource Tags
 #-------------------------------------------------------------------------------
 

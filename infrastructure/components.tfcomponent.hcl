@@ -2,7 +2,7 @@
 # Component Definitions
 # Agentic Runtime Security Workshop — Phase 2 Foundation + Phase 3 Platform
 # Single-region stack (canonical region locked in deployments.tfdeploy.hcl):
-# audit foundation + VPC + EKS + addons + RDS + Bedrock KB + Vault
+# audit foundation + VPC + EKS + addons + RDS + Bedrock KB + Vault + IVIA
 # Reference: ~/git-repos/eks-terraform-stacks/infrastructure/components.tfcomponent.hcl
 #
 # Component dependency graph (resolved automatically by Stacks via input refs):
@@ -11,6 +11,7 @@
 #   Wave 2: rds (vpc + audit + eks), addons (eks),
 #           bedrock_kb_index (bedrock_kb_aoss)
 #   Wave 3: vault (eks + audit + addons)
+#   Wave 4: ivia (eks + rds + vault + audit + addons)
 #
 # Per HCP Stacks docs, component output references in `inputs` are sufficient
 # to express ordering; explicit `depends_on` is reserved for non-obvious
@@ -231,5 +232,39 @@ component "vault" {
     oidc_provider_arn                  = component.eks.oidc_provider_arn
     audit_log_group_names              = component.audit.audit_log_group_names
     tags                               = var.tags
+  }
+}
+
+#-------------------------------------------------------------------------------
+# IBM Verify Identity Access Component (Wave 4)
+# Depends on eks (cluster creds), audit (log groups), addons (LBC for ALB),
+# rds (PostgreSQL backend), vault (OIDC seam target).
+# Deploys IVIA 11.0.2 OIDC provider via raw kubernetes_* manifests.
+# Pitfall 8: RDS output names use NO prefix — component.rds.endpoint,
+#            component.rds.address, etc. (NOT component.rds.rds_endpoint).
+#-------------------------------------------------------------------------------
+component "ivia" {
+  source = "./modules/verify_access"
+
+  providers = {
+    aws        = provider.aws.main
+    kubernetes = provider.kubernetes.main
+    random     = provider.random.main
+    time       = provider.time.main
+  }
+
+  inputs = {
+    region                     = var.region
+    cluster_name               = component.eks.cluster_name
+    rds_endpoint               = component.rds.endpoint
+    rds_address                = component.rds.address
+    rds_port                   = component.rds.port
+    rds_master_username        = component.rds.master_username
+    rds_master_user_secret_arn = component.rds.master_user_secret_arn
+    rds_db_name                = component.rds.db_name
+    vault_endpoint             = component.vault.vault_endpoint
+    audit_log_group_names      = component.audit.audit_log_group_names
+    icr_entitlement_key        = var.icr_entitlement_key
+    tags                       = var.tags
   }
 }
