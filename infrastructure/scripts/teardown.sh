@@ -184,9 +184,9 @@ phase_k8s_cleanup() {
     kubectl config use-context "$DEFAULT_CLUSTER" >/dev/null 2>&1 || true
     print_success "Kubeconfig set to $DEFAULT_CLUSTER"
 
-    # Delete workshop namespaces (vault, verify-access, etc.) so any LB Services
-    # in them get torn down by the LB controller.
-    for ns in vault verify-access; do
+    # Delete workshop namespaces (vault, verify-access, uc1, etc.) so any LB
+    # Services in them get torn down by the LB controller.
+    for ns in vault verify-access uc1; do
         if kubectl get namespace "$ns" &>/dev/null; then
             print_info "Deleting namespace $ns..."
             kubectl delete namespace "$ns" --ignore-not-found --timeout=120s 2>/dev/null || true

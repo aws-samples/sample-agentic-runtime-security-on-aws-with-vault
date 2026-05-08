@@ -10,7 +10,9 @@
 #   Phase 4: Foundation verify (calls test-foundation.sh — EKS + RDS + Bedrock KB)
 #   Phase 5: Identity (IVIA) — placeholder, populated when workshop Phase 3 ships
 #   Phase 6: Vault — placeholder, populated when workshop Phase 4 ships
-#   Phase 7: Use cases (UC1/UC2/UC3) — placeholder, populated when workshop Phases 5/6 ship
+#   Phase 7a: Use Case 1 — Non-Personalized Read-Only (calls verify-uc1.sh)
+#   Phase 7b: Use Case 2 — OAuth Personalized Read-Only (placeholder; Phase 5)
+#   Phase 7c: Use Case 3 — CIBA Privileged (placeholder; Phase 6)
 #   Phase 8: Teardown (calls teardown.sh — unless --skip-teardown)
 #
 # Usage: ./workshop-e2e.sh <HCP_ORG> [OPTIONS]
@@ -808,11 +810,36 @@ phase_vault() {
 }
 
 #===============================================================================
-# PHASE 7: Use Cases (UC1/UC2/UC3) — placeholder
+# PHASE 7a: Use Case 1 — Non-Personalized Read-Only
 #===============================================================================
-phase_use_cases_placeholder() {
-    phase_header "Phase 7: Use Cases (UC1/UC2/UC3)"
-    print_info "[Phase 7 — placeholder; populated when workshop Phases 5/6 (use cases) ship]"
+phase_uc1() {
+    phase_header "Phase 7a: Use Case 1 — Non-Personalized Read-Only"
+
+    if [ "$DRY_RUN" = true ]; then
+        print_info "[DRY-RUN] Would run: verify-uc1.sh"
+        return 0
+    fi
+
+    pause_if_interactive "About to verify UC1 deployment"
+    bash "$SCRIPT_DIR/verify-uc1.sh" 2>&1 || print_warn "UC1 verification had warnings"
+    print_success "UC1 verification complete"
+}
+
+#===============================================================================
+# PHASE 7b: Use Case 2 — OAuth Personalized Read-Only (placeholder)
+#===============================================================================
+phase_uc2_placeholder() {
+    phase_header "Phase 7b: Use Case 2 — OAuth Personalized Read-Only"
+    print_info "[Phase 7b — placeholder; populated when Phase 5 (UC2) ships]"
+    return 0
+}
+
+#===============================================================================
+# PHASE 7c: Use Case 3 — CIBA Privileged (placeholder)
+#===============================================================================
+phase_uc3_placeholder() {
+    phase_header "Phase 7c: Use Case 3 — CIBA Privileged"
+    print_info "[Phase 7c — placeholder; populated when Phase 6 (UC3) ships]"
     return 0
 }
 
@@ -1112,7 +1139,9 @@ phase_configure_kubectl
 phase_verify_foundation
 phase_identity
 phase_vault
-phase_use_cases_placeholder
+phase_uc1
+phase_uc2_placeholder
+phase_uc3_placeholder
 
 if [ "$SKIP_TEARDOWN" = false ]; then
     phase_teardown
