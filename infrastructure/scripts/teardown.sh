@@ -43,7 +43,10 @@ TFE_API="https://app.terraform.io/api/v2"
 DEFAULT_CLUSTER=""
 
 # Known name-prefixes the workshop uses (for resources without tag visibility).
-S3_BUCKET_PREFIXES=("workshop-kb-corpus" "workshop-athena-results")
+# Note: workshop-athena-* (NOT workshop-athena-results) — actual bucket name has
+# no `-results` suffix; that mismatch made the sweep miss the bucket on a prior
+# teardown (audit on 2026-05-08).
+S3_BUCKET_PREFIXES=("workshop-kb-corpus" "workshop-athena")
 GLUE_DB_NAMES=("workshop_logs")
 ATHENA_WG_NAMES=("workshop")
 # CW_LOG_PREFIXES set after DEFAULT_CLUSTER is resolved (below).
@@ -531,6 +534,111 @@ sweep_kms() {
     done
 }
 
+#----- CloudFormation stacks (bedrock_kb_index uses CFN for AOSS index) --------
+# bedrock_kb_index/index.tf creates an aws_cloudformation_stack named
+# `workshop-kb-aoss-index` to provision the AOSS::Index resource. Other modules
+# may also leave behind CFN stacks tagged with the workshop tag.
+# Retry on DELETE_FAILED with --retain-resources for the stuck KnowledgeBaseIndex
+# (failure mode: AOSS collection already deleted, CFN's DeleteIndex returns 403).
+sweep_cfn_stacks() {
+    local stacks
+    stacks=$(aws cloudformation list-stacks --region "$REGION" \
+        --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE CREATE_IN_PROGRESS \
+            UPDATE_IN_PROGRESS DELETE_FAILED \
+        --query "StackSummaries[?contains(StackName,'workshop')||contains(StackName,'agentic-runtime')].StackName" \
+        --output text 2>/dev/null)
+    if [[ -z "$stacks" || "$stacks" == "None" ]]; then
+        print_info "CFN stacks: none"; return 0
+    fi
+    for s in $stacks; do
+        echo -n "    Deleting CFN stack $s... "
+        aws cloudformation delete-stack --region "$REGION" --stack-name "$s" &>/dev/null
+        echo -e "${GREEN}initiated${NC}"
+    done
+    # Wait for deletion, retry stuck stacks with --retain-resources
+    for s in $stacks; do
+        echo -n "    Waiting for $s to delete"
+        local waited=0 status
+        while [[ $waited -lt 300 ]]; do
+            status=$(aws cloudformation describe-stacks --region "$REGION" --stack-name "$s" \
+                --query 'Stacks[0].StackStatus' --output text 2>/dev/null)
+            if [[ -z "$status" || "$status" == "None" ]]; then
+                echo -e " ${GREEN}done${NC}"; break
+            fi
+            if [[ "$status" == "DELETE_FAILED" ]]; then
+                # Retry with --retain-resources for any failed resources
+                local retain
+                retain=$(aws cloudformation describe-stack-resources --region "$REGION" --stack-name "$s" \
+                    --query "StackResources[?ResourceStatus=='DELETE_FAILED'].LogicalResourceId" --output text 2>/dev/null)
+                if [[ -n "$retain" ]]; then
+                    echo -e " ${YELLOW}DELETE_FAILED — retrying with --retain-resources $retain${NC}"
+                    # shellcheck disable=SC2086
+                    aws cloudformation delete-stack --region "$REGION" --stack-name "$s" \
+                        --retain-resources $retain &>/dev/null
+                    sleep 5
+                    continue
+                fi
+                echo -e " ${RED}DELETE_FAILED (no retain candidates)${NC}"
+                break
+            fi
+            sleep 10; waited=$((waited + 10)); echo -n "."
+        done
+        [[ $waited -ge 300 ]] && echo -e " ${YELLOW}timeout${NC}"
+    done
+}
+
+#----- IAM customer-managed policies (workshop-tagged) -------------------------
+# Modules + the eks-pod-identity submodule create policies like
+# AmazonEKS_VPC_CNI-*, AmazonEKS_EBS_CSI-*, alb-controller-*, cert-manager-*,
+# agentic-runtime-usw2-cluster-*. They survive role deletion. Sweep by Workshop
+# tag so we don't touch sister-workshop policies. Detach from any remaining
+# roles before delete.
+sweep_iam_workshop_policies() {
+    local matched=""
+    for arn in $(aws iam list-policies --scope Local --query 'Policies[].Arn' --output text 2>/dev/null); do
+        local tag
+        tag=$(aws iam list-policy-tags --policy-arn "$arn" \
+            --query "Tags[?Key=='${WORKSHOP_TAG_KEY}' && Value=='${WORKSHOP_TAG_VAL}'].Value" \
+            --output text 2>/dev/null)
+        [[ -n "$tag" && "$tag" != "None" ]] && matched="$matched $arn"
+    done
+    if [[ -z "$matched" ]]; then
+        print_info "IAM customer policies (Workshop tag): none"; return 0
+    fi
+    for arn in $matched; do
+        local name="${arn##*/}"
+        echo -n "    Deleting IAM policy $name... "
+        # Detach from any roles still using it
+        for role in $(aws iam list-entities-for-policy --policy-arn "$arn" \
+                --query 'PolicyRoles[].RoleName' --output text 2>/dev/null); do
+            [[ -z "$role" || "$role" == "None" ]] && continue
+            aws iam detach-role-policy --role-name "$role" --policy-arn "$arn" &>/dev/null
+        done
+        # Detach from groups + users (defensive)
+        for grp in $(aws iam list-entities-for-policy --policy-arn "$arn" \
+                --query 'PolicyGroups[].GroupName' --output text 2>/dev/null); do
+            [[ -z "$grp" || "$grp" == "None" ]] && continue
+            aws iam detach-group-policy --group-name "$grp" --policy-arn "$arn" &>/dev/null
+        done
+        for u in $(aws iam list-entities-for-policy --policy-arn "$arn" \
+                --query 'PolicyUsers[].UserName' --output text 2>/dev/null); do
+            [[ -z "$u" || "$u" == "None" ]] && continue
+            aws iam detach-user-policy --user-name "$u" --policy-arn "$arn" &>/dev/null
+        done
+        # Delete non-default versions before delete-policy
+        for v in $(aws iam list-policy-versions --policy-arn "$arn" \
+                --query 'Versions[?!IsDefaultVersion].VersionId' --output text 2>/dev/null); do
+            [[ -z "$v" || "$v" == "None" ]] && continue
+            aws iam delete-policy-version --policy-arn "$arn" --version-id "$v" &>/dev/null
+        done
+        if aws iam delete-policy --policy-arn "$arn" &>/dev/null; then
+            echo -e "${GREEN}done${NC}"
+        else
+            echo -e "${RED}failed${NC}"
+        fi
+    done
+}
+
 #----- IAM roles (workshop-tagged) ---------------------------------------------
 sweep_iam_roles() {
     local matched=""
@@ -774,6 +882,12 @@ phase_aws_sweep() {
 
     step_header "KMS aliases + workshop-tagged keys (7-day deletion window)"
     sweep_kms || true
+
+    step_header "CloudFormation stacks (workshop-named)"
+    sweep_cfn_stacks || true
+
+    step_header "IAM customer-managed policies tagged Workshop"
+    sweep_iam_workshop_policies || true
 
     step_header "IAM roles tagged Workshop (excluding HCP role)"
     sweep_iam_roles || true
