@@ -85,6 +85,8 @@ resource "aws_iam_role_policy" "kb_s3" {
         Action = [
           "s3:GetObject",
           "s3:PutObject",
+          "s3:DeleteObject",
+          "s3:AbortMultipartUpload",
           "s3:ListBucket"
         ]
         Resource = [
@@ -136,6 +138,7 @@ resource "aws_iam_role_policy" "kb_kms" {
         Effect = "Allow"
         Action = [
           "kms:Decrypt",
+          "kms:Encrypt",
           "kms:GenerateDataKey",
           "kms:DescribeKey"
         ]
