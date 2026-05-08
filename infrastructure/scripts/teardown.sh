@@ -233,6 +233,38 @@ sweep_eks_pod_identity() {
     done
 }
 
+#----- EKS managed addons (delete before node groups to let finalizers run) ----
+sweep_eks_addons() {
+    if ! aws eks describe-cluster --name "$DEFAULT_CLUSTER" --region "$REGION" &>/dev/null; then
+        print_info "EKS addons: cluster gone, skipping"; return 0
+    fi
+    local addons
+    addons=$(aws eks list-addons --cluster-name "$DEFAULT_CLUSTER" --region "$REGION" \
+        --query 'addons[]' --output text 2>/dev/null)
+    if [[ -z "$addons" || "$addons" == "None" ]]; then
+        print_info "EKS addons: none"; return 0
+    fi
+    for addon in $addons; do
+        echo -n "    Deleting addon $addon... "
+        if aws eks delete-addon --cluster-name "$DEFAULT_CLUSTER" --addon-name "$addon" \
+                --region "$REGION" &>/dev/null; then
+            echo -e "${GREEN}initiated${NC}"
+        else
+            echo -e "${YELLOW}skipped${NC}"
+        fi
+    done
+    echo -n "    Waiting for addons to delete"
+    local waited=0
+    while [[ $waited -lt 120 ]]; do
+        local rem
+        rem=$(aws eks list-addons --cluster-name "$DEFAULT_CLUSTER" --region "$REGION" \
+            --query 'addons[]' --output text 2>/dev/null)
+        [[ -z "$rem" || "$rem" == "None" ]] && { echo -e " ${GREEN}done${NC}"; return 0; }
+        sleep 10; waited=$((waited + 10)); echo -n "."
+    done
+    echo -e " ${YELLOW}timeout (continuing)${NC}"
+}
+
 #----- EKS node groups + cluster -----------------------------------------------
 sweep_eks_nodegroups() {
     if ! aws eks describe-cluster --name "$DEFAULT_CLUSTER" --region "$REGION" &>/dev/null; then
@@ -307,6 +339,52 @@ sweep_eks_oidc_provider() {
     done
     if [[ $count -eq 0 ]]; then print_info "EKS OIDC providers: none to delete"
     else print_success "EKS OIDC providers: deleted $count"; fi
+}
+
+#----- EBS volumes (orphaned from PVCs after cluster delete) -------------------
+sweep_ebs_volumes() {
+    local vols
+    vols=$(aws ec2 describe-volumes --region "$REGION" \
+        --filters "Name=tag:${WORKSHOP_TAG_KEY},Values=${WORKSHOP_TAG_VAL}" \
+        --query 'Volumes[].VolumeId' --output text 2>/dev/null)
+    if [[ -z "$vols" || "$vols" == "None" ]]; then
+        vols=$(aws ec2 describe-volumes --region "$REGION" \
+            --filters "Name=tag:kubernetes.io/cluster/${DEFAULT_CLUSTER},Values=owned" \
+            --query 'Volumes[].VolumeId' --output text 2>/dev/null)
+    fi
+    if [[ -z "$vols" || "$vols" == "None" ]]; then
+        print_info "EBS volumes: none"; return 0
+    fi
+    for vol in $vols; do
+        local state
+        state=$(aws ec2 describe-volumes --region "$REGION" --volume-ids "$vol" \
+            --query 'Volumes[0].State' --output text 2>/dev/null)
+        if [[ "$state" == "in-use" ]]; then
+            echo -n "    Force-detaching volume $vol... "
+            aws ec2 detach-volume --volume-id "$vol" --region "$REGION" --force &>/dev/null \
+                && echo -e "${GREEN}done${NC}" || echo -e "${YELLOW}skipped${NC}"
+            sleep 5
+        fi
+        echo -n "    Deleting EBS volume $vol... "
+        aws ec2 delete-volume --volume-id "$vol" --region "$REGION" &>/dev/null \
+            && echo -e "${GREEN}done${NC}" || echo -e "${RED}failed${NC}"
+    done
+}
+
+#----- Launch templates (orphaned after EKS node group API-delete) -------------
+sweep_launch_templates() {
+    local lts
+    lts=$(aws ec2 describe-launch-templates --region "$REGION" \
+        --filters "Name=tag:${WORKSHOP_TAG_KEY},Values=${WORKSHOP_TAG_VAL}" \
+        --query 'LaunchTemplates[].LaunchTemplateId' --output text 2>/dev/null)
+    if [[ -z "$lts" || "$lts" == "None" ]]; then
+        print_info "Launch templates: none"; return 0
+    fi
+    for lt in $lts; do
+        echo -n "    Deleting launch template $lt... "
+        aws ec2 delete-launch-template --launch-template-id "$lt" --region "$REGION" &>/dev/null \
+            && echo -e "${GREEN}done${NC}" || echo -e "${RED}failed${NC}"
+    done
 }
 
 #----- RDS ---------------------------------------------------------------------
@@ -385,6 +463,30 @@ sweep_rds() {
             aws iam detach-role-policy --role-name "$r" --policy-arn "$p" &>/dev/null
         done
         aws iam delete-role --role-name "$r" &>/dev/null \
+            && echo -e "${GREEN}done${NC}" || echo -e "${RED}failed${NC}"
+    done
+}
+
+#----- Secrets Manager (RDS managed master password) ---------------------------
+sweep_secrets_manager() {
+    local secrets
+    secrets=$(aws secretsmanager list-secrets --region "$REGION" \
+        --filters Key=tag-key,Values="${WORKSHOP_TAG_KEY}" Key=tag-value,Values="${WORKSHOP_TAG_VAL}" \
+        --query 'SecretList[].ARN' --output text 2>/dev/null)
+    if [[ -z "$secrets" || "$secrets" == "None" ]]; then
+        secrets=$(aws secretsmanager list-secrets --region "$REGION" \
+            --filters Key=name,Values="rds!" \
+            --query "SecretList[?contains(Name,'${DEFAULT_CLUSTER}')].ARN" --output text 2>/dev/null)
+    fi
+    if [[ -z "$secrets" || "$secrets" == "None" ]]; then
+        print_info "Secrets Manager: none"; return 0
+    fi
+    for arn in $secrets; do
+        [[ -z "$arn" || "$arn" == "None" ]] && continue
+        local name="${arn##*:secret:}"
+        echo -n "    Deleting secret $name... "
+        aws secretsmanager delete-secret --secret-id "$arn" --region "$REGION" \
+            --force-delete-without-recovery &>/dev/null \
             && echo -e "${GREEN}done${NC}" || echo -e "${RED}failed${NC}"
     done
 }
@@ -670,6 +772,25 @@ sweep_iam_roles() {
     done
 }
 
+#----- Instance profiles (empty after role removal) ----------------------------
+sweep_instance_profiles() {
+    local matched=""
+    for ip in $(aws iam list-instance-profiles \
+            --query "InstanceProfiles[?length(Roles)==\`0\` && starts_with(InstanceProfileName,'${DEFAULT_CLUSTER}')].InstanceProfileName" \
+            --output text 2>/dev/null); do
+        [[ -z "$ip" || "$ip" == "None" ]] && continue
+        matched="$matched $ip"
+    done
+    if [[ -z "$matched" ]]; then
+        print_info "Instance profiles: none"; return 0
+    fi
+    for ip in $matched; do
+        echo -n "    Deleting instance profile $ip... "
+        aws iam delete-instance-profile --instance-profile-name "$ip" &>/dev/null \
+            && echo -e "${GREEN}done${NC}" || echo -e "${RED}failed${NC}"
+    done
+}
+
 #----- VPC sweep (endpoints, ELBs, ENIs, SGs, NAT, IGW, subnets, RTs, VPC) -----
 sweep_vpc_endpoints() {
     local vpc=$1
@@ -710,6 +831,22 @@ sweep_vpc_elbs() {
         [[ -z "$n" || "$n" == "None" ]] && continue
         echo -n "    Deleting classic ELB $n... "
         aws elb delete-load-balancer --load-balancer-name "$n" --region "$REGION" &>/dev/null \
+            && echo -e "${GREEN}done${NC}" || echo -e "${RED}failed${NC}"
+    done
+}
+
+sweep_vpc_target_groups() {
+    local vpc=$1
+    local tgs
+    tgs=$(aws elbv2 describe-target-groups --region "$REGION" \
+        --query "TargetGroups[?VpcId=='${vpc}' && length(LoadBalancerArns)==\`0\`].TargetGroupArn" \
+        --output text 2>/dev/null)
+    [[ -z "$tgs" || "$tgs" == "None" ]] && { print_info "Target groups in $vpc: none"; return 0; }
+    for arn in $tgs; do
+        [[ -z "$arn" || "$arn" == "None" ]] && continue
+        local name="${arn##*/}"
+        echo -n "    Deleting target group $name... "
+        aws elbv2 delete-target-group --target-group-arn "$arn" --region "$REGION" &>/dev/null \
             && echo -e "${GREEN}done${NC}" || echo -e "${RED}failed${NC}"
     done
 }
@@ -839,8 +976,10 @@ phase_aws_sweep() {
     phase_header "AWS Resource Sweep (tag: ${WORKSHOP_TAG_KEY}=${WORKSHOP_TAG_VAL})"
 
     if [ "$DRY_RUN" = true ]; then
-        print_info "[DRY-RUN] Would sweep: EKS pod-identity, node groups, cluster, RDS,"
-        print_info "  AOSS, S3, Bedrock KB, Glue/Athena, CW logs, KMS, IAM roles, VPC + deps"
+        print_info "[DRY-RUN] Would sweep: EKS (addons, pod-identity, node groups, cluster),"
+        print_info "  EBS volumes, launch templates, RDS, Secrets Manager, Bedrock KB, AOSS,"
+        print_info "  S3, Glue/Athena, CW logs, KMS, CFN, IAM (policies, roles, instance profiles),"
+        print_info "  VPC (ELBs, target groups, endpoints, ENIs, SGs, NAT, IGW, subnets, RTs)"
         return 0
     fi
 
@@ -853,14 +992,26 @@ phase_aws_sweep() {
     step_header "EKS pod-identity associations"
     sweep_eks_pod_identity || true
 
+    step_header "EKS managed addons"
+    sweep_eks_addons || true
+
     step_header "EKS node groups"
     sweep_eks_nodegroups || true
 
     step_header "EKS cluster"
     sweep_eks_cluster || true
 
+    step_header "EBS volumes (orphaned from PVCs)"
+    sweep_ebs_volumes || true
+
+    step_header "Launch templates (orphaned from node groups)"
+    sweep_launch_templates || true
+
     step_header "RDS (instance + subnet + param + monitoring role)"
     sweep_rds || true
+
+    step_header "Secrets Manager (RDS managed password)"
+    sweep_secrets_manager || true
 
     step_header "Bedrock Knowledge Base + data sources"
     sweep_bedrock_kb || true
@@ -892,6 +1043,9 @@ phase_aws_sweep() {
     step_header "IAM roles tagged Workshop (excluding HCP role)"
     sweep_iam_roles || true
 
+    step_header "Instance profiles (empty after role removal)"
+    sweep_instance_profiles || true
+
     # Per-VPC sweeps — find all VPCs tagged or named for the workshop
     local vpcs
     vpcs=$(aws ec2 describe-vpcs --region "$REGION" \
@@ -907,11 +1061,12 @@ phase_aws_sweep() {
     else
         for vpc in $vpcs; do
             step_header "VPC $vpc"
-            sweep_vpc_elbs           "$vpc" || true
-            sweep_vpc_endpoints      "$vpc" || true
-            sweep_vpc_enis           "$vpc" || true
+            sweep_vpc_elbs            "$vpc" || true
+            sweep_vpc_target_groups   "$vpc" || true
+            sweep_vpc_endpoints       "$vpc" || true
+            sweep_vpc_enis            "$vpc" || true
             sweep_vpc_security_groups "$vpc" || true
-            sweep_vpc_resources      "$vpc" || true
+            sweep_vpc_resources       "$vpc" || true
         done
     fi
 
@@ -1035,6 +1190,209 @@ phase_hcp_cleanup() {
 }
 
 #===============================================================================
+# VERIFICATION — read-only audit to confirm zero residuals
+#===============================================================================
+phase_verify_zero_residuals() {
+    phase_header "Post-Teardown Verification (zero-residual audit)"
+
+    if [ "$DRY_RUN" = true ]; then
+        print_info "[DRY-RUN] Would run post-teardown verification audit"
+        return 0
+    fi
+
+    local failures=0
+
+    _check() {
+        local label=$1 result=$2
+        if [[ -z "$result" || "$result" == "None" || "$result" == "0" ]]; then
+            echo -e "    ${GREEN}PASS${NC}  $label"
+        else
+            echo -e "    ${RED}FAIL${NC}  $label: $result"
+            failures=$((failures + 1))
+        fi
+    }
+
+    # EKS cluster
+    local eks_cluster
+    eks_cluster=$(aws eks describe-cluster --name "$DEFAULT_CLUSTER" --region "$REGION" \
+        --query 'cluster.name' --output text 2>/dev/null || true)
+    [[ "$eks_cluster" == "None" ]] && eks_cluster=""
+    _check "EKS cluster" "$eks_cluster"
+
+    # RDS instances
+    local rds
+    rds=$(aws rds describe-db-instances --region "$REGION" \
+        --query "DBInstances[?TagList[?Key=='${WORKSHOP_TAG_KEY}' && Value=='${WORKSHOP_TAG_VAL}']].DBInstanceIdentifier" \
+        --output text 2>/dev/null)
+    [[ "$rds" == "None" ]] && rds=""
+    _check "RDS instances (tagged)" "$rds"
+
+    # RDS subnet groups
+    local rds_sgs
+    rds_sgs=$(aws rds describe-db-subnet-groups --region "$REGION" \
+        --query "DBSubnetGroups[?starts_with(DBSubnetGroupName,'${DEFAULT_CLUSTER}')].DBSubnetGroupName" \
+        --output text 2>/dev/null)
+    [[ "$rds_sgs" == "None" ]] && rds_sgs=""
+    _check "RDS subnet groups" "$rds_sgs"
+
+    # AOSS collections
+    local aoss
+    aoss=$(aws opensearchserverless list-collections --region "$REGION" \
+        --query 'collectionSummaries[].name' --output text 2>/dev/null)
+    [[ "$aoss" == "None" ]] && aoss=""
+    _check "AOSS collections" "$aoss"
+
+    # Bedrock KBs
+    local kbs
+    kbs=$(aws bedrock-agent list-knowledge-bases --region "$REGION" \
+        --query 'knowledgeBaseSummaries[].name' --output text 2>/dev/null)
+    [[ "$kbs" == "None" ]] && kbs=""
+    _check "Bedrock knowledge bases" "$kbs"
+
+    # S3 buckets
+    local s3=""
+    for prefix in "${S3_BUCKET_PREFIXES[@]}"; do
+        local b
+        b=$(aws s3api list-buckets --query "Buckets[?starts_with(Name,'${prefix}')].Name" --output text 2>/dev/null)
+        [[ -n "$b" && "$b" != "None" ]] && s3="$s3 $b"
+    done
+    _check "S3 buckets (workshop-named)" "$(echo "$s3" | xargs)"
+
+    # CloudWatch log groups
+    local cw=""
+    for prefix in "${CW_LOG_PREFIXES[@]}"; do
+        local g
+        g=$(aws logs describe-log-groups --region "$REGION" --log-group-name-prefix "$prefix" \
+            --query 'logGroups[].logGroupName' --output text 2>/dev/null)
+        [[ -n "$g" && "$g" != "None" ]] && cw="$cw $g"
+    done
+    _check "CloudWatch log groups" "$(echo "$cw" | xargs)"
+
+    # KMS keys (Workshop-tagged, not PendingDeletion)
+    local kms_active=""
+    for k in $(aws kms list-keys --region "$REGION" --query 'Keys[].KeyId' --output text 2>/dev/null); do
+        local state
+        state=$(aws kms describe-key --region "$REGION" --key-id "$k" --query 'KeyMetadata.KeyState' --output text 2>/dev/null)
+        [[ "$state" == "PendingDeletion" ]] && continue
+        local tag
+        tag=$(aws kms list-resource-tags --region "$REGION" --key-id "$k" \
+            --query "Tags[?TagKey=='${WORKSHOP_TAG_KEY}' && TagValue=='${WORKSHOP_TAG_VAL}'].TagValue" \
+            --output text 2>/dev/null)
+        [[ -n "$tag" && "$tag" != "None" ]] && kms_active="$kms_active $k"
+    done
+    _check "KMS keys (active, tagged)" "$(echo "$kms_active" | xargs)"
+
+    # IAM roles (tagged)
+    local iam_roles=""
+    for r in $(aws iam list-roles --query 'Roles[].RoleName' --output text 2>/dev/null); do
+        [[ "$r" == "$HCP_ROLE_NAME" ]] && continue
+        local tag
+        tag=$(aws iam list-role-tags --role-name "$r" \
+            --query "Tags[?Key=='${WORKSHOP_TAG_KEY}' && Value=='${WORKSHOP_TAG_VAL}'].Value" \
+            --output text 2>/dev/null)
+        [[ -n "$tag" && "$tag" != "None" ]] && iam_roles="$iam_roles $r"
+    done
+    _check "IAM roles (tagged)" "$(echo "$iam_roles" | xargs)"
+
+    # IAM policies (tagged)
+    local iam_pols=""
+    for arn in $(aws iam list-policies --scope Local --query 'Policies[].Arn' --output text 2>/dev/null); do
+        local tag
+        tag=$(aws iam list-policy-tags --policy-arn "$arn" \
+            --query "Tags[?Key=='${WORKSHOP_TAG_KEY}' && Value=='${WORKSHOP_TAG_VAL}'].Value" \
+            --output text 2>/dev/null)
+        [[ -n "$tag" && "$tag" != "None" ]] && iam_pols="$iam_pols ${arn##*/}"
+    done
+    _check "IAM policies (tagged)" "$(echo "$iam_pols" | xargs)"
+
+    # Instance profiles (empty, cluster-named)
+    local ips
+    ips=$(aws iam list-instance-profiles \
+        --query "InstanceProfiles[?length(Roles)==\`0\` && starts_with(InstanceProfileName,'${DEFAULT_CLUSTER}')].InstanceProfileName" \
+        --output text 2>/dev/null)
+    [[ "$ips" == "None" ]] && ips=""
+    _check "Instance profiles (empty)" "$ips"
+
+    # EBS volumes
+    local ebs
+    ebs=$(aws ec2 describe-volumes --region "$REGION" \
+        --filters "Name=tag:${WORKSHOP_TAG_KEY},Values=${WORKSHOP_TAG_VAL}" \
+        --query 'Volumes[].VolumeId' --output text 2>/dev/null)
+    [[ "$ebs" == "None" ]] && ebs=""
+    if [[ -z "$ebs" ]]; then
+        ebs=$(aws ec2 describe-volumes --region "$REGION" \
+            --filters "Name=tag:kubernetes.io/cluster/${DEFAULT_CLUSTER},Values=owned" \
+            --query 'Volumes[].VolumeId' --output text 2>/dev/null)
+        [[ "$ebs" == "None" ]] && ebs=""
+    fi
+    _check "EBS volumes" "$ebs"
+
+    # Launch templates
+    local lts
+    lts=$(aws ec2 describe-launch-templates --region "$REGION" \
+        --filters "Name=tag:${WORKSHOP_TAG_KEY},Values=${WORKSHOP_TAG_VAL}" \
+        --query 'LaunchTemplates[].LaunchTemplateId' --output text 2>/dev/null)
+    [[ "$lts" == "None" ]] && lts=""
+    _check "Launch templates (tagged)" "$lts"
+
+    # Secrets Manager
+    local secrets
+    secrets=$(aws secretsmanager list-secrets --region "$REGION" \
+        --filters Key=tag-key,Values="${WORKSHOP_TAG_KEY}" Key=tag-value,Values="${WORKSHOP_TAG_VAL}" \
+        --query 'SecretList[].Name' --output text 2>/dev/null)
+    [[ "$secrets" == "None" ]] && secrets=""
+    _check "Secrets Manager (tagged)" "$secrets"
+
+    # VPCs
+    local vpcs
+    vpcs=$(aws ec2 describe-vpcs --region "$REGION" \
+        --filters "Name=tag:${WORKSHOP_TAG_KEY},Values=${WORKSHOP_TAG_VAL}" \
+        --query 'Vpcs[].VpcId' --output text 2>/dev/null)
+    [[ "$vpcs" == "None" ]] && vpcs=""
+    _check "VPCs (tagged)" "$vpcs"
+
+    # CFN stacks
+    local cfn
+    cfn=$(aws cloudformation list-stacks --region "$REGION" \
+        --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE DELETE_FAILED \
+        --query "StackSummaries[?contains(StackName,'workshop')||contains(StackName,'agentic-runtime')].StackName" \
+        --output text 2>/dev/null)
+    [[ "$cfn" == "None" ]] && cfn=""
+    _check "CFN stacks (workshop-named)" "$cfn"
+
+    # Glue DBs
+    local glue=""
+    for db in "${GLUE_DB_NAMES[@]}"; do
+        aws glue get-database --name "$db" --region "$REGION" &>/dev/null && glue="$glue $db"
+    done
+    _check "Glue databases" "$(echo "$glue" | xargs)"
+
+    # Athena workgroups
+    local athena=""
+    for wg in "${ATHENA_WG_NAMES[@]}"; do
+        aws athena get-work-group --work-group "$wg" --region "$REGION" &>/dev/null && athena="$athena $wg"
+    done
+    _check "Athena workgroups" "$(echo "$athena" | xargs)"
+
+    # EKS OIDC providers
+    local oidc=""
+    for arn in $(aws iam list-open-id-connect-providers \
+            --query 'OpenIDConnectProviderList[].Arn' --output text 2>/dev/null); do
+        [[ "$arn" == *"oidc.eks.${REGION}.amazonaws.com/id/"* ]] && oidc="$oidc $arn"
+    done
+    _check "EKS OIDC providers" "$(echo "$oidc" | xargs)"
+
+    echo ""
+    if [[ $failures -eq 0 ]]; then
+        print_success "Verification PASSED — zero residuals detected"
+        return 0
+    else
+        print_error "Verification FAILED — $failures resource type(s) still have residuals"
+        return 1
+    fi
+}
+
+#===============================================================================
 # MAIN
 #===============================================================================
 echo ""
@@ -1047,6 +1405,7 @@ if [ "$AWS_ONLY" = true ]; then
     print_info "Mode: AWS-only (K8s drain + tag-scoped resource sweep)"
     phase_k8s_cleanup
     phase_aws_sweep
+    phase_verify_zero_residuals || VERIFY_FAILED=true
 elif [ "$HCP_ONLY" = true ]; then
     print_info "Mode: HCP-only (Stack + varset + IAM role + OIDC)"
     phase_hcp_cleanup
@@ -1055,12 +1414,16 @@ else
     phase_k8s_cleanup
     phase_aws_sweep
     phase_hcp_cleanup
+    phase_verify_zero_residuals || VERIFY_FAILED=true
 fi
 
 echo ""
 phase_header "Teardown Complete"
 if [ "$DRY_RUN" = true ]; then
     print_warn "DRY RUN — no changes were made"
+elif [ "${VERIFY_FAILED:-}" = true ]; then
+    print_error "Teardown finished but verification found residuals — review output above"
+    exit 1
 else
     print_success "All targeted resources have been removed (KMS keys: 7-day deletion window)"
 fi
