@@ -193,6 +193,14 @@ Step-by-step deploy:
 4. Click **Plan**. Review the resource graph — expect ~80–120 resource creations.
 5. Click **Apply**. Total time is ~25–35 minutes (EKS ~12 min, RDS ~10 min including the pgaudit reboot, Bedrock KB ~3 min, addons ~5 min).
 
+:::alert{header="Expect multiple plan/apply rounds — each one needs your approval" type="warning"}
+Stacks runs a **deferred-replan** loop: after the first apply, components whose inputs become resolvable (for example `bedrock_kb_index` waiting on `bedrock_kb_aoss`'s collection endpoint) get re-planned, and you'll be prompted to **Approve** again. A clean first deploy typically goes through **3–5 plan/apply rounds** before the run reaches `succeeded`.
+
+The `deployment_auto_approve "no_destroy"` rule in `deployments.tfdeploy.hcl` only auto-approves plans with **zero removals**. Adds and changes require manual approval in the HCP UI. Watch the run page — each round shows a new plan; click **Approve** when it's ready.
+
+Why this matters in the room: don't walk away after the first apply succeeds. The run isn't done until the run-level status flips from `deploying` to `succeeded`.
+:::
+
 When the apply completes, the run output exposes the outputs you use in the next sections — especially `kubectl_config_command`, `knowledge_base_id`, and the data-source ID map.
 
 ## Configuring kubectl (INFR-05)
