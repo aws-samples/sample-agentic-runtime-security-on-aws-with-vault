@@ -47,6 +47,11 @@ variable "rds_db_name" {
   default     = "workshop"
 }
 
+variable "bedrock_role_arn" {
+  description = "ARN of the IAM role Vault assumes to issue scoped Bedrock STS credentials."
+  type        = string
+}
+
 variable "region" {
   description = "AWS region — passed to the Vault AWS secrets engine backend configuration."
   type        = string

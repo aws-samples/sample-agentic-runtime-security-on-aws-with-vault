@@ -63,6 +63,7 @@ Vault writes one JSON object per API call to pod stdout. The fluent-bit DaemonSe
 | `rds_master_username` | `string` | `vault_root` | RDS master username |
 | `rds_master_user_secret_arn` | `string` | — | Secrets Manager ARN for RDS master password (sensitive) |
 | `rds_db_name` | `string` | `workshop` | Database name |
+| `bedrock_role_arn` | `string` | — | IAM role ARN Vault assumes for scoped Bedrock STS credentials |
 | `region` | `string` | — | AWS region for the AWS secrets engine |
 | `tags` | `map(string)` | `{}` | Resource tags |
 
@@ -97,6 +98,7 @@ component "vault_config" {
     rds_master_username                 = component.rds.master_username
     rds_master_user_secret_arn          = component.rds.master_user_secret_arn
     rds_db_name                         = component.rds.db_name
+    bedrock_role_arn                    = component.bedrock_kb_aoss.kb_role_arn
     region                              = var.region
     tags                                = var.tags
   }
@@ -111,7 +113,7 @@ component "vault_config" {
 
 **P3 — `vault_jwt_auth_backend_role.bound_claims` must be a flat `map(string)`**: The `may_act` claim in an RFC 8693 token is a JSON object, not a string. Vault evaluates `bound_claims` as string equality or glob — use `"may_act" = "*"` (glob) to require the claim is present without constraining its value. Never attempt to pass a nested object here.
 
-**P4 — AWS secrets engine `role_arns` requires at least one entry for `assumed_role` credential type**: Populate `role_arns` with the Bedrock execution role ARN from the Stacks component output in `deployments.tfdeploy.hcl`. Leaving it empty causes `vault read aws/sts/bedrock-reader` to fail at runtime with a configuration error rather than an IAM error.
+**P4 — AWS secrets engine `role_arns` requires at least one entry for `assumed_role` credential type**: `role_arns` is wired to `var.bedrock_role_arn` (sourced from `component.bedrock_kb_aoss.kb_role_arn`). Leaving it empty causes `vault read aws/sts/bedrock-reader` to fail at runtime with a configuration error rather than an IAM error.
 
 ## References
 

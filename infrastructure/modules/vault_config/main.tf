@@ -176,10 +176,7 @@ resource "vault_aws_secret_backend_role" "bedrock_reader" {
   name            = "bedrock-reader"
   credential_type = "assumed_role"
 
-  # IAM role ARN is supplied at deploy time via a policy document;
-  # Placeholder — overridden in deployments.tfdeploy.hcl via role_arns input
-  # when the bedrock_kb component ARN is available.
-  role_arns = []
+  role_arns = [var.bedrock_role_arn]
 
   policy_document = jsonencode({
     Version = "2012-10-17"

@@ -293,12 +293,13 @@ component "vault_config" {
     region                             = var.region
     cluster_endpoint                   = component.eks.cluster_endpoint
     cluster_certificate_authority_data = component.eks.cluster_certificate_authority_data
-    cluster_oidc_issuer                = component.eks.oidc_issuer_url
+    cluster_oidc_issuer                = component.eks.cluster_oidc_issuer
     ivia_oidc_discovery_url            = component.ivia.ivia_oidc_discovery_url
     rds_endpoint                       = component.rds.endpoint
     rds_master_username                = component.rds.master_username
     rds_master_user_secret_arn         = component.rds.master_user_secret_arn
     rds_db_name                        = component.rds.db_name
+    bedrock_role_arn                   = component.bedrock_kb_aoss.kb_role_arn
     tags                               = var.tags
   }
 }
