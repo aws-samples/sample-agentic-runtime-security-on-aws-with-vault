@@ -54,40 +54,18 @@ module "eks_blueprints_addons" {
   # ---------------------------------------------------------------------------
 
   # cert-manager — TLS issuer for Vault, IVIA, and ALB-fronted services.
-  # Default issuer ships with cert-manager; Vault PKI integration is deferred
-  # to Phase 3+.
-  enable_cert_manager = true
+  # Disabled until Phase 3 (Vault, IVIA) is built and needs TLS.
+  enable_cert_manager = false
 
   # external-dns — automatic Route53 record management for ALB-fronted
-  # Services. Required so attendee-visible URLs work without manual DNS.
-  enable_external_dns = true
+  # Services. Disabled until Phase 4+ (Strands agents with ALB Ingress).
+  enable_external_dns = false
 
   # AWS Load Balancer Controller — provisions ALBs from Kubernetes Ingress.
-  # replicaCount=2 keeps the mutating webhook reachable across pod restarts.
-  #
-  # `serviceMutatorWebhook.failurePolicy=Ignore` (NOT `serviceMutatorWebhookConfig` —
-  # the upstream chart has inconsistent naming: `podMutatorWebhookConfig` has the
-  # `Config` suffix but `serviceMutatorWebhook` doesn't) prevents the
-  # `mservice.elbv2.k8s.aws` webhook from blocking ALL Service apiserver
-  # mutations when LBC pod endpoints aren't yet ready. The webhook fires on
-  # every Service create regardless of type (it makes LBC the default for
-  # `type=LoadBalancer`); during first-apply, cert-manager / external-dns
-  # ClusterIP Services land in parallel with LBC install and trigger it before
-  # LBC pods are routing.
-  #
-  # Verified chart key against `helm show values eks/aws-load-balancer-controller`
-  # line 484. Default upstream value is `Fail`; `Ignore` is the workshop-safe
-  # choice — Service mutations are a convenience feature, not security.
-  # Reproduced in stack runs sdr-W2pEpnLEeDCGMZ9M and sdr-9S9G5vg4ZpSgohv2
-  # (2026-05-07/08).
-  enable_aws_load_balancer_controller = true
-  aws_load_balancer_controller = {
-    wait = true
-    set = [
-      { name = "replicaCount", value = "2" },
-      { name = "serviceMutatorWebhook.failurePolicy", value = "Ignore" },
-    ]
-  }
+  # Disabled until Phase 4+ (Strands agents with ALB Ingress). Re-enable with
+  # `wait = true`, `replicaCount = 2`, and
+  # `serviceMutatorWebhook.failurePolicy = Ignore` (NOT the `Config` suffix).
+  enable_aws_load_balancer_controller = false
 
   # ---------------------------------------------------------------------------
   # Explicitly disabled — out of scope for this workshop.
