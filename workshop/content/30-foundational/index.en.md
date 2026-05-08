@@ -37,7 +37,7 @@ Trying to retrofit cross-plane audit correlation after agents and Vault are runn
 
 Confirm you completed Phase 1's [Prerequisites module](../20-prerequisites/) before deploying:
 
-- Amazon Bedrock Nova Pro (`us.amazon.nova-pro-v1:0` cross-region inference profile) and Titan Embeddings v2 (`amazon.titan-embed-text-v2:0`) are **enabled** in your AWS account.
+- Amazon Bedrock Nova Pro (`us.amazon.nova-pro-v1:0` cross-region inference profile) and Nova 2 Multimodal Embeddings (`amazon.nova-2-multimodal-embeddings-v1:0`, us-east-1 only) are **enabled** in your AWS account.
 - EC2, Elastic IP, and OpenSearch Serverless quotas are sufficient for the workshop topology (a single NAT Gateway EIP, three m5.xlarge nodes, and 2 OCU minimum on AOSS).
 - An HCP Terraform organization and project are bootstrapped, with a variable set carrying your `admin_principal_arn` (the IAM principal that becomes the EKS cluster admin via Access Entries).
 
@@ -156,26 +156,34 @@ The Bedrock Knowledge Base is the highest-risk-surface part of Phase 2 — it st
 
 **Why split?** The Stack-level opensearch provider's `url` must reference the AOSS collection endpoint (`component.bedrock_kb_aoss.aoss_collection_endpoint`). If the same component that creates the collection also used that provider, Stacks would detect a `provider → component → provider` cycle and reject the configuration. Splitting breaks the cycle: `bedrock_kb_aoss` produces the endpoint output (no opensearch provider), `bedrock_kb_index` consumes the provider (no opensearch provider self-reference).
 
-The combined six-resource dance:
+:::alert{header="Cross-region: KB components deploy to us-east-1" type="info"}
+Amazon Nova 2 Multimodal Embeddings (`amazon.nova-2-multimodal-embeddings-v1:0`) is currently available only in **us-east-1**. The Bedrock KB, AOSS collection, S3 corpus bucket, and S3 multimodal bucket all deploy to us-east-1 via a second AWS provider (`provider.aws.kb`). Everything else (EKS, VPC, RDS, audit) stays in us-west-2. The agent in us-west-2 calls the Bedrock Retrieve API cross-region.
+:::
 
-- **3 AOSS policies** — encryption (workshop CMK), network (PUBLIC), data access (KB role + apply principal).
+The combined resource set:
+
+- **KMS CMK** — KB-specific key in us-east-1 (separate from the us-west-2 audit CMK — KMS keys are regional).
+- **3 AOSS policies** — encryption (KB CMK), network (PUBLIC), data access (KB role + apply principal).
 - **AOSS VECTORSEARCH collection** — `workshop-kb`.
-- **OpenSearch index** — Titan v2 embedding, **dimension 1024** (NOT 1536). Created via the `opensearch-project/opensearch` provider pinned **EXACT `= 2.2.0`** (Pitfall B3).
-- **IAM service role** + 4 inline policies (aoss / s3 / bedrock / kms).
+- **OpenSearch index** — Nova 2 Embeddings, **dimension 1024**. Created via `aws_cloudformation_stack` wrapping `AWS::OpenSearchServerless::Index`.
+- **IAM service role** + 5 inline policies (aoss / s3 corpus+multimodal / bedrock / kms).
 - **`time_sleep` 20s** — IAM eventual-consistency bridge (Pitfall B1).
-- **Bedrock Knowledge Base** — Titan Embeddings v2 (`amazon.titan-embed-text-v2:0`).
+- **Bedrock Knowledge Base** — Nova 2 Multimodal Embeddings (`amazon.nova-2-multimodal-embeddings-v1:0`), with `supplementalDataStorageConfiguration` pointing to the multimodal S3 bucket.
 - **3 data sources** — one per domain: HR (UC1), customers (UC2), finance (UC3).
-- **S3 corpus bucket** — `workshop-kb-corpus-<random>`, SSE-KMS with the workshop CMK, holds **8 synthetic markdown files** (every file ends with the disclaimer `*Synthetic workshop content; not from any real company.*` and email addresses use the RFC 6761 reserved `example.invalid` TLD).
+- **S3 corpus bucket** — `workshop-kb-corpus-<random>`, SSE-KMS with KB CMK, holds **8 synthetic markdown files** (every file ends with the disclaimer `*Synthetic workshop content; not from any real company.*` and email addresses use the RFC 6761 reserved `example.invalid` TLD).
+- **S3 multimodal bucket** — `workshop-kb-multimodal-<random>`, required by Nova 2 Embeddings for multimodal storage.
 
 **Triggering ingestion** is a one-time post-apply step (see "Validating the Bedrock KB ingestion" below).
 
-:::alert{header="What you just deployed (bedrock_kb_aoss + bedrock_kb_index)" type="success"}
-- **AOSS collection** — `workshop-kb` (VECTORSEARCH, encrypted with the workshop CMK)
-- **OpenSearch index** — `workshop-kb-index` (Titan v2, 1024-dim, k-NN cosine)
+:::alert{header="What you just deployed (bedrock_kb_aoss + bedrock_kb_index) — us-east-1" type="success"}
+- **KMS CMK** — `alias/workshop-kb-data` (us-east-1)
+- **AOSS collection** — `workshop-kb` (VECTORSEARCH, encrypted with KB CMK)
+- **OpenSearch index** — `bedrock-knowledge-base-default-index` (Nova 2, 1024-dim, k-NN L2)
 - **Bedrock Knowledge Base** — `workshop-kb`
 - **Data sources** — 3 (HR / customers / finance)
 - **S3 corpus bucket** — `workshop-kb-corpus-<random>` with 8 synthetic markdown files
-- **IAM service role** — `workshop-kb-role` (4 inline policies: aoss, s3, bedrock, kms)
+- **S3 multimodal bucket** — `workshop-kb-multimodal-<random>`
+- **IAM service role** — `workshop-kb-role` (5 inline policies: aoss, s3, bedrock, kms)
 :::
 
 ## Deploying via HCP Terraform
@@ -366,12 +374,12 @@ A single HCP Terraform Stacks apply just created, in dependency order:
 | `audit`      | Workshop CMK (`alias/workshop-data`), 3 audit log groups, Glue database `workshop_logs`, Athena workgroup `workshop`, results bucket |
 | `vpc`        | VPC `10.1.0.0/16`, 3 public + 3 private subnets, single NAT, S3 gateway endpoint, 6 interface endpoints                              |
 | `eks`        | Kubernetes 1.33 cluster, 3-node managed node group, 5 control-plane log types, Access Entries, 5 managed addons with Pod Identity   |
-| `addons`     | cert-manager + external-dns + AWS Load Balancer Controller (helm provider 2.17)                                                     |
+| `addons`     | External addons disabled in foundation (cert-manager, external-dns, LBC enabled in later phases)                                    |
 | `rds`        | PostgreSQL 17 single-AZ, pgaudit + connection logging, master password in Secrets Manager (workshop CMK)                            |
-| `bedrock_kb_aoss`  | AOSS VECTORSEARCH collection + 3 policies, IAM service role + 4 inline policies, S3 corpus bucket (workshop CMK SSE), 8 synthetic markdown files |
-| `bedrock_kb_index` | OpenSearch index (Titan v2 1024-dim, k-NN cosine), Bedrock Knowledge Base, 3 data sources (HR / customers / finance)              |
+| `bedrock_kb_aoss` *(us-east-1)*  | KB CMK, AOSS VECTORSEARCH collection + 3 policies, IAM service role + 5 inline policies, S3 corpus + multimodal buckets, 8 synthetic markdown files |
+| `bedrock_kb_index` *(us-east-1)* | OpenSearch index (Nova 2 Embeddings 1024-dim, k-NN L2), Bedrock Knowledge Base, 3 data sources (HR / customers / finance)         |
 
-The audit-correlation contract is **locked**: every component encrypts with the workshop CMK, the three audit log groups are pre-created with the right key, and the trace-id propagation contract is documented in [`infrastructure/docs/audit-correlation-queries.md`](https://github.com/IBM/agentic-runtime-security-aws/blob/main/infrastructure/docs/audit-correlation-queries.md).
+The audit-correlation contract is **locked**: every us-west-2 component encrypts with the workshop CMK, the three audit log groups are pre-created with the right key, and the trace-id propagation contract is documented in [`infrastructure/docs/audit-correlation-queries.md`](https://github.com/IBM/agentic-runtime-security-aws/blob/main/infrastructure/docs/audit-correlation-queries.md). The KB components in us-east-1 use a separate KB CMK (KMS keys are regional).
 
 ## Production-grade considerations
 

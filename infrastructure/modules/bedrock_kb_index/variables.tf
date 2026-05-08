@@ -27,7 +27,17 @@ variable "kb_role_arn" {
 }
 
 variable "embedding_model_arn" {
-  description = "Cohere Embed v4 CRIS ARN — populated from component.bedrock_kb_aoss.embedding_model_arn."
+  description = "Nova 2 Multimodal Embeddings model ARN — populated from component.bedrock_kb_aoss.embedding_model_arn."
+  type        = string
+}
+
+variable "kb_multimodal_bucket_arn" {
+  description = "S3 multimodal storage bucket ARN — required by Nova 2 Embeddings supplementalDataStorageConfiguration."
+  type        = string
+}
+
+variable "kb_multimodal_bucket_id" {
+  description = "S3 multimodal storage bucket name — used to construct the s3:// URI."
   type        = string
 }
 

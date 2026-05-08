@@ -135,17 +135,19 @@ component "rds" {
 component "bedrock_kb_aoss" {
   source = "./modules/bedrock_kb_aoss"
 
-  # Implicit dependency on component.audit via workshop_cmk_arn input below.
+  # Uses provider.aws.kb (us-east-1) — Nova 2 Multimodal Embeddings is
+  # us-east-1 only; AOSS + S3 corpus must be co-located with the KB.
+  # No dependency on component.audit — KB creates its own CMK in us-east-1
+  # (KMS keys are regional; the us-west-2 audit CMK can't be used cross-region).
 
   providers = {
-    aws  = provider.aws.main
+    aws  = provider.aws.kb
     time = provider.time.main
   }
 
   inputs = {
-    region           = var.region
-    workshop_cmk_arn = component.audit.workshop_cmk_arn
-    tags             = var.tags
+    region = var.kb_region
+    tags   = var.tags
   }
 }
 
@@ -157,12 +159,9 @@ component "bedrock_kb_index" {
   # ordering constraint to a reader (the time_sleep is internal to aoss).
   depends_on = [component.bedrock_kb_aoss]
 
-  # Note: no opensearch provider — the AOSS vector index is created via
-  # aws_cloudformation_stack (AWS::OpenSearchServerless::Index) using the
-  # OIDC-authenticated aws.main provider. See bedrock_kb_index/index.tf
-  # for the why.
+  # Uses provider.aws.kb (us-east-1) — co-located with AOSS + embedding model.
   providers = {
-    aws = provider.aws.main
+    aws = provider.aws.kb
   }
 
   inputs = {
@@ -171,6 +170,8 @@ component "bedrock_kb_index" {
     kb_role_arn              = component.bedrock_kb_aoss.kb_role_arn
     embedding_model_arn      = component.bedrock_kb_aoss.embedding_model_arn
     kb_corpus_bucket_arn     = component.bedrock_kb_aoss.kb_corpus_bucket_arn
+    kb_multimodal_bucket_arn = component.bedrock_kb_aoss.kb_multimodal_bucket_arn
+    kb_multimodal_bucket_id  = component.bedrock_kb_aoss.kb_multimodal_bucket_id
     tags                     = var.tags
   }
 }

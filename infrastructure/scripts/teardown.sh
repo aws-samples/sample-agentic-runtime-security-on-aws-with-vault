@@ -46,7 +46,7 @@ DEFAULT_CLUSTER=""
 # Note: workshop-athena-* (NOT workshop-athena-results) — actual bucket name has
 # no `-results` suffix; that mismatch made the sweep miss the bucket on a prior
 # teardown (audit on 2026-05-08).
-S3_BUCKET_PREFIXES=("workshop-kb-corpus" "workshop-athena")
+S3_BUCKET_PREFIXES=("workshop-kb-corpus" "workshop-kb-multimodal" "workshop-athena")
 GLUE_DB_NAMES=("workshop_logs")
 ATHENA_WG_NAMES=("workshop")
 # CW_LOG_PREFIXES set after DEFAULT_CLUSTER is resolved (below).
@@ -130,6 +130,10 @@ if [ -z "$DEFAULT_CLUSTER" ]; then
 fi
 
 CW_LOG_PREFIXES=("/workshop/" "/aws/eks/${DEFAULT_CLUSTER}/" "/aws/rds/instance/${DEFAULT_CLUSTER}-pg")
+
+# KB region — Nova 2 Multimodal Embeddings is us-east-1 only; KB components
+# (AOSS, Bedrock KB, S3 corpus/multimodal, CFN index stack) live there.
+KB_REGION="${KB_REGION:-us-east-1}"
 
 # HCP organization — source-of-truth is the `hcp_org` terraform variable in
 # infrastructure/scripts/hcp-setup/terraform.tfvars (written by bootstrap.sh
@@ -1013,14 +1017,35 @@ phase_aws_sweep() {
     step_header "Secrets Manager (RDS managed password)"
     sweep_secrets_manager || true
 
-    step_header "Bedrock Knowledge Base + data sources"
+    # KB resources live in KB_REGION (us-east-1). Temporarily swap REGION
+    # so the sweep functions hit the right region.
+    local SAVED_REGION="$REGION"
+    if [[ "$KB_REGION" != "$REGION" ]]; then
+        print_info "KB region: $KB_REGION (different from primary $REGION)"
+        REGION="$KB_REGION"
+    fi
+
+    step_header "Bedrock Knowledge Base + data sources (${REGION})"
     sweep_bedrock_kb || true
 
-    step_header "AOSS (collection + 3 policies)"
+    step_header "AOSS (collection + 3 policies) (${REGION})"
     sweep_aoss || true
 
-    step_header "S3 buckets (workshop-named)"
+    step_header "S3 buckets (workshop-named, both regions)"
     sweep_s3_buckets || true
+    if [[ "$KB_REGION" != "$SAVED_REGION" ]]; then
+        REGION="$SAVED_REGION"
+        sweep_s3_buckets || true
+    fi
+
+    step_header "CloudFormation stacks — KB region (${KB_REGION})"
+    REGION="$KB_REGION"
+    sweep_cfn_stacks || true
+
+    step_header "KMS — KB region (${KB_REGION})"
+    sweep_kms || true
+
+    REGION="$SAVED_REGION"
 
     step_header "Glue catalog DB + Athena workgroup"
     sweep_glue_athena || true
@@ -1235,19 +1260,19 @@ phase_verify_zero_residuals() {
     [[ "$rds_sgs" == "None" ]] && rds_sgs=""
     _check "RDS subnet groups" "$rds_sgs"
 
-    # AOSS collections
+    # AOSS collections (KB_REGION)
     local aoss
-    aoss=$(aws opensearchserverless list-collections --region "$REGION" \
+    aoss=$(aws opensearchserverless list-collections --region "$KB_REGION" \
         --query 'collectionSummaries[].name' --output text 2>/dev/null)
     [[ "$aoss" == "None" ]] && aoss=""
-    _check "AOSS collections" "$aoss"
+    _check "AOSS collections ($KB_REGION)" "$aoss"
 
-    # Bedrock KBs
+    # Bedrock KBs (KB_REGION)
     local kbs
-    kbs=$(aws bedrock-agent list-knowledge-bases --region "$REGION" \
+    kbs=$(aws bedrock-agent list-knowledge-bases --region "$KB_REGION" \
         --query 'knowledgeBaseSummaries[].name' --output text 2>/dev/null)
     [[ "$kbs" == "None" ]] && kbs=""
-    _check "Bedrock knowledge bases" "$kbs"
+    _check "Bedrock knowledge bases ($KB_REGION)" "$kbs"
 
     # S3 buckets
     local s3=""

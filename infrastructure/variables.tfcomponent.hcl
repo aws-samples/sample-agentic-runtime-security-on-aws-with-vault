@@ -16,6 +16,11 @@ variable "region" {
   description = "AWS region for deployment. Canonical region — every component receives this. The string literal MUST appear only in deployments.tfdeploy.hcl."
 }
 
+variable "kb_region" {
+  type        = string
+  description = "AWS region for Bedrock KB components (AOSS, KB, corpus). Nova 2 Multimodal Embeddings is us-east-1 only; everything else stays in var.region."
+}
+
 variable "role_arn" {
   type        = string
   ephemeral   = true

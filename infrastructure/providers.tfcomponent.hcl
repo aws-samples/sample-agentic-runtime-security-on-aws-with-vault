@@ -76,6 +76,20 @@ provider "aws" "main" {
   }
 }
 
+# KB AWS provider — same OIDC auth, different region (us-east-1).
+# Nova 2 Multimodal Embeddings is us-east-1 only; Bedrock KB + AOSS
+# must be co-located with the embedding model.
+provider "aws" "kb" {
+  config {
+    region = var.kb_region
+
+    assume_role_with_web_identity {
+      role_arn           = var.role_arn
+      web_identity_token = var.identity_token
+    }
+  }
+}
+
 # Kubernetes provider — token-based auth (required for Stacks remote execution).
 provider "kubernetes" "main" {
   config {

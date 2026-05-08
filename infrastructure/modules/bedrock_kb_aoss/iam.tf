@@ -4,7 +4,7 @@
 # The KB service role is assumed by bedrock.amazonaws.com and grants:
 #   - aoss:APIAccessAll on the AOSS collection
 #   - s3:GetObject + s3:ListBucket on the corpus bucket
-#   - bedrock:InvokeModel on the Cohere Embed v4 embedding model (via CRIS)
+#   - bedrock:InvokeModel on Nova 2 Multimodal Embeddings (direct, us-east-1 only)
 #   - kms:Decrypt + kms:GenerateDataKey + kms:DescribeKey on workshop CMK
 #
 # The role + policies live here (not in bedrock_kb_index) because the data
@@ -60,7 +60,7 @@ resource "aws_iam_role_policy" "kb_aoss" {
   })
 }
 
-# 2/4 — S3 read access on the corpus bucket.
+# 2/5 — S3 access on corpus bucket (read) + multimodal bucket (read/write).
 resource "aws_iam_role_policy" "kb_s3" {
   depends_on = [time_sleep.wait_for_kb_role_propagation]
   name       = "${var.kb_name}-s3"
@@ -79,19 +79,31 @@ resource "aws_iam_role_policy" "kb_s3" {
           aws_s3_bucket.kb_corpus.arn,
           "${aws_s3_bucket.kb_corpus.arn}/*"
         ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:ListBucket"
+        ]
+        Resource = [
+          aws_s3_bucket.kb_multimodal.arn,
+          "${aws_s3_bucket.kb_multimodal.arn}/*"
+        ]
       }
     ]
   })
 }
 
-# Embedding model — Cohere Embed v4 via cross-region inference profile (CRIS).
-# SCP blocks direct foundation-model invocation; CRIS is the only path that
-# works in this account (same pattern as Nova Pro for the LLM).
-data "aws_bedrock_inference_profile" "embedding" {
-  inference_profile_id = "us.cohere.embed-v4:0"
+# Embedding model — Amazon Nova 2 Multimodal Embeddings (us-east-1 only).
+# No CRIS exists for this model; direct foundation model ARN is used.
+# SCP allows `amazon.nova-2-multimodal-embeddings-*`.
+data "aws_bedrock_foundation_model" "embedding" {
+  model_id = "amazon.nova-2-multimodal-embeddings-v1:0"
 }
 
-# 3/4 — Bedrock InvokeModel + GetInferenceProfile for the embedding CRIS.
+# 3/4 — Bedrock InvokeModel on the embedding model.
 resource "aws_iam_role_policy" "kb_bedrock" {
   depends_on = [time_sleep.wait_for_kb_role_propagation]
   name       = "${var.kb_name}-bedrock"
@@ -103,15 +115,7 @@ resource "aws_iam_role_policy" "kb_bedrock" {
       {
         Effect   = "Allow"
         Action   = ["bedrock:InvokeModel"]
-        Resource = concat(
-          [data.aws_bedrock_inference_profile.embedding.inference_profile_arn],
-          data.aws_bedrock_inference_profile.embedding.models[*].model_arn,
-        )
-      },
-      {
-        Effect   = "Allow"
-        Action   = ["bedrock:GetInferenceProfile"]
-        Resource = data.aws_bedrock_inference_profile.embedding.inference_profile_arn
+        Resource = data.aws_bedrock_foundation_model.embedding.model_arn
       }
     ]
   })
@@ -133,7 +137,7 @@ resource "aws_iam_role_policy" "kb_kms" {
           "kms:GenerateDataKey",
           "kms:DescribeKey"
         ]
-        Resource = var.workshop_cmk_arn
+        Resource = aws_kms_key.kb.arn
       }
     ]
   })

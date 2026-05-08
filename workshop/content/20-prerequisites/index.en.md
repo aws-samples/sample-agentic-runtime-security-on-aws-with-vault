@@ -8,7 +8,11 @@ Before deploying any infrastructure, set up your environment using the workshop'
 ## AWS account
 
 - Active AWS account with administrator-equivalent permissions OR the IAM permissions enumerated by `check-prerequisites.sh`'s IAM permissions check
-- **Bedrock model access** — the workshop uses **Amazon Nova Pro** invoked via the cross-region inference profile id `us.amazon.nova-pro-v1:0` in `us-west-2`. Amazon's own Nova family is generally enabled by default in fresh AWS accounts (no click-through acceptance), unlike Anthropic Claude models. If `check-prerequisites.sh` reports access denied, request access via the [Bedrock console model-access page](https://us-west-2.console.aws.amazon.com/bedrock/home#/modelaccess) and select "Amazon Nova Pro". The bare model id `amazon.nova-pro-v1:0` is rejected for on-demand throughput — always use the `us.` prefix. **Cost note:** Nova Pro on-demand pricing (~$0.80 / 1M input tokens, ~$3.20 / 1M output tokens) is roughly 25% of Claude Sonnet 4.x for comparable workshop traffic; total LLM cost for a single workshop run is typically under $0.10.
+- **Bedrock model access** — the workshop uses two Amazon Nova models:
+  - **Amazon Nova Pro** (LLM) — invoked via cross-region inference profile `us.amazon.nova-pro-v1:0` in `us-west-2`.
+  - **Amazon Nova 2 Multimodal Embeddings** — invoked directly as `amazon.nova-2-multimodal-embeddings-v1:0` in **us-east-1** (the only region where this model is available). The Bedrock Knowledge Base, AOSS collection, and corpus bucket deploy to us-east-1 for this reason.
+
+  Amazon's own Nova family is generally enabled by default in fresh AWS accounts (no click-through acceptance), unlike Anthropic Claude models. If `check-prerequisites.sh` reports access denied, request access via the Bedrock console model-access page in both [us-west-2](https://us-west-2.console.aws.amazon.com/bedrock/home#/modelaccess) and [us-east-1](https://us-east-1.console.aws.amazon.com/bedrock/home#/modelaccess). **Cost note:** Nova Pro on-demand pricing (~$0.80 / 1M input tokens, ~$3.20 / 1M output tokens) is roughly 25% of Claude Sonnet 4.x for comparable workshop traffic; total LLM cost for a single workshop run is typically under $0.10.
 
 ## HCP Terraform
 

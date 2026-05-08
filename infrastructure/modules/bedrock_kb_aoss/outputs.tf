@@ -38,8 +38,18 @@ output "kb_corpus_bucket_id" {
 }
 
 output "embedding_model_arn" {
-  description = "ARN of the Cohere Embed v4 cross-region inference profile. Consumed by bedrock_kb_index for the KB vector_knowledge_base_configuration."
-  value       = data.aws_bedrock_inference_profile.embedding.inference_profile_arn
+  description = "ARN of the Nova 2 Multimodal Embeddings foundation model. Consumed by bedrock_kb_index for the KB vector_knowledge_base_configuration."
+  value       = data.aws_bedrock_foundation_model.embedding.model_arn
+}
+
+output "kb_multimodal_bucket_arn" {
+  description = "ARN of the S3 multimodal storage bucket. Required by Nova 2 Embeddings supplementalDataStorageConfiguration."
+  value       = aws_s3_bucket.kb_multimodal.arn
+}
+
+output "kb_multimodal_bucket_id" {
+  description = "Name of the S3 multimodal storage bucket."
+  value       = aws_s3_bucket.kb_multimodal.id
 }
 
 output "iam_propagate_id" {

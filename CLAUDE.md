@@ -4,8 +4,8 @@
 
 - **Karpenter is OUT of scope.** EKS cluster runs with managed node group only. No Karpenter NodePool, EC2NodeClass, controller install, or Karpenter Blueprints reference. Global `~/.claude/CLAUDE.md` mandate to use Karpenter Blueprints does NOT apply to this project.
 - **ArgoCD is OUT of scope.** No GitOps controller. Deploys are Helm-direct or Terraform Stacks. No `argo-cd` Helm release, no Application/AppProject CRDs.
-- **Bedrock LLM = Amazon Nova Pro** via cross-region inference profile id `us.amazon.nova-pro-v1:0` (NOT the bare `amazon.nova-pro-v1:0` — Bedrock rejects it for on-demand throughput). Embedding model for Bedrock KB is `amazon.titan-embed-text-v2:0` (unchanged).
-- **Canonical region contract**: no string literal `us-west-2` outside `infrastructure/deployments.tfdeploy.hcl`. All other modules interpolate `var.region`.
+- **Bedrock LLM = Amazon Nova Pro** via cross-region inference profile id `us.amazon.nova-pro-v1:0` (NOT the bare `amazon.nova-pro-v1:0` — Bedrock rejects it for on-demand throughput). **Embedding model = Amazon Nova 2 Multimodal Embeddings** (`amazon.nova-2-multimodal-embeddings-v1:0`, direct model ARN, no CRIS). The embedding model is **us-east-1 only** — KB components (AOSS, Bedrock KB, S3 corpus/multimodal) deploy to us-east-1 via `provider.aws.kb`; everything else stays in us-west-2.
+- **Canonical region contract**: no string literal `us-west-2` or `us-east-1` outside `infrastructure/deployments.tfdeploy.hcl`. All other modules interpolate `var.region` (or `var.kb_region` for KB components).
 
 ## Workshop content conventions
 

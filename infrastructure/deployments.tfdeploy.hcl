@@ -78,6 +78,9 @@ deployment "usw2" {
     vpc_cidr     = "10.1.0.0/16"
     azs          = ["us-west-2a", "us-west-2b", "us-west-2c"]
 
+    # Bedrock KB region — Nova 2 Multimodal Embeddings is us-east-1 only.
+    kb_region = "us-east-1"
+
     # Audit retention (workshop ephemeral; 7-day default)
     audit_retention_days = 7
 

@@ -19,10 +19,6 @@ variable "kb_collection_name" {
   default     = "workshop-kb"
 }
 
-variable "workshop_cmk_arn" {
-  description = "Workshop CMK ARN from the audit module. Used for AOSS encryption policy KmsARN and S3 corpus bucket SSE-KMS — matches RDS + log group encryption context."
-  type        = string
-}
 
 variable "tags" {
   description = "Tags applied to all taggable resources in this module."

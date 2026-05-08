@@ -1,7 +1,9 @@
 ################################################################################
-# bedrock_kb_aoss Module — S3 corpus bucket + SSE-KMS + corpus upload.
+# bedrock_kb_aoss Module — S3 corpus bucket + multimodal bucket + corpus upload.
 #
-# Bucket holds the synthetic workshop corpus (HR + customers + finance).
+# Corpus bucket holds the synthetic workshop corpus (HR + customers + finance).
+# Multimodal bucket is required by Nova 2 Multimodal Embeddings as the
+# supplementalDataStorageConfiguration for the KB.
 # 8 markdown files under sample_corpus/{hr,customers,finance}/ are uploaded
 # via aws_s3_object for_each over fileset() so adding/removing corpus files
 # is a Terraform-tracked operation.
@@ -9,21 +11,47 @@
 
 resource "aws_s3_bucket" "kb_corpus" {
   bucket_prefix = "${var.kb_name}-corpus-"
-  force_destroy = true # Workshop ephemeral; teardown deletes everything.
+  force_destroy = true
   tags          = var.tags
 }
 
-# SSE-KMS using workshop CMK (matches RDS storage + AOSS encryption context).
 resource "aws_s3_bucket_server_side_encryption_configuration" "kb_corpus" {
   bucket = aws_s3_bucket.kb_corpus.id
 
   rule {
     apply_server_side_encryption_by_default {
       sse_algorithm     = "aws:kms"
-      kms_master_key_id = var.workshop_cmk_arn
+      kms_master_key_id = aws_kms_key.kb.arn
     }
     bucket_key_enabled = true
   }
+}
+
+resource "aws_s3_bucket" "kb_multimodal" {
+  bucket_prefix = "${var.kb_name}-multimodal-"
+  force_destroy = true
+  tags          = var.tags
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "kb_multimodal" {
+  bucket = aws_s3_bucket.kb_multimodal.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm     = "aws:kms"
+      kms_master_key_id = aws_kms_key.kb.arn
+    }
+    bucket_key_enabled = true
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "kb_multimodal" {
+  bucket = aws_s3_bucket.kb_multimodal.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
 }
 
 # Block all public access — corpus stays private; KB role reads via IAM.

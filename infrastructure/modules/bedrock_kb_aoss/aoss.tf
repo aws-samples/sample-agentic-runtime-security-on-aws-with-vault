@@ -14,7 +14,7 @@
 #   B1 — IAM eventual consistency (time_sleep in main.tf).
 #   B2 — AOSS does NOT auto-create the index; bedrock_kb_index handles it.
 #   B3 — opensearch-project/opensearch provider pinned EXACT = 2.2.0 at Stack level.
-#   B4 — Titan v2 dimension is 1024 (handled in bedrock_kb_index/index.tf).
+#   B4 — Nova 2 Embeddings dimension is 1024 (handled in bedrock_kb_index/index.tf).
 ################################################################################
 
 terraform {
@@ -47,8 +47,23 @@ data "aws_iam_session_context" "this" {
 }
 
 ################################################################################
-# 1. AOSS encryption policy — workshop CMK (NOT AWS-owned key).
-#    Matches RDS + log group encryption context per Phase 2 KMS reuse decision.
+# KMS CMK for KB resources (AOSS encryption + S3 SSE).
+# Separate from the audit module's CMK because KMS keys are regional — KB
+# components live in us-east-1 while audit lives in us-west-2.
+################################################################################
+resource "aws_kms_key" "kb" {
+  description         = "KB CMK (AOSS + S3 corpus/multimodal encryption)"
+  enable_key_rotation = true
+  tags                = var.tags
+}
+
+resource "aws_kms_alias" "kb" {
+  name          = "alias/${var.kb_name}-data"
+  target_key_id = aws_kms_key.kb.key_id
+}
+
+################################################################################
+# 1. AOSS encryption policy — KB CMK.
 ################################################################################
 resource "aws_opensearchserverless_security_policy" "kb_encryption" {
   name = "${var.kb_name}-enc"
@@ -61,7 +76,7 @@ resource "aws_opensearchserverless_security_policy" "kb_encryption" {
       }
     ]
     AWSOwnedKey = false
-    KmsARN      = var.workshop_cmk_arn
+    KmsARN      = aws_kms_key.kb.arn
   })
 }
 
