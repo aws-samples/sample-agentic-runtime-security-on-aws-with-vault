@@ -1,0 +1,40 @@
+################################################################################
+# Vault Module — Variables
+################################################################################
+
+variable "region" {
+  description = "AWS region where Vault and its KMS unseal key are deployed. Interpolated into Helm values (seal stanza) and IAM resources."
+  type        = string
+}
+
+variable "cluster_name" {
+  description = "EKS cluster name. Used for the Pod Identity association and the KMS unseal IAM role name prefix."
+  type        = string
+}
+
+variable "cluster_endpoint" {
+  description = "EKS cluster API server endpoint. Passed through to kubernetes/helm provider configs in the Stacks component."
+  type        = string
+}
+
+variable "cluster_certificate_authority_data" {
+  description = "Base64-encoded certificate authority data for the EKS cluster. Used by kubernetes/helm provider authentication."
+  type        = string
+  sensitive   = true
+}
+
+variable "oidc_provider_arn" {
+  description = "ARN of the IAM OIDC provider associated with the EKS cluster. Retained for forward compatibility; Vault itself uses Pod Identity (not IRSA)."
+  type        = string
+}
+
+variable "audit_log_group_names" {
+  description = "Map of audit-source name → CloudWatch log group name from the audit component. Keys: vault-audit, ivia-decision, agent-trace. Available for future fluent-bit configuration in this module."
+  type        = map(string)
+}
+
+variable "tags" {
+  description = "Tags applied to all AWS resources created by this module."
+  type        = map(string)
+  default     = {}
+}
