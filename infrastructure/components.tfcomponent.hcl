@@ -242,36 +242,37 @@ component "vault" {
 }
 
 #-------------------------------------------------------------------------------
-# IBM Verify Identity Access Component (Wave 4) — TEMPORARILY DISABLED
-# Re-enable when icr_entitlement_key is available (IVIA can't pull images
-# from icr.io without it). Also re-enable isva_config + restapi provider.
+# IBM Verify Identity Access Component (Wave 4)
+# Depends on eks (cluster creds), audit (log groups), addons (LBC for ALB),
+# rds (PostgreSQL backend), vault (OIDC seam target).
+# Deploys IVIA 11.0.2 OIDC provider via raw kubernetes_* manifests.
 #-------------------------------------------------------------------------------
-# component "ivia" {
-#   source = "./modules/verify_access"
-#
-#   providers = {
-#     aws        = provider.aws.main
-#     kubernetes = provider.kubernetes.main
-#     random     = provider.random.main
-#     time       = provider.time.main
-#   }
-#
-#   inputs = {
-#     region                     = var.region
-#     cluster_name               = component.eks.cluster_name
-#     rds_endpoint               = component.rds.endpoint
-#     rds_address                = component.rds.address
-#     rds_port                   = component.rds.port
-#     rds_master_username        = component.rds.master_username
-#     rds_master_user_secret_arn = component.rds.master_user_secret_arn
-#     rds_db_name                = component.rds.db_name
-#     vault_endpoint             = component.vault.vault_endpoint
-#     audit_log_group_names      = component.audit.audit_log_group_names
-#     addons_ready               = component.addons.aws_load_balancer_controller_release
-#     icr_entitlement_key        = var.icr_entitlement_key
-#     tags                       = var.tags
-#   }
-# }
+component "ivia" {
+  source = "./modules/verify_access"
+
+  providers = {
+    aws        = provider.aws.main
+    kubernetes = provider.kubernetes.main
+    random     = provider.random.main
+    time       = provider.time.main
+  }
+
+  inputs = {
+    region                     = var.region
+    cluster_name               = component.eks.cluster_name
+    rds_endpoint               = component.rds.endpoint
+    rds_address                = component.rds.address
+    rds_port                   = component.rds.port
+    rds_master_username        = component.rds.master_username
+    rds_master_user_secret_arn = component.rds.master_user_secret_arn
+    rds_db_name                = component.rds.db_name
+    vault_endpoint             = component.vault.vault_endpoint
+    audit_log_group_names      = component.audit.audit_log_group_names
+    addons_ready               = component.addons.aws_load_balancer_controller_release
+    icr_entitlement_key        = var.icr_entitlement_key
+    tags                       = var.tags
+  }
+}
 
 #-------------------------------------------------------------------------------
 # Vault Config Component (Wave 5)
@@ -307,25 +308,26 @@ component "vault_config" {
 }
 
 #-------------------------------------------------------------------------------
-# IVIA Config Component (Wave 5) — TEMPORARILY DISABLED
-# Re-enable together with ivia component + restapi provider.
+# IVIA Config Component (Wave 5 — after vault_config)
+# Registers OAuth clients, CIBA policy, RAR types, and JWT signing key in IVIA
+# via the restapi provider against the IVIA Config Service REST API.
 #-------------------------------------------------------------------------------
-# component "isva_config" {
-#   source = "./modules/isva_config"
-#
-#   depends_on = [component.vault_config]
-#
-#   providers = {
-#     restapi = provider.restapi.main
-#   }
-#
-#   inputs = {
-#     ivia_service_endpoint      = component.ivia.ivia_service_endpoint
-#     vault_config_jwt_auth_path = component.vault_config.jwt_auth_path
-#     ivia_admin_username        = var.ivia_admin_username
-#     ivia_admin_password        = var.ivia_admin_password
-#   }
-# }
+component "isva_config" {
+  source = "./modules/isva_config"
+
+  depends_on = [component.vault_config]
+
+  providers = {
+    restapi = provider.restapi.main
+  }
+
+  inputs = {
+    ivia_service_endpoint      = component.ivia.ivia_service_endpoint
+    vault_config_jwt_auth_path = component.vault_config.jwt_auth_path
+    ivia_admin_username        = var.ivia_admin_username
+    ivia_admin_password        = var.ivia_admin_password
+  }
+}
 
 #-------------------------------------------------------------------------------
 # UC1 Agent Component (Wave 6)

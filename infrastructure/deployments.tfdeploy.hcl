@@ -94,6 +94,9 @@ deployment "usw2" {
       ManagedBy   = "terraform-stacks"
     }
 
+    # IBM Container Registry entitlement key for IVIA images
+    icr_entitlement_key = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJJQk0gTWFya2V0cGxhY2UiLCJpYXQiOjE3NzgyODQwNDksImp0aSI6IjZkZjJkNWY5M2NlYjRmZWE5YThlNWM2ODI5MWM3MzQ2In0.UHv4IX0FFa7ASBWf4Txclhfz-52ZTjMwixXdFxtAWsA"
+
     # UC1 Agent image — attendees set this after ECR push (Phase 4 lab step).
     # Replace with the actual ECR URI: <account>.dkr.ecr.us-west-2.amazonaws.com/uc1-agent:<tag>
     uc1_agent_image = "<placeholder-ecr-uri>"
