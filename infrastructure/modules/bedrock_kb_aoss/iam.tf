@@ -4,7 +4,7 @@
 # The KB service role is assumed by bedrock.amazonaws.com and grants:
 #   - aoss:APIAccessAll on the AOSS collection
 #   - s3:GetObject + s3:ListBucket on the corpus bucket
-#   - bedrock:InvokeModel on the Titan Text Embeddings v2 foundation model
+#   - bedrock:InvokeModel on the Cohere Embed v4 embedding model (via CRIS)
 #   - kms:Decrypt + kms:GenerateDataKey + kms:DescribeKey on workshop CMK
 #
 # The role + policies live here (not in bedrock_kb_index) because the data
@@ -84,9 +84,11 @@ resource "aws_iam_role_policy" "kb_s3" {
   })
 }
 
-# Embedding model lookup — Titan Text Embeddings v2 (1024-dim).
-data "aws_bedrock_foundation_model" "embedding" {
-  model_id = "amazon.titan-embed-text-v2:0"
+# Embedding model — Cohere Embed v4 via cross-region inference profile (CRIS).
+# SCP blocks direct foundation-model invocation; CRIS is the only path that
+# works in this account (same pattern as Nova Pro for the LLM).
+data "aws_bedrock_inference_profile" "embedding" {
+  inference_profile_id = "us.cohere.embed-v4:0"
 }
 
 # 3/4 — Bedrock InvokeModel on the embedding model.
@@ -101,7 +103,7 @@ resource "aws_iam_role_policy" "kb_bedrock" {
       {
         Effect   = "Allow"
         Action   = ["bedrock:InvokeModel"]
-        Resource = data.aws_bedrock_foundation_model.embedding.model_arn
+        Resource = data.aws_bedrock_inference_profile.embedding.models[*].model_arn
       }
     ]
   })

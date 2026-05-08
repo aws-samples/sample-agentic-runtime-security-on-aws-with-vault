@@ -19,7 +19,7 @@
 #
 # Pitfalls preserved:
 #   B2 — AOSS does NOT auto-create the index for KB; we declare it here.
-#   B4 — Titan Text Embeddings v2 dimension is 1024 (NOT 1536; v1 was 1536).
+#   B4 — Cohere Embed v4 default dimension is 1024 (same as Titan v2).
 ################################################################################
 
 terraform {
@@ -35,7 +35,7 @@ terraform {
 # Vector index for the Bedrock Knowledge Base.
 #
 #   Knn = true / KnnAlgoParamEfSearch = 512 — k-NN search tuning.
-#   Dimension = 1024 — Titan Text Embeddings v2 (NOT 1536; Pitfall B4).
+#   Dimension = 1024 — Cohere Embed v4 default (same as Titan v2; Pitfall B4).
 #   Method.Engine = faiss / SpaceType = l2 — Bedrock KB requirement.
 #
 # No depends_on on the AOSS collection — that's enforced cross-component
@@ -70,7 +70,7 @@ resource "aws_cloudformation_stack" "kb_index" {
             Properties = {
               "bedrock-knowledge-base-default-vector" = {
                 Type      = "knn_vector"
-                Dimension = 1024 # Titan v2; Titan v1 was 1536 — Pitfall B4.
+                Dimension = 1024 # Cohere Embed v4 default; Pitfall B4.
                 Method = {
                   Name      = "hnsw"
                   Engine    = "faiss"

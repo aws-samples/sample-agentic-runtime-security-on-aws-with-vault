@@ -27,7 +27,7 @@ variable "kb_role_arn" {
 }
 
 variable "embedding_model_arn" {
-  description = "Titan v2 embedding model ARN — populated from component.bedrock_kb_aoss.embedding_model_arn."
+  description = "Cohere Embed v4 CRIS ARN — populated from component.bedrock_kb_aoss.embedding_model_arn."
   type        = string
 }
 
