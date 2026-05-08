@@ -96,6 +96,40 @@ variable "icr_entitlement_key" {
 }
 
 #-------------------------------------------------------------------------------
+# Vault Configuration
+# vault_token: Vault root/initial token used ONLY for bootstrap config in
+# vault_config component. Never used by UC agents (they use K8s auth).
+# Ephemeral = true so the token is not stored in Stacks state.
+# NOTE: rds_master_password is NOT here — vault_config fetches it from
+#       Secrets Manager via rds_master_user_secret_arn + data source.
+#-------------------------------------------------------------------------------
+
+variable "vault_token" {
+  type        = string
+  sensitive   = true
+  ephemeral   = true
+  description = "Vault root token for initial vault_config bootstrap. Ephemeral — not stored in Stacks state. Rotated after first apply."
+}
+
+#-------------------------------------------------------------------------------
+# IVIA Admin Credentials
+# Used by the restapi provider in isva_config component (Wave 5) to
+# authenticate to the IVIA Config Service REST API.
+#-------------------------------------------------------------------------------
+
+variable "ivia_admin_username" {
+  type        = string
+  description = "IVIA admin username for the Config Service REST API (default: admin)."
+  default     = "admin"
+}
+
+variable "ivia_admin_password" {
+  type        = string
+  sensitive   = true
+  description = "IVIA admin password for the Config Service REST API. Provided via HCP Terraform variable set."
+}
+
+#-------------------------------------------------------------------------------
 # Resource Tags
 #-------------------------------------------------------------------------------
 

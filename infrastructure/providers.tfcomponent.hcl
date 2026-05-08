@@ -58,6 +58,19 @@ required_providers {
     source  = "hashicorp/random"
     version = "~> 3.0"
   }
+
+  # Vault provider — required by vault_config component (Wave 5).
+  vault = {
+    source  = "hashicorp/vault"
+    version = "~> 4.0"
+  }
+
+  # restapi provider — required by isva_config component (Wave 5).
+  # Mastercard/restapi manages IVIA Config Service REST API objects.
+  restapi = {
+    source  = "Mastercard/restapi"
+    version = "~> 1.19"
+  }
 }
 
 #-------------------------------------------------------------------------------
@@ -134,4 +147,29 @@ provider "time" "main" {
 # Random provider (required by addons + rds modules for password / suffix generation).
 provider "random" "main" {
   config {}
+}
+
+# Vault provider — Vault address is the in-cluster service DNS.
+# vault_token is the root/initial token used only for bootstrap configuration;
+# agents use short-lived tokens issued by the Kubernetes auth backend.
+provider "vault" "main" {
+  config {
+    address = "http://vault.vault.svc.cluster.local:8200"
+    token   = var.vault_token
+  }
+}
+
+# restapi provider — IVIA Config Service REST API.
+# uri uses the ivia ClusterIP service endpoint (no scheme — provider prepends https://).
+# Pitfall 5: insecure=true required for self-signed IVIA certificate (workshop only).
+provider "restapi" "main" {
+  config {
+    uri      = "https://${component.ivia.ivia_service_endpoint}"
+    insecure = true
+    headers = {
+      "Content-Type" = "application/json"
+    }
+    username = var.ivia_admin_username
+    password = var.ivia_admin_password
+  }
 }

@@ -12,6 +12,8 @@
 #           bedrock_kb_index (bedrock_kb_aoss)
 #   Wave 3: vault (eks + audit + addons)
 #   Wave 4: ivia (eks + rds + vault + audit + addons)
+#   Wave 5: vault_config (vault + eks + rds + ivia),
+#           isva_config  (ivia + vault_config)
 #
 # Per HCP Stacks docs, component output references in `inputs` are sufficient
 # to express ordering; explicit `depends_on` is reserved for non-obvious
@@ -266,5 +268,62 @@ component "ivia" {
     audit_log_group_names      = component.audit.audit_log_group_names
     icr_entitlement_key        = var.icr_entitlement_key
     tags                       = var.tags
+  }
+}
+
+#-------------------------------------------------------------------------------
+# Vault Config Component (Wave 5)
+# Configures Vault backends after Vault is running:
+#   - Kubernetes auth (CONF-01), JWT auth (CONF-02), PostgreSQL secrets engine
+#     (CONF-03), AWS secrets engine (CONF-04), audit device (PLAT-05).
+# RDS password is NOT a plain stack variable — vault_config fetches it from
+# Secrets Manager via rds_master_user_secret_arn + data.aws_secretsmanager_secret_version.
+# Pitfall 8: RDS output names use NO prefix — component.rds.endpoint,
+#            component.rds.master_username, etc. (NOT component.rds.rds_endpoint).
+#-------------------------------------------------------------------------------
+component "vault_config" {
+  source = "./modules/vault_config"
+
+  providers = {
+    vault = provider.vault.main
+    aws   = provider.aws.main
+  }
+
+  inputs = {
+    region                             = var.region
+    cluster_endpoint                   = component.eks.cluster_endpoint
+    cluster_certificate_authority_data = component.eks.cluster_certificate_authority_data
+    cluster_oidc_issuer                = component.eks.oidc_issuer_url
+    ivia_oidc_discovery_url            = component.ivia.ivia_oidc_discovery_url
+    rds_endpoint                       = component.rds.endpoint
+    rds_master_username                = component.rds.master_username
+    rds_master_user_secret_arn         = component.rds.master_user_secret_arn
+    rds_db_name                        = component.rds.db_name
+    tags                               = var.tags
+  }
+}
+
+#-------------------------------------------------------------------------------
+# IVIA Config Component (Wave 5 — after vault_config)
+# Registers OAuth clients, CIBA policy, RAR types, and JWT signing key in IVIA
+# via the restapi provider against the IVIA Config Service REST API.
+# explicit depends_on on vault_config ensures Vault JWT auth is configured
+# before IVIA OAuth clients are registered (IVIA validates against Vault JWKS
+# during client registration in some policy configurations).
+#-------------------------------------------------------------------------------
+component "isva_config" {
+  source = "./modules/isva_config"
+
+  depends_on = [component.vault_config]
+
+  providers = {
+    restapi = provider.restapi.main
+  }
+
+  inputs = {
+    ivia_service_endpoint      = component.ivia.ivia_service_endpoint
+    vault_config_jwt_auth_path = component.vault_config.jwt_auth_path
+    ivia_admin_username        = var.ivia_admin_username
+    ivia_admin_password        = var.ivia_admin_password
   }
 }
