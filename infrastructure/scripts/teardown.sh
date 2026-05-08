@@ -38,14 +38,15 @@ HCP_PROJECT_NAME="Agentic Runtime Security"
 HCP_VARSET_NAME="agentic-runtime-stacks-config"
 TFE_API="https://app.terraform.io/api/v2"
 
-# Default cluster — workshop is single-region single-cluster.
-DEFAULT_CLUSTER="agentic-runtime-usw2"
+# Default cluster — resolved from infrastructure/deployments.tfdeploy.hcl.
+# Workshop is single-region single-cluster. Override with $CLUSTER_NAME env var.
+DEFAULT_CLUSTER=""
 
 # Known name-prefixes the workshop uses (for resources without tag visibility).
 S3_BUCKET_PREFIXES=("workshop-kb-corpus" "workshop-athena-results")
 GLUE_DB_NAMES=("workshop_logs")
 ATHENA_WG_NAMES=("workshop")
-CW_LOG_PREFIXES=("/workshop/" "/aws/eks/${DEFAULT_CLUSTER}/" "/aws/rds/instance/${DEFAULT_CLUSTER}-pg")
+# CW_LOG_PREFIXES set after DEFAULT_CLUSTER is resolved (below).
 
 #-------------------------------------------------------------------------------
 # Colors + print helpers
@@ -103,18 +104,29 @@ fi
 # Region resolution (canonical contract: only deployments.tfdeploy.hcl carries
 # the literal "us-west-2" — everything else reads it from there or $AWS_REGION).
 #-------------------------------------------------------------------------------
+TF_DEPLOY="${REPO_ROOT}/infrastructure/deployments.tfdeploy.hcl"
+
 REGION="${AWS_REGION:-}"
-if [ -z "$REGION" ]; then
-    TF_DEPLOY="${REPO_ROOT}/infrastructure/deployments.tfdeploy.hcl"
-    if [ -f "$TF_DEPLOY" ]; then
-        REGION=$(grep -E '^\s*region\s*=\s*"' "$TF_DEPLOY" 2>/dev/null \
-            | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
-    fi
+if [ -z "$REGION" ] && [ -f "$TF_DEPLOY" ]; then
+    REGION=$(grep -E '^\s*region\s*=\s*"' "$TF_DEPLOY" 2>/dev/null \
+        | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
 fi
 if [ -z "$REGION" ]; then
-    echo -e "${RED}Error: could not resolve region. Set AWS_REGION.${NC}" >&2
+    echo -e "${RED}Error: could not resolve region from deployments.tfdeploy.hcl or AWS_REGION.${NC}" >&2
     exit 1
 fi
+
+DEFAULT_CLUSTER="${CLUSTER_NAME:-}"
+if [ -z "$DEFAULT_CLUSTER" ] && [ -f "$TF_DEPLOY" ]; then
+    DEFAULT_CLUSTER=$(grep -E '^\s*cluster_name\s*=\s*"' "$TF_DEPLOY" 2>/dev/null \
+        | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+fi
+if [ -z "$DEFAULT_CLUSTER" ]; then
+    echo -e "${RED}Error: could not resolve cluster_name from deployments.tfdeploy.hcl or CLUSTER_NAME.${NC}" >&2
+    exit 1
+fi
+
+CW_LOG_PREFIXES=("/workshop/" "/aws/eks/${DEFAULT_CLUSTER}/" "/aws/rds/instance/${DEFAULT_CLUSTER}-pg")
 
 #-------------------------------------------------------------------------------
 # TFE token loader

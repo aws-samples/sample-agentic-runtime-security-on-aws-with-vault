@@ -103,19 +103,25 @@ SKIP_ADDONS=false
 DRY_RUN=false
 TFE_API="https://app.terraform.io/api/v2"
 
-# Workshop-locked single-deployment cluster (alias = deployment block name)
-CLUSTER_NAME="agentic-runtime-usw2"
-
 # IAM role name created by bootstrap.sh / setup-aws-oidc.sh
 HCP_ROLE_NAME="hcp-stacks-deploy"
 
-# Resolve canonical region from $AWS_REGION or deployments.tfdeploy.hcl.
-# No region string literal here — only the .hcl file is allowed to embed one.
+# Resolve canonical region + cluster_name from infrastructure/deployments.tfdeploy.hcl.
+# No string literals here — only the .hcl file (terraform variables) is the source of truth.
 TF_DEPLOY="${PROJECT_ROOT}/infrastructure/deployments.tfdeploy.hcl"
 WORKSHOP_REGION="${AWS_REGION:-}"
 if [ -z "$WORKSHOP_REGION" ] && [ -f "$TF_DEPLOY" ]; then
     WORKSHOP_REGION=$(grep -E '^\s*region\s*=\s*"' "$TF_DEPLOY" 2>/dev/null \
         | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+fi
+CLUSTER_NAME="${CLUSTER_NAME:-}"
+if [ -z "$CLUSTER_NAME" ] && [ -f "$TF_DEPLOY" ]; then
+    CLUSTER_NAME=$(grep -E '^\s*cluster_name\s*=\s*"' "$TF_DEPLOY" 2>/dev/null \
+        | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+fi
+if [ -z "$CLUSTER_NAME" ]; then
+    echo -e "${RED}Error: could not resolve cluster_name from $TF_DEPLOY${NC}" >&2
+    exit 1
 fi
 
 #-------------------------------------------------------------------------------
