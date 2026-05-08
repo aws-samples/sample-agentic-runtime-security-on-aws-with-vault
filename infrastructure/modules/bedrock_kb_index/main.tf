@@ -23,28 +23,6 @@ resource "aws_bedrockagent_knowledge_base" "kb" {
     type = "VECTOR"
     vector_knowledge_base_configuration {
       embedding_model_arn = var.embedding_model_arn
-
-      dynamic "embedding_model_configuration" {
-        for_each = var.kb_multimodal_bucket_id != "" ? [1] : []
-        content {
-          bedrock_embedding_model_configuration {
-            dimensions          = 1024
-            embedding_data_type = "FLOAT32"
-          }
-        }
-      }
-
-      dynamic "supplemental_data_storage_configuration" {
-        for_each = var.kb_multimodal_bucket_id != "" ? [1] : []
-        content {
-          storage_location {
-            type = "S3"
-            s3_location {
-              uri = "s3://${var.kb_multimodal_bucket_id}/"
-            }
-          }
-        }
-      }
     }
   }
 

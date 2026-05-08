@@ -3,8 +3,7 @@
 #
 # All variables are populated from component.bedrock_kb_aoss outputs in
 # infrastructure/components.tfcomponent.hcl.
-# Defaults are provided so Stacks `removed` blocks can plan a destroy
-# without passing inputs (region migration step 1).
+# Defaults provided for Stacks removed-block destroy compatibility.
 ################################################################################
 
 variable "kb_name" {
@@ -20,37 +19,25 @@ variable "aoss_collection_arn" {
 }
 
 variable "aoss_collection_endpoint" {
-  description = "AOSS collection endpoint URL — populated from component.bedrock_kb_aoss.aoss_collection_endpoint. Consumed by aws_cloudformation_stack.kb_index template (CollectionEndpoint property of AWS::OpenSearchServerless::Index)."
+  description = "AOSS collection endpoint URL."
   type        = string
   default     = ""
 }
 
 variable "kb_role_arn" {
-  description = "IAM role ARN for the KB — populated from component.bedrock_kb_aoss.kb_role_arn. Bedrock service principal assumes this role at runtime."
+  description = "IAM role ARN for the KB."
   type        = string
   default     = ""
 }
 
 variable "embedding_model_arn" {
-  description = "Nova 2 Multimodal Embeddings model ARN — populated from component.bedrock_kb_aoss.embedding_model_arn."
-  type        = string
-  default     = ""
-}
-
-variable "kb_multimodal_bucket_arn" {
-  description = "S3 multimodal storage bucket ARN — required by Nova 2 Embeddings supplementalDataStorageConfiguration."
-  type        = string
-  default     = ""
-}
-
-variable "kb_multimodal_bucket_id" {
-  description = "S3 multimodal storage bucket name — used to construct the s3:// URI."
+  description = "Embedding model ARN."
   type        = string
   default     = ""
 }
 
 variable "kb_corpus_bucket_arn" {
-  description = "S3 corpus bucket ARN — populated from component.bedrock_kb_aoss.kb_corpus_bucket_arn. Used by all 3 data sources."
+  description = "S3 corpus bucket ARN."
   type        = string
   default     = ""
 }
