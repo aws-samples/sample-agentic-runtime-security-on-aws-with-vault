@@ -3,7 +3,6 @@
 #
 # All variables are populated from component.bedrock_kb_aoss outputs in
 # infrastructure/components.tfcomponent.hcl.
-# Defaults provided for Stacks removed-block destroy compatibility.
 ################################################################################
 
 variable "kb_name" {
@@ -15,31 +14,36 @@ variable "kb_name" {
 variable "aoss_collection_arn" {
   description = "AOSS collection ARN — populated from component.bedrock_kb_aoss.aoss_collection_arn. Used by KB storage_configuration."
   type        = string
-  default     = ""
 }
 
 variable "aoss_collection_endpoint" {
   description = "AOSS collection endpoint URL."
   type        = string
-  default     = ""
 }
 
 variable "kb_role_arn" {
   description = "IAM role ARN for the KB."
   type        = string
-  default     = ""
 }
 
 variable "embedding_model_arn" {
-  description = "Embedding model ARN."
+  description = "Nova 2 Multimodal Embeddings model ARN."
   type        = string
-  default     = ""
+}
+
+variable "kb_multimodal_bucket_arn" {
+  description = "S3 multimodal storage bucket ARN — required by Nova 2 Embeddings supplementalDataStorageConfiguration."
+  type        = string
+}
+
+variable "kb_multimodal_bucket_id" {
+  description = "S3 multimodal storage bucket name — used to construct the s3:// URI."
+  type        = string
 }
 
 variable "kb_corpus_bucket_arn" {
   description = "S3 corpus bucket ARN."
   type        = string
-  default     = ""
 }
 
 variable "tags" {

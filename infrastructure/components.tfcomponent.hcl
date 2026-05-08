@@ -132,26 +132,43 @@ component "rds" {
 #                      enforced before the KB is created.
 #-------------------------------------------------------------------------------
 
-# --- KB components removed for region migration (us-west-2 → us-east-1).
-# --- `removed` blocks tell Stacks to destroy the us-west-2 state.
-# --- Replace with component blocks pointing to provider.aws.kb in step 2.
-
-removed {
+component "bedrock_kb_aoss" {
   source = "./modules/bedrock_kb_aoss"
-  from   = component.bedrock_kb_aoss
+
+  # Uses provider.aws.kb (us-east-1) — Nova 2 Multimodal Embeddings is
+  # us-east-1 only; AOSS + S3 corpus must be co-located with the KB.
+  # No dependency on component.audit — KB creates its own CMK in us-east-1
+  # (KMS keys are regional; the us-west-2 audit CMK can't be used cross-region).
 
   providers = {
-    aws  = provider.aws.main
+    aws  = provider.aws.kb
     time = provider.time.main
+  }
+
+  inputs = {
+    region = var.kb_region
+    tags   = var.tags
   }
 }
 
-removed {
+component "bedrock_kb_index" {
   source = "./modules/bedrock_kb_index"
-  from   = component.bedrock_kb_index
+
+  depends_on = [component.bedrock_kb_aoss]
 
   providers = {
-    aws = provider.aws.main
+    aws = provider.aws.kb
+  }
+
+  inputs = {
+    aoss_collection_arn      = component.bedrock_kb_aoss.aoss_collection_arn
+    aoss_collection_endpoint = component.bedrock_kb_aoss.aoss_collection_endpoint
+    kb_role_arn              = component.bedrock_kb_aoss.kb_role_arn
+    embedding_model_arn      = component.bedrock_kb_aoss.embedding_model_arn
+    kb_corpus_bucket_arn     = component.bedrock_kb_aoss.kb_corpus_bucket_arn
+    kb_multimodal_bucket_arn = component.bedrock_kb_aoss.kb_multimodal_bucket_arn
+    kb_multimodal_bucket_id  = component.bedrock_kb_aoss.kb_multimodal_bucket_id
+    tags                     = var.tags
   }
 }
 

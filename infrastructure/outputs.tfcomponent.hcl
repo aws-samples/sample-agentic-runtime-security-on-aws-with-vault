@@ -53,12 +53,11 @@ output "rds_endpoint" {
   value       = component.rds.endpoint
 }
 
-# --- Bedrock KB output temporarily removed for region migration (step 1/2).
-# output "kb_id" {
-#   type        = string
-#   description = "Bedrock Knowledge Base ID — agents pass this to bedrock-agent-runtime:Retrieve."
-#   value       = component.bedrock_kb_index.knowledge_base_id
-# }
+output "kb_id" {
+  type        = string
+  description = "Bedrock Knowledge Base ID — agents pass this to bedrock-agent-runtime:Retrieve (us-east-1)."
+  value       = component.bedrock_kb_index.knowledge_base_id
+}
 
 #-------------------------------------------------------------------------------
 # Audit Outputs (consumed by every downstream phase that emits logs)

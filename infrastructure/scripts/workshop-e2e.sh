@@ -119,6 +119,14 @@ if [ -z "$CLUSTER_NAME" ] && [ -f "$TF_DEPLOY" ]; then
     CLUSTER_NAME=$(grep -E '^\s*cluster_name\s*=\s*"' "$TF_DEPLOY" 2>/dev/null \
         | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
 fi
+
+# KB region — Nova 2 Multimodal Embeddings is us-east-1 only.
+KB_REGION="${KB_REGION:-}"
+if [ -z "$KB_REGION" ] && [ -f "$TF_DEPLOY" ]; then
+    KB_REGION=$(grep -E '^\s*kb_region\s*=\s*"' "$TF_DEPLOY" 2>/dev/null \
+        | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+fi
+KB_REGION="${KB_REGION:-us-east-1}"
 if [ -z "$CLUSTER_NAME" ]; then
     echo -e "${RED}Error: could not resolve cluster_name from $TF_DEPLOY${NC}" >&2
     exit 1
@@ -666,7 +674,7 @@ phase_deploy_foundation() {
         }
     fi
 
-    pause_if_interactive "Foundation deployed. Check HCP Terraform UI to verify."
+    pause_if_interactive "Foundation plan triggered. Wait for HCP apply to converge before continuing."
 }
 
 #===============================================================================
@@ -722,7 +730,7 @@ phase_verify_foundation() {
         [ "$db_id" = "None" ] && db_id=""
     fi
     if [ -z "$kb_id" ]; then
-        kb_id=$(aws bedrock-agent list-knowledge-bases --region "$WORKSHOP_REGION" \
+        kb_id=$(aws bedrock-agent list-knowledge-bases --region "$KB_REGION" \
             --query 'knowledgeBaseSummaries[0].knowledgeBaseId' --output text 2>/dev/null)
         [ "$kb_id" = "None" ] && kb_id=""
     fi
@@ -738,7 +746,7 @@ phase_verify_foundation() {
         --cluster-name "$CLUSTER_NAME" \
         --db-instance-id "$db_id" \
         --knowledge-base-id "$kb_id" \
-        --region "$WORKSHOP_REGION" \
+        --region "$KB_REGION" \
         || print_warn "Foundation verification reported failures (see above)"
 
     pause_if_interactive "Foundation verification complete."

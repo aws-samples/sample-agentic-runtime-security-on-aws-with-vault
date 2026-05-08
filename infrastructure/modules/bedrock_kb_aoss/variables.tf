@@ -19,13 +19,6 @@ variable "kb_collection_name" {
   default     = "workshop-kb"
 }
 
-
-variable "workshop_cmk_arn" {
-  description = "Unused — retained with default for Stacks removed-block compatibility during region migration. Will be deleted after migration completes."
-  type        = string
-  default     = ""
-}
-
 variable "tags" {
   description = "Tags applied to all taggable resources in this module."
   type        = map(string)
