@@ -104,7 +104,7 @@ DRY_RUN=false
 TFE_API="https://app.terraform.io/api/v2"
 
 # Workshop-locked single-deployment cluster (alias = deployment block name)
-CLUSTER_NAME="eks-usw2"
+CLUSTER_NAME="agentic-runtime-usw2"
 
 # IAM role name created by bootstrap.sh / setup-aws-oidc.sh
 HCP_ROLE_NAME="hcp-stacks-deploy"

@@ -33,7 +33,7 @@ Bootstrapping, end-to-end orchestration, per-component verification, and teardow
 
 # 4. Verify foundation
 ./infrastructure/scripts/test-foundation.sh \
-    --cluster-name eks-usw2 \
+    --cluster-name agentic-runtime-usw2 \
     --db-instance-id <db-id> \
     --knowledge-base-id <kb-id>
 # Each of test-eks.sh / test-rds.sh / test-bedrock-kb.sh can also be run individually.
