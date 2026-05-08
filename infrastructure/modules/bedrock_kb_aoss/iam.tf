@@ -97,13 +97,15 @@ resource "aws_iam_role_policy" "kb_s3" {
 }
 
 # Embedding model — Amazon Nova 2 Multimodal Embeddings (us-east-1 only).
-# No CRIS exists for this model; direct foundation model ARN is used.
-# SCP allows `amazon.nova-2-multimodal-embeddings-*`.
-data "aws_bedrock_foundation_model" "embedding" {
-  model_id = "amazon.nova-2-multimodal-embeddings-v1:0"
+# ARN constructed from var.region to avoid a data source API call that would
+# fail in regions where the model isn't available (e.g. us-west-2 during
+# Stacks destroy-plan for region migration).
+locals {
+  embedding_model_id  = "amazon.nova-2-multimodal-embeddings-v1:0"
+  embedding_model_arn = "arn:aws:bedrock:${var.region}::foundation-model/${local.embedding_model_id}"
 }
 
-# 3/4 — Bedrock InvokeModel on the embedding model.
+# 3/5 — Bedrock InvokeModel on the embedding model.
 resource "aws_iam_role_policy" "kb_bedrock" {
   depends_on = [time_sleep.wait_for_kb_role_propagation]
   name       = "${var.kb_name}-bedrock"
@@ -115,7 +117,7 @@ resource "aws_iam_role_policy" "kb_bedrock" {
       {
         Effect   = "Allow"
         Action   = ["bedrock:InvokeModel"]
-        Resource = data.aws_bedrock_foundation_model.embedding.model_arn
+        Resource = local.embedding_model_arn
       }
     ]
   })

@@ -39,7 +39,7 @@ output "kb_corpus_bucket_id" {
 
 output "embedding_model_arn" {
   description = "ARN of the Nova 2 Multimodal Embeddings foundation model. Consumed by bedrock_kb_index for the KB vector_knowledge_base_configuration."
-  value       = data.aws_bedrock_foundation_model.embedding.model_arn
+  value       = local.embedding_model_arn
 }
 
 output "kb_multimodal_bucket_arn" {
