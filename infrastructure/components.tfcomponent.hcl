@@ -1,8 +1,8 @@
 ################################################################################
 # Component Definitions
-# Agentic Runtime Security Workshop — Phase 2 Foundation
+# Agentic Runtime Security Workshop — Phase 2 Foundation + Phase 3 Platform
 # Single-region stack (canonical region locked in deployments.tfdeploy.hcl):
-# audit foundation + VPC + EKS + addons + RDS + Bedrock KB
+# audit foundation + VPC + EKS + addons + RDS + Bedrock KB + Vault
 # Reference: ~/git-repos/eks-terraform-stacks/infrastructure/components.tfcomponent.hcl
 #
 # Component dependency graph (resolved automatically by Stacks via input refs):
@@ -10,6 +10,7 @@
 #   Wave 1: eks (vpc), bedrock_kb_aoss (audit)
 #   Wave 2: rds (vpc + audit + eks), addons (eks),
 #           bedrock_kb_index (bedrock_kb_aoss)
+#   Wave 3: vault (eks + audit + addons)
 #
 # Per HCP Stacks docs, component output references in `inputs` are sufficient
 # to express ordering; explicit `depends_on` is reserved for non-obvious
@@ -204,5 +205,31 @@ component "addons" {
     cluster_version   = component.eks.cluster_version
     oidc_provider_arn = component.eks.oidc_provider_arn
     tags              = var.tags
+  }
+}
+
+#-------------------------------------------------------------------------------
+# Vault Component (Wave 3)
+# Depends on eks (cluster creds), audit (CMK, log groups), addons (cert-manager).
+# Deploys Vault 2.0.0 via Helm chart 0.32.0 in Raft 3-node HA with
+# dedicated KMS auto-unseal key + Pod Identity for unseal IAM.
+#-------------------------------------------------------------------------------
+component "vault" {
+  source = "./modules/vault"
+
+  providers = {
+    aws        = provider.aws.main
+    helm       = provider.helm.main
+    kubernetes = provider.kubernetes.main
+  }
+
+  inputs = {
+    region                             = var.region
+    cluster_name                       = component.eks.cluster_name
+    cluster_endpoint                   = component.eks.cluster_endpoint
+    cluster_certificate_authority_data = component.eks.cluster_certificate_authority_data
+    oidc_provider_arn                  = component.eks.oidc_provider_arn
+    audit_log_group_names              = component.audit.audit_log_group_names
+    tags                               = var.tags
   }
 }
