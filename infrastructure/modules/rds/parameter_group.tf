@@ -19,7 +19,7 @@
 resource "aws_db_parameter_group" "pg17_audit" {
   name        = "${var.identifier}-pg17-audit"
   family      = "postgres17"
-  description = "Workshop PG17 — pgaudit + connection logging for audit-correlation pedagogy"
+  description = "Workshop PG17 - pgaudit + connection logging for audit-correlation pedagogy"
 
   # ---------------------------------------------------------------------------
   # pgaudit shared-library boot (STATIC parameter — Pitfall R1: reboot required)

@@ -30,10 +30,23 @@ resource "aws_iam_role" "bedrock_kb" {
   tags               = var.tags
 }
 
+# Pre-policy IAM propagation barrier — without this, the four
+# aws_iam_role_policy resources below race the role's AWS-IAM propagation and
+# fail with `NoSuchEntity: The role with name <kb_name>-role cannot be found`
+# (run sdr-rgxc91GbDFEWcBcr, 2026-05-07). Distinct from the post-policy
+# time_sleep.kb_iam_propagate in main.tf, which gates downstream KB creation
+# on policy propagation — that one runs AFTER PutRolePolicy and so can't
+# prevent NoSuchEntity. Codex confirmed both sleeps are needed.
+resource "time_sleep" "wait_for_kb_role_propagation" {
+  depends_on      = [aws_iam_role.bedrock_kb]
+  create_duration = "20s"
+}
+
 # 1/4 — AOSS API access for the KB role.
 resource "aws_iam_role_policy" "kb_aoss" {
-  name = "${var.kb_name}-aoss"
-  role = aws_iam_role.bedrock_kb.id
+  depends_on = [time_sleep.wait_for_kb_role_propagation]
+  name       = "${var.kb_name}-aoss"
+  role       = aws_iam_role.bedrock_kb.id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -49,8 +62,9 @@ resource "aws_iam_role_policy" "kb_aoss" {
 
 # 2/4 — S3 read access on the corpus bucket.
 resource "aws_iam_role_policy" "kb_s3" {
-  name = "${var.kb_name}-s3"
-  role = aws_iam_role.bedrock_kb.id
+  depends_on = [time_sleep.wait_for_kb_role_propagation]
+  name       = "${var.kb_name}-s3"
+  role       = aws_iam_role.bedrock_kb.id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -77,8 +91,9 @@ data "aws_bedrock_foundation_model" "embedding" {
 
 # 3/4 — Bedrock InvokeModel on the embedding model.
 resource "aws_iam_role_policy" "kb_bedrock" {
-  name = "${var.kb_name}-bedrock"
-  role = aws_iam_role.bedrock_kb.id
+  depends_on = [time_sleep.wait_for_kb_role_propagation]
+  name       = "${var.kb_name}-bedrock"
+  role       = aws_iam_role.bedrock_kb.id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -94,8 +109,9 @@ resource "aws_iam_role_policy" "kb_bedrock" {
 
 # 4/4 — KMS access on the workshop CMK (used for AOSS encryption + S3 SSE).
 resource "aws_iam_role_policy" "kb_kms" {
-  name = "${var.kb_name}-kms"
-  role = aws_iam_role.bedrock_kb.id
+  depends_on = [time_sleep.wait_for_kb_role_propagation]
+  name       = "${var.kb_name}-kms"
+  role       = aws_iam_role.bedrock_kb.id
 
   policy = jsonencode({
     Version = "2012-10-17"

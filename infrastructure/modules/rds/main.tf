@@ -121,8 +121,8 @@ resource "aws_db_instance" "pg17" {
   enabled_cloudwatch_logs_exports = ["postgresql", "upgrade"]
 
   # Workshop topology — single-AZ, private-only, no final snapshot, no deletion lock.
-  multi_az            = false
-  publicly_accessible = false
+  multi_az               = false
+  publicly_accessible    = false
   db_subnet_group_name   = aws_db_subnet_group.pg17.name
   vpc_security_group_ids = [aws_security_group.pg17.id]
 

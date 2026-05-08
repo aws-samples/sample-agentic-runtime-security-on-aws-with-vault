@@ -63,13 +63,20 @@ module "eks_blueprints_addons" {
   enable_external_dns = true
 
   # AWS Load Balancer Controller — provisions ALBs from Kubernetes Ingress.
-  # replicaCount=2 keeps the mutating webhook reachable across pod restarts;
-  # otherwise brief webhook outages can fail concurrent Service applies.
+  # replicaCount=2 keeps the mutating webhook reachable across pod restarts.
+  # serviceMutatorWebhookConfig.failurePolicy=Ignore prevents the
+  # `mservice.elbv2.k8s.aws` webhook from blocking Service mutations when LBC
+  # pod endpoints aren't yet ready — critical during first-apply when
+  # cert-manager / external-dns Services land in parallel with LBC install
+  # (run sdr-W2pEpnLEeDCGMZ9M, 2026-05-07). Default upstream chart value is
+  # `Fail`; `Ignore` is the workshop-safe choice — Service mutations are
+  # convenience features (e.g. type=LoadBalancer auto-NLB), not security.
   enable_aws_load_balancer_controller = true
   aws_load_balancer_controller = {
     wait = true
     set = [
-      { name = "replicaCount", value = "2" }
+      { name = "replicaCount", value = "2" },
+      { name = "serviceMutatorWebhookConfig.failurePolicy", value = "Ignore" },
     ]
   }
 

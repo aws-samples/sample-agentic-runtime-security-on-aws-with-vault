@@ -138,6 +138,14 @@ module "eks" {
   vpc_id     = var.vpc_id
   subnet_ids = var.private_subnet_ids
 
+  # Bump from default 30s. The cluster's primary security group (auto-created
+  # by EKS at CreateCluster) needs longer than 30s to be visible to the
+  # CreateNodegroup API in some regions/AZs — observed as
+  # `InvalidRequestException: The security group sg-... does not exist in VPC`
+  # in run sdr-rgxc91GbDFEWcBcr (2026-05-07). 60s removes the race entirely
+  # at the cost of one extra minute on first apply.
+  dataplane_wait_duration = "60s"
+
   tags = var.tags
 }
 
