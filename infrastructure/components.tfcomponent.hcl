@@ -235,6 +235,7 @@ component "vault" {
     cluster_endpoint                   = component.eks.cluster_endpoint
     cluster_certificate_authority_data = component.eks.cluster_certificate_authority_data
     oidc_provider_arn                  = component.eks.oidc_provider_arn
+    addons_ready                       = component.addons.aws_load_balancer_controller_release
     audit_log_group_names              = component.audit.audit_log_group_names
     tags                               = var.tags
   }
@@ -269,6 +270,7 @@ component "ivia" {
     rds_db_name                = component.rds.db_name
     vault_endpoint             = component.vault.vault_endpoint
     audit_log_group_names      = component.audit.audit_log_group_names
+    addons_ready               = component.addons.aws_load_balancer_controller_release
     icr_entitlement_key        = var.icr_entitlement_key
     tags                       = var.tags
   }

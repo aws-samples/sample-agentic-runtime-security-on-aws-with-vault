@@ -33,6 +33,12 @@ variable "audit_log_group_names" {
   type        = map(string)
 }
 
+variable "addons_ready" {
+  description = "Consumed but unused — creates implicit Stacks ordering so Vault deploys after the AWS LB Controller webhook is serving."
+  type        = any
+  default     = null
+}
+
 variable "tags" {
   description = "Tags applied to all AWS resources created by this module."
   type        = map(string)
