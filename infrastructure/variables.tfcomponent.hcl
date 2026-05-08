@@ -92,6 +92,7 @@ variable "rds_instance_class" {
 variable "icr_entitlement_key" {
   type        = string
   sensitive   = true
+  default     = ""
   description = "IBM Container Registry entitlement key for pulling IVIA images (icr.io/ivia/ivia-oidc-provider). Attendees obtain from IBM."
 }
 
@@ -108,6 +109,7 @@ variable "vault_token" {
   type        = string
   sensitive   = true
   ephemeral   = true
+  default     = ""
   description = "Vault root token for initial vault_config bootstrap. Ephemeral — not stored in Stacks state. Rotated after first apply."
 }
 
@@ -126,6 +128,7 @@ variable "ivia_admin_username" {
 variable "ivia_admin_password" {
   type        = string
   sensitive   = true
+  default     = ""
   description = "IVIA admin password for the Config Service REST API. Provided via HCP Terraform variable set."
 }
 
