@@ -610,12 +610,42 @@ sweep_cw_log_groups() {
     done
 }
 
+#----- Vault PVC cleanup (orphaned after vault namespace deletion) ---------------
+# Vault Raft pods each claim a PVC backed by an EBS volume. The namespace
+# deletion in phase_k8s_cleanup should cascade-delete the PVCs, but if
+# termination hangs (finalizer stuck) the PVC objects remain. This sweep
+# force-deletes them so EBS volumes are released for sweep_ebs_volumes.
+sweep_vault_pvcs() {
+    # Namespace may already be gone — best-effort only
+    if ! kubectl get namespace vault &>/dev/null 2>&1; then
+        print_info "Vault namespace gone — PVCs already removed"; return 0
+    fi
+    local pvcs
+    pvcs=$(kubectl get pvc -n vault --no-headers 2>/dev/null | awk '{print $1}')
+    if [[ -z "$pvcs" ]]; then
+        print_info "Vault PVCs: none"; return 0
+    fi
+    for pvc in $pvcs; do
+        echo -n "    Deleting Vault PVC $pvc... "
+        kubectl delete pvc "$pvc" -n vault --ignore-not-found=true --timeout=30s &>/dev/null \
+            && echo -e "${GREEN}done${NC}" || echo -e "${YELLOW}skipped${NC}"
+    done
+    # Force-remove finalizers on any stuck PVCs
+    for pvc in $(kubectl get pvc -n vault --no-headers 2>/dev/null | awk '{print $1}'); do
+        kubectl patch pvc "$pvc" -n vault -p '{"metadata":{"finalizers":null}}' &>/dev/null || true
+    done
+}
+
 #----- KMS (workshop-tagged keys + their aliases) ------------------------------
+# NOTE (Pitfall 7): AWS requires a minimum 7-day pending-deletion window for
+# customer-managed KMS keys. You CANNOT immediately delete a CMK. Schedule it
+# and wait. The alias/vault-unseal key is a dedicated key (not the workshop CMK)
+# created by the vault module — it must be captured here explicitly.
 sweep_kms() {
-    # Aliases first (eks/<cluster> + workshop-data + any with workshop in name)
+    # Aliases first: eks/<cluster> + workshop-data + vault-unseal + any with workshop/agentic in name
     local aliases
     aliases=$(aws kms list-aliases --region "$REGION" \
-        --query "Aliases[?contains(AliasName,'workshop') || contains(AliasName,'agentic') || AliasName=='alias/eks/${DEFAULT_CLUSTER}'].AliasName" \
+        --query "Aliases[?contains(AliasName,'workshop') || contains(AliasName,'agentic') || AliasName=='alias/eks/${DEFAULT_CLUSTER}' || AliasName=='alias/vault-unseal'].AliasName" \
         --output text 2>/dev/null)
     for a in $aliases; do
         [[ -z "$a" || "$a" == "None" ]] && continue
@@ -981,8 +1011,10 @@ phase_aws_sweep() {
 
     if [ "$DRY_RUN" = true ]; then
         print_info "[DRY-RUN] Would sweep: EKS (addons, pod-identity, node groups, cluster),"
-        print_info "  EBS volumes, launch templates, RDS, Secrets Manager, Bedrock KB, AOSS,"
-        print_info "  S3, Glue/Athena, CW logs, KMS, CFN, IAM (policies, roles, instance profiles),"
+        print_info "  Vault PVCs (Raft StatefulSet), EBS volumes, launch templates,"
+        print_info "  RDS, Secrets Manager, Bedrock KB, AOSS,"
+        print_info "  S3, Glue/Athena, CW logs, KMS (alias/vault-unseal + workshop keys),"
+        print_info "  CFN, IAM (policies, roles, instance profiles),"
         print_info "  VPC (ELBs, target groups, endpoints, ENIs, SGs, NAT, IGW, subnets, RTs)"
         return 0
     fi
@@ -1004,6 +1036,9 @@ phase_aws_sweep() {
 
     step_header "EKS cluster"
     sweep_eks_cluster || true
+
+    step_header "Vault PVCs (orphaned from Raft StatefulSet)"
+    sweep_vault_pvcs || true
 
     step_header "EBS volumes (orphaned from PVCs)"
     sweep_ebs_volumes || true

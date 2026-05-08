@@ -753,21 +753,58 @@ phase_verify_foundation() {
 }
 
 #===============================================================================
-# PHASE 5: Identity (IVIA) — placeholder
+# PHASE 5: Identity (IVIA) — verify IVIA pods + OIDC discovery
 #===============================================================================
-phase_identity_placeholder() {
+phase_identity() {
     phase_header "Phase 5: Identity (IVIA)"
-    print_info "[Phase 5 — placeholder; populated when workshop Phase 3 (IVIA) ships]"
-    return 0
+
+    if [ "$DRY_RUN" = true ]; then
+        print_info "[DRY-RUN] Would check IVIA pods running and OIDC discovery endpoint"
+        return 0
+    fi
+
+    local ivia_ns="verify-access"
+    local vault_ns="vault"
+    local oidc_url="https://isvaop.verify-access.svc.cluster.local:8436/.well-known/openid-configuration"
+
+    # Check IVIA pods
+    local running_ivia
+    running_ivia=$(kubectl get pods -n "${ivia_ns}" --no-headers 2>/dev/null | grep -c Running || true)
+    if [ "${running_ivia:-0}" -ge 1 ]; then
+        print_success "IVIA: ${running_ivia} pod(s) Running in ${ivia_ns}"
+    else
+        print_warn "IVIA: no pods Running in ${ivia_ns} — IVIA may still be starting"
+    fi
+
+    # Check OIDC discovery via vault-0 (in-cluster path)
+    local ivia_issuer
+    ivia_issuer=$(kubectl exec -n "${vault_ns}" vault-0 -- \
+        curl -sk "${oidc_url}" 2>/dev/null \
+        | jq -r '.issuer // empty' 2>/dev/null || echo "")
+    if [ -n "${ivia_issuer}" ]; then
+        print_success "IVIA OIDC discovery: issuer = ${ivia_issuer}"
+    else
+        print_warn "IVIA OIDC discovery: issuer not reachable (IVIA may still be initializing)"
+    fi
+
+    pause_if_interactive "IVIA verification complete."
 }
 
 #===============================================================================
-# PHASE 6: Vault — placeholder
+# PHASE 6: Vault — verify pods, seal status, Raft peers, audit device
 #===============================================================================
-phase_vault_placeholder() {
+phase_vault() {
     phase_header "Phase 6: Vault"
-    print_info "[Phase 6 — placeholder; populated when workshop Phase 4 (Vault) ships]"
-    return 0
+
+    if [ "$DRY_RUN" = true ]; then
+        print_info "[DRY-RUN] Would run: test-vault-verify.sh"
+        return 0
+    fi
+
+    bash "$SCRIPT_DIR/test-vault-verify.sh" \
+        || print_warn "Platform verification reported failures (see above)"
+
+    pause_if_interactive "Vault verification complete."
 }
 
 #===============================================================================
@@ -1073,8 +1110,8 @@ phase_bootstrap
 phase_deploy_foundation
 phase_configure_kubectl
 phase_verify_foundation
-phase_identity_placeholder
-phase_vault_placeholder
+phase_identity
+phase_vault
 phase_use_cases_placeholder
 
 if [ "$SKIP_TEARDOWN" = false ]; then
