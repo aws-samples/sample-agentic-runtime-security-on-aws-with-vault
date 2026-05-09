@@ -247,33 +247,9 @@ component "vault" {
 # rds (PostgreSQL backend), vault (OIDC seam target).
 # Deploys IVIA 11.0.2 OIDC provider via raw kubernetes_* manifests.
 #-------------------------------------------------------------------------------
-component "ivia" {
-  source = "./modules/verify_access"
-
-  providers = {
-    aws        = provider.aws.main
-    kubernetes = provider.kubernetes.main
-    random     = provider.random.main
-    time       = provider.time.main
-    tls        = provider.tls.main
-  }
-
-  inputs = {
-    region                     = var.region
-    cluster_name               = component.eks.cluster_name
-    rds_endpoint               = component.rds.endpoint
-    rds_address                = component.rds.address
-    rds_port                   = component.rds.port
-    rds_master_username        = component.rds.master_username
-    rds_master_user_secret_arn = component.rds.master_user_secret_arn
-    rds_db_name                = component.rds.db_name
-    vault_endpoint             = component.vault.vault_endpoint
-    audit_log_group_names      = component.audit.audit_log_group_names
-    addons_ready               = component.addons.aws_load_balancer_controller_release
-    icr_entitlement_key        = var.icr_entitlement_key
-    tags                       = var.tags
-  }
-}
+# TEMPORARILY REMOVED — clearing stale state to work around Kubernetes provider
+# identity bug. Will be re-added in next commit.
+# component "ivia" { ... }
 
 #-------------------------------------------------------------------------------
 # Vault Config Component (Wave 5)
@@ -285,75 +261,31 @@ component "ivia" {
 # Pitfall 8: RDS output names use NO prefix — component.rds.endpoint,
 #            component.rds.master_username, etc. (NOT component.rds.rds_endpoint).
 #-------------------------------------------------------------------------------
-component "vault_config" {
-  source = "./modules/vault_config"
-
-  providers = {
-    vault = provider.vault.main
-    aws   = provider.aws.main
-  }
-
-  inputs = {
-    region                             = var.region
-    cluster_endpoint                   = component.eks.cluster_endpoint
-    cluster_certificate_authority_data = component.eks.cluster_certificate_authority_data
-    cluster_oidc_issuer                = component.eks.cluster_oidc_issuer
-    ivia_oidc_discovery_url            = component.ivia.ivia_oidc_discovery_url
-    rds_endpoint                       = component.rds.endpoint
-    rds_master_username                = component.rds.master_username
-    rds_master_user_secret_arn         = component.rds.master_user_secret_arn
-    rds_db_name                        = component.rds.db_name
-    bedrock_role_arn                   = component.bedrock_kb_aoss.kb_role_arn
-    tags                               = var.tags
-  }
-}
+# TEMPORARILY REMOVED — clearing stale state (identity bug workaround)
+# component "vault_config" { ... }
+# component "isva_config" { ... }
 
 #-------------------------------------------------------------------------------
-# IVIA Config Component (Wave 5 — after vault_config)
-# Registers OAuth clients, CIBA policy, RAR types, and JWT signing key in IVIA
-# via the restapi provider against the IVIA Config Service REST API.
+# UC1 Agent Component (Wave 6) — TEMPORARILY REMOVED (depends on vault_config)
 #-------------------------------------------------------------------------------
-component "isva_config" {
-  source = "./modules/isva_config"
-
-  depends_on = [component.vault_config]
-
-  providers = {
-    restapi = provider.restapi.main
-  }
-
-  inputs = {
-    ivia_service_endpoint      = component.ivia.ivia_service_endpoint
-    vault_config_jwt_auth_path = component.vault_config.jwt_auth_path
-    ivia_admin_username        = var.ivia_admin_username
-    ivia_admin_password        = var.ivia_admin_password
-  }
-}
-
-#-------------------------------------------------------------------------------
-# UC1 Agent Component (Wave 6)
-# Non-personalized read-only Strands agent. Authenticates to Vault via
-# Kubernetes auth (SA JWT), receives JIT Postgres + Bedrock STS credentials.
-# Implicit ordering via vault_config, rds, bedrock_kb_index, eks inputs.
-#-------------------------------------------------------------------------------
-component "uc1_agent" {
-  source = "./modules/uc1_agent"
-
-  providers = {
-    kubernetes = provider.kubernetes.main
-  }
-
-  inputs = {
-    vault_addr        = component.vault.vault_endpoint
-    vault_role        = component.vault_config.uc1_role_name
-    rds_address       = component.rds.address
-    rds_port          = component.rds.port
-    rds_db_name       = component.rds.db_name
-    knowledge_base_id = component.bedrock_kb_index.knowledge_base_id
-    region            = var.region
-    kb_region         = var.kb_region
-    agent_image       = var.uc1_agent_image
-    bedrock_model_id  = var.bedrock_model_id
-    tags              = var.tags
-  }
-}
+# component "uc1_agent" {
+#   source = "./modules/uc1_agent"
+#
+#   providers = {
+#     kubernetes = provider.kubernetes.main
+#   }
+#
+#   inputs = {
+#     vault_addr        = component.vault.vault_endpoint
+#     vault_role        = component.vault_config.uc1_role_name
+#     rds_address       = component.rds.address
+#     rds_port          = component.rds.port
+#     rds_db_name       = component.rds.db_name
+#     knowledge_base_id = component.bedrock_kb_index.knowledge_base_id
+#     region            = var.region
+#     kb_region         = var.kb_region
+#     agent_image       = var.uc1_agent_image
+#     bedrock_model_id  = var.bedrock_model_id
+#     tags              = var.tags
+#   }
+# }
