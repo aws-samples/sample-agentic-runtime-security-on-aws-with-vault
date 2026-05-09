@@ -157,15 +157,14 @@ provider "vault" "main" {
   }
 }
 
-# TEMPORARILY REMOVED — clearing stale state (identity bug workaround)
-# provider "restapi" "main" {
-#   config {
-#     uri      = "https://${component.ivia.ivia_service_endpoint}"
-#     insecure = true
-#     headers = {
-#       "Content-Type" = "application/json"
-#     }
-#     username = var.ivia_admin_username
-#     password = var.ivia_admin_password
-#   }
-# }
+provider "restapi" "main" {
+  config {
+    uri      = "https://placeholder.local"
+    insecure = true
+    headers = {
+      "Content-Type" = "application/json"
+    }
+    username = var.ivia_admin_username
+    password = var.ivia_admin_password
+  }
+}
