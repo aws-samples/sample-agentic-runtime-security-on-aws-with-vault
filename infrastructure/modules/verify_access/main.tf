@@ -411,7 +411,7 @@ resource "kubernetes_job" "ivia_db_init" {
 
         container {
           name  = "db-init"
-          image = "bitnami/postgresql:17"
+          image = "public.ecr.aws/docker/library/postgres:17-alpine"
 
           env {
             name = "PGHOST"
@@ -463,7 +463,7 @@ resource "kubernetes_job" "ivia_db_init" {
             }
           }
 
-          command = ["/bin/bash", "-c"]
+          command = ["/bin/sh", "-c"]
           args = [<<-EOSQL
             psql -v ON_ERROR_STOP=0 <<'SQL'
             -- ================================================================
