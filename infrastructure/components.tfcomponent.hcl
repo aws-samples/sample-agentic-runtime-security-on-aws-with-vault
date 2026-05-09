@@ -255,6 +255,7 @@ component "ivia" {
     kubernetes = provider.kubernetes.main
     random     = provider.random.main
     time       = provider.time.main
+    tls        = provider.tls.main
   }
 
   inputs = {
