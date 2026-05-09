@@ -1,11 +1,21 @@
 ################################################################################
 # Verify Access Module — Main
-# IBM Verify Identity Access 11.0.2 OIDC Provider
+# IBM Verify Identity Access OIDC Provider (image tag 26.03)
 #
 # Deploys IVIA via raw kubernetes_* Terraform resources (no Helm chart exists
-# for IVIA). Provides OAuth, CIBA, and RAR capabilities as the identity plane
-# for user-context delegation. Vault jwt auth (Plan 03-03) consumes the OIDC
-# discovery URL output.
+# for IVIA). Provides OAuth client_credentials grant as the identity plane
+# for workload-identity delegation. Vault jwt auth (Plan 03-03) consumes the
+# OIDC discovery URL output.
+#
+# Config structure follows IBM official docs:
+#   https://docs.verify.ibm.com/ibm-security-verify-access/docs/configuration
+#   https://github.com/IBM-Security/verify-access-oidc-provider-resources
+#
+# Key design decisions:
+#   - Inline B64 keystore in config.yaml (avoids projected-volume complexity)
+#   - secret: K8s API syntax for DB creds + obf key (RBAC already granted)
+#   - Config stored in kubernetes_secret (contains B64-encoded private key)
+#   - DB schema initialized via kubernetes_job before deployment
 #
 # Pitfall 3: ICR pull secret MUST be created before deployment — without it
 #            pods get ImagePullBackOff (icr.io/ivia/ivia-oidc-provider:26.03).
@@ -50,6 +60,11 @@ data "aws_secretsmanager_secret_version" "rds_master" {
 
 locals {
   rds_creds = jsondecode(data.aws_secretsmanager_secret_version.rds_master.secret_string)
+
+  # Base64-encode TLS material for inline keystore in config.yaml.
+  # The B64: prefix tells IVIA to decode at runtime.
+  server_key_b64  = base64encode(tls_private_key.isvaop.private_key_pem)
+  server_cert_b64 = base64encode(tls_self_signed_cert.isvaop.cert_pem)
 }
 
 ################################################################################
@@ -57,15 +72,15 @@ locals {
 ################################################################################
 
 # IVIA obfuscation key — used to protect sensitive configuration values stored
-# in the Config Service database (standard IVIA security practice).
+# in the runtime database (standard IVIA security practice).
 resource "random_password" "obfuscation_key" {
   length  = 32
   special = false
 }
 
-# Keystore password for the PKCS12 file used by IVIA TLS + token signing.
-resource "random_password" "keystore_password" {
-  length  = 24
+# Client secret for the workshop OIDC client (client_credentials grant).
+resource "random_password" "client_secret" {
+  length  = 32
   special = false
 }
 
@@ -150,31 +165,9 @@ resource "kubernetes_secret" "icr_pull" {
 }
 
 ################################################################################
-# Keystore Secret — PEM key + cert for IVIA TLS and token signing
-# IVIA expects /var/isvaop/config/keystore/<name>/personal/ (key) and signer/ (cert)
-# Mounted as a secret volume with items projected into the directory structure.
-################################################################################
-
-resource "kubernetes_secret" "isvaop_keystore" {
-  metadata {
-    name      = "isvaop-keystore"
-    namespace = kubernetes_namespace.verify_access.metadata[0].name
-    labels = {
-      "app.kubernetes.io/name"       = "isvaop"
-      "app.kubernetes.io/managed-by" = "terraform"
-    }
-  }
-
-  type = "Opaque"
-
-  data = {
-    "server-key.pem"  = tls_private_key.isvaop.private_key_pem
-    "server-cert.pem" = tls_self_signed_cert.isvaop.cert_pem
-  }
-}
-
-################################################################################
 # Service Account + RBAC
+# RBAC grants get/list/watch on secrets and configmaps — REQUIRED for the
+# secret: K8s API reference syntax used in config.yaml.
 ################################################################################
 
 resource "kubernetes_service_account" "isvaop" {
@@ -231,6 +224,7 @@ resource "kubernetes_role_binding" "isvaop" {
 # PostgreSQL connection details — bootstrap only.
 # Vault rotates the master credential post-deploy and vends short-lived
 # per-role creds at runtime (Phase 3 Plan 03 vault_config).
+# IVIA reads these via secret:isvaop-server/<key> K8s API syntax.
 resource "kubernetes_secret" "isvaop_server" {
   metadata {
     name      = "isvaop-server"
@@ -252,7 +246,8 @@ resource "kubernetes_secret" "isvaop_server" {
   }
 }
 
-# IVIA obfuscation key — protects sensitive config at rest in the Config Service DB.
+# IVIA obfuscation key — protects sensitive config at rest in the runtime DB.
+# IVIA reads via secret:isvaop-obf/obfuscation_key K8s API syntax.
 resource "kubernetes_secret" "isvaop_obf" {
   metadata {
     name      = "isvaop-obf"
@@ -271,10 +266,13 @@ resource "kubernetes_secret" "isvaop_obf" {
 }
 
 ################################################################################
-# ConfigMap — IVIA Main Configuration
+# Config Secret — IVIA Main Configuration
+# Stored as a Secret (not ConfigMap) because config.yaml contains B64-encoded
+# private key material via the inline keystore block.
+# Mounted at /var/isvaop/config — the only volume mount needed.
 ################################################################################
 
-resource "kubernetes_config_map" "isvaop_config" {
+resource "kubernetes_secret" "isvaop_config" {
   metadata {
     name      = "isvaop-config"
     namespace = kubernetes_namespace.verify_access.metadata[0].name
@@ -284,50 +282,324 @@ resource "kubernetes_config_map" "isvaop_config" {
     }
   }
 
+  type = "Opaque"
+
   data = {
     "config.yaml" = <<-EOT
+      version: 24.08
+
       server:
         ssl:
-          enabled: true
-          port: 8436
-          key: "@keystore/https_keys/personal/server-key.pem"
-          certificate: "@keystore/https_keys/signer/server-cert.pem"
+          key: "ks:https_keys/serverkey"
+          certificate: "ks:https_keys/servercert"
 
-      oidc_provider:
-        issuer: "https://isvaop.verify-access.svc.cluster.local:8436/oidc"
+      secrets:
+        obf_key: "secret:isvaop-obf/obfuscation_key"
+
+      definition:
+        id: 1
+        name: "Workshop OIDC"
         grant_types:
-          - authorization_code
           - client_credentials
-          - "urn:openid:params:grant-type:ciba"
+        access_policy_id: allow_all
+        pre_mappingrule_id: pretoken
+        post_mappingrule_id: posttoken
+        base_url: "https://isvaop.verify-access.svc.cluster.local:8436"
         token_settings:
+          issuer: "https://isvaop.verify-access.svc.cluster.local:8436"
+          signing_alg: RS256
+          signing_keystore: https_keys
+          signing_keylabel: serverkey
           access_token_lifetime: 900
           id_token_lifetime: 3600
-        signing_key: "@keystore/https_keys/personal/server-key.pem"
-        signing_certificate: "@keystore/https_keys/signer/server-cert.pem"
 
-      runtime_db:
-        type: postgresql
-        host_secret_name: isvaop-server
-        host_secret_key: host
-        port_secret_name: isvaop-server
-        port_secret_key: port
-        username_secret_name: isvaop-server
-        username_secret_key: username
-        password_secret_name: isvaop-server
-        password_secret_key: password
-        db_secret_name: isvaop-server
-        db_secret_key: database
+      jwks:
+        signing_keystore: https_keys
+
+      runtime_db: workshopdb
+
+      session_cache:
+        type: db
+
+      server_connections:
+        - name: workshopdb
+          type: postgresql
+          database_name: "secret:isvaop-server/database"
+          hosts:
+            - hostname: "secret:isvaop-server/host"
+              hostport: "secret:isvaop-server/port"
+          credential:
+            username: "secret:isvaop-server/username"
+            password: "secret:isvaop-server/password"
+          ssl_settings:
+            use_ssl: false
+
+      rules:
+        access_policy:
+          - name: allow_all
+            content: |
+              context.setDecision(Decision.allow());
+        mapping:
+          - name: pretoken
+            rule_type: javascript
+            content: |
+              // No enrichment needed for workshop
+          - name: posttoken
+            rule_type: javascript
+            content: |
+              // No post-processing needed for workshop
+
+      clients:
+        - client_id: workshop_agent
+          client_secret: "${random_password.client_secret.result}"
+          client_name: "Workshop Agent Client"
+          enabled: true
+          grant_types:
+            - client_credentials
+          token_endpoint_auth_method: client_secret_basic
+          id_token_signed_response_alg: RS256
+
+      keystore:
+        - name: https_keys
+          type: pem
+          certificate:
+            - label: servercert
+              content: "B64:${local.server_cert_b64}"
+          key:
+            - label: serverkey
+              content: "B64:${local.server_key_b64}"
 
       logging:
-        decision_log:
-          enabled: true
-          output:
-            type: syslog
-            format: json
-            facility: local0
-            severity: info
+        level: info
     EOT
   }
+}
+
+################################################################################
+# DB Schema Initialization Job
+# IVIA does NOT auto-create database tables. Without the schema, the container
+# terminates at startup. This job runs the cumulative schema SQL (base +
+# updates through 25.10) idempotently before the IVIA deployment starts.
+#
+# Source: https://github.com/IBM-Security/verify-access-oidc-provider-resources/
+#         tree/master/resources/db/pg
+################################################################################
+
+resource "kubernetes_job" "ivia_db_init" {
+  metadata {
+    name      = "ivia-db-init"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels = {
+      "app.kubernetes.io/name"       = "ivia-db-init"
+      "app.kubernetes.io/managed-by" = "terraform"
+    }
+  }
+
+  spec {
+    backoff_limit = 3
+
+    template {
+      metadata {
+        labels = {
+          "app.kubernetes.io/name" = "ivia-db-init"
+        }
+      }
+
+      spec {
+        restart_policy       = "OnFailure"
+        service_account_name = kubernetes_service_account.isvaop.metadata[0].name
+
+        container {
+          name  = "db-init"
+          image = "bitnami/postgresql:17"
+
+          env {
+            name = "PGHOST"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret.isvaop_server.metadata[0].name
+                key  = "host"
+              }
+            }
+          }
+
+          env {
+            name = "PGPORT"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret.isvaop_server.metadata[0].name
+                key  = "port"
+              }
+            }
+          }
+
+          env {
+            name = "PGUSER"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret.isvaop_server.metadata[0].name
+                key  = "username"
+              }
+            }
+          }
+
+          env {
+            name = "PGPASSWORD"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret.isvaop_server.metadata[0].name
+                key  = "password"
+              }
+            }
+          }
+
+          env {
+            name = "PGDATABASE"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret.isvaop_server.metadata[0].name
+                key  = "database"
+              }
+            }
+          }
+
+          command = ["/bin/bash", "-c"]
+          args = [<<-EOSQL
+            psql -v ON_ERROR_STOP=0 <<'SQL'
+            -- ================================================================
+            -- IVIA Cumulative Schema (base 0.0.1 + 24.12 + 25.10)
+            -- All statements are idempotent (CREATE IF NOT EXISTS / DO blocks)
+            -- Source: IBM-Security/verify-access-oidc-provider-resources
+            -- ================================================================
+
+            -- Token/session storage
+            CREATE TABLE IF NOT EXISTS OAUTH20_TOKEN_CACHE (
+                LOOKUP_ID         VARCHAR(256) NOT NULL PRIMARY KEY,
+                UNIQUEID          VARCHAR(128) NOT NULL,
+                COMPONENTID       VARCHAR(256) NOT NULL,
+                TYPE              VARCHAR(64)  NOT NULL,
+                SUBTYPE           VARCHAR(64),
+                CREATEDAT         BIGINT       NOT NULL,
+                LIFETIME          INT          NOT NULL,
+                EXPIRES           BIGINT       NOT NULL,
+                TOKENSTRING       TEXT         NOT NULL,
+                CLIENTID          VARCHAR(256) NOT NULL,
+                USERNAME          VARCHAR(256),
+                SCOPE             VARCHAR(512),
+                REDIRECTURI       VARCHAR(2048),
+                STATEID           VARCHAR(256),
+                EXTENDEDFIELDS    TEXT
+            );
+
+            -- SESSION_ID column (added in 25.10)
+            DO $$
+            BEGIN
+              IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'oauth20_token_cache'
+                  AND column_name = 'session_id'
+              ) THEN
+                ALTER TABLE OAUTH20_TOKEN_CACHE ADD COLUMN SESSION_ID VARCHAR(256);
+              END IF;
+            END $$;
+
+            -- Extended token attributes
+            CREATE TABLE IF NOT EXISTS OAUTH20_TOKEN_EXTRA_ATTRIBUTE (
+                ID                SERIAL       PRIMARY KEY,
+                LOOKUP_ID         VARCHAR(256) NOT NULL,
+                ATTR_NAME         VARCHAR(256) NOT NULL,
+                ATTR_VALUE        VARCHAR(1024)
+            );
+
+            -- JWT ID replay protection
+            CREATE TABLE IF NOT EXISTS OAUTH20_JTI (
+                ID                SERIAL       PRIMARY KEY,
+                JTI               VARCHAR(512) NOT NULL UNIQUE,
+                EXPIRES           BIGINT       NOT NULL
+            );
+
+            -- Consent / trusted client records
+            CREATE TABLE IF NOT EXISTS OAUTH_TRUSTED_CLIENT (
+                ID                SERIAL       PRIMARY KEY,
+                USERNAME          VARCHAR(256) NOT NULL,
+                CLIENTID          VARCHAR(256) NOT NULL,
+                CREATEDAT         BIGINT       NOT NULL,
+                UNIQUE (USERNAME, CLIENTID)
+            );
+
+            -- Scope grants (FK to OAUTH_TRUSTED_CLIENT)
+            CREATE TABLE IF NOT EXISTS OAUTH_SCOPE (
+                ID                SERIAL       PRIMARY KEY,
+                TRUSTED_CLIENT_ID INT          NOT NULL REFERENCES OAUTH_TRUSTED_CLIENT(ID) ON DELETE CASCADE,
+                SCOPE             VARCHAR(256) NOT NULL
+            );
+
+            -- RAR authorization details (added in 24.12)
+            CREATE TABLE IF NOT EXISTS OAUTH_AUTHORIZATION_DETAILS (
+                ID                SERIAL       PRIMARY KEY,
+                TRUSTED_CLIENT_ID INT          NOT NULL REFERENCES OAUTH_TRUSTED_CLIENT(ID) ON DELETE CASCADE,
+                TYPE              VARCHAR(256) NOT NULL,
+                DETAILS           TEXT
+            );
+
+            -- Dynamic client registration
+            CREATE TABLE IF NOT EXISTS OAUTH20_DYNAMIC_CLIENT (
+                CLIENTID          VARCHAR(256) NOT NULL PRIMARY KEY,
+                COMPONENTID       VARCHAR(256) NOT NULL,
+                CLIENTMETADATA    TEXT         NOT NULL,
+                CREATEDAT         BIGINT       NOT NULL,
+                UPDATEDAT         BIGINT
+            );
+
+            -- General key-value store with TTL
+            CREATE TABLE IF NOT EXISTS DMAP_ENTRIES (
+                KEY               VARCHAR(512) NOT NULL PRIMARY KEY,
+                VALUE             TEXT,
+                DATATYPE          VARCHAR(64),
+                EXPIRY            BIGINT
+            );
+
+            -- Indexes for performance
+            CREATE INDEX IF NOT EXISTS IDX_TOKEN_CACHE_EXPIRES
+              ON OAUTH20_TOKEN_CACHE (EXPIRES);
+            CREATE INDEX IF NOT EXISTS IDX_TOKEN_CACHE_CLIENTID
+              ON OAUTH20_TOKEN_CACHE (CLIENTID);
+            CREATE INDEX IF NOT EXISTS IDX_TOKEN_EXTRA_LOOKUP
+              ON OAUTH20_TOKEN_EXTRA_ATTRIBUTE (LOOKUP_ID);
+            CREATE INDEX IF NOT EXISTS IDX_JTI_EXPIRES
+              ON OAUTH20_JTI (EXPIRES);
+            CREATE INDEX IF NOT EXISTS IDX_DMAP_EXPIRY
+              ON DMAP_ENTRIES (EXPIRY);
+
+            SQL
+            echo "IVIA database schema initialized successfully"
+          EOSQL
+          ]
+
+          resources {
+            requests = {
+              cpu    = "100m"
+              memory = "128Mi"
+            }
+            limits = {
+              cpu    = "250m"
+              memory = "256Mi"
+            }
+          }
+        }
+      }
+    }
+  }
+
+  wait_for_completion = true
+
+  timeouts {
+    create = "5m"
+  }
+
+  depends_on = [
+    kubernetes_secret.isvaop_server,
+  ]
 }
 
 ################################################################################
@@ -399,7 +671,8 @@ resource "kubernetes_deployment" "isvaop" {
               scheme = "HTTPS"
             }
             initial_delay_seconds = 30
-            period_seconds        = 10
+            timeout_seconds       = 30
+            period_seconds        = 30
             failure_threshold     = 6
           }
 
@@ -409,82 +682,26 @@ resource "kubernetes_deployment" "isvaop" {
               port   = 8436
               scheme = "HTTPS"
             }
-            initial_delay_seconds = 60
-            period_seconds        = 15
+            initial_delay_seconds = 30
+            timeout_seconds       = 30
+            period_seconds        = 30
             failure_threshold     = 3
           }
 
+          # Single volume mount — config secret contains config.yaml with
+          # inline B64 keystore. IVIA reads DB creds and obf key via K8s API
+          # (secret: syntax), so no additional volume mounts are needed.
           volume_mount {
             name       = "config"
             mount_path = "/var/isvaop/config"
-            read_only  = true
-          }
-
-          volume_mount {
-            name       = "keystore-personal"
-            mount_path = "/var/isvaop/config/keystore/https_keys/personal"
-            read_only  = true
-          }
-
-          volume_mount {
-            name       = "keystore-signer"
-            mount_path = "/var/isvaop/config/keystore/https_keys/signer"
-            read_only  = true
-          }
-
-          volume_mount {
-            name       = "server-secret"
-            mount_path = "/secrets/server"
-            read_only  = true
-          }
-
-          volume_mount {
-            name       = "obf-secret"
-            mount_path = "/secrets/obf"
             read_only  = true
           }
         }
 
         volume {
           name = "config"
-          config_map {
-            name = kubernetes_config_map.isvaop_config.metadata[0].name
-          }
-        }
-
-        volume {
-          name = "keystore-personal"
           secret {
-            secret_name = kubernetes_secret.isvaop_keystore.metadata[0].name
-            items {
-              key  = "server-key.pem"
-              path = "server-key.pem"
-            }
-          }
-        }
-
-        volume {
-          name = "keystore-signer"
-          secret {
-            secret_name = kubernetes_secret.isvaop_keystore.metadata[0].name
-            items {
-              key  = "server-cert.pem"
-              path = "server-cert.pem"
-            }
-          }
-        }
-
-        volume {
-          name = "server-secret"
-          secret {
-            secret_name = kubernetes_secret.isvaop_server.metadata[0].name
-          }
-        }
-
-        volume {
-          name = "obf-secret"
-          secret {
-            secret_name = kubernetes_secret.isvaop_obf.metadata[0].name
+            secret_name = kubernetes_secret.isvaop_config.metadata[0].name
           }
         }
       }
@@ -495,8 +712,8 @@ resource "kubernetes_deployment" "isvaop" {
     kubernetes_secret.icr_pull,
     kubernetes_secret.isvaop_server,
     kubernetes_secret.isvaop_obf,
-    kubernetes_secret.isvaop_keystore,
-    kubernetes_config_map.isvaop_config,
+    kubernetes_secret.isvaop_config,
+    kubernetes_job.ivia_db_init,
   ]
 }
 
