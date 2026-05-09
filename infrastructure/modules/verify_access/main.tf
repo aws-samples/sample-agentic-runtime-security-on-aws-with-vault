@@ -71,13 +71,6 @@ resource "kubernetes_namespace" "verify_access" {
       "workshop/component"           = "ivia"
     }
   }
-
-  identity {
-    api_version = "v1"
-    kind        = "Namespace"
-    name        = "verify-access"
-    namespace   = ""
-  }
 }
 
 ################################################################################
@@ -94,13 +87,6 @@ resource "kubernetes_secret" "icr_pull" {
     labels = {
       "app.kubernetes.io/managed-by" = "terraform"
     }
-  }
-
-  identity {
-    api_version = "v1"
-    kind        = "Secret"
-    name        = "icr-pull-secret"
-    namespace   = "verify-access"
   }
 
   type = "kubernetes.io/dockerconfigjson"
@@ -132,13 +118,6 @@ resource "kubernetes_service_account" "isvaop" {
     }
   }
 
-  identity {
-    api_version = "v1"
-    kind        = "ServiceAccount"
-    name        = "isvaop"
-    namespace   = "verify-access"
-  }
-
   image_pull_secret {
     name = kubernetes_secret.icr_pull.metadata[0].name
   }
@@ -148,13 +127,6 @@ resource "kubernetes_role" "isvaop" {
   metadata {
     name      = "isvaop"
     namespace = kubernetes_namespace.verify_access.metadata[0].name
-  }
-
-  identity {
-    api_version = "rbac.authorization.k8s.io/v1"
-    kind        = "Role"
-    name        = "isvaop"
-    namespace   = "verify-access"
   }
 
   rule {
@@ -168,13 +140,6 @@ resource "kubernetes_role_binding" "isvaop" {
   metadata {
     name      = "isvaop"
     namespace = kubernetes_namespace.verify_access.metadata[0].name
-  }
-
-  identity {
-    api_version = "rbac.authorization.k8s.io/v1"
-    kind        = "RoleBinding"
-    name        = "isvaop"
-    namespace   = "verify-access"
   }
 
   role_ref {
@@ -207,13 +172,6 @@ resource "kubernetes_secret" "isvaop_server" {
     }
   }
 
-  identity {
-    api_version = "v1"
-    kind        = "Secret"
-    name        = "isvaop-server"
-    namespace   = "verify-access"
-  }
-
   type = "Opaque"
 
   data = {
@@ -236,13 +194,6 @@ resource "kubernetes_secret" "isvaop_obf" {
     }
   }
 
-  identity {
-    api_version = "v1"
-    kind        = "Secret"
-    name        = "isvaop-obf"
-    namespace   = "verify-access"
-  }
-
   type = "Opaque"
 
   data = {
@@ -262,13 +213,6 @@ resource "kubernetes_config_map" "isvaop_config" {
       "app.kubernetes.io/name"       = "isvaop"
       "app.kubernetes.io/managed-by" = "terraform"
     }
-  }
-
-  identity {
-    api_version = "v1"
-    kind        = "ConfigMap"
-    name        = "isvaop-config"
-    namespace   = "verify-access"
   }
 
   data = {
@@ -327,13 +271,6 @@ resource "kubernetes_deployment" "isvaop" {
       "app.kubernetes.io/managed-by" = "terraform"
       "workshop/component"           = "ivia"
     }
-  }
-
-  identity {
-    api_version = "apps/v1"
-    kind        = "Deployment"
-    name        = "isvaop"
-    namespace   = "verify-access"
   }
 
   spec {
@@ -469,13 +406,6 @@ resource "kubernetes_service" "isvaop" {
     }
   }
 
-  identity {
-    api_version = "v1"
-    kind        = "Service"
-    name        = "isvaop"
-    namespace   = "verify-access"
-  }
-
   spec {
     selector = {
       "app.kubernetes.io/name" = "isvaop"
@@ -510,13 +440,6 @@ resource "kubernetes_ingress_v1" "isvaop" {
       "app.kubernetes.io/name"       = "isvaop"
       "app.kubernetes.io/managed-by" = "terraform"
     }
-  }
-
-  identity {
-    api_version = "networking.k8s.io/v1"
-    kind        = "Ingress"
-    name        = "isvaop"
-    namespace   = "verify-access"
   }
 
   spec {
