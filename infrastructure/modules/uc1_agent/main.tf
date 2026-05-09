@@ -36,13 +36,6 @@ resource "kubernetes_namespace" "uc1" {
       app = "uc1-agent"
     }
   }
-
-  identity {
-    api_version = "v1"
-    kind        = "Namespace"
-    name        = "uc1"
-    namespace   = ""
-  }
 }
 
 ################################################################################
@@ -61,13 +54,6 @@ resource "kubernetes_service_account" "uc1" {
     }
   }
 
-  identity {
-    api_version = "v1"
-    kind        = "ServiceAccount"
-    name        = "uc1-retriever-sa"
-    namespace   = "uc1"
-  }
-
   automount_service_account_token = true
 }
 
@@ -81,13 +67,6 @@ resource "kubernetes_config_map" "uc1_config" {
   metadata {
     name      = "uc1-config"
     namespace = kubernetes_namespace.uc1.metadata[0].name
-  }
-
-  identity {
-    api_version = "v1"
-    kind        = "ConfigMap"
-    name        = "uc1-config"
-    namespace   = "uc1"
   }
 
   data = {
@@ -114,13 +93,6 @@ resource "kubernetes_deployment" "uc1" {
     labels = {
       app = "uc1-agent"
     }
-  }
-
-  identity {
-    api_version = "apps/v1"
-    kind        = "Deployment"
-    name        = "uc1-agent"
-    namespace   = "uc1"
   }
 
   spec {
@@ -210,13 +182,6 @@ resource "kubernetes_service" "uc1" {
     }
   }
 
-  identity {
-    api_version = "v1"
-    kind        = "Service"
-    name        = "uc1-agent-svc"
-    namespace   = "uc1"
-  }
-
   spec {
     type = "ClusterIP"
 
@@ -249,13 +214,6 @@ resource "kubernetes_network_policy" "uc1_egress" {
   metadata {
     name      = "uc1-egress"
     namespace = kubernetes_namespace.uc1.metadata[0].name
-  }
-
-  identity {
-    api_version = "networking.k8s.io/v1"
-    kind        = "NetworkPolicy"
-    name        = "uc1-egress"
-    namespace   = "uc1"
   }
 
   spec {

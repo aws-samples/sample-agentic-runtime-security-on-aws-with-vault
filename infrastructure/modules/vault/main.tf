@@ -154,13 +154,6 @@ resource "kubernetes_namespace" "vault" {
       "app.kubernetes.io/managed-by" = "terraform"
     }
   }
-
-  identity {
-    api_version = "v1"
-    kind        = "Namespace"
-    name        = "vault"
-    namespace   = ""
-  }
 }
 
 ################################################################################
