@@ -60,6 +60,12 @@ variable "icr_entitlement_key" {
   description = "IBM Container Registry entitlement key for pulling IVIA images (icr.io/ivia/ivia-oidc-provider:26.03). Attendees obtain this from the IBM Cloud console under 'Container Registry' entitlement keys."
 }
 
+variable "ivia_activation_code" {
+  type        = string
+  sensitive   = true
+  description = "IVIA activation code (PEM certificate content). Trial license from isva-trial.verify.ibm.com or production code from Passport Advantage (M11DCML)."
+}
+
 variable "addons_ready" {
   description = "Consumed but unused — creates implicit Stacks ordering so IVIA deploys after the AWS LB Controller webhook is serving."
   type        = any

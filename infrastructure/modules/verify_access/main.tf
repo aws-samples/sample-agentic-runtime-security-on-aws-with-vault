@@ -289,6 +289,8 @@ resource "kubernetes_secret" "isvaop_config" {
       version: 24.08
 
       server:
+        activation_code: |
+          ${indent(10, var.ivia_activation_code)}
         ssl:
           key: "ks:https_keys/serverkey"
           certificate: "ks:https_keys/servercert"

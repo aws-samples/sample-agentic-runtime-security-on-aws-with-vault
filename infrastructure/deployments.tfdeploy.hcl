@@ -97,6 +97,27 @@ deployment "usw2" {
     # IBM Container Registry entitlement key for IVIA images
     icr_entitlement_key = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJJQk0gTWFya2V0cGxhY2UiLCJpYXQiOjE3NzgyODQwNDksImp0aSI6IjZkZjJkNWY5M2NlYjRmZWE5YThlNWM2ODI5MWM3MzQ2In0.UHv4IX0FFa7ASBWf4Txclhfz-52ZTjMwixXdFxtAWsA"
 
+    # IVIA trial activation code (from isva-trial.verify.ibm.com)
+    ivia_activation_code = <<-EOT
+-----BEGIN CERTIFICATE-----
+MIICwzCCAasCAQAwDQYJKoZIhvcNAQELBQAwJjEMMAoGA1UEChMDaWJtMRYwFAYD
+VQQDEw1JU0FNIFRyaWFsIENBMB4XDTI2MDUwODE3NTM1OVoXDTI2MDgwNzE3NTM1
+OVowKTESMBAGA1UECgwJSGFzaGlDb3JwMRMwEQYDVQQDDAo2OTEwMDBWTTJIMIIB
+IjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwl5kCOFiZpjC/FdnRVb7W6/r
+9XRIG6yLl0EpXRKCar9uq8va5qrIhKuBR/rVA2ThHG9FLUzXUMq3F/4IbaPJnW/a
+YcVPhtEcixokoMrDrNMkErVPZ+EsKS7nkUK9hptzpvasoRxxA2wj4x/E+hrugFXR
+fhjerRvmoJ6ir74T7xbemaI5ZhhFTp0TSNyF/JfQHmxU1s7RO4PjVxxms/G3+Oyg
+Vt7bbwHq0GcMqXRgeZiZNWe+UDo2dTtuDRbmnt3Iz8H8hzVN860fIqYo1ed405E6
+FPOyDuv9Xo6ALP+L3ttFSZeqruRzfaEyW9sdoFmcXB9JNFLTyJFvrcPgdjgTfwID
+AQABMA0GCSqGSIb3DQEBCwUAA4IBAQA04etp4F5mI0ja95U3iIkAfEz2MWXyFNg0
+1IRUcMGW8pB+HSTUSfgv4B9zVbxJGyQxkW5MpnN5X8vfmCazetNX6pvae+8Mts2Y
+rdmPmEb3MXgEu7pSYIIxuT+mDm9OQxrNtJmZ7SUYq/mdCwu6vdK2UMHUXUlJ/XSG
+3hbmbB7fsva2Eby92hVy/npsC1+q5QfDGV70QwED9VyL7Cg8tYGA8/ZbsIpioSpz
+3hkHGaYO8Sl+zJgWrnCt8QPH7TFJasrUeHqYJj489VXxCs7gOIgTDyyogIExaqJB
+TD2STvy+tvIIKXh+jq6MieXIjGFi62lzTyYJRdKEpYK6kL16l7AU
+-----END CERTIFICATE-----
+EOT
+
     # UC1 Agent image — attendees set this after ECR push (Phase 4 lab step).
     # Replace with the actual ECR URI: <account>.dkr.ecr.us-west-2.amazonaws.com/uc1-agent:<tag>
     uc1_agent_image = "<placeholder-ecr-uri>"
