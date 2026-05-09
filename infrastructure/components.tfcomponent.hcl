@@ -247,45 +247,24 @@ component "vault" {
 # rds (PostgreSQL backend), vault (OIDC seam target).
 # Deploys IVIA 11.0.2 OIDC provider via raw kubernetes_* manifests.
 #-------------------------------------------------------------------------------
-# TEMPORARILY REMOVED — clearing stale state to work around Kubernetes provider
-# identity bug. Will be re-added in next commit.
-# component "ivia" { ... }
+# Clearing stale state to work around Kubernetes provider identity bug.
+# removed blocks tell Stacks to destroy these resources and drop from state.
+removed {
+  source = "./modules/verify_access"
+  from   = component.ivia
+}
 
-#-------------------------------------------------------------------------------
-# Vault Config Component (Wave 5)
-# Configures Vault backends after Vault is running:
-#   - Kubernetes auth (CONF-01), JWT auth (CONF-02), PostgreSQL secrets engine
-#     (CONF-03), AWS secrets engine (CONF-04), audit device (PLAT-05).
-# RDS password is NOT a plain stack variable — vault_config fetches it from
-# Secrets Manager via rds_master_user_secret_arn + data.aws_secretsmanager_secret_version.
-# Pitfall 8: RDS output names use NO prefix — component.rds.endpoint,
-#            component.rds.master_username, etc. (NOT component.rds.rds_endpoint).
-#-------------------------------------------------------------------------------
-# TEMPORARILY REMOVED — clearing stale state (identity bug workaround)
-# component "vault_config" { ... }
-# component "isva_config" { ... }
+removed {
+  source = "./modules/vault_config"
+  from   = component.vault_config
+}
 
-#-------------------------------------------------------------------------------
-# UC1 Agent Component (Wave 6) — TEMPORARILY REMOVED (depends on vault_config)
-#-------------------------------------------------------------------------------
-# component "uc1_agent" {
-#   source = "./modules/uc1_agent"
-#
-#   providers = {
-#     kubernetes = provider.kubernetes.main
-#   }
-#
-#   inputs = {
-#     vault_addr        = component.vault.vault_endpoint
-#     vault_role        = component.vault_config.uc1_role_name
-#     rds_address       = component.rds.address
-#     rds_port          = component.rds.port
-#     rds_db_name       = component.rds.db_name
-#     knowledge_base_id = component.bedrock_kb_index.knowledge_base_id
-#     region            = var.region
-#     kb_region         = var.kb_region
-#     agent_image       = var.uc1_agent_image
-#     bedrock_model_id  = var.bedrock_model_id
-#     tags              = var.tags
-#   }
-# }
+removed {
+  source = "./modules/isva_config"
+  from   = component.isva_config
+}
+
+removed {
+  source = "./modules/uc1_agent"
+  from   = component.uc1_agent
+}
