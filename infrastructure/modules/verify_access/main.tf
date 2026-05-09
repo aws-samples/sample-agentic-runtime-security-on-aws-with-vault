@@ -31,6 +31,10 @@ terraform {
       source  = "hashicorp/time"
       version = "~> 0.9"
     }
+    tls = {
+      source  = "hashicorp/tls"
+      version = "~> 4.0"
+    }
   }
 }
 
@@ -57,6 +61,47 @@ locals {
 resource "random_password" "obfuscation_key" {
   length  = 32
   special = false
+}
+
+# Keystore password for the PKCS12 file used by IVIA TLS + token signing.
+resource "random_password" "keystore_password" {
+  length  = 24
+  special = false
+}
+
+################################################################################
+# TLS — Self-signed certificate for IVIA OIDC provider (workshop only)
+# Production would use cert-manager with a real CA.
+################################################################################
+
+resource "tls_private_key" "isvaop" {
+  algorithm = "RSA"
+  rsa_bits  = 2048
+}
+
+resource "tls_self_signed_cert" "isvaop" {
+  private_key_pem = tls_private_key.isvaop.private_key_pem
+
+  subject {
+    common_name  = "isvaop.verify-access.svc.cluster.local"
+    organization = "Workshop"
+  }
+
+  dns_names = [
+    "isvaop",
+    "isvaop.verify-access",
+    "isvaop.verify-access.svc",
+    "isvaop.verify-access.svc.cluster.local",
+  ]
+
+  validity_period_hours = 8760
+  is_ca_certificate     = false
+
+  allowed_uses = [
+    "key_encipherment",
+    "digital_signature",
+    "server_auth",
+  ]
 }
 
 ################################################################################
@@ -101,6 +146,30 @@ resource "kubernetes_secret" "icr_pull" {
         }
       }
     })
+  }
+}
+
+################################################################################
+# Keystore Secret — PEM key + cert for IVIA TLS and token signing
+# IVIA expects /var/isvaop/config/keystore/<name>/personal/ (key) and signer/ (cert)
+# Mounted as a secret volume with items projected into the directory structure.
+################################################################################
+
+resource "kubernetes_secret" "isvaop_keystore" {
+  metadata {
+    name      = "isvaop-keystore"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels = {
+      "app.kubernetes.io/name"       = "isvaop"
+      "app.kubernetes.io/managed-by" = "terraform"
+    }
+  }
+
+  type = "Opaque"
+
+  data = {
+    "server-key.pem"  = tls_private_key.isvaop.private_key_pem
+    "server-cert.pem" = tls_self_signed_cert.isvaop.cert_pem
   }
 }
 
@@ -221,6 +290,8 @@ resource "kubernetes_config_map" "isvaop_config" {
         ssl:
           enabled: true
           port: 8436
+          key: "@keystore/https_keys/personal/server-key.pem"
+          certificate: "@keystore/https_keys/signer/server-cert.pem"
 
       oidc_provider:
         issuer: "https://isvaop.verify-access.svc.cluster.local:8436/oidc"
@@ -231,6 +302,8 @@ resource "kubernetes_config_map" "isvaop_config" {
         token_settings:
           access_token_lifetime: 900
           id_token_lifetime: 3600
+        signing_key: "@keystore/https_keys/personal/server-key.pem"
+        signing_certificate: "@keystore/https_keys/signer/server-cert.pem"
 
       runtime_db:
         type: postgresql
@@ -343,7 +416,19 @@ resource "kubernetes_deployment" "isvaop" {
 
           volume_mount {
             name       = "config"
-            mount_path = "/config"
+            mount_path = "/var/isvaop/config"
+            read_only  = true
+          }
+
+          volume_mount {
+            name       = "keystore-personal"
+            mount_path = "/var/isvaop/config/keystore/https_keys/personal"
+            read_only  = true
+          }
+
+          volume_mount {
+            name       = "keystore-signer"
+            mount_path = "/var/isvaop/config/keystore/https_keys/signer"
             read_only  = true
           }
 
@@ -368,6 +453,28 @@ resource "kubernetes_deployment" "isvaop" {
         }
 
         volume {
+          name = "keystore-personal"
+          secret {
+            secret_name = kubernetes_secret.isvaop_keystore.metadata[0].name
+            items {
+              key  = "server-key.pem"
+              path = "server-key.pem"
+            }
+          }
+        }
+
+        volume {
+          name = "keystore-signer"
+          secret {
+            secret_name = kubernetes_secret.isvaop_keystore.metadata[0].name
+            items {
+              key  = "server-cert.pem"
+              path = "server-cert.pem"
+            }
+          }
+        }
+
+        volume {
           name = "server-secret"
           secret {
             secret_name = kubernetes_secret.isvaop_server.metadata[0].name
@@ -388,6 +495,7 @@ resource "kubernetes_deployment" "isvaop" {
     kubernetes_secret.icr_pull,
     kubernetes_secret.isvaop_server,
     kubernetes_secret.isvaop_obf,
+    kubernetes_secret.isvaop_keystore,
     kubernetes_config_map.isvaop_config,
   ]
 }
