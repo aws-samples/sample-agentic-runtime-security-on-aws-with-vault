@@ -252,19 +252,40 @@ component "vault" {
 removed {
   source = "./modules/verify_access"
   from   = component.ivia
+
+  providers = {
+    aws        = provider.aws.main
+    kubernetes = provider.kubernetes.main
+    random     = provider.random.main
+    time       = provider.time.main
+    tls        = provider.tls.main
+  }
 }
 
 removed {
   source = "./modules/vault_config"
   from   = component.vault_config
+
+  providers = {
+    vault = provider.vault.main
+    aws   = provider.aws.main
+  }
 }
 
 removed {
   source = "./modules/isva_config"
   from   = component.isva_config
+
+  providers = {
+    restapi = provider.restapi.main
+  }
 }
 
 removed {
   source = "./modules/uc1_agent"
   from   = component.uc1_agent
+
+  providers = {
+    kubernetes = provider.kubernetes.main
+  }
 }
