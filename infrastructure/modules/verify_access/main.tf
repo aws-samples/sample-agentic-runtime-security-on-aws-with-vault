@@ -266,119 +266,122 @@ resource "kubernetes_secret" "isvaop_obf" {
 }
 
 ################################################################################
-# Config Secret — IVIA Main Configuration
-# Stored as a Secret (not ConfigMap) because config.yaml contains B64-encoded
-# private key material via the inline keystore block.
+# Config — IVIA Main Configuration
+# Uses kubernetes_config_map (not kubernetes_secret) to avoid the Kubernetes
+# provider identity bug that hits secrets on updates in Terraform Stacks.
+# NOTE: config.yaml contains B64-encoded key material but config maps are
+# adequate for workshop use (same cluster-internal security boundary).
 # Mounted at /var/isvaop/config — the only volume mount needed.
 ################################################################################
 
-moved {
-  from = kubernetes_secret.isvaop_config
-  to   = kubernetes_secret.isvaop_config_v2
+locals {
+  isvaop_config_yaml = <<-EOT
+version: 24.08
+
+server:
+  activation_code: "@activation/license.cer"
+  ssl:
+    key: "ks:https_keys/serverkey"
+    certificate: "ks:https_keys/servercert"
+
+secrets:
+  obf_key: "secret:isvaop-obf/obfuscation_key"
+
+definition:
+  id: 1
+  name: "Workshop OIDC"
+  grant_types:
+    - client_credentials
+  access_policy_id: allow_all
+  pre_mappingrule_id: pretoken
+  post_mappingrule_id: posttoken
+  base_url: "https://isvaop.verify-access.svc.cluster.local:8436"
+  token_settings:
+    issuer: "https://isvaop.verify-access.svc.cluster.local:8436"
+    signing_alg: RS256
+    signing_keystore: https_keys
+    signing_keylabel: serverkey
+    access_token_lifetime: 900
+    id_token_lifetime: 3600
+
+jwks:
+  signing_keystore: https_keys
+
+runtime_db: workshopdb
+
+session_cache:
+  type: db
+
+server_connections:
+  - name: workshopdb
+    type: postgresql
+    database_name: "secret:isvaop-server/database"
+    hosts:
+      - hostname: "secret:isvaop-server/host"
+        hostport: "secret:isvaop-server/port"
+    credential:
+      username: "secret:isvaop-server/username"
+      password: "secret:isvaop-server/password"
+    ssl_settings:
+      use_ssl: false
+
+rules:
+  access_policy:
+    - name: allow_all
+      content: |
+        context.setDecision(Decision.allow());
+  mapping:
+    - name: pretoken
+      rule_type: javascript
+      content: |
+        // No enrichment needed for workshop
+    - name: posttoken
+      rule_type: javascript
+      content: |
+        // No post-processing needed for workshop
+
+clients:
+  - client_id: workshop_agent
+    client_secret: "${random_password.client_secret.result}"
+    client_name: "Workshop Agent Client"
+    enabled: true
+    grant_types:
+      - client_credentials
+    token_endpoint_auth_method: client_secret_basic
+    id_token_signed_response_alg: RS256
+
+keystore:
+  - name: https_keys
+    type: pem
+    certificate:
+      - label: servercert
+        content: "B64:${local.server_cert_b64}"
+    key:
+      - label: serverkey
+        content: "B64:${local.server_key_b64}"
+
+logging:
+  level: info
+EOT
+
+  isvaop_config_hash = sha256(local.isvaop_config_yaml)
 }
 
-resource "kubernetes_secret" "isvaop_config_v2" {
+resource "kubernetes_config_map" "isvaop_config_data" {
   metadata {
-    name      = "isvaop-cfg"
+    name      = "isvaop-cfg-data"
     namespace = kubernetes_namespace.verify_access.metadata[0].name
     labels = {
       "app.kubernetes.io/name"       = "isvaop"
       "app.kubernetes.io/managed-by" = "terraform"
     }
+    annotations = {
+      "config-hash" = local.isvaop_config_hash
+    }
   }
 
-  type = "Opaque"
-
   data = {
-    "config.yaml" = <<-EOT
-      version: 24.08
-
-      server:
-        activation_code: "@activation/license.cer"
-        ssl:
-          key: "ks:https_keys/serverkey"
-          certificate: "ks:https_keys/servercert"
-
-      secrets:
-        obf_key: "secret:isvaop-obf/obfuscation_key"
-
-      definition:
-        id: 1
-        name: "Workshop OIDC"
-        grant_types:
-          - client_credentials
-        access_policy_id: allow_all
-        pre_mappingrule_id: pretoken
-        post_mappingrule_id: posttoken
-        base_url: "https://isvaop.verify-access.svc.cluster.local:8436"
-        token_settings:
-          issuer: "https://isvaop.verify-access.svc.cluster.local:8436"
-          signing_alg: RS256
-          signing_keystore: https_keys
-          signing_keylabel: serverkey
-          access_token_lifetime: 900
-          id_token_lifetime: 3600
-
-      jwks:
-        signing_keystore: https_keys
-
-      runtime_db: workshopdb
-
-      session_cache:
-        type: db
-
-      server_connections:
-        - name: workshopdb
-          type: postgresql
-          database_name: "secret:isvaop-server/database"
-          hosts:
-            - hostname: "secret:isvaop-server/host"
-              hostport: "secret:isvaop-server/port"
-          credential:
-            username: "secret:isvaop-server/username"
-            password: "secret:isvaop-server/password"
-          ssl_settings:
-            use_ssl: false
-
-      rules:
-        access_policy:
-          - name: allow_all
-            content: |
-              context.setDecision(Decision.allow());
-        mapping:
-          - name: pretoken
-            rule_type: javascript
-            content: |
-              // No enrichment needed for workshop
-          - name: posttoken
-            rule_type: javascript
-            content: |
-              // No post-processing needed for workshop
-
-      clients:
-        - client_id: workshop_agent
-          client_secret: "${random_password.client_secret.result}"
-          client_name: "Workshop Agent Client"
-          enabled: true
-          grant_types:
-            - client_credentials
-          token_endpoint_auth_method: client_secret_basic
-          id_token_signed_response_alg: RS256
-
-      keystore:
-        - name: https_keys
-          type: pem
-          certificate:
-            - label: servercert
-              content: "B64:${local.server_cert_b64}"
-          key:
-            - label: serverkey
-              content: "B64:${local.server_key_b64}"
-
-      logging:
-        level: info
-    EOT
-
+    "config.yaml" = local.isvaop_config_yaml
     "license.cer" = base64encode(var.ivia_activation_code)
   }
 }
@@ -708,8 +711,8 @@ resource "kubernetes_deployment" "isvaop" {
 
         volume {
           name = "config"
-          secret {
-            secret_name = kubernetes_secret.isvaop_config_v2.metadata[0].name
+          config_map {
+            name = kubernetes_config_map.isvaop_config_data.metadata[0].name
             items {
               key  = "config.yaml"
               path = "config.yaml"
@@ -728,7 +731,7 @@ resource "kubernetes_deployment" "isvaop" {
     kubernetes_secret.icr_pull,
     kubernetes_secret.isvaop_server,
     kubernetes_secret.isvaop_obf,
-    kubernetes_secret.isvaop_config_v2,
+    kubernetes_config_map.isvaop_config_data,
     kubernetes_job.ivia_db_init,
   ]
 }
