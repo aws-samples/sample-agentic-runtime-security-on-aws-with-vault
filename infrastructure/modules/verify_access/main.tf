@@ -382,7 +382,7 @@ resource "kubernetes_config_map" "isvaop_config_data" {
 
   data = {
     "config.yaml" = local.isvaop_config_yaml
-    "license.cer" = base64encode(var.ivia_activation_code)
+    "license.cer" = var.ivia_activation_code
   }
 }
 
@@ -707,6 +707,12 @@ resource "kubernetes_deployment" "isvaop" {
             mount_path = "/var/isvaop/config"
             read_only  = true
           }
+
+          volume_mount {
+            name       = "schema-rar"
+            mount_path = "/isvaop/config/schema/rar"
+            read_only  = true
+          }
         }
 
         volume {
@@ -722,6 +728,11 @@ resource "kubernetes_deployment" "isvaop" {
               path = "activation/license.cer"
             }
           }
+        }
+
+        volume {
+          name = "schema-rar"
+          empty_dir {}
         }
       }
     }
