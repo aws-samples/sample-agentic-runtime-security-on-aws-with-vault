@@ -270,21 +270,16 @@ resource "kubernetes_secret" "isvaop_obf" {
 # Stored as a Secret (not ConfigMap) because config.yaml contains B64-encoded
 # private key material via the inline keystore block.
 # Mounted at /var/isvaop/config — the only volume mount needed.
-# NOTE: renamed from isvaop_config to isvaop_config_v2 to force destroy+create
-# (works around Kubernetes provider identity bug on updates in Stacks).
 ################################################################################
 
-removed {
+moved {
   from = kubernetes_secret.isvaop_config
-
-  lifecycle {
-    destroy = true
-  }
+  to   = kubernetes_secret.isvaop_config_v2
 }
 
 resource "kubernetes_secret" "isvaop_config_v2" {
   metadata {
-    name      = "isvaop-config"
+    name      = "isvaop-cfg"
     namespace = kubernetes_namespace.verify_access.metadata[0].name
     labels = {
       "app.kubernetes.io/name"       = "isvaop"
