@@ -159,7 +159,7 @@ provider "vault" "main" {
 
 provider "restapi" "main" {
   config {
-    uri      = "https://${component.ivia.ivia_service_endpoint}"
+    uri      = "https://placeholder.local"
     insecure = true
     headers = {
       "Content-Type" = "application/json"
