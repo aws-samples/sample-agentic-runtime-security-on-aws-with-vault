@@ -379,7 +379,7 @@ resource "kubernetes_secret" "isvaop_config_v2" {
         level: info
     EOT
 
-    "license.cer" = var.ivia_activation_code
+    "license.cer" = base64encode(var.ivia_activation_code)
   }
 }
 
