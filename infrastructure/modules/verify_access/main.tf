@@ -289,8 +289,7 @@ resource "kubernetes_secret" "isvaop_config" {
       version: 24.08
 
       server:
-        activation_code: |
-          ${indent(10, var.ivia_activation_code)}
+        activation_code: "@activation/license.cer"
         ssl:
           key: "ks:https_keys/serverkey"
           certificate: "ks:https_keys/servercert"
@@ -374,6 +373,8 @@ resource "kubernetes_secret" "isvaop_config" {
       logging:
         level: info
     EOT
+
+    "license.cer" = var.ivia_activation_code
   }
 }
 
@@ -704,6 +705,14 @@ resource "kubernetes_deployment" "isvaop" {
           name = "config"
           secret {
             secret_name = kubernetes_secret.isvaop_config.metadata[0].name
+            items {
+              key  = "config.yaml"
+              path = "config.yaml"
+            }
+            items {
+              key  = "license.cer"
+              path = "activation/license.cer"
+            }
           }
         }
       }
