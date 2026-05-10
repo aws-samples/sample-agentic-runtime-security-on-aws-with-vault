@@ -275,11 +275,13 @@ resource "kubernetes_secret" "isvaop_obf" {
 ################################################################################
 
 locals {
+  activation_code_b64 = join("", [for line in split("\n", var.ivia_activation_code) : trimspace(line) if !startswith(trimspace(line), "-----") && length(trimspace(line)) > 0])
+
   isvaop_config_yaml = <<-EOT
 version: 24.08
 
 server:
-  activation_code: "@activation/license.cer"
+  activation_code: "${local.activation_code_b64}"
   ssl:
     key: "ks:https_keys/serverkey"
     certificate: "ks:https_keys/servercert"
@@ -382,7 +384,6 @@ resource "kubernetes_config_map" "isvaop_config_data" {
 
   data = {
     "config.yaml" = local.isvaop_config_yaml
-    "license.cer" = join("", [for line in split("\n", var.ivia_activation_code) : trimspace(line) if !startswith(trimspace(line), "-----") && length(trimspace(line)) > 0])
   }
 }
 
@@ -722,10 +723,6 @@ resource "kubernetes_deployment" "isvaop" {
             items {
               key  = "config.yaml"
               path = "config.yaml"
-            }
-            items {
-              key  = "license.cer"
-              path = "activation/license.cer"
             }
           }
         }
