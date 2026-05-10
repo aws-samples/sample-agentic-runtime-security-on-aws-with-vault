@@ -382,7 +382,7 @@ resource "kubernetes_config_map" "isvaop_config_data" {
 
   data = {
     "config.yaml" = local.isvaop_config_yaml
-    "license.cer" = var.ivia_activation_code
+    "license.cer" = join("", [for line in split("\n", var.ivia_activation_code) : trimspace(line) if !startswith(trimspace(line), "-----") && length(trimspace(line)) > 0])
   }
 }
 
