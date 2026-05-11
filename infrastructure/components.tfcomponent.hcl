@@ -245,11 +245,11 @@ component "vault" {
 # IBM Verify Identity Access Component (Wave 4)
 # Depends on eks (cluster creds), audit (log groups), addons (LBC for ALB),
 # rds (PostgreSQL backend), vault (OIDC seam target).
-# Deploys IVIA 11.0.2 OIDC provider via raw kubernetes_* manifests.
+# Deploys IVIA 25.10 OIDC provider via raw kubernetes_* manifests.
+# No activation code needed (mandatory only from 26.03+).
 #-------------------------------------------------------------------------------
-removed {
+component "ivia" {
   source = "./modules/verify_access"
-  from   = component.ivia
 
   providers = {
     aws        = provider.aws.main
@@ -258,6 +258,22 @@ removed {
     time       = provider.time.main
     tls        = provider.tls.main
   }
+
+  inputs = {
+    region                     = var.region
+    cluster_name               = component.eks.cluster_name
+    rds_endpoint               = component.rds.endpoint
+    rds_address                = component.rds.address
+    rds_port                   = component.rds.port
+    rds_master_username        = component.rds.master_username
+    rds_master_user_secret_arn = component.rds.master_user_secret_arn
+    rds_db_name                = component.rds.db_name
+    vault_endpoint             = component.vault.vault_endpoint
+    audit_log_group_names      = component.audit.audit_log_group_names
+    addons_ready               = component.addons.aws_load_balancer_controller_release
+    icr_entitlement_key        = var.icr_entitlement_key
+    tags                       = var.tags
+  }
 }
 
 #-------------------------------------------------------------------------------
@@ -265,30 +281,73 @@ removed {
 # Configures Vault auth backends (Kubernetes, JWT/OIDC), policies, and roles
 # after both Vault and IVIA are running.
 #-------------------------------------------------------------------------------
-removed {
+component "vault_config" {
   source = "./modules/vault_config"
-  from   = component.vault_config
 
   providers = {
     vault = provider.vault.main
     aws   = provider.aws.main
   }
+
+  inputs = {
+    region                             = var.region
+    cluster_endpoint                   = component.eks.cluster_endpoint
+    cluster_certificate_authority_data = component.eks.cluster_certificate_authority_data
+    cluster_oidc_issuer                = component.eks.cluster_oidc_issuer
+    ivia_oidc_discovery_url            = component.ivia.ivia_oidc_discovery_url
+    rds_endpoint                       = component.rds.endpoint
+    rds_master_username                = component.rds.master_username
+    rds_master_user_secret_arn         = component.rds.master_user_secret_arn
+    rds_db_name                        = component.rds.db_name
+    bedrock_role_arn                   = component.bedrock_kb_aoss.kb_role_arn
+    tags                               = var.tags
+  }
 }
 
-removed {
+#-------------------------------------------------------------------------------
+# ISVA Config Component (Wave 5)
+# Configures IVIA OIDC federation settings via REST API after IVIA is running.
+#-------------------------------------------------------------------------------
+component "isva_config" {
   source = "./modules/isva_config"
-  from   = component.isva_config
+
+  depends_on = [component.vault_config]
 
   providers = {
     restapi = provider.restapi.main
   }
+
+  inputs = {
+    ivia_service_endpoint      = component.ivia.ivia_service_endpoint
+    vault_config_jwt_auth_path = component.vault_config.jwt_auth_path
+    ivia_admin_username        = var.ivia_admin_username
+    ivia_admin_password        = var.ivia_admin_password
+  }
 }
 
-removed {
+#-------------------------------------------------------------------------------
+# Use Case 1 Agent Component (Wave 6)
+# Deploys the agentic security agent pod that integrates Vault, IVIA, RDS,
+# and Bedrock KB for runtime identity-aware authorization.
+#-------------------------------------------------------------------------------
+component "uc1_agent" {
   source = "./modules/uc1_agent"
-  from   = component.uc1_agent
 
   providers = {
     kubernetes = provider.kubernetes.main
+  }
+
+  inputs = {
+    vault_addr        = component.vault.vault_endpoint
+    vault_role        = component.vault_config.uc1_role_name
+    rds_address       = component.rds.address
+    rds_port          = component.rds.port
+    rds_db_name       = component.rds.db_name
+    knowledge_base_id = component.bedrock_kb_index.knowledge_base_id
+    region            = var.region
+    kb_region         = var.kb_region
+    agent_image       = var.uc1_agent_image
+    bedrock_model_id  = var.bedrock_model_id
+    tags              = var.tags
   }
 }
