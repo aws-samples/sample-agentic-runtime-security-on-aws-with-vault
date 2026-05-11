@@ -187,10 +187,10 @@ phase_gather() {
 
   # Bedrock KB role ARN
   info "Reading Bedrock KB role..."
-  BEDROCK_ROLE_ARN=$(aws iam list-roles --query "Roles[?contains(RoleName, 'bedrock') && contains(RoleName, 'kb')].Arn | [0]" \
+  BEDROCK_ROLE_ARN=$(aws iam list-roles --query "Roles[?contains(RoleName, 'kb-role')].Arn | [0]" \
     --output text 2>/dev/null || echo "")
   if [[ -z "$BEDROCK_ROLE_ARN" || "$BEDROCK_ROLE_ARN" == "None" ]]; then
-    BEDROCK_ROLE_ARN=$(aws iam list-roles --query "Roles[?contains(RoleName, 'BedrockKB')].Arn | [0]" \
+    BEDROCK_ROLE_ARN=$(aws iam list-roles --query "Roles[?contains(RoleName, 'workshop-kb')].Arn | [0]" \
       --output text 2>/dev/null || echo "")
   fi
   if [[ -z "$BEDROCK_ROLE_ARN" || "$BEDROCK_ROLE_ARN" == "None" ]]; then

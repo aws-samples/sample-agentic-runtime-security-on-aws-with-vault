@@ -88,7 +88,7 @@ if echo "${VAULT_STATUS}" | grep -q '"initialized": true'; then
   fi
 
   echo ""
-  info "Next step: run ./vault-enable-config.sh to enable Wave 5-6 components."
+  info "Next step: run ./vault-configure.sh to configure Vault auth backends and policies."
   exit 0
 fi
 
@@ -143,12 +143,9 @@ fi
 
 #--- Summary -------------------------------------------------------------------
 echo ""
-info "Next steps:"
-echo "  1. Store the root token in HCP variable set 'agentic-runtime-stacks-config':"
-echo "     Variable name:  vault_token"
-echo "     Value:          ${ROOT_TOKEN}"
-echo "     Category:       terraform"
-echo "     Sensitive:      yes"
+info "Next step:"
+echo "  Run ./vault-configure.sh to configure Vault auth backends, secrets engines,"
+echo "  and policies via local Terraform apply with kubectl port-forward."
 echo ""
-echo "  2. Run ./vault-enable-config.sh to set enable_vault_config=true and trigger"
-echo "     the second Stacks deploy (Wave 5-6: vault_config + isva_config + uc1_agent)."
+echo "  Example:"
+echo "    ./vault-configure.sh --vault-token ${ROOT_TOKEN}"
