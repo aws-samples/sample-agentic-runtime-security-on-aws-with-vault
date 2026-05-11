@@ -157,6 +157,25 @@ resource "kubernetes_namespace" "vault" {
 }
 
 ################################################################################
+# Vault Service Account
+# Created explicitly because the Helm chart's serviceAccount.create is false
+# (Pitfall V1). Pod Identity does NOT create the SA — it only maps an existing
+# SA to an IAM role. Without this resource, the StatefulSet fails:
+#   "pods vault-0 is forbidden: serviceaccount vault not found"
+################################################################################
+
+resource "kubernetes_service_account" "vault" {
+  metadata {
+    name      = "vault"
+    namespace = kubernetes_namespace.vault.metadata[0].name
+    labels = {
+      "app.kubernetes.io/name"       = "vault"
+      "app.kubernetes.io/managed-by" = "terraform"
+    }
+  }
+}
+
+################################################################################
 # Vault Helm Release
 # Chart: hashicorp/vault 0.32.0 (Vault server image 2.0.0)
 # HA values rendered from vault-ha.yaml.tpl template.
@@ -180,5 +199,8 @@ resource "helm_release" "vault" {
   wait    = true
   timeout = 600
 
-  depends_on = [aws_eks_pod_identity_association.vault]
+  depends_on = [
+    aws_eks_pod_identity_association.vault,
+    kubernetes_service_account.vault,
+  ]
 }

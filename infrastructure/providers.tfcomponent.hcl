@@ -147,17 +147,23 @@ provider "random" "main" {
   config {}
 }
 
-# Vault provider — Vault address is the in-cluster service DNS.
-# vault_token is the root/initial token used only for bootstrap configuration;
-# agents use short-lived tokens issued by the Kubernetes auth backend.
+# Vault provider — gated by enable_vault_config (two-phase bootstrap).
+# First run: enable_vault_config=false → provider not instantiated → vault_config skipped.
+# After vault operator init + token stored in HCP: enable_vault_config=true → provider active.
 provider "vault" "main" {
+  for_each = var.enable_vault_config ? toset(["enabled"]) : toset([])
+
   config {
     address = "http://vault.vault.svc.cluster.local:8200"
     token   = var.vault_token
   }
 }
 
+# REST API provider for IVIA Config Service — same gate as vault_config
+# because isva_config depends on vault_config.
 provider "restapi" "main" {
+  for_each = var.enable_vault_config ? toset(["enabled"]) : toset([])
+
   config {
     uri      = "https://${component.ivia.ivia_service_endpoint}"
     insecure = true

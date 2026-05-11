@@ -98,12 +98,16 @@ variable "icr_entitlement_key" {
 
 #-------------------------------------------------------------------------------
 # Vault Configuration
-# vault_token: Vault root/initial token used ONLY for bootstrap config in
-# vault_config component. Never used by UC agents (they use K8s auth).
-# Ephemeral = true so the token is not stored in Stacks state.
-# NOTE: rds_master_password is NOT here — vault_config fetches it from
-#       Secrets Manager via rds_master_user_secret_arn + data source.
+# Two-phase bootstrap: first run deploys Vault (enable_vault_config=false),
+# operator inits manually, stores root token in HCP variable set, then
+# second run sets enable_vault_config=true to deploy vault_config + downstream.
 #-------------------------------------------------------------------------------
+
+variable "enable_vault_config" {
+  type        = bool
+  description = "Gate for vault_config, isva_config, uc1_agent components. Set false until Vault is initialized and vault_token is available."
+  default     = false
+}
 
 variable "vault_token" {
   type        = string
