@@ -14,9 +14,9 @@
 #           bedrock_kb_index (bedrock_kb_aoss)
 #   Wave 3: vault (eks + audit + addons)
 #   Wave 4: ivia (eks + rds + vault + audit + addons)
-#   Wave 5: vault_config (vault + eks + rds + ivia)          [gated: enable_vault_config]
-#           isva_config  (ivia + vault_config)               [gated: enable_vault_config]
-#   Wave 6: uc1_agent (vault_config + rds + bedrock_kb_index + eks) [gated: enable_vault_config]
+#   Wave 5: vault_config (vault + eks + rds + ivia)          [module-level enabled gate]
+#           isva_config  (ivia + vault_config)               [module-level enabled gate]
+#   Wave 6: uc1_agent (vault_config + rds + bedrock_kb_index + eks) [module-level enabled gate]
 #
 # Per HCP Stacks docs, component output references in `inputs` are sufficient
 # to express ordering; explicit `depends_on` is reserved for non-obvious
@@ -281,11 +281,12 @@ component "ivia" {
 # Vault Config Component (Wave 5)
 # Configures Vault auth backends (Kubernetes, JWT/OIDC), policies, and roles
 # after both Vault and IVIA are running.
-# Gated by enable_vault_config (two-phase bootstrap — see variables.tfcomponent.hcl).
+# Module-level enabled gate: when enable_vault_config=false, all resources
+# inside the module are skipped (for_each = {}). Outputs return static
+# defaults so downstream component references still resolve.
 #-------------------------------------------------------------------------------
 component "vault_config" {
-  source   = "./modules/vault_config"
-  for_each = var.enable_vault_config ? toset(["enabled"]) : toset([])
+  source = "./modules/vault_config"
 
   providers = {
     vault = provider.vault.main
@@ -293,6 +294,7 @@ component "vault_config" {
   }
 
   inputs = {
+    enabled                            = var.enable_vault_config
     region                             = var.region
     cluster_endpoint                   = component.eks.cluster_endpoint
     cluster_certificate_authority_data = component.eks.cluster_certificate_authority_data
@@ -310,11 +312,10 @@ component "vault_config" {
 #-------------------------------------------------------------------------------
 # ISVA Config Component (Wave 5)
 # Configures IVIA OIDC federation settings via REST API after IVIA is running.
-# Same gate as vault_config — depends on Vault being initialized.
+# Same enabled gate as vault_config.
 #-------------------------------------------------------------------------------
 component "isva_config" {
-  source   = "./modules/isva_config"
-  for_each = var.enable_vault_config ? toset(["enabled"]) : toset([])
+  source = "./modules/isva_config"
 
   depends_on = [component.vault_config]
 
@@ -323,8 +324,9 @@ component "isva_config" {
   }
 
   inputs = {
+    enabled                    = var.enable_vault_config
     ivia_service_endpoint      = component.ivia.ivia_service_endpoint
-    vault_config_jwt_auth_path = component.vault_config[each.key].jwt_auth_path
+    vault_config_jwt_auth_path = component.vault_config.jwt_auth_path
     ivia_admin_username        = var.ivia_admin_username
     ivia_admin_password        = var.ivia_admin_password
   }
@@ -334,19 +336,19 @@ component "isva_config" {
 # Use Case 1 Agent Component (Wave 6)
 # Deploys the agentic security agent pod that integrates Vault, IVIA, RDS,
 # and Bedrock KB for runtime identity-aware authorization.
-# Same gate as vault_config — agent needs Vault roles/policies to exist.
+# Same enabled gate as vault_config.
 #-------------------------------------------------------------------------------
 component "uc1_agent" {
-  source   = "./modules/uc1_agent"
-  for_each = var.enable_vault_config ? toset(["enabled"]) : toset([])
+  source = "./modules/uc1_agent"
 
   providers = {
     kubernetes = provider.kubernetes.main
   }
 
   inputs = {
+    enabled           = var.enable_vault_config
     vault_addr        = component.vault.vault_endpoint
-    vault_role        = component.vault_config[each.key].uc1_role_name
+    vault_role        = component.vault_config.uc1_role_name
     rds_address       = component.rds.address
     rds_port          = component.rds.port
     rds_db_name       = component.rds.db_name
@@ -356,42 +358,5 @@ component "uc1_agent" {
     agent_image       = var.uc1_agent_image
     bedrock_model_id  = var.bedrock_model_id
     tags              = var.tags
-  }
-}
-
-################################################################################
-# Removed Blocks — Claim old keyless component instances from state
-# Before the for_each gate was added, these components existed as single
-# instances (no key). Adding for_each changes the instance address to
-# component.<name>["enabled"], leaving the old keyless instance unclaimed.
-# These removed blocks tell Stacks to destroy any remaining resources
-# and drop the old instances from state.
-################################################################################
-
-removed {
-  from   = component.vault_config
-  source = "./modules/vault_config"
-
-  providers = {
-    vault = provider.vault.main
-    aws   = provider.aws.main
-  }
-}
-
-removed {
-  from   = component.isva_config
-  source = "./modules/isva_config"
-
-  providers = {
-    restapi = provider.restapi.main
-  }
-}
-
-removed {
-  from   = component.uc1_agent
-  source = "./modules/uc1_agent"
-
-  providers = {
-    kubernetes = provider.kubernetes.main
   }
 }

@@ -3,6 +3,12 @@
 # Inputs wired from component.isva_config in components.tfcomponent.hcl
 ################################################################################
 
+variable "enabled" {
+  description = "When false, this module creates no resources (two-phase Vault bootstrap)."
+  type        = bool
+  default     = true
+}
+
 variable "ivia_service_endpoint" {
   description = "IVIA ClusterIP service DNS endpoint (host only, no scheme). Format: isvaop.verify-access.svc.cluster.local. The restapi provider constructs its URI as https://<endpoint>."
   type        = string

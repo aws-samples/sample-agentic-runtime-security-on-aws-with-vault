@@ -24,6 +24,10 @@ terraform {
   }
 }
 
+locals {
+  enabled_instances = var.enabled ? { main = true } : {}
+}
+
 ################################################################################
 # OAuth Clients — CONF-05
 # Three clients matching the three use-case agent identities.
@@ -33,6 +37,8 @@ terraform {
 
 # UC1: client_credentials grant — background agent with no user context
 resource "restapi_object" "uc1_client" {
+  for_each = local.enabled_instances
+
   path         = "/mga/sps/oauth/oauth20/clients"
   id_attribute = "client_id"
 
@@ -48,6 +54,8 @@ resource "restapi_object" "uc1_client" {
 
 # UC2: authorization_code + PKCE — user-delegated personal data agent
 resource "restapi_object" "uc2_client" {
+  for_each = local.enabled_instances
+
   path         = "/mga/sps/oauth/oauth20/clients"
   id_attribute = "client_id"
 
@@ -65,6 +73,8 @@ resource "restapi_object" "uc2_client" {
 
 # UC3: CIBA grant — asynchronous user consent for financial operation
 resource "restapi_object" "uc3_client" {
+  for_each = local.enabled_instances
+
   path         = "/mga/sps/oauth/oauth20/clients"
   id_attribute = "client_id"
 
@@ -87,6 +97,8 @@ resource "restapi_object" "uc3_client" {
 ################################################################################
 
 resource "restapi_object" "ciba_policy" {
+  for_each = local.enabled_instances
+
   path         = "/mga/sps/authservice/authentication/mechanisms/ciba"
   id_attribute = "id"
 
@@ -107,6 +119,8 @@ resource "restapi_object" "ciba_policy" {
 ################################################################################
 
 resource "restapi_object" "rar_types" {
+  for_each = local.enabled_instances
+
   path         = "/mga/sps/oauth/oauth20/rar-types"
   id_attribute = "type"
 
@@ -134,6 +148,8 @@ resource "restapi_object" "rar_types" {
 ################################################################################
 
 resource "restapi_object" "jwt_signing" {
+  for_each = local.enabled_instances
+
   path         = "/mga/sps/oauth/oauth20/jwt-signing"
   id_attribute = "algorithm"
 

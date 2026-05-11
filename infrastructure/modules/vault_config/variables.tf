@@ -3,6 +3,12 @@
 # Inputs wired from component.vault_config in deployments.tfdeploy.hcl
 ################################################################################
 
+variable "enabled" {
+  description = "Feature gate — when false, no Vault resources are created but outputs still return static defaults so downstream references resolve."
+  type        = bool
+  default     = true
+}
+
 variable "cluster_endpoint" {
   description = "EKS API server endpoint — used by vault_kubernetes_auth_backend_config.kubernetes_host."
   type        = string
