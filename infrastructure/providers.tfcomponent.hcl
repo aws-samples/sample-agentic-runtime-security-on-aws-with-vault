@@ -160,7 +160,7 @@ provider "vault" "main" {
 # REST API provider for IVIA Config Service — always instantiated (same reason).
 provider "restapi" "main" {
   config {
-    uri      = "https://${component.ivia.ivia_service_endpoint}"
+    uri      = component.ivia.ivia_external_endpoint
     insecure = true
     headers = {
       "Content-Type" = "application/json"

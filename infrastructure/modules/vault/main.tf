@@ -232,7 +232,7 @@ resource "aws_security_group_rule" "vault_nlb_ingress" {
   protocol          = "tcp"
   cidr_blocks       = ["0.0.0.0/0"]
   security_group_id = var.node_security_group_id
-  description       = "Vault NLB ingress — HCP Terraform remote access"
+  description       = "Vault NLB ingress - HCP Terraform remote access"
 }
 
 resource "kubernetes_service" "vault_external" {

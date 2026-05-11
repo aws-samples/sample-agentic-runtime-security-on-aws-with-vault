@@ -23,3 +23,8 @@ output "ivia_ingress_hostname" {
   description = "ALB hostname provisioned by AWS Load Balancer Controller for external OIDC discovery. May be empty until the LBC reconciles the Ingress resource."
   value       = try(kubernetes_ingress_v1.isvaop.status[0].load_balancer[0].ingress[0].hostname, "")
 }
+
+output "ivia_external_endpoint" {
+  description = "IVIA external endpoint via ALB (scheme + host). Used by the restapi provider in isva_config since HCP Terraform cannot reach cluster-internal DNS."
+  value       = "https://${try(kubernetes_ingress_v1.isvaop.status[0].load_balancer[0].ingress[0].hostname, "")}"
+}
