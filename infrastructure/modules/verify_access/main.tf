@@ -1,6 +1,6 @@
 ################################################################################
 # Verify Access Module — Main
-# IBM Verify Identity Access OIDC Provider (image tag 26.03)
+# IBM Verify Identity Access OIDC Provider (image tag 25.10)
 #
 # Deploys IVIA via raw kubernetes_* Terraform resources (no Helm chart exists
 # for IVIA). Provides OAuth client_credentials grant as the identity plane
@@ -18,7 +18,7 @@
 #   - DB schema initialized via kubernetes_job before deployment
 #
 # Pitfall 3: ICR pull secret MUST be created before deployment — without it
-#            pods get ImagePullBackOff (icr.io/ivia/ivia-oidc-provider:26.03).
+#            pods get ImagePullBackOff (icr.io/ivia/ivia-oidc-provider:25.10).
 # Pitfall 6: Use raw kubernetes_* resources only. The kubernetes provider is
 #            already pinned in the stack; no extra provider is needed.
 ################################################################################
@@ -275,13 +275,10 @@ resource "kubernetes_secret" "isvaop_obf" {
 ################################################################################
 
 locals {
-  activation_code_b64 = join("", [for line in split("\n", var.ivia_activation_code) : trimspace(line) if !startswith(trimspace(line), "-----") && length(trimspace(line)) > 0])
-
   isvaop_config_yaml = <<-EOT
 version: 24.08
 
 server:
-  activation_code: "${local.activation_code_b64}"
   ssl:
     key: "ks:https_keys/serverkey"
     certificate: "ks:https_keys/servercert"
@@ -624,7 +621,7 @@ resource "kubernetes_deployment" "isvaop" {
     namespace = kubernetes_namespace.verify_access.metadata[0].name
     labels = {
       "app.kubernetes.io/name"       = "isvaop"
-      "app.kubernetes.io/version"    = "26.03"
+      "app.kubernetes.io/version"    = "25.10"
       "app.kubernetes.io/managed-by" = "terraform"
       "workshop/component"           = "ivia"
     }
@@ -643,7 +640,7 @@ resource "kubernetes_deployment" "isvaop" {
       metadata {
         labels = {
           "app.kubernetes.io/name"    = "isvaop"
-          "app.kubernetes.io/version" = "26.03"
+          "app.kubernetes.io/version" = "25.10"
           "workshop/component"        = "ivia"
         }
       }
@@ -657,7 +654,7 @@ resource "kubernetes_deployment" "isvaop" {
 
         container {
           name  = "isvaop"
-          image = "icr.io/ivia/ivia-oidc-provider:26.03"
+          image = "icr.io/ivia/ivia-oidc-provider:25.10"
 
           port {
             container_port = 8436

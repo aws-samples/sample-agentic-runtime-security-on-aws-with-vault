@@ -57,13 +57,7 @@ variable "audit_log_group_names" {
 variable "icr_entitlement_key" {
   type        = string
   sensitive   = true
-  description = "IBM Container Registry entitlement key for pulling IVIA images (icr.io/ivia/ivia-oidc-provider:26.03). Attendees obtain this from the IBM Cloud console under 'Container Registry' entitlement keys."
-}
-
-variable "ivia_activation_code" {
-  type        = string
-  sensitive   = true
-  description = "IVIA activation code (PEM certificate content). Trial license from isva-trial.verify.ibm.com or production code from Passport Advantage (M11DCML)."
+  description = "IBM Container Registry entitlement key for pulling IVIA images (icr.io/ivia/ivia-oidc-provider:25.10). Attendees obtain this from the IBM Cloud console under 'Container Registry' entitlement keys."
 }
 
 variable "addons_ready" {

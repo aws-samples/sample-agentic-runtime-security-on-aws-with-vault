@@ -96,13 +96,6 @@ variable "icr_entitlement_key" {
   description = "IBM Container Registry entitlement key for pulling IVIA images (icr.io/ivia/ivia-oidc-provider). Attendees obtain from IBM."
 }
 
-variable "ivia_activation_code" {
-  type        = string
-  sensitive   = true
-  default     = ""
-  description = "IVIA activation code (PEM certificate). Trial license from isva-trial.verify.ibm.com or production from Passport Advantage (M11DCML)."
-}
-
 #-------------------------------------------------------------------------------
 # Vault Configuration
 # vault_token: Vault root/initial token used ONLY for bootstrap config in

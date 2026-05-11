@@ -271,7 +271,6 @@ component "ivia" {
     audit_log_group_names      = component.audit.audit_log_group_names
     addons_ready               = component.addons.aws_load_balancer_controller_release
     icr_entitlement_key        = var.icr_entitlement_key
-    ivia_activation_code       = var.ivia_activation_code
     tags                       = var.tags
   }
 }
