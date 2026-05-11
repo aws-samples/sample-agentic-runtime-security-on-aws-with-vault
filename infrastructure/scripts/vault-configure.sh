@@ -126,7 +126,7 @@ phase_gather() {
   # Auto-detect region
   if [[ -z "$REGION" ]]; then
     REGION=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null \
-      | grep -oP '(?<=\.)[a-z]+-[a-z]+-[0-9]+(?=\.)' || true)
+      | sed -n 's/.*\.\([a-z]*-[a-z]*-[0-9]*\)\..*/\1/p' || true)
     if [[ -z "$REGION" ]]; then
       REGION=$(aws configure get region 2>/dev/null || echo "us-west-2")
     fi
@@ -136,7 +136,7 @@ phase_gather() {
   # Auto-detect cluster name
   if [[ -z "$CLUSTER_NAME" ]]; then
     CLUSTER_NAME=$(kubectl config current-context 2>/dev/null \
-      | grep -oP '(?<=:cluster/)[^:]+' || true)
+      | sed -n 's/.*:cluster\/\([^:]*\).*/\1/p' || true)
     [[ -z "$CLUSTER_NAME" ]] && CLUSTER_NAME="agentic-runtime-usw2"
   fi
   ok "Cluster: ${CLUSTER_NAME}"
@@ -200,6 +200,28 @@ phase_gather() {
     ok "Bedrock role ARN: ${BEDROCK_ROLE_ARN}"
   fi
 
+  # IVIA self-signed TLS cert (Vault needs it to trust OIDC discovery)
+  info "Reading IVIA TLS certificate..."
+  IVIA_CERT_PEM=$(kubectl get secret -n verify-access \
+    $(kubectl get pods -n verify-access -l app.kubernetes.io/name=isvaop -o jsonpath='{.items[0].metadata.name}' 2>/dev/null) \
+    -o jsonpath='{.data.tls\.crt}' 2>/dev/null | base64 -d 2>/dev/null || true)
+  if [[ -z "$IVIA_CERT_PEM" ]]; then
+    # Fallback: extract from the configmap config.yaml B64 cert
+    IVIA_CERT_PEM=$(kubectl get configmap isvaop-cfg-data -n verify-access -o jsonpath='{.data.config\.yaml}' 2>/dev/null \
+      | sed -n 's/.*B64:\([A-Za-z0-9+/=]*\).*/\1/p' | head -1 | base64 -d 2>/dev/null || true)
+  fi
+  if [[ -z "$IVIA_CERT_PEM" ]]; then
+    # Last fallback: openssl s_client
+    IVIA_CERT_PEM=$(kubectl exec -n vault vault-0 -- sh -c \
+      'echo | openssl s_client -connect isvaop.verify-access.svc.cluster.local:8436 -servername isvaop 2>/dev/null' 2>/dev/null \
+      | sed -n '/BEGIN CERTIFICATE/,/END CERTIFICATE/p' || true)
+  fi
+  if [[ -n "$IVIA_CERT_PEM" ]]; then
+    ok "IVIA TLS cert: captured ($(echo "$IVIA_CERT_PEM" | wc -l | tr -d ' ') lines)"
+  else
+    warn "Could not capture IVIA TLS cert — JWT auth backend may fail"
+  fi
+
   # IVIA password
   if [[ "$SKIP_IVIA" == false && -z "$IVIA_PASSWORD" ]]; then
     read -rsp "[INPUT] IVIA admin password (or press Enter to skip IVIA): " IVIA_PASSWORD
@@ -258,6 +280,9 @@ cluster_oidc_issuer                = "${CLUSTER_OIDC_ISSUER}"
 rds_endpoint                       = "${RDS_ENDPOINT}"
 rds_master_user_secret_arn         = "${RDS_SECRET_ARN}"
 bedrock_role_arn                   = "${BEDROCK_ROLE_ARN}"
+ivia_oidc_ca_pem                   = <<-CERTEOF
+${IVIA_CERT_PEM}
+CERTEOF
 TFVARS
   chmod 600 "${VAULT_CONFIG_DIR}/terraform.tfvars"
   ok "terraform.tfvars written (mode 600)"

@@ -36,6 +36,12 @@ variable "ivia_oidc_discovery_url" {
   default     = "https://isvaop.verify-access.svc.cluster.local:8436/.well-known/openid-configuration"
 }
 
+variable "ivia_oidc_ca_pem" {
+  description = "IVIA self-signed TLS certificate PEM. Vault needs this to trust the OIDC discovery endpoint."
+  type        = string
+  sensitive   = true
+}
+
 variable "rds_endpoint" {
   description = "RDS endpoint in host:port form."
   type        = string

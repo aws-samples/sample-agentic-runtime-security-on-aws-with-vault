@@ -47,6 +47,7 @@ module "vault_config" {
   cluster_certificate_authority_data = var.cluster_certificate_authority_data
   cluster_oidc_issuer                = var.cluster_oidc_issuer
   ivia_oidc_discovery_url            = var.ivia_oidc_discovery_url
+  ivia_oidc_ca_pem                   = var.ivia_oidc_ca_pem
   rds_endpoint                       = var.rds_endpoint
   rds_master_username                = var.rds_master_username
   rds_master_user_secret_arn         = var.rds_master_user_secret_arn

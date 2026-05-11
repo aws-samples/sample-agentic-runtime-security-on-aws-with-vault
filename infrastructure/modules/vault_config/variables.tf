@@ -24,6 +24,13 @@ variable "ivia_oidc_discovery_url" {
   type        = string
 }
 
+variable "ivia_oidc_ca_pem" {
+  description = "IVIA self-signed TLS certificate PEM. Vault needs this to trust the OIDC discovery endpoint (self-signed cert, not in system trust store)."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
 variable "rds_endpoint" {
   description = "RDS endpoint in <address>:<port> form — matches rds module output 'endpoint' (no rds_ prefix). Used in the Vault PostgreSQL secrets engine connection_url."
   type        = string
