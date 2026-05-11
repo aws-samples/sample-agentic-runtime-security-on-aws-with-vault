@@ -179,6 +179,19 @@ resource "kubernetes_service_account" "vault" {
 # Vault Helm Release
 # Chart: hashicorp/vault 0.32.0 (Vault server image 2.0.0)
 # HA values rendered from vault-ha.yaml.tpl template.
+#
+# POST-DEPLOY MANUAL STEP — Two-phase bootstrap:
+#   After this Helm release deploys the 3-node Raft cluster, Vault starts
+#   sealed and uninitialized. KMS auto-unseal handles unsealing, but
+#   initialization is a one-time manual operation:
+#
+#   1. kubectl exec -n vault vault-0 -- vault operator init -format=json
+#      → Save root_token and recovery_keys (3-of-5 threshold).
+#   2. Store vault_token (root token) in HCP variable set as sensitive+ephemeral.
+#   3. Set enable_vault_config = true in deployments.tfdeploy.hcl.
+#   4. Commit + push → next Stacks run deploys vault_config + downstream.
+#
+#   Recovery keys are needed only if KMS becomes unavailable. Store securely.
 ################################################################################
 
 resource "helm_release" "vault" {
