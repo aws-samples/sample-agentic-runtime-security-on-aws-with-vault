@@ -322,7 +322,7 @@ server_connections:
       username: "secret:isvaop-server/username"
       password: "secret:isvaop-server/password"
     ssl_settings:
-      use_ssl: false
+      use_ssl: true
 
 rules:
   access_policy:
