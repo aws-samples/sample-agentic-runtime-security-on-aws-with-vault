@@ -3,13 +3,6 @@
 # Inputs wired from component.isva_config in components.tfcomponent.hcl
 ################################################################################
 
-# TEMPORARY: retained so the Stacks removed block can process old state that
-# included enabled=true. Remove after Stacks state cleanup run succeeds.
-variable "enabled" {
-  type    = bool
-  default = true
-}
-
 variable "ivia_service_endpoint" {
   description = "IVIA ClusterIP service DNS endpoint (host only, no scheme). Format: isvaop.verify-access.svc.cluster.local. The restapi provider constructs its URI as https://<endpoint>."
   type        = string

@@ -87,6 +87,8 @@ resource "kubernetes_config_map" "uc1_config" {
 ################################################################################
 
 resource "kubernetes_deployment" "uc1" {
+  wait_for_rollout = false
+
   metadata {
     name      = "uc1-agent"
     namespace = kubernetes_namespace.uc1.metadata[0].name

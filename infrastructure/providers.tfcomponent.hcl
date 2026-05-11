@@ -59,16 +59,6 @@ required_providers {
     version = "~> 3.0"
   }
 
-  # TEMPORARY — required by removed blocks for state cleanup only.
-  vault = {
-    source  = "hashicorp/vault"
-    version = "~> 4.0"
-  }
-  restapi = {
-    source  = "Mastercard/restapi"
-    version = "~> 1.19"
-  }
-
 
 }
 
@@ -146,27 +136,4 @@ provider "time" "main" {
 # Random provider (required by addons + rds modules for password / suffix generation).
 provider "random" "main" {
   config {}
-}
-
-# --------------------------------------------------------------------------
-# TEMPORARY — removed-block providers (state cleanup only)
-# vault_config and isva_config were extracted to local workspaces but their
-# component instances remain in Stacks state. These dummy providers satisfy
-# the removed blocks below. No API calls are made — skip_child_token
-# prevents Vault from trying to authenticate. Remove after one successful
-# Stacks run cleans up state.
-# --------------------------------------------------------------------------
-provider "vault" "cleanup" {
-  config {
-    address          = "http://127.0.0.1:8200"
-    token            = "cleanup-placeholder"
-    skip_child_token = true
-  }
-}
-
-provider "restapi" "cleanup" {
-  config {
-    uri      = "https://127.0.0.1:9999"
-    insecure = true
-  }
 }
