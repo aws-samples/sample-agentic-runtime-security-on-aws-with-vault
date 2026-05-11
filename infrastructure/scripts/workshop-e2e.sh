@@ -793,18 +793,84 @@ phase_identity() {
 }
 
 #===============================================================================
-# PHASE 6: Vault — verify pods, seal status, Raft peers, audit device
+# PHASE 6: Vault — init (two-phase bootstrap) + verify
+# Step 1: vault-init.sh — initialize Vault, save root token + recovery keys
+# Step 2: vault-enable-config.sh — enable Wave 5-6, push to main, trigger Stacks
+# Step 3: Wait for second Stacks deploy to complete
+# Step 4: test-vault-verify.sh — verify pods, seal status, Raft peers, audit
 #===============================================================================
 phase_vault() {
     phase_header "Phase 6: Vault"
 
     if [ "$DRY_RUN" = true ]; then
+        print_info "[DRY-RUN] Would run: vault-init.sh"
+        print_info "[DRY-RUN] Would store vault_token in HCP variable set"
+        print_info "[DRY-RUN] Would run: vault-enable-config.sh"
+        print_info "[DRY-RUN] Would wait for second Stacks deploy"
         print_info "[DRY-RUN] Would run: test-vault-verify.sh"
         return 0
     fi
 
+    # Step 1: Initialize Vault
+    step_header "Initializing Vault (two-phase bootstrap Phase 1)..."
+    bash "$SCRIPT_DIR/vault-init.sh" \
+        || { print_error "vault-init.sh failed"; return 1; }
+
+    # Step 2: Store vault_token in HCP variable set
+    local root_token
+    root_token=$(jq -r '.root_token // empty' "${HOME}/vault-init.json" 2>/dev/null || true)
+    if [ -z "$root_token" ]; then
+        print_error "Could not read root_token from ~/vault-init.json"
+        return 1
+    fi
+
+    step_header "Storing vault_token in HCP variable set..."
+    local org stack_id varset_id
+    org="${HCP_ORG:-}"
+    if [ -z "$org" ]; then
+        print_warn "HCP_ORG not set — cannot auto-store vault_token."
+        print_info "Manually add vault_token=${root_token} to the HCP variable set."
+        pause_if_interactive "Press Enter after storing vault_token in HCP..."
+    else
+        stack_id=$(get_stack_id "$org")
+        varset_id=$(curl -s \
+            -H "Authorization: Bearer $(terraform stacks token 2>/dev/null || echo '')" \
+            "$TFE_API/organizations/$org/varsets?search%5Bname%5D=$VARSET_NAME" 2>/dev/null \
+            | jq -r '.data[0].id // empty' || true)
+        if [ -n "$varset_id" ]; then
+            curl -s -X POST \
+                -H "Authorization: Bearer $(terraform stacks token 2>/dev/null || echo '')" \
+                -H "Content-Type: application/vnd.api+json" \
+                "$TFE_API/varsets/$varset_id/relationships/vars" \
+                -d "{\"data\":{\"type\":\"vars\",\"attributes\":{\"key\":\"vault_token\",\"value\":\"$root_token\",\"category\":\"terraform\",\"sensitive\":true}}}" \
+                >/dev/null 2>&1 \
+                && print_success "vault_token stored in HCP variable set" \
+                || print_warn "Failed to auto-store vault_token — add manually to HCP"
+        else
+            print_warn "Could not find variable set — add vault_token manually to HCP"
+            pause_if_interactive "Press Enter after storing vault_token in HCP..."
+        fi
+    fi
+
+    # Step 3: Enable vault_config and trigger second Stacks deploy
+    step_header "Enabling vault_config (two-phase bootstrap Phase 2)..."
+    bash "$SCRIPT_DIR/vault-enable-config.sh" \
+        || { print_error "vault-enable-config.sh failed"; return 1; }
+
+    # Step 4: Wait for second Stacks deploy
+    if [ -n "${org:-}" ] && [ -n "${stack_id:-}" ]; then
+        wait_for_plan "$org" "$stack_id"
+        approve_deployment_groups "$stack_id"
+        wait_for_apply "$org" "$stack_id"
+    else
+        print_info "Approve the Stacks plan in HCP Terraform UI."
+        pause_if_interactive "Press Enter after the second Stacks run completes..."
+    fi
+
+    # Step 5: Verify Vault
+    step_header "Verifying Vault configuration..."
     bash "$SCRIPT_DIR/test-vault-verify.sh" \
-        || print_warn "Platform verification reported failures (see above)"
+        || print_warn "Vault verification reported failures (see above)"
 
     pause_if_interactive "Vault verification complete."
 }
