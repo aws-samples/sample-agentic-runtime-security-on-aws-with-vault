@@ -304,3 +304,29 @@ component "uc1_agent" {
     tags              = var.tags
   }
 }
+
+################################################################################
+# TEMPORARY — Removed blocks for state cleanup
+# vault_config and isva_config were extracted to local workspaces. These
+# removed blocks claim the old component instances in Stacks state so they
+# can be cleaned up. Remove after one successful Stacks run.
+################################################################################
+
+removed {
+  from   = component.vault_config
+  source = "./modules/vault_config"
+
+  providers = {
+    vault = provider.vault.cleanup
+    aws   = provider.aws.main
+  }
+}
+
+removed {
+  from   = component.isva_config
+  source = "./modules/isva_config"
+
+  providers = {
+    restapi = provider.restapi.cleanup
+  }
+}
