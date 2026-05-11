@@ -4,20 +4,20 @@
 
 output "agent_namespace" {
   description = "Kubernetes namespace where the UC1 agent runs."
-  value       = "uc1"
+  value       = kubernetes_namespace.uc1.metadata[0].name
 }
 
 output "agent_service_name" {
   description = "Name of the Kubernetes Service exposing the UC1 agent (ClusterIP)."
-  value       = "uc1-agent-svc"
+  value       = kubernetes_service.uc1.metadata[0].name
 }
 
 output "agent_deployment_name" {
   description = "Name of the Kubernetes Deployment for the UC1 agent."
-  value       = "uc1-agent"
+  value       = kubernetes_deployment.uc1.metadata[0].name
 }
 
 output "agent_service_account_name" {
   description = "Name of the ServiceAccount bound to the Vault uc1 Kubernetes auth role."
-  value       = "uc1-retriever-sa"
+  value       = kubernetes_service_account.uc1.metadata[0].name
 }

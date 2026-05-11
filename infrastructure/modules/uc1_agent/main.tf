@@ -25,17 +25,11 @@ terraform {
   }
 }
 
-locals {
-  enabled_instances = var.enabled ? { main = true } : {}
-}
-
 ################################################################################
 # 1. Namespace
 ################################################################################
 
 resource "kubernetes_namespace" "uc1" {
-  for_each = local.enabled_instances
-
   metadata {
     name = "uc1"
     labels = {
@@ -52,11 +46,9 @@ resource "kubernetes_namespace" "uc1" {
 ################################################################################
 
 resource "kubernetes_service_account" "uc1" {
-  for_each = local.enabled_instances
-
   metadata {
     name      = "uc1-retriever-sa"
-    namespace = kubernetes_namespace.uc1["main"].metadata[0].name
+    namespace = kubernetes_namespace.uc1.metadata[0].name
     labels = {
       app = "uc1-agent"
     }
@@ -72,11 +64,9 @@ resource "kubernetes_service_account" "uc1" {
 ################################################################################
 
 resource "kubernetes_config_map" "uc1_config" {
-  for_each = local.enabled_instances
-
   metadata {
     name      = "uc1-config"
-    namespace = kubernetes_namespace.uc1["main"].metadata[0].name
+    namespace = kubernetes_namespace.uc1.metadata[0].name
   }
 
   data = {
@@ -97,11 +87,9 @@ resource "kubernetes_config_map" "uc1_config" {
 ################################################################################
 
 resource "kubernetes_deployment" "uc1" {
-  for_each = local.enabled_instances
-
   metadata {
     name      = "uc1-agent"
-    namespace = kubernetes_namespace.uc1["main"].metadata[0].name
+    namespace = kubernetes_namespace.uc1.metadata[0].name
     labels = {
       app = "uc1-agent"
     }
@@ -124,7 +112,7 @@ resource "kubernetes_deployment" "uc1" {
       }
 
       spec {
-        service_account_name            = kubernetes_service_account.uc1["main"].metadata[0].name
+        service_account_name            = kubernetes_service_account.uc1.metadata[0].name
         automount_service_account_token = true
 
         container {
@@ -138,7 +126,7 @@ resource "kubernetes_deployment" "uc1" {
 
           env_from {
             config_map_ref {
-              name = kubernetes_config_map.uc1_config["main"].metadata[0].name
+              name = kubernetes_config_map.uc1_config.metadata[0].name
             }
           }
 
@@ -176,8 +164,8 @@ resource "kubernetes_deployment" "uc1" {
   }
 
   depends_on = [
-    kubernetes_service_account.uc1["main"],
-    kubernetes_config_map.uc1_config["main"],
+    kubernetes_service_account.uc1,
+    kubernetes_config_map.uc1_config,
   ]
 }
 
@@ -186,11 +174,9 @@ resource "kubernetes_deployment" "uc1" {
 ################################################################################
 
 resource "kubernetes_service" "uc1" {
-  for_each = local.enabled_instances
-
   metadata {
     name      = "uc1-agent-svc"
-    namespace = kubernetes_namespace.uc1["main"].metadata[0].name
+    namespace = kubernetes_namespace.uc1.metadata[0].name
     labels = {
       app = "uc1-agent"
     }
@@ -225,11 +211,9 @@ resource "kubernetes_service" "uc1" {
 ################################################################################
 
 resource "kubernetes_network_policy" "uc1_egress" {
-  for_each = local.enabled_instances
-
   metadata {
     name      = "uc1-egress"
-    namespace = kubernetes_namespace.uc1["main"].metadata[0].name
+    namespace = kubernetes_namespace.uc1.metadata[0].name
   }
 
   spec {

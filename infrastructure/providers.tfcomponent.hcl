@@ -59,16 +59,7 @@ required_providers {
     version = "~> 3.0"
   }
 
-  # Vault provider — required by vault_config component (Wave 5).
-  vault = {
-    source  = "hashicorp/vault"
-    version = "~> 4.0"
-  }
 
-  restapi = {
-    source  = "Mastercard/restapi"
-    version = "~> 1.19"
-  }
 }
 
 #-------------------------------------------------------------------------------
@@ -145,27 +136,4 @@ provider "time" "main" {
 # Random provider (required by addons + rds modules for password / suffix generation).
 provider "random" "main" {
   config {}
-}
-
-# Vault provider — always instantiated (provider-level for_each is incompatible
-# with removed blocks that need a provider ref). The empty token is harmless
-# when enable_vault_config=false because no components consume it.
-provider "vault" "main" {
-  config {
-    address = component.vault.vault_endpoint
-    token   = var.vault_token
-  }
-}
-
-# REST API provider for IVIA Config Service — always instantiated (same reason).
-provider "restapi" "main" {
-  config {
-    uri      = component.ivia.ivia_external_endpoint
-    insecure = true
-    headers = {
-      "Content-Type" = "application/json"
-    }
-    username = var.ivia_admin_username
-    password = var.ivia_admin_password
-  }
 }

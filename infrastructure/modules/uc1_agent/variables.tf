@@ -6,12 +6,6 @@
 # NetworkPolicy).
 ################################################################################
 
-variable "enabled" {
-  type        = bool
-  default     = true
-  description = "When false, this module creates no resources (two-phase Vault bootstrap)."
-}
-
 variable "vault_addr" {
   description = "Vault cluster-internal address reachable from the uc1 namespace."
   type        = string

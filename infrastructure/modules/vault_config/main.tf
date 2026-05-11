@@ -28,24 +28,15 @@ terraform {
 }
 
 ################################################################################
-# Enabled gate — controls whether any resources are created
-################################################################################
-
-locals {
-  enabled_instances = var.enabled ? { main = true } : {}
-}
-
-################################################################################
 # RDS master password — Secrets Manager (matches verify_access pattern)
 ################################################################################
 
 data "aws_secretsmanager_secret_version" "rds_master" {
-  for_each  = local.enabled_instances
   secret_id = var.rds_master_user_secret_arn
 }
 
 locals {
-  rds_master_password = var.enabled ? jsondecode(data.aws_secretsmanager_secret_version.rds_master["main"].secret_string)["password"] : null
+  rds_master_password = jsondecode(data.aws_secretsmanager_secret_version.rds_master.secret_string)["password"]
 }
 
 ################################################################################
@@ -54,8 +45,7 @@ locals {
 ################################################################################
 
 resource "vault_audit" "stdout" {
-  for_each = local.enabled_instances
-  type     = "file"
+  type = "file"
 
   options = {
     file_path = "stdout"
@@ -69,14 +59,12 @@ resource "vault_audit" "stdout" {
 ################################################################################
 
 resource "vault_auth_backend" "kubernetes" {
-  for_each = local.enabled_instances
-  type     = "kubernetes"
-  path     = "kubernetes"
+  type = "kubernetes"
+  path = "kubernetes"
 }
 
 resource "vault_kubernetes_auth_backend_config" "this" {
-  for_each           = local.enabled_instances
-  backend            = vault_auth_backend.kubernetes["main"].path
+  backend            = vault_auth_backend.kubernetes.path
   kubernetes_host    = var.cluster_endpoint
   kubernetes_ca_cert = base64decode(var.cluster_certificate_authority_data)
   issuer             = var.cluster_oidc_issuer
@@ -88,7 +76,6 @@ resource "vault_kubernetes_auth_backend_config" "this" {
 ################################################################################
 
 resource "vault_jwt_auth_backend" "ivia" {
-  for_each           = local.enabled_instances
   type               = "jwt"
   path               = "jwt"
   oidc_discovery_url = var.ivia_oidc_discovery_url
@@ -100,14 +87,12 @@ resource "vault_jwt_auth_backend" "ivia" {
 ################################################################################
 
 resource "vault_mount" "database" {
-  for_each = local.enabled_instances
-  path     = "database"
-  type     = "database"
+  path = "database"
+  type = "database"
 }
 
 resource "vault_database_secret_backend_connection" "pg" {
-  for_each          = local.enabled_instances
-  backend           = vault_mount.database["main"].path
+  backend           = vault_mount.database.path
   name              = "workshop-pg"
   allowed_roles     = ["uc1-readonly", "uc2-personal", "uc3-refund-writer"]
   verify_connection = false
@@ -121,10 +106,9 @@ resource "vault_database_secret_backend_connection" "pg" {
 
 # uc1-readonly: SELECT only, 15-min TTL
 resource "vault_database_secret_backend_role" "uc1_readonly" {
-  for_each    = local.enabled_instances
-  backend     = vault_mount.database["main"].path
+  backend     = vault_mount.database.path
   name        = "uc1-readonly"
-  db_name     = vault_database_secret_backend_connection.pg["main"].name
+  db_name     = vault_database_secret_backend_connection.pg.name
   default_ttl = 900  # 15 minutes
   max_ttl     = 1800 # 30 minutes
   creation_statements = [
@@ -141,10 +125,9 @@ resource "vault_database_secret_backend_role" "uc1_readonly" {
 
 # uc2-personal: SELECT only, 15-min TTL (personal data access — full audit in CONF-03)
 resource "vault_database_secret_backend_role" "uc2_personal" {
-  for_each    = local.enabled_instances
-  backend     = vault_mount.database["main"].path
+  backend     = vault_mount.database.path
   name        = "uc2-personal"
-  db_name     = vault_database_secret_backend_connection.pg["main"].name
+  db_name     = vault_database_secret_backend_connection.pg.name
   default_ttl = 900  # 15 minutes
   max_ttl     = 1800 # 30 minutes
   creation_statements = [
@@ -161,10 +144,9 @@ resource "vault_database_secret_backend_role" "uc2_personal" {
 
 # uc3-refund-writer: SELECT + INSERT + UPDATE, 5-min TTL (tightest scope — financial write)
 resource "vault_database_secret_backend_role" "uc3_refund_writer" {
-  for_each    = local.enabled_instances
-  backend     = vault_mount.database["main"].path
+  backend     = vault_mount.database.path
   name        = "uc3-refund-writer"
-  db_name     = vault_database_secret_backend_connection.pg["main"].name
+  db_name     = vault_database_secret_backend_connection.pg.name
   default_ttl = 300 # 5 minutes
   max_ttl     = 600 # 10 minutes
   creation_statements = [
@@ -185,14 +167,12 @@ resource "vault_database_secret_backend_role" "uc3_refund_writer" {
 ################################################################################
 
 resource "vault_aws_secret_backend" "this" {
-  for_each = local.enabled_instances
-  path     = "aws"
-  region   = var.region
+  path   = "aws"
+  region = var.region
 }
 
 resource "vault_aws_secret_backend_role" "bedrock_reader" {
-  for_each        = local.enabled_instances
-  backend         = vault_aws_secret_backend.this["main"].path
+  backend         = vault_aws_secret_backend.this.path
   name            = "bedrock-reader"
   credential_type = "assumed_role"
 
@@ -218,8 +198,7 @@ resource "vault_aws_secret_backend_role" "bedrock_reader" {
 ################################################################################
 
 resource "vault_policy" "uc1_readonly" {
-  for_each = local.enabled_instances
-  name     = "uc1-readonly"
+  name = "uc1-readonly"
 
   policy = <<-EOT
     # UC1: Read-only agent policy
@@ -240,8 +219,7 @@ resource "vault_policy" "uc1_readonly" {
 }
 
 resource "vault_policy" "uc2_personal" {
-  for_each = local.enabled_instances
-  name     = "uc2-personal"
+  name = "uc2-personal"
 
   policy = <<-EOT
     # UC2: Personal-data agent policy
@@ -262,8 +240,7 @@ resource "vault_policy" "uc2_personal" {
 }
 
 resource "vault_policy" "uc3_refund_writer" {
-  for_each = local.enabled_instances
-  name     = "uc3-refund-writer"
+  name = "uc3-refund-writer"
 
   policy = <<-EOT
     # UC3: Refund-writer agent policy
@@ -289,34 +266,31 @@ resource "vault_policy" "uc3_refund_writer" {
 ################################################################################
 
 resource "vault_kubernetes_auth_backend_role" "uc1" {
-  for_each                         = local.enabled_instances
-  backend                          = vault_auth_backend.kubernetes["main"].path
+  backend                          = vault_auth_backend.kubernetes.path
   role_name                        = "uc1"
   bound_service_account_names      = ["uc1-retriever-sa"]
   bound_service_account_namespaces = ["uc1"]
-  token_policies                   = [vault_policy.uc1_readonly["main"].name]
+  token_policies                   = [vault_policy.uc1_readonly.name]
   token_ttl                        = 3600 # 1 hour
   token_max_ttl                    = 7200 # 2 hours
 }
 
 resource "vault_kubernetes_auth_backend_role" "uc2" {
-  for_each                         = local.enabled_instances
-  backend                          = vault_auth_backend.kubernetes["main"].path
+  backend                          = vault_auth_backend.kubernetes.path
   role_name                        = "uc2"
   bound_service_account_names      = ["uc2-personal-retriever-sa"]
   bound_service_account_namespaces = ["uc2"]
-  token_policies                   = [vault_policy.uc2_personal["main"].name]
+  token_policies                   = [vault_policy.uc2_personal.name]
   token_ttl                        = 3600
   token_max_ttl                    = 7200
 }
 
 resource "vault_kubernetes_auth_backend_role" "uc3" {
-  for_each                         = local.enabled_instances
-  backend                          = vault_auth_backend.kubernetes["main"].path
+  backend                          = vault_auth_backend.kubernetes.path
   role_name                        = "uc3"
   bound_service_account_names      = ["uc3-privileged-actor-sa"]
   bound_service_account_namespaces = ["uc3"]
-  token_policies                   = [vault_policy.uc3_refund_writer["main"].name]
+  token_policies                   = [vault_policy.uc3_refund_writer.name]
   token_ttl                        = 3600
   token_max_ttl                    = 7200
 }
@@ -328,11 +302,10 @@ resource "vault_kubernetes_auth_backend_role" "uc3" {
 ################################################################################
 
 resource "vault_jwt_auth_backend_role" "uc2_jwt" {
-  for_each       = local.enabled_instances
-  backend        = vault_jwt_auth_backend.ivia["main"].path
+  backend        = vault_jwt_auth_backend.ivia.path
   role_name      = "uc2-jwt"
   role_type      = "jwt"
-  token_policies = [vault_policy.uc2_personal["main"].name]
+  token_policies = [vault_policy.uc2_personal.name]
   token_ttl      = 3600
   token_max_ttl  = 7200
 
@@ -345,11 +318,10 @@ resource "vault_jwt_auth_backend_role" "uc2_jwt" {
 }
 
 resource "vault_jwt_auth_backend_role" "uc3_jwt" {
-  for_each       = local.enabled_instances
-  backend        = vault_jwt_auth_backend.ivia["main"].path
+  backend        = vault_jwt_auth_backend.ivia.path
   role_name      = "uc3-jwt"
   role_type      = "jwt"
-  token_policies = [vault_policy.uc3_refund_writer["main"].name]
+  token_policies = [vault_policy.uc3_refund_writer.name]
   token_ttl      = 3600
   token_max_ttl  = 7200
 

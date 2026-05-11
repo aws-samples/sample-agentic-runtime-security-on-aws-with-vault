@@ -101,10 +101,6 @@ deployment "usw2" {
     # Replace with the actual ECR URI: <account>.dkr.ecr.us-west-2.amazonaws.com/uc1-agent:<tag>
     uc1_agent_image = "<placeholder-ecr-uri>"
 
-    # Two-phase Vault bootstrap — Vault initialized, token stored in varset
-    enable_vault_config = true
-    vault_token         = store.varset.config.vault_token
-
     # OIDC authentication
     role_arn       = store.varset.config.aws_role_arn
     identity_token = identity_token.aws.jwt

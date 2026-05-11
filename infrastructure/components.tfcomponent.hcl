@@ -4,7 +4,8 @@
 #                                   + Phase 4 Use Case 1 Agent
 # Single-region stack (canonical region locked in deployments.tfdeploy.hcl):
 # audit foundation + VPC + EKS + addons + RDS + Bedrock KB + Vault + IVIA
-# + vault_config + isva_config + uc1_agent
+# + uc1_agent
+# Note: vault_config + isva_config run locally via kubectl port-forward (not in Stacks)
 # Reference: ~/git-repos/eks-terraform-stacks/infrastructure/components.tfcomponent.hcl
 #
 # Component dependency graph (resolved automatically by Stacks via input refs):
@@ -14,9 +15,8 @@
 #           bedrock_kb_index (bedrock_kb_aoss)
 #   Wave 3: vault (eks + audit + addons)
 #   Wave 4: ivia (eks + rds + vault + audit + addons)
-#   Wave 5: vault_config (vault + eks + rds + ivia)          [module-level enabled gate]
-#           isva_config  (ivia + vault_config)               [module-level enabled gate]
-#   Wave 6: uc1_agent (vault_config + rds + bedrock_kb_index + eks) [module-level enabled gate]
+#   Wave 5: vault_config + isva_config  [LOCAL — kubectl port-forward]
+#   Wave 6: uc1_agent (vault + rds + bedrock_kb_index + eks)
 #
 # Per HCP Stacks docs, component output references in `inputs` are sufficient
 # to express ordering; explicit `depends_on` is reserved for non-obvious
@@ -236,7 +236,6 @@ component "vault" {
     cluster_endpoint                   = component.eks.cluster_endpoint
     cluster_certificate_authority_data = component.eks.cluster_certificate_authority_data
     oidc_provider_arn                  = component.eks.oidc_provider_arn
-    node_security_group_id             = component.eks.node_security_group_id
     addons_ready                       = component.addons.aws_load_balancer_controller_release
     audit_log_group_names              = component.audit.audit_log_group_names
     tags                               = var.tags
@@ -270,7 +269,7 @@ component "ivia" {
     rds_master_username        = component.rds.master_username
     rds_master_user_secret_arn = component.rds.master_user_secret_arn
     rds_db_name                = component.rds.db_name
-    vault_endpoint             = component.vault.vault_internal_endpoint
+    vault_endpoint             = component.vault.vault_endpoint
     audit_log_group_names      = component.audit.audit_log_group_names
     addons_ready               = component.addons.aws_load_balancer_controller_release
     icr_entitlement_key        = var.icr_entitlement_key
@@ -279,65 +278,10 @@ component "ivia" {
 }
 
 #-------------------------------------------------------------------------------
-# Vault Config Component (Wave 5)
-# Configures Vault auth backends (Kubernetes, JWT/OIDC), policies, and roles
-# after both Vault and IVIA are running.
-# Module-level enabled gate: when enable_vault_config=false, all resources
-# inside the module are skipped (for_each = {}). Outputs return static
-# defaults so downstream component references still resolve.
-#-------------------------------------------------------------------------------
-component "vault_config" {
-  source = "./modules/vault_config"
-
-  providers = {
-    vault = provider.vault.main
-    aws   = provider.aws.main
-  }
-
-  inputs = {
-    enabled                            = var.enable_vault_config
-    region                             = var.region
-    cluster_endpoint                   = component.eks.cluster_endpoint
-    cluster_certificate_authority_data = component.eks.cluster_certificate_authority_data
-    cluster_oidc_issuer                = component.eks.cluster_oidc_issuer
-    ivia_oidc_discovery_url            = component.ivia.ivia_oidc_discovery_url
-    rds_endpoint                       = component.rds.endpoint
-    rds_master_username                = component.rds.master_username
-    rds_master_user_secret_arn         = component.rds.master_user_secret_arn
-    rds_db_name                        = component.rds.db_name
-    bedrock_role_arn                   = component.bedrock_kb_aoss.kb_role_arn
-    tags                               = var.tags
-  }
-}
-
-#-------------------------------------------------------------------------------
-# ISVA Config Component (Wave 5)
-# Configures IVIA OIDC federation settings via REST API after IVIA is running.
-# Same enabled gate as vault_config.
-#-------------------------------------------------------------------------------
-component "isva_config" {
-  source = "./modules/isva_config"
-
-  depends_on = [component.vault_config]
-
-  providers = {
-    restapi = provider.restapi.main
-  }
-
-  inputs = {
-    enabled                    = var.enable_vault_config
-    ivia_service_endpoint      = component.ivia.ivia_service_endpoint
-    vault_config_jwt_auth_path = component.vault_config.jwt_auth_path
-    ivia_admin_username        = var.ivia_admin_username
-    ivia_admin_password        = var.ivia_admin_password
-  }
-}
-
-#-------------------------------------------------------------------------------
 # Use Case 1 Agent Component (Wave 6)
 # Deploys the agentic security agent pod that integrates Vault, IVIA, RDS,
 # and Bedrock KB for runtime identity-aware authorization.
-# Same enabled gate as vault_config.
+# Vault addr and role are hardcoded — vault_config runs locally, not in Stacks.
 #-------------------------------------------------------------------------------
 component "uc1_agent" {
   source = "./modules/uc1_agent"
@@ -347,9 +291,8 @@ component "uc1_agent" {
   }
 
   inputs = {
-    enabled           = var.enable_vault_config
-    vault_addr        = component.vault.vault_internal_endpoint
-    vault_role        = component.vault_config.uc1_role_name
+    vault_addr        = "http://vault.vault.svc.cluster.local:8200"
+    vault_role        = "uc1"
     rds_address       = component.rds.address
     rds_port          = component.rds.port
     rds_db_name       = component.rds.db_name

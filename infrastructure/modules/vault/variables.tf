@@ -33,11 +33,6 @@ variable "audit_log_group_names" {
   type        = map(string)
 }
 
-variable "node_security_group_id" {
-  description = "EKS node security group ID. The vault_external NLB needs an inbound rule on port 8200 so HCP Terraform runners can reach Vault through the NLB."
-  type        = string
-}
-
 variable "addons_ready" {
   description = "Consumed but unused — creates implicit Stacks ordering so Vault deploys after the AWS LB Controller webhook is serving."
   type        = any

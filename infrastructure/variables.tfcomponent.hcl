@@ -97,46 +97,6 @@ variable "icr_entitlement_key" {
 }
 
 #-------------------------------------------------------------------------------
-# Vault Configuration
-# Two-phase bootstrap: first run deploys Vault (enable_vault_config=false),
-# operator inits manually, stores root token in HCP variable set, then
-# second run sets enable_vault_config=true to deploy vault_config + downstream.
-#-------------------------------------------------------------------------------
-
-variable "enable_vault_config" {
-  type        = bool
-  description = "Gate for vault_config, isva_config, uc1_agent components. Set false until Vault is initialized and vault_token is available."
-  default     = false
-}
-
-variable "vault_token" {
-  type        = string
-  sensitive   = true
-  ephemeral   = true
-  default     = ""
-  description = "Vault root token for initial vault_config bootstrap. Ephemeral — not stored in Stacks state. Rotated after first apply."
-}
-
-#-------------------------------------------------------------------------------
-# IVIA Admin Credentials
-# Used by the restapi provider in isva_config component (Wave 5) to
-# authenticate to the IVIA Config Service REST API.
-#-------------------------------------------------------------------------------
-
-variable "ivia_admin_username" {
-  type        = string
-  description = "IVIA admin username for the Config Service REST API (default: admin)."
-  default     = "admin"
-}
-
-variable "ivia_admin_password" {
-  type        = string
-  sensitive   = true
-  default     = ""
-  description = "IVIA admin password for the Config Service REST API. Provided via HCP Terraform variable set."
-}
-
-#-------------------------------------------------------------------------------
 # UC1 Agent Configuration
 # uc1_agent_image: set by attendees after ECR push (Phase 4 lab step).
 # bedrock_model_id: defaults to Nova Pro CRIS profile — no deployments override needed.
