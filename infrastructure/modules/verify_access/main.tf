@@ -321,8 +321,8 @@ server_connections:
     credential:
       username: "secret:isvaop-server/username"
       password: "secret:isvaop-server/password"
-    ssl_settings:
-      use_ssl: true
+    ssl:
+      disable_hostname_verification: true
 
 rules:
   access_policy:
