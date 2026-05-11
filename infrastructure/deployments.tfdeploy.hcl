@@ -103,6 +103,7 @@ deployment "usw2" {
 
     # Two-phase Vault bootstrap — Vault initialized, token stored in varset
     enable_vault_config = true
+    vault_token         = store.varset.config.vault_token
 
     # OIDC authentication
     role_arn       = store.varset.config.aws_role_arn
