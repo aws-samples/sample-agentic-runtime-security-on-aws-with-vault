@@ -3,6 +3,13 @@
 # Inputs wired from component.vault_config in deployments.tfdeploy.hcl
 ################################################################################
 
+# TEMPORARY: retained so the Stacks removed block can process old state that
+# included enabled=true. Remove after Stacks state cleanup run succeeds.
+variable "enabled" {
+  type    = bool
+  default = true
+}
+
 variable "cluster_endpoint" {
   description = "EKS API server endpoint — used by vault_kubernetes_auth_backend_config.kubernetes_host."
   type        = string
