@@ -23,6 +23,11 @@ variable "cluster_security_group_id" {
   description = "EKS cluster security group ID. The RDS security group's :5432 ingress rule uses this as source_security_group_id (NOT cidr_blocks 0.0.0.0/0). Output by component.eks."
 }
 
+variable "node_security_group_id" {
+  type        = string
+  description = "EKS node security group ID. Pod traffic originates from node ENIs, not the cluster SG. Required for RDS ingress."
+}
+
 variable "workshop_cmk_arn" {
   type        = string
   description = "Workshop CMK ARN from the audit module. Used for storage encryption, the master_user_secret KMS key, and the pre-created CloudWatch log group — encryption-context consistency across Phase 2 (Pattern 6)."

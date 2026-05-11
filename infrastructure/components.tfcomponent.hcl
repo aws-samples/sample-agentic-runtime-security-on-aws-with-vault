@@ -117,6 +117,7 @@ component "rds" {
     vpc_id                    = component.vpc.vpc_id
     private_subnet_ids        = component.vpc.private_subnet_ids
     cluster_security_group_id = component.eks.cluster_security_group_id
+    node_security_group_id    = component.eks.node_security_group_id
     workshop_cmk_arn          = component.audit.workshop_cmk_arn
     instance_class            = var.rds_instance_class
     tags                      = var.tags

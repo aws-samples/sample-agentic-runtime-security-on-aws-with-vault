@@ -61,6 +61,16 @@ resource "aws_security_group_rule" "pg17_ingress_from_eks" {
   description              = "Allow :5432 from EKS cluster security group"
 }
 
+resource "aws_security_group_rule" "pg17_ingress_from_eks_nodes" {
+  type                     = "ingress"
+  from_port                = 5432
+  to_port                  = 5432
+  protocol                 = "tcp"
+  security_group_id        = aws_security_group.pg17.id
+  source_security_group_id = var.node_security_group_id
+  description              = "Allow :5432 from EKS node security group"
+}
+
 resource "aws_security_group_rule" "pg17_egress_all" {
   type              = "egress"
   from_port         = 0
