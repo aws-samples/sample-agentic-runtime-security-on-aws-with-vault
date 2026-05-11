@@ -152,7 +152,7 @@ provider "random" "main" {
 # when enable_vault_config=false because no components consume it.
 provider "vault" "main" {
   config {
-    address = "http://vault.vault.svc.cluster.local:8200"
+    address = component.vault.vault_endpoint
     token   = var.vault_token
   }
 }

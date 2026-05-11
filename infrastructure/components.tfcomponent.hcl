@@ -269,7 +269,7 @@ component "ivia" {
     rds_master_username        = component.rds.master_username
     rds_master_user_secret_arn = component.rds.master_user_secret_arn
     rds_db_name                = component.rds.db_name
-    vault_endpoint             = component.vault.vault_endpoint
+    vault_endpoint             = component.vault.vault_internal_endpoint
     audit_log_group_names      = component.audit.audit_log_group_names
     addons_ready               = component.addons.aws_load_balancer_controller_release
     icr_entitlement_key        = var.icr_entitlement_key
@@ -347,7 +347,7 @@ component "uc1_agent" {
 
   inputs = {
     enabled           = var.enable_vault_config
-    vault_addr        = component.vault.vault_endpoint
+    vault_addr        = component.vault.vault_internal_endpoint
     vault_role        = component.vault_config.uc1_role_name
     rds_address       = component.rds.address
     rds_port          = component.rds.port

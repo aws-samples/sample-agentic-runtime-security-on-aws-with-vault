@@ -217,3 +217,46 @@ resource "helm_release" "vault" {
     kubernetes_service_account.vault,
   ]
 }
+
+################################################################################
+# External NLB — exposes Vault API to HCP Terraform runners
+# HCP Stacks executes remotely and cannot resolve cluster-internal DNS.
+# The vault_config component's Vault provider needs a routable endpoint.
+# AWS LBC provisions an internet-facing NLB on port 8200.
+################################################################################
+
+resource "kubernetes_service" "vault_external" {
+  metadata {
+    name      = "vault-external"
+    namespace = kubernetes_namespace.vault.metadata[0].name
+    annotations = {
+      "service.beta.kubernetes.io/aws-load-balancer-type"            = "external"
+      "service.beta.kubernetes.io/aws-load-balancer-nlb-target-type" = "ip"
+      "service.beta.kubernetes.io/aws-load-balancer-scheme"          = "internet-facing"
+    }
+    labels = {
+      "app.kubernetes.io/name"       = "vault"
+      "app.kubernetes.io/managed-by" = "terraform"
+    }
+  }
+
+  spec {
+    type = "LoadBalancer"
+
+    selector = {
+      "app.kubernetes.io/name"     = "vault"
+      "app.kubernetes.io/instance" = "vault"
+      "component"                  = "server"
+      "vault-active"               = "true"
+    }
+
+    port {
+      name        = "http"
+      port        = 8200
+      target_port = 8200
+      protocol    = "TCP"
+    }
+  }
+
+  depends_on = [helm_release.vault]
+}

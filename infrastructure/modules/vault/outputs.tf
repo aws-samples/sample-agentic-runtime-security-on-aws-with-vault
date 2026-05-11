@@ -4,7 +4,12 @@
 ################################################################################
 
 output "vault_endpoint" {
-  description = "Vault API endpoint — ClusterIP service DNS (in-cluster access only). Format: http://vault.vault.svc.cluster.local:8200"
+  description = "Vault API endpoint — external NLB for HCP Terraform access. In-cluster consumers should use http://vault.vault.svc.cluster.local:8200 directly."
+  value       = "http://${kubernetes_service.vault_external.status[0].load_balancer[0].ingress[0].hostname}:8200"
+}
+
+output "vault_internal_endpoint" {
+  description = "Vault API endpoint — ClusterIP service DNS (in-cluster access only). Used by agents and IVIA."
   value       = "http://vault.vault.svc.cluster.local:8200"
 }
 
