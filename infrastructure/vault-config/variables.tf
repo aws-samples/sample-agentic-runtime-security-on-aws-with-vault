@@ -30,14 +30,20 @@ variable "cluster_oidc_issuer" {
   type        = string
 }
 
-variable "ivia_oidc_discovery_url" {
-  description = "IVIA OIDC discovery URL (cluster-internal). Vault stores this for runtime JWT validation."
+variable "ivia_jwks_url" {
+  description = "IVIA JWKS URL (cluster-internal). Vault fetches signing keys from this endpoint."
   type        = string
-  default     = "https://isvaop.verify-access.svc.cluster.local:8436/.well-known/openid-configuration"
+  default     = "https://isvaop.verify-access.svc.cluster.local:8436/oauth2/jwks"
+}
+
+variable "ivia_issuer" {
+  description = "IVIA token issuer URL. Vault validates the iss claim against this."
+  type        = string
+  default     = "https://isvaop.verify-access.svc.cluster.local:8436"
 }
 
 variable "ivia_oidc_ca_pem" {
-  description = "IVIA self-signed TLS certificate PEM. Vault needs this to trust the OIDC discovery endpoint."
+  description = "IVIA self-signed TLS certificate PEM. Vault needs this to trust the JWKS endpoint."
   type        = string
   sensitive   = true
 }

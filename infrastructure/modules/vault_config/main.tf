@@ -76,10 +76,11 @@ resource "vault_kubernetes_auth_backend_config" "this" {
 ################################################################################
 
 resource "vault_jwt_auth_backend" "ivia" {
-  type                  = "jwt"
-  path                  = "jwt"
-  oidc_discovery_url    = var.ivia_oidc_discovery_url
-  oidc_discovery_ca_pem = var.ivia_oidc_ca_pem
+  type         = "jwt"
+  path         = "jwt"
+  jwks_url     = var.ivia_jwks_url
+  jwks_ca_pem  = var.ivia_oidc_ca_pem
+  bound_issuer = var.ivia_issuer
 }
 
 ################################################################################

@@ -19,13 +19,18 @@ variable "cluster_oidc_issuer" {
   type        = string
 }
 
-variable "ivia_oidc_discovery_url" {
-  description = "IVIA (IBM Verify Identity Assertion) OIDC discovery URL — used as oidc_discovery_url for the jwt auth backend (CONF-02)."
+variable "ivia_jwks_url" {
+  description = "IVIA JWKS URL — Vault fetches signing keys to validate IVIA-issued JWTs. Uses jwks_url instead of oidc_discovery_url because Vault's discovery validation fails with self-signed certs despite CA PEM."
+  type        = string
+}
+
+variable "ivia_issuer" {
+  description = "IVIA token issuer URL — bound_issuer for the JWT auth backend. Vault rejects tokens whose iss claim doesn't match."
   type        = string
 }
 
 variable "ivia_oidc_ca_pem" {
-  description = "IVIA self-signed TLS certificate PEM. Vault needs this to trust the OIDC discovery endpoint (self-signed cert, not in system trust store)."
+  description = "IVIA self-signed TLS certificate PEM. Vault needs this to trust the JWKS endpoint (self-signed cert, not in system trust store)."
   type        = string
   sensitive   = true
   default     = ""

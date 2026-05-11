@@ -5,8 +5,18 @@
 ################################################################################
 
 output "ivia_oidc_discovery_url" {
-  description = "Internal OIDC discovery URL for IVIA (ClusterIP path). Vault jwt auth method consumes this to fetch JWKS and validate tokens."
-  value       = "https://${kubernetes_service.isvaop.metadata[0].name}.${kubernetes_namespace.verify_access.metadata[0].name}.svc.cluster.local:8436/.well-known/openid-configuration"
+  description = "Internal OIDC discovery URL for IVIA (ClusterIP path)."
+  value       = "https://${kubernetes_service.isvaop.metadata[0].name}.${kubernetes_namespace.verify_access.metadata[0].name}.svc.cluster.local:8436/oauth2/.well-known/openid-configuration"
+}
+
+output "ivia_jwks_url" {
+  description = "IVIA JWKS URL (cluster-internal). Used by Vault jwt auth backend to fetch signing keys. Preferred over oidc_discovery_url because Vault's discovery validation fails with self-signed certs."
+  value       = "https://${kubernetes_service.isvaop.metadata[0].name}.${kubernetes_namespace.verify_access.metadata[0].name}.svc.cluster.local:8436/oauth2/jwks"
+}
+
+output "ivia_issuer" {
+  description = "IVIA token issuer URL. Matches the iss claim in IVIA-issued JWTs."
+  value       = "https://${kubernetes_service.isvaop.metadata[0].name}.${kubernetes_namespace.verify_access.metadata[0].name}.svc.cluster.local:8436"
 }
 
 output "ivia_namespace" {
