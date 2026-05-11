@@ -74,5 +74,15 @@ resource "aws_db_parameter_group" "pg17_audit" {
     value = "ddl"
   }
 
+  # ---------------------------------------------------------------------------
+  # Disable forced SSL — IVIA OIDC Provider does not support the RDS CA bundle
+  # natively (only reads the first cert in a multi-cert PEM, misses the RSA root).
+  # Workshop-acceptable: traffic is VPC-internal (private subnets, SG-locked).
+  # ---------------------------------------------------------------------------
+  parameter {
+    name  = "rds.force_ssl"
+    value = "0"
+  }
+
   tags = var.tags
 }
