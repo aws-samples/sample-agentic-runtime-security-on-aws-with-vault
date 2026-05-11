@@ -236,6 +236,7 @@ component "vault" {
     cluster_endpoint                   = component.eks.cluster_endpoint
     cluster_certificate_authority_data = component.eks.cluster_certificate_authority_data
     oidc_provider_arn                  = component.eks.oidc_provider_arn
+    node_security_group_id             = component.eks.node_security_group_id
     addons_ready                       = component.addons.aws_load_balancer_controller_release
     audit_log_group_names              = component.audit.audit_log_group_names
     tags                               = var.tags
