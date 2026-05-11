@@ -288,7 +288,7 @@ component "vault_config" {
   for_each = var.enable_vault_config ? toset(["enabled"]) : toset([])
 
   providers = {
-    vault = provider.vault.main[each.key]
+    vault = provider.vault.main
     aws   = provider.aws.main
   }
 
@@ -319,12 +319,12 @@ component "isva_config" {
   depends_on = [component.vault_config]
 
   providers = {
-    restapi = provider.restapi.main[each.key]
+    restapi = provider.restapi.main
   }
 
   inputs = {
     ivia_service_endpoint      = component.ivia.ivia_service_endpoint
-    vault_config_jwt_auth_path = component.vault_config["enabled"].jwt_auth_path
+    vault_config_jwt_auth_path = component.vault_config[each.key].jwt_auth_path
     ivia_admin_username        = var.ivia_admin_username
     ivia_admin_password        = var.ivia_admin_password
   }
@@ -346,7 +346,7 @@ component "uc1_agent" {
 
   inputs = {
     vault_addr        = component.vault.vault_endpoint
-    vault_role        = component.vault_config["enabled"].uc1_role_name
+    vault_role        = component.vault_config[each.key].uc1_role_name
     rds_address       = component.rds.address
     rds_port          = component.rds.port
     rds_db_name       = component.rds.db_name
@@ -356,5 +356,42 @@ component "uc1_agent" {
     agent_image       = var.uc1_agent_image
     bedrock_model_id  = var.bedrock_model_id
     tags              = var.tags
+  }
+}
+
+################################################################################
+# Removed Blocks — Claim old keyless component instances from state
+# Before the for_each gate was added, these components existed as single
+# instances (no key). Adding for_each changes the instance address to
+# component.<name>["enabled"], leaving the old keyless instance unclaimed.
+# These removed blocks tell Stacks to destroy any remaining resources
+# and drop the old instances from state.
+################################################################################
+
+removed {
+  from   = component.vault_config
+  source = "./modules/vault_config"
+
+  providers = {
+    vault = provider.vault.main
+    aws   = provider.aws.main
+  }
+}
+
+removed {
+  from   = component.isva_config
+  source = "./modules/isva_config"
+
+  providers = {
+    restapi = provider.restapi.main
+  }
+}
+
+removed {
+  from   = component.uc1_agent
+  source = "./modules/uc1_agent"
+
+  providers = {
+    kubernetes = provider.kubernetes.main
   }
 }
