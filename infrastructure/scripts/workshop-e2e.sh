@@ -78,6 +78,17 @@ set -e
 export AWS_PAGER=""
 
 #-------------------------------------------------------------------------------
+# Debug logging — set DEBUG=true to tee all output to a timestamped log file
+#-------------------------------------------------------------------------------
+if [[ "${DEBUG:-false}" == "true" || "${DEBUG:-0}" == "1" ]]; then
+  _LOG_DIR="$(cd "$(dirname "$0")/../.." && pwd)/logs"
+  mkdir -p "$_LOG_DIR"
+  _LOG_FILE="${_LOG_DIR}/e2e-$(date +%Y%m%d-%H%M%S).log"
+  echo "DEBUG: logging to ${_LOG_FILE}"
+  exec > >(tee -a "$_LOG_FILE") 2>&1
+fi
+
+#-------------------------------------------------------------------------------
 # Script Directory
 #-------------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

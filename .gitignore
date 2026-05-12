@@ -34,6 +34,9 @@ infrastructure/scripts/hcp-setup/terraform.tfstate.backup
 infrastructure/scripts/hcp-setup/.terraform/
 infrastructure/scripts/hcp-setup/.terraform.lock.hcl
 
+# Debug logs
+logs/
+
 # Python
 .venv/
 __pycache__/
