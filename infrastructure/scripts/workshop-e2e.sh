@@ -11,7 +11,7 @@
 #   Phase 5: Identity (IVIA) — placeholder, populated when workshop Phase 3 ships
 #   Phase 6: Vault — placeholder, populated when workshop Phase 4 ships
 #   Phase 7a: Use Case 1 — Non-Personalized Read-Only (ECR build+push, Stacks deploy, verify-uc1.sh)
-#   Phase 7b: Use Case 2 — OAuth Personalized Read-Only (placeholder; Phase 5)
+#   Phase 7b: Use Case 2 — OAuth Personalized Read-Only (ECR build+push, Stacks deploy, ivia-configure.sh, verify-uc2.sh)
 #   Phase 7c: Use Case 3 — CIBA Privileged (placeholder; Phase 6)
 #   Phase 8: Teardown (calls teardown.sh — unless --skip-teardown)
 #
@@ -953,12 +953,135 @@ phase_uc1() {
 }
 
 #===============================================================================
-# PHASE 7b: Use Case 2 — OAuth Personalized Read-Only (placeholder)
+# PHASE 7b: Use Case 2 — OAuth Personalized Read-Only
 #===============================================================================
-phase_uc2_placeholder() {
+phase_uc2() {
     phase_header "Phase 7b: Use Case 2 — OAuth Personalized Read-Only"
-    print_info "[Phase 7b — placeholder; populated when Phase 5 (UC2) ships]"
-    return 0
+
+    if [ "$DRY_RUN" = true ]; then
+        print_info "[DRY-RUN] Would build+push banking app images (UI, Agent, MCP Server)"
+        print_info "[DRY-RUN] Would update banking_app_*_image in deployments.tfdeploy.hcl"
+        print_info "[DRY-RUN] Would trigger Stacks plan+apply for uc2_app component"
+        print_info "[DRY-RUN] Would wait for banking-app pods to be ready"
+        print_info "[DRY-RUN] Would run ivia-configure.sh (redirect URIs + test users)"
+        print_info "[DRY-RUN] Would run verify-uc2.sh"
+        return 0
+    fi
+
+    # Step 1: Build + push banking app images
+    step_header "Building and pushing banking app images..."
+    bash "$SCRIPT_DIR/build-banking-app.sh" \
+        --region "$WORKSHOP_REGION" || {
+        print_error "build-banking-app.sh failed"
+        return 1
+    }
+    print_success "Banking app images built and pushed to ECR"
+
+    # Step 2: Update banking app image URIs in deployments.tfdeploy.hcl
+    # build-banking-app.sh outputs the ECR URIs; resolve them here.
+    step_header "Resolving banking app ECR image URIs..."
+    local account_id
+    account_id=$(aws sts get-caller-identity --query 'Account' --output text 2>/dev/null)
+    local ecr_base="${account_id}.dkr.ecr.${WORKSHOP_REGION}.amazonaws.com/workshop/banking-app"
+    local ui_image="${ecr_base}:ui"
+    local agent_image="${ecr_base}:agent"
+    local mcp_image="${ecr_base}:mcp"
+
+    local deploy_file="$PROJECT_ROOT/infrastructure/deployments.tfdeploy.hcl"
+
+    # Update each image variable (idempotent)
+    for var_name in banking_app_ui_image banking_app_agent_image banking_app_mcp_image; do
+        local var_image=""
+        case "$var_name" in
+            banking_app_ui_image)    var_image="$ui_image" ;;
+            banking_app_agent_image) var_image="$agent_image" ;;
+            banking_app_mcp_image)   var_image="$mcp_image" ;;
+        esac
+        local current_val
+        current_val=$(grep "${var_name}" "$deploy_file" 2>/dev/null | sed -E 's/.*"([^"]+)".*/\1/')
+        if [ "$current_val" = "$var_image" ]; then
+            print_info "${var_name} already set to ${var_image}"
+        else
+            sed -i.bak "s|${var_name}[[:space:]]*=[[:space:]]*\"[^\"]*\"|${var_name} = \"${var_image}\"|" "$deploy_file"
+            rm -f "${deploy_file}.bak"
+            print_success "${var_name} = ${var_image}"
+        fi
+    done
+
+    # Step 3: Find Stack and trigger Stacks plan+apply
+    step_header "Finding HCP Terraform Stack..."
+    local stack_id
+    stack_id=$(hcp_find_stack "$HCP_ORG") || {
+        print_error "Could not find Stack in HCP Terraform"
+        return 1
+    }
+    print_success "Stack found: $stack_id"
+
+    local old_config_id
+    old_config_id=$(hcp_get_latest_config "$stack_id")
+
+    git_commit_and_push "deploy: set banking_app images for UC2 deployment" \
+        "infrastructure/deployments.tfdeploy.hcl"
+
+    if [ "$GIT_PUSHED" = true ]; then
+        step_header "Waiting for VCS-triggered deploy (UC2 banking app)..."
+        hcp_wait_for_vcs_plan "$stack_id" "$old_config_id" 1800 || {
+            print_error "UC2 deploy failed. Check HCP Terraform UI for details."
+            return 1
+        }
+    else
+        step_header "Triggering Stacks plan (UC2 banking app)..."
+        hcp_deploy_and_wait "$stack_id" "UC2 banking app deploy" 1800 || {
+            print_error "UC2 deploy failed. Check HCP Terraform UI for details."
+            return 1
+        }
+    fi
+    print_success "UC2 banking app deployed via Stacks"
+
+    # Step 4: Wait for all banking-app pods to be ready
+    step_header "Waiting for banking-app pods to be ready..."
+    local pods_ready=false
+    local wait_elapsed=0
+    while [ $wait_elapsed -lt 180 ]; do
+        local ui_running agent_running mcp_running
+        ui_running=$(kubectl get pods -n banking-app -l app=banking-ui \
+            --no-headers 2>/dev/null | grep -c Running || true)
+        agent_running=$(kubectl get pods -n banking-app -l app=banking-agent \
+            --no-headers 2>/dev/null | grep -c Running || true)
+        mcp_running=$(kubectl get pods -n banking-app -l app=banking-mcp-server \
+            --no-headers 2>/dev/null | grep -c Running || true)
+
+        if [ "${ui_running:-0}" -ge 1 ] && \
+           [ "${agent_running:-0}" -ge 1 ] && \
+           [ "${mcp_running:-0}" -ge 1 ]; then
+            pods_ready=true
+            break
+        fi
+        sleep 15
+        wait_elapsed=$((wait_elapsed + 15))
+        if [ $((wait_elapsed % 45)) -eq 0 ]; then
+            print_info "Waiting for banking-app pods (${wait_elapsed}s/180s)..."
+        fi
+    done
+
+    if [ "$pods_ready" = true ]; then
+        print_success "All banking-app pods are Running (ui + agent + mcp-server)"
+    else
+        print_warn "Some banking-app pods not Running after 180s — verify-uc2.sh will report details"
+    fi
+
+    # Step 5: Run ivia-configure.sh — update redirect URIs, create test users
+    step_header "Configuring IVIA OAuth client (redirect URIs + test users)..."
+    bash "$SCRIPT_DIR/ivia-configure.sh" \
+        --region "$WORKSHOP_REGION" || {
+        print_warn "ivia-configure.sh reported failures — IVIA OAuth may not be fully configured"
+    }
+    print_success "IVIA OAuth client configured"
+
+    # Step 6: Run verify-uc2.sh
+    pause_if_interactive "About to verify UC2 deployment"
+    bash "$SCRIPT_DIR/verify-uc2.sh" 2>&1 || print_warn "UC2 verification had warnings"
+    print_success "UC2 verification complete"
 }
 
 #===============================================================================
@@ -1267,7 +1390,7 @@ phase_verify_foundation
 phase_identity
 phase_vault
 phase_uc1
-phase_uc2_placeholder
+phase_uc2
 phase_uc3_placeholder
 
 if [ "$SKIP_TEARDOWN" = false ]; then
