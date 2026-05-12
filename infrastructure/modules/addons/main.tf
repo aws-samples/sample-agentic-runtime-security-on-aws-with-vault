@@ -53,28 +53,37 @@ module "eks_blueprints_addons" {
   # External addons (CONTEXT.md heavy-baseline override)
   # ---------------------------------------------------------------------------
 
-  # cert-manager — TLS issuer for Vault, IVIA, and ALB-fronted services.
-  # Enabled in Phase 3 (Vault and IVIA require TLS certificate management).
-  enable_cert_manager = true
+  # cert-manager is deployed separately below (depends on LBC webhook ready).
+  enable_cert_manager = false
 
-  # external-dns — automatic Route53 record management for ALB-fronted
-  # Services. Disabled until Phase 4+ (Strands agents with ALB Ingress).
   enable_external_dns = false
 
   # AWS Load Balancer Controller — provisions ALBs from Kubernetes Ingress.
-  # Enabled in Phase 3 (Vault and IVIA Ingress resources require LBC).
   enable_aws_load_balancer_controller = true
 
-  # ---------------------------------------------------------------------------
-  # Explicitly disabled — out of scope for this workshop.
-  # ---------------------------------------------------------------------------
-
-  # Karpenter is OUT of scope (managed node group only — see project CLAUDE.md).
   enable_karpenter = false
-
-  # ArgoCD is OUT of scope (Helm-direct or Stacks for app deployments — see
-  # project CLAUDE.md).
-  enable_argocd = false
+  enable_argocd    = false
 
   tags = var.tags
+}
+
+# cert-manager deployed AFTER LBC webhook is ready. Deploying them in the same
+# module call causes a race: LBC registers a mutating webhook on Services, but
+# its pods aren't ready when cert-manager's Service resources are created.
+resource "helm_release" "cert_manager" {
+  name             = "cert-manager"
+  namespace        = "cert-manager"
+  create_namespace = true
+  repository       = "https://charts.jetstack.io"
+  chart            = "cert-manager"
+  version          = "v1.17.2"
+  wait             = true
+  timeout          = 300
+
+  set {
+    name  = "crds.enabled"
+    value = "true"
+  }
+
+  depends_on = [module.eks_blueprints_addons]
 }
