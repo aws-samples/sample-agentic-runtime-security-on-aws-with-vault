@@ -185,14 +185,16 @@ fi
 # Execute psql SELECT via a temporary pod using the Vault-vended credentials.
 # Requires the uc2-personal-readonly Postgres role to have SELECT on banking.accounts.
 #-------------------------------------------------------------------------------
-rds_host=$(kubectl get configmap uc2-mcp-config -n "${BANKING_NAMESPACE}" \
-    -o jsonpath='{.data.RDS_HOST}' 2>/dev/null || echo "")
+rds_host=$(kubectl get configmap banking-mcp-config -n "${BANKING_NAMESPACE}" \
+    -o jsonpath='{.data.RDS_ADDRESS}' 2>/dev/null || echo "")
 
 if [ -n "${db_username}" ] && [ "${db_username}" != "null" ] && [ -n "${rds_host}" ]; then
-    select_result=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
-        sh -c "PGPASSWORD='${db_password}' psql -h '${rds_host}' -U '${db_username}' -d workshop \
-            -c 'SET app.current_user_sub = '\''test-verify-script'\''; SELECT count(*) FROM banking.accounts;' \
-            --no-password --tuples-only 2>&1" 2>/dev/null || echo "PSQL_FAILED")
+    kubectl delete pod verify-uc2-psql -n "${BANKING_NAMESPACE}" --ignore-not-found --wait=false &>/dev/null
+    select_result=$(kubectl run verify-uc2-psql -n "${BANKING_NAMESPACE}" --rm -i --restart=Never \
+        --image=postgres:17-alpine --env="PGPASSWORD=${db_password}" -- \
+        psql -h "${rds_host}" -U "${db_username}" -d workshop \
+            -c "SET app.current_user_sub = 'test-verify-script'; SELECT count(*) FROM banking.accounts;" \
+            --no-password --tuples-only 2>&1 | grep -v 'pod.*deleted' || echo "PSQL_FAILED")
 
     if echo "${select_result}" | grep -qE "^[[:space:]]*[0-9]+"; then
         row_count=$(echo "${select_result}" | grep -E "^[[:space:]]*[0-9]+" | tr -d ' ')
@@ -202,7 +204,7 @@ if [ -n "${db_username}" ] && [ "${db_username}" != "null" ] && [ -n "${rds_host
             "SELECT failed with JIT creds — RDS host: ${rds_host}, user: ${db_username}. Error: ${select_result}. Verify RLS policy and uc2_personal_readonly Postgres role GRANTs."
     fi
 else
-    print_warn "DB read check skipped — missing DB credentials or RDS host (ConfigMap uc2-mcp-config)"
+    print_warn "DB read check skipped — missing DB credentials or RDS host (ConfigMap banking-mcp-config)"
 fi
 
 #-------------------------------------------------------------------------------
@@ -213,10 +215,12 @@ fi
 # Expected: "ERROR: permission denied for table accounts"
 #-------------------------------------------------------------------------------
 if [ -n "${db_username}" ] && [ "${db_username}" != "null" ] && [ -n "${rds_host}" ]; then
-    insert_result=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
-        sh -c "PGPASSWORD='${db_password}' psql -h '${rds_host}' -U '${db_username}' -d workshop \
-            -c \"INSERT INTO banking.accounts (user_sub, account_number, balance) VALUES ('verify-test', 'ACC999', 0.00);\" \
-            --no-password 2>&1" 2>/dev/null || echo "PSQL_FAILED")
+    kubectl delete pod verify-uc2-insert -n "${BANKING_NAMESPACE}" --ignore-not-found --wait=false &>/dev/null
+    insert_result=$(kubectl run verify-uc2-insert -n "${BANKING_NAMESPACE}" --rm -i --restart=Never \
+        --image=postgres:17-alpine --env="PGPASSWORD=${db_password}" -- \
+        psql -h "${rds_host}" -U "${db_username}" -d workshop \
+            -c "INSERT INTO banking.accounts (user_sub, account_number, balance) VALUES ('verify-test', 'ACC999', 0.00);" \
+            --no-password 2>&1 | grep -v 'pod.*deleted' || echo "PSQL_FAILED")
 
     if echo "${insert_result}" | grep -qi "permission denied"; then
         print_pass "ENFC-02: INSERT rejected by PostgreSQL (permission denied for table)"
@@ -241,7 +245,7 @@ mcp_pod=$(kubectl get pods -n "${BANKING_NAMESPACE}" -l app=banking-mcp-server \
 
 if [ -n "${mcp_pod}" ]; then
     egress_result=$(kubectl exec -n "${BANKING_NAMESPACE}" "${mcp_pod}" -- \
-        sh -c "wget -q -O - --timeout=5 https://httpbin.org/get 2>&1 || echo BLOCKED" \
+        sh -c "wget -q -O - -T 5 http://httpbin.org:8080/get 2>&1 || echo BLOCKED" \
         2>/dev/null || echo "EXEC_FAILED")
 
     if echo "${egress_result}" | grep -qiE "timed out|BLOCKED|Connection timed out|Could not connect|Network unreachable|connection refused|EXEC_FAILED|not found"; then
@@ -264,9 +268,9 @@ agent_pod=$(kubectl get pods -n "${BANKING_NAMESPACE}" -l app=banking-agent \
 
 if [ -n "${agent_pod}" ]; then
     agent_health=$(kubectl exec -n "${BANKING_NAMESPACE}" "${agent_pod}" -- \
-        curl -s http://localhost:3002/health 2>/dev/null \
-        | jq -r '.status' 2>/dev/null || echo "")
-    if [ "${agent_health}" = "healthy" ]; then
+        python3 -c "import urllib.request,json; r=urllib.request.urlopen('http://localhost:3002/health'); print(json.loads(r.read())['status'])" \
+        2>/dev/null || echo "")
+    if [ "${agent_health}" = "healthy" ] || [ "${agent_health}" = "ok" ]; then
         print_pass "Agent /health endpoint: healthy"
     else
         print_fail "Agent /health endpoint" \
@@ -285,7 +289,7 @@ fi
 #-------------------------------------------------------------------------------
 ivia_jwks_url="https://isvaop.verify-access.svc.cluster.local:8436/oauth2/jwks"
 jwks_result=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
-    sh -c "curl -sk --max-time 10 '${ivia_jwks_url}'" 2>/dev/null | jq -r '.keys | length' 2>/dev/null || echo "0")
+    sh -c "wget -q -O - --no-check-certificate --timeout=10 '${ivia_jwks_url}'" 2>/dev/null | jq -r '.keys | length' 2>/dev/null || echo "0")
 
 if [ "${jwks_result:-0}" -ge 1 ] 2>/dev/null; then
     print_pass "IVIA JWKS endpoint reachable (${jwks_result} key(s) returned) — OAuth pre-check passed"
@@ -302,8 +306,8 @@ fi
 #-------------------------------------------------------------------------------
 if [ -n "${VAULT_ROOT_TOKEN:-}" ]; then
     lease_count=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
-        sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault list -format=json sys/leases/lookup/database/creds/uc2-personal-readonly 2>/dev/null | jq 'length' 2>/dev/null" \
-        || echo "0")
+        sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault list -format=json sys/leases/lookup/database/creds/uc2-personal-readonly 2>/dev/null" \
+        | jq 'length' 2>/dev/null || echo "0")
     if [ "${lease_count:-0}" -ge 1 ] 2>/dev/null; then
         print_pass "Active Vault lease exists for uc2-personal-readonly (${lease_count} lease(s))"
     else

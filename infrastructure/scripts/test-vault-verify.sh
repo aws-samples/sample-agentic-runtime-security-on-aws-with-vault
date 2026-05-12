@@ -147,7 +147,7 @@ fi
 # Check 6 — IVIA OIDC discovery reachable
 #-------------------------------------------------------------------------------
 ivia_issuer=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
-    curl -sk "${IVIA_OIDC_URL}" 2>/dev/null \
+    sh -c "wget -q -O - --no-check-certificate --timeout=10 '${IVIA_OIDC_URL}'" 2>/dev/null \
     | jq -r '.issuer // empty' 2>/dev/null || echo "")
 if [ -n "${ivia_issuer}" ]; then
     print_pass "IVIA OIDC discovery: issuer reachable (${ivia_issuer})"

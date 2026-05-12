@@ -141,8 +141,8 @@ fi
 # Check 6 — Agent /health endpoint returns "healthy"
 #-------------------------------------------------------------------------------
 agent_health=$(kubectl exec -n "${UC1_NAMESPACE}" deploy/uc1-agent -- \
-    curl -s http://localhost:8080/health 2>/dev/null \
-    | jq -r '.status' 2>/dev/null || echo "")
+    python3 -c "import urllib.request,json; r=urllib.request.urlopen('http://localhost:8080/health'); print(json.loads(r.read())['status'])" \
+    2>/dev/null || echo "")
 if [ "${agent_health}" = "healthy" ]; then
     print_pass "Agent /health endpoint: healthy"
 else
