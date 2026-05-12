@@ -430,7 +430,7 @@ clients:
     pkce_s256_required: true
     redirect_uris:
       - "${var.uc2_redirect_uri}"
-    scope:
+    scopes:
       - openid
       - profile
       - email
