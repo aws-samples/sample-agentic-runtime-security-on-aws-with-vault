@@ -5,7 +5,7 @@ weight: 60
 
 ## Overview
 
-Use Case 2 builds directly on Use Case 1 by adding **user identity** to the credential flow. In Use Case 1 the agent acts as a workload — it has no knowledge of who sent the query, and all users receive the same data. In Use Case 2 the banking app authenticates the user through IBM Verify Access (IVIA) using the OAuth Authorization Code + PKCE flow, and that user identity propagates all the way to the database through short-lived, per-user-scoped Vault credentials. The agent now knows *who* is asking, and the database enforces data isolation at the row level.
+Use Case 2 builds directly on Use Case 1 by adding **user identity** to the credential flow. In Use Case 1 the agent acts as a workload — it has no knowledge of who sent the query, and all users receive the same data. In Use Case 2 the banking app authenticates the user through IBM Verify Identity Access (IVIA) using the OAuth Authorization Code + PKCE flow, and that user identity propagates all the way to the database through short-lived, per-user-scoped Vault credentials. The agent now knows *who* is asking, and the database enforces data isolation at the row level.
 
 This use case adds **Objective 3 — actions tied to user intent** on top of the workload identity and JIT credential foundations established in Use Case 1.
 
@@ -66,7 +66,7 @@ You must have completed the **Platform** module (Phase 3) before starting here. 
 
 - `vault` — Vault HA cluster running and initialized
 - `vault_config` — Kubernetes auth backend, jwt auth backend (pointing to IVIA OIDC discovery), `uc2-personal` policy, `uc2` Kubernetes auth role, `uc2-jwt` JWT auth role, and `uc2-personal-readonly` database credentials role configured
-- `isva_config` — IVIA OAuth client `agent-uc2` created with PKCE required and banking app redirect URIs registered
+- `verify_access` — IVIA OIDC provider deployed with `agent-uc2` OAuth client (PKCE required, authorization_code grant) configured declaratively via config.yaml
 - `uc2_app` — Banking UI, Banking Agent, and MCP Server deployed via the HCP Terraform workspace
 - `seed-banking-db.sh` — Banking schema, RLS policies, and test data seeded into RDS (run post-deploy)
 

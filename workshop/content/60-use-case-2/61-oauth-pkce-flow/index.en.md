@@ -5,7 +5,7 @@ weight: 61
 
 ## Overview
 
-In this module you open the Banking UI, authenticate as a test user through IBM Verify Access (IVIA), and inspect the JWT that the SvelteKit server-side code receives at the OAuth callback. You will observe how PKCE prevents authorization code interception attacks, and how the resulting JWT carries the claims that Vault's `jwt` auth method validates.
+In this module you open the Banking UI, authenticate as a test user through IBM Verify Identity Access (IVIA), and inspect the JWT that the SvelteKit server-side code receives at the OAuth callback. You will observe how PKCE prevents authorization code interception attacks, and how the resulting JWT carries the claims that Vault's `jwt` auth method validates.
 
 ## What Is PKCE?
 
@@ -40,10 +40,14 @@ The ALB uses HTTP (not HTTPS) because ALB-generated hostnames cannot be register
 
 ## Step 2 — Authenticate as Oscar
 
-On the Banking UI login page, you are redirected automatically to IVIA's login screen. Use the test user credentials:
+On the Banking UI login page, you are redirected automatically to IVIA's login screen. IVIA authenticates users against the AWS Simple AD directory that was provisioned during the workshop setup. Use the pre-created test user credentials:
 
 - **Username:** `oscar`
-- **Password:** (provided by your workshop facilitator or set during `ivia-configure.sh`)
+- **Password:** `WorkshopUser1!`
+
+:::alert{header="Where do these users come from?" type="info"}
+Your organization uses Active Directory for employee identity management. This workshop uses AWS Simple AD — a lightweight managed directory — with two pre-provisioned employees (Oscar and Adriana). IVIA authenticates them via LDAP and issues JWTs that agents use to obtain user-scoped credentials from Vault.
+:::
 
 After login, IVIA redirects the browser back to the Banking UI callback URL (`http://<ALB>/callback`). The SvelteKit server-side route handles the code exchange and stores the JWT in a server-side session.
 
@@ -91,7 +95,7 @@ The IVIA OAuth client `agent-uc2` is configured by `ivia-configure.sh` with thes
 IVIA's authorization endpoint URL pattern:
 
 ```
-http://<IVIA_ALB>/pksc/sps/oauth/oauth20/authorize
+http://<IVIA_ALB>/oauth2/authorize
   ?response_type=code
   &client_id=agent-uc2
   &redirect_uri=http%3A%2F%2F<UI_ALB>%2Fcallback

@@ -346,20 +346,55 @@ else
 fi
 
 #===============================================================================
-# STEP 5: Seed Banking DB (seed-banking-db.sh)
+# STEP 5: Provision Simple AD Users (create-simple-ad-users.sh)
 #===============================================================================
 echo ""
-echo -e "${YELLOW}> Step 5: Seed Banking DB${NC}"
+echo -e "${YELLOW}> Step 5: Provision Simple AD Users (Oscar, Adriana)${NC}"
+
+if [[ "$DRY_RUN" = true ]]; then
+    print_info "[DRY-RUN] Would run: create-simple-ad-users.sh"
+    print_pass "Step 5: Simple AD users (dry-run)"
+else
+    SIMPLE_AD_HOST=""
+    SIMPLE_AD_BASE_DN=""
+    SIMPLE_AD_PASSWORD="${SIMPLE_AD_ADMIN_PASSWORD:-}"
+
+    # Resolve Simple AD DNS IP from Terraform output or AWS API
+    if command -v terraform &>/dev/null && [ -d "${PROJECT_ROOT}/infrastructure" ]; then
+        SIMPLE_AD_HOST=$(cd "${PROJECT_ROOT}/infrastructure" && terraform output -json 2>/dev/null \
+            | jq -r '.simple_ad_dns_ips.value[0] // empty' 2>/dev/null || echo "")
+        SIMPLE_AD_BASE_DN=$(cd "${PROJECT_ROOT}/infrastructure" && terraform output -json 2>/dev/null \
+            | jq -r '.simple_ad_base_dn.value // empty' 2>/dev/null || echo "")
+    fi
+
+    if [ -n "$SIMPLE_AD_HOST" ] && [ -n "$SIMPLE_AD_PASSWORD" ]; then
+        if _run_subscript "Step 5: create-simple-ad-users" \
+                "${SCRIPT_DIR}/create-simple-ad-users.sh" \
+                --ldap-host "$SIMPLE_AD_HOST" \
+                --base-dn "${SIMPLE_AD_BASE_DN:-DC=workshop,DC=internal}" \
+                --admin-password "$SIMPLE_AD_PASSWORD"; then
+            print_pass "Step 5: Simple AD users provisioned"
+        fi
+    else
+        print_warn "Step 5: Skipping Simple AD user provisioning (SIMPLE_AD_HOST or SIMPLE_AD_ADMIN_PASSWORD not resolved)"
+        print_info "Set SIMPLE_AD_ADMIN_PASSWORD env var and re-run, or run create-simple-ad-users.sh manually"
+    fi
+fi
+
+#===============================================================================
+# STEP 6: Seed Banking DB (seed-banking-db.sh)
+#===============================================================================
+echo ""
+echo -e "${YELLOW}> Step 6: Seed Banking DB${NC}"
 
 if [[ "$DRY_RUN" = true ]]; then
     print_info "[DRY-RUN] Would run: seed-banking-db.sh --region ${REGION}"
-    print_pass "Step 5: Seed Banking DB (dry-run)"
+    print_pass "Step 6: Seed Banking DB (dry-run)"
 else
-    if _run_subscript "Step 5: seed-banking-db" \
+    if _run_subscript "Step 6: seed-banking-db" \
             "${SCRIPT_DIR}/seed-banking-db.sh" \
             --region "${REGION}"; then
-        # Verify: seed-banking-db.sh is self-verifying; if it exited 0, seeding succeeded.
-        print_pass "Step 5: Seed Banking DB (script verified successfully)"
+        print_pass "Step 6: Seed Banking DB (script verified successfully)"
     fi
 fi
 

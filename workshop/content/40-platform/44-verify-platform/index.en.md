@@ -41,7 +41,7 @@ If any check fails, the script prints a `Fix:` hint inline. Address the issue an
 | Vault Raft peers: 3 | `kubectl exec vault-0 -- vault operator raft list-peers -format=json` | `servers \| length` == 3 |
 | Vault audit device: enabled | `kubectl exec vault-0 -- vault audit list -format=json` | `length` >= 1 |
 | IVIA pods running | `kubectl get pods -n verify-access` | at least 1 pod `Running` |
-| IVIA OIDC discovery: issuer reachable | `curl -sk https://isvaop.verify-access.svc.cluster.local:8436/.well-known/openid-configuration` | `issuer` field non-empty |
+| IVIA OIDC discovery: issuer reachable | `kubectl run oidc-check --image=curlimages/curl --rm -i --restart=Never -n verify-access -- curl -sk https://isvaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration` | `issuer` field non-empty |
 | cert-manager pods running | `kubectl get pods -n cert-manager` | at least 1 pod `Running` |
 | AWS Load Balancer Controller running | `kubectl get pods -n kube-system -l app.kubernetes.io/name=aws-load-balancer-controller` | at least 1 pod `Running` |
 :::
@@ -51,7 +51,8 @@ If any check fails, the script prints a `Fix:` hint inline. Address the issue an
 At this point the workshop platform layer is fully operational:
 
 - **Vault 2.0 Raft HA** — 3 pods, KMS auto-unseal, Kubernetes + JWT auth methods, database and AWS secrets engines, audit device.
-- **IBM IVIA 11.0.2** — OIDC provider, CIBA authorization server, 3 OAuth 2.0 clients, RAR type definitions, ALB Ingress.
+- **IBM IVIA 11.0.2** — OIDC provider with LDAP authentication against AWS Simple AD, OAuth clients for all use cases, ALB Ingress.
+- **AWS Simple AD** — Lightweight managed Active Directory with pre-provisioned workshop users (Oscar, Adriana) for OAuth and CIBA flows.
 - **OIDC seam** — Vault `jwt` auth trusts IVIA's OIDC discovery URL; user JWTs from IVIA become Vault-vended dynamic credentials.
 
 Proceed to the use case modules to see these components in action.

@@ -265,16 +265,33 @@ resource "kubernetes_secret" "isvaop_obf" {
   }
 }
 
+resource "kubernetes_secret" "isvaop_ldap" {
+  metadata {
+    name      = "isvaop-ldap"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels = {
+      "app.kubernetes.io/name"       = "isvaop"
+      "app.kubernetes.io/managed-by" = "terraform"
+    }
+  }
+
+  type = "Opaque"
+
+  data = {
+    bind_password = var.simple_ad_admin_password
+  }
+}
+
 ################################################################################
 # Config — IVIA Main Configuration
-# Uses kubernetes_config_map (not kubernetes_secret) to avoid the Kubernetes
-# provider identity bug that hits secrets on updates in Terraform Stacks.
-# NOTE: config.yaml contains B64-encoded key material but config maps are
-# adequate for workshop use (same cluster-internal security boundary).
 # Mounted at /var/isvaop/config — the only volume mount needed.
 ################################################################################
 
 locals {
+  simple_ad_ldap_hosts = join("\n", [
+    for ip in var.simple_ad_dns_ips : "      - hostname: \"${ip}\"\n        hostport: 389"
+  ])
+
   isvaop_config_yaml = <<-EOT
 version: 24.08
 
@@ -291,6 +308,8 @@ definition:
   name: "Workshop OIDC"
   grant_types:
     - client_credentials
+    - authorization_code
+    - refresh_token
   access_policy_id: allow_all
   pre_mappingrule_id: pretoken
   post_mappingrule_id: posttoken
@@ -302,6 +321,10 @@ definition:
     signing_keylabel: serverkey
     access_token_lifetime: 900
     id_token_lifetime: 3600
+  attribute_map:
+    sub: ldap_sub
+    email: ldap_email
+    name: ldap_name
 
 jwks:
   signing_keystore: https_keys
@@ -321,6 +344,55 @@ server_connections:
     credential:
       username: "secret:isvaop-server/username"
       password: "secret:isvaop-server/password"
+  - name: simple_ad
+    type: ldap
+    hosts:
+${local.simple_ad_ldap_hosts}
+    credential:
+      bind_dn: "${var.simple_ad_bind_dn}"
+      bind_password: "secret:isvaop-ldap/bind_password"
+    conn_settings:
+      max_pool_size: 10
+      connect_timeout: 5
+
+ldapcfg:
+  - name: workshop_users
+    user_object_classes: "top,person,organizationalPerson,user"
+    filter: "(&(objectClass=user)(!(objectClass=computer)))"
+    selector: "objectClass,cn,sAMAccountName,userPrincipalName,displayName,givenName,sn,mail"
+    srv_conn: simple_ad
+    attribute: sAMAccountName
+    baseDN: "${var.simple_ad_base_dn}"
+
+attribute_sources:
+  - id: 1
+    name: ldap_sub
+    type: ldap
+    value: sAMAccountName
+    scope: subtree
+    filter: "(&(objectClass=user)(sAMAccountName={AZN_CRED_PRINCIPAL_NAME}))"
+    selector: "sAMAccountName"
+    srv_conn: simple_ad
+    baseDN: "${var.simple_ad_base_dn}"
+  - id: 2
+    name: ldap_email
+    type: ldap
+    value: mail
+    scope: subtree
+    filter: "(&(objectClass=user)(sAMAccountName={AZN_CRED_PRINCIPAL_NAME}))"
+    selector: "mail"
+    srv_conn: simple_ad
+    baseDN: "${var.simple_ad_base_dn}"
+  - id: 3
+    name: ldap_name
+    type: ldap
+    value: displayName
+    scope: subtree
+    filter: "(&(objectClass=user)(sAMAccountName={AZN_CRED_PRINCIPAL_NAME}))"
+    selector: "displayName"
+    srv_conn: simple_ad
+    baseDN: "${var.simple_ad_base_dn}"
+
 rules:
   access_policy:
     - name: allow_all
@@ -330,7 +402,7 @@ rules:
     - name: pretoken
       rule_type: javascript
       content: |
-        // No enrichment needed for workshop
+        // Map LDAP attributes into token claims
     - name: posttoken
       rule_type: javascript
       content: |
@@ -339,11 +411,26 @@ rules:
 clients:
   - client_id: workshop_agent
     client_secret: "${random_password.client_secret.result}"
-    client_name: "Workshop Agent Client"
+    client_name: "Workshop Agent Client (UC1)"
     enabled: true
     grant_types:
       - client_credentials
     token_endpoint_auth_method: client_secret_basic
+    id_token_signed_response_alg: RS256
+  - client_id: agent-uc2
+    client_name: "Banking App (UC2 — Authorization Code + PKCE)"
+    enabled: true
+    grant_types:
+      - authorization_code
+      - refresh_token
+    response_types:
+      - code
+    token_endpoint_auth_method: none
+    pkce_required: true
+    pkce_s256_required: true
+    redirect_uris:
+      - "${var.uc2_redirect_uri}"
+    scope: "openid profile email"
     id_token_signed_response_alg: RS256
 
 keystore:
@@ -733,6 +820,7 @@ resource "kubernetes_deployment" "isvaop" {
     kubernetes_secret.icr_pull,
     kubernetes_secret.isvaop_server,
     kubernetes_secret.isvaop_obf,
+    kubernetes_secret.isvaop_ldap,
     kubernetes_config_map.isvaop_config_data,
     kubernetes_job.ivia_db_init,
   ]

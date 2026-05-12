@@ -11,7 +11,7 @@ Before deploying any infrastructure, run `infrastructure/scripts/check-prerequis
 
 ## What you'll build
 
-Three progressively-layered Strands agents on EKS, fronted by IBM Verify Access and brokered through HashiCorp Vault, with end-to-end audit correlation:
+Three progressively-layered Strands agents on EKS, fronted by IBM Verify Identity Access (IVIA) and brokered through HashiCorp Vault, with end-to-end audit correlation:
 
 1. **Use Case 1** — Non-personalized read-only agent (workload identity, JIT credentials)
 2. **Use Case 2** — OAuth personalized read-only agent (user intent via Authorization Code + PKCE)
@@ -24,7 +24,7 @@ Three progressively-layered Strands agents on EKS, fronted by IBM Verify Access 
 | 10 | [Introduction](10-introduction/) | Understand the problem, five control objectives, and architecture |
 | 20 | [Prerequisites](20-prerequisites/) | Set up AWS account, HCP Terraform, and run pre-flight checks |
 | 30 | [Deploy Foundation](30-deploy-foundation/) | Deploy VPC, EKS, RDS, Bedrock KB via HCP Terraform Workspace |
-| 40 | [Platform — Vault & Verify Access](40-platform/) | Deploy and configure Vault + IBM Verify Access on EKS |
+| 40 | [Platform — Vault & Verify Access](40-platform/) | Deploy and configure Vault + IBM Verify Identity Access on EKS |
 | 50 | [Use Case 1 — Non-personalized R/O](50-use-case-1/) | Workload identity, JIT Postgres + Bedrock credentials |
 | 60 | [Use Case 2 — OAuth Personalized R/O](60-use-case-2/) | User intent via OAuth PKCE, per-user DB GRANTs, NetworkPolicy |
 | 70 | [Use Case 3 — CIBA Privileged](70-use-case-3/) | CIBA approval, bound_claims enforcement, three-plane audit |

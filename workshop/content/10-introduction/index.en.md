@@ -12,4 +12,5 @@ The agentic-systems threat model stretches across three trust planes simultaneou
 Continue through the sub-modules:
 
 1. **[Five Control Objectives](11-five-control-objectives/)** — The five security objectives this workshop implements, and the three use cases that demonstrate them
-2. **[Architecture](12-architecture/)** — The IBM Verify + HashiCorp Vault architecture, workshop structure, and design rationale
+2. **[Architecture](12-architecture/)** — The IBM Verify + HashiCorp Vault architecture, workshop structure, and what you'll build
+3. **[Audience and Scope](13-audience-and-scope/)** — Who this workshop is for and what's out of scope

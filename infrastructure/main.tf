@@ -162,6 +162,23 @@ module "bedrock_kb_index" {
 }
 
 #-------------------------------------------------------------------------------
+# Wave 2 — Simple AD (LDAP identity source for IVIA user authentication)
+# Oscar + Adriana test users provisioned post-deploy by create-simple-ad-users.sh.
+# Same VPC as EKS. SG rule allows LDAP from EKS nodes.
+#-------------------------------------------------------------------------------
+
+module "simple_ad" {
+  source = "./modules/simple_ad"
+
+  region                     = var.region
+  vpc_id                     = module.vpc.vpc_id
+  private_subnet_ids         = module.vpc.private_subnet_ids
+  eks_node_security_group_id = module.eks.node_security_group_id
+  admin_password             = var.simple_ad_admin_password
+  tags                       = var.tags
+}
+
+#-------------------------------------------------------------------------------
 # Wave 3 — Vault
 # Depends on eks (cluster creds), audit (CMK, log groups), addons (cert-manager).
 # Deploys Vault via Helm chart in Raft 3-node HA with dedicated KMS auto-unseal
@@ -221,9 +238,14 @@ module "ivia" {
   audit_log_group_names      = module.audit.audit_log_group_names
   addons_ready               = module.addons.aws_load_balancer_controller_release
   icr_entitlement_key        = var.icr_entitlement_key
+  simple_ad_dns_ips          = module.simple_ad.dns_ip_addresses
+  simple_ad_bind_dn          = module.simple_ad.bind_dn
+  simple_ad_admin_password   = var.simple_ad_admin_password
+  simple_ad_base_dn          = module.simple_ad.base_dn
+  uc2_redirect_uri           = var.uc2_redirect_uri
   tags                       = var.tags
 
-  depends_on = [time_sleep.alb_webhook_ready]
+  depends_on = [time_sleep.alb_webhook_ready, module.simple_ad]
 }
 
 #-------------------------------------------------------------------------------

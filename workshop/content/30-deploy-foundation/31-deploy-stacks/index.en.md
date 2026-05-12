@@ -3,30 +3,9 @@ title: 'Deploy Workspace'
 weight: 31
 ---
 
-The bootstrap script already created the HCP Terraform Workspace, agent pool, and agent token. In this step, you start the local tfc-agent, push to `main` to trigger the first workspace plan, approve the apply, and then run `configure-workshop.sh` to complete post-deploy configuration.
+The bootstrap script already created the HCP Terraform Workspace, variable set, and dynamic provider credentials (OIDC). In this step, you push to `main` to trigger the first workspace plan, approve the apply in the HCP Terraform UI, and then run `configure-workshop.sh` to complete post-deploy configuration.
 
-## Step 1 — Start the tfc-agent
-
-The HCP Terraform Workspace is configured to use your local agent pool. Start the agent in a dedicated terminal — keep it running throughout the workshop:
-
-```bash
-export TFC_AGENT_TOKEN=$(cat infrastructure/scripts/.agent-token)
-tfc-agent
-```
-
-You should see:
-
-```
-INFO agent: Starting agent
-INFO agent: Connected to HCP Terraform
-INFO agent: Waiting for jobs
-```
-
-:::alert{header="Agent token location" type="info"}
-The `.agent-token` file was created by `bootstrap.sh` when it provisioned the agent pool. It is gitignored — never commit it. If the file is missing, re-run `bootstrap.sh --mode workspace` to regenerate it.
-:::
-
-## Step 2 — Push to trigger the workspace plan
+## Step 1 — Push to trigger the workspace plan
 
 Push any change to `main` to trigger the first workspace plan. If you have no local changes, you can trigger from the HCP Terraform UI instead (see the alert below).
 
@@ -34,13 +13,13 @@ Push any change to `main` to trigger the first workspace plan. If you have no lo
 git push origin main
 ```
 
-HCP Terraform detects the push and queues a new run in the workspace. Your local tfc-agent picks up the run and begins planning against your AWS account.
+HCP Terraform detects the push and queues a new run in the workspace. The remote worker authenticates to your AWS account via OIDC (dynamic provider credentials) and begins planning.
 
 :::alert{header="Triggering from the UI instead" type="info"}
 If you have no local changes to push, you can trigger a run manually: go to [HCP Terraform](https://app.terraform.io/) > your Project > your Workspace > **Actions** > **Start new run**. Select **Plan and apply** and confirm.
 :::
 
-## Step 3 — Review and approve the plan
+## Step 2 — Review and approve the plan
 
 In the HCP Terraform UI, navigate to the running plan:
 
@@ -50,12 +29,12 @@ In the HCP Terraform UI, navigate to the running plan:
 4. Click **Confirm & Apply**
 
 :::alert{header="First deploy timing" type="info"}
-Total time: ~25–35 minutes (EKS ~12 min, RDS ~10 min including pgaudit reboot, Bedrock KB ~3 min, addons ~5 min). The tfc-agent must remain running in your terminal throughout.
+Total time: ~25–35 minutes (EKS ~12 min, RDS ~10 min including pgaudit reboot, Bedrock KB ~3 min, addons ~5 min).
 :::
 
-## Step 4 — Run configure-workshop.sh
+## Step 3 — Run configure-workshop.sh
 
-After the workspace apply completes, run the post-deploy configuration script. This configures kubectl, initializes and configures Vault, configures IVIA, and seeds the banking database:
+After the workspace apply completes, run the post-deploy configuration script. This configures kubectl, initializes and configures Vault, verifies IVIA, provisions Simple AD users, and seeds the banking database:
 
 ```bash
 bash infrastructure/scripts/configure-workshop.sh
@@ -69,14 +48,14 @@ The script prints a pass/fail summary for each configuration step. All steps mus
 
 ## What Happens During Apply
 
-When the workspace apply runs, HCP Terraform deploys the eleven modules in dependency order:
+When the workspace apply runs, HCP Terraform deploys the modules in dependency order:
 
 1. **audit** + **vpc** + **bedrock_kb_aoss** — apply in parallel (no inter-dependencies)
 2. **eks** — depends on `vpc` + `audit`
-3. **addons** + **rds** — depend on `eks`
+3. **addons** + **rds** + **simple_ad** — depend on `eks` (Simple AD shares the VPC)
 4. **bedrock_kb_index** — depends on `bedrock_kb_aoss`
-5. **vault** + **ivia** — depend on `eks` + `addons` (ALB webhook ready)
-6. **vault_config** + **isva_config** — depend on Vault running
+5. **vault** + **verify_access** — depend on `eks` + `addons` (ALB webhook ready) + `simple_ad` (LDAP)
+6. **vault_config** — depends on Vault running
 7. **uc1_agent** + **uc2_app** — depend on `vault_config`
 
 When the run completes, note these outputs — you will need them in the next sub-modules:
@@ -100,13 +79,19 @@ When the run completes, note these outputs — you will need them in the next su
 ::::
 
 ::::expand{header="eks — Kubernetes cluster and managed addons"}
-- Kubernetes 1.33 cluster, 3 × m5.xlarge managed node group (AL2023)
+- Kubernetes 1.33 cluster, 3 x m5.xlarge managed node group (AL2023)
 - 5 control-plane log types, EKS Access Entry for your `admin_principal_arn`
 - 5 managed addons: `vpc-cni`, `coredns`, `kube-proxy`, `eks-pod-identity-agent`, `aws-ebs-csi-driver`
 ::::
 
 ::::expand{header="addons — External cluster addons"}
 - cert-manager, external-dns, AWS Load Balancer Controller (via eks-blueprints-addons)
+::::
+
+::::expand{header="simple_ad — Employee identity directory"}
+- AWS Simple AD (Small, `workshop.internal` domain) deployed in 2 private subnets
+- Security group rule allowing LDAP (port 389) from EKS nodes to Simple AD
+- Users (Oscar, Adriana) provisioned post-deploy by `create-simple-ad-users.sh`
 ::::
 
 ::::expand{header="rds — PostgreSQL 17 with audit logging"}

@@ -58,3 +58,11 @@ uc1_agent_image = "<account>.dkr.ecr.us-west-2.amazonaws.com/workshop/uc1-agent:
 banking_app_ui_image    = "<account>.dkr.ecr.us-west-2.amazonaws.com/workshop/banking-app:ui"
 banking_app_agent_image = "<account>.dkr.ecr.us-west-2.amazonaws.com/workshop/banking-app:agent"
 banking_app_mcp_image   = "<account>.dkr.ecr.us-west-2.amazonaws.com/workshop/banking-app:mcp"
+
+# Simple AD — LDAP identity source for IVIA user authentication.
+# Workshop test users (Oscar, Adriana) are provisioned in this directory.
+simple_ad_admin_password = "WorkshopAdmin1!"
+
+# UC2 OAuth redirect URI — set to the banking app ALB hostname after deploy.
+# Example: http://k8s-bankinga-banking-xxxxx.us-west-2.elb.amazonaws.com/callback
+uc2_redirect_uri = "http://localhost:3000/callback"

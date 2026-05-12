@@ -5,7 +5,9 @@ weight: 42
 
 ## Overview
 
-In this step you deploy IBM Verify Identity Access (IVIA) 11.0.2 as a self-hosted OIDC provider and CIBA authorization server on the EKS cluster. IVIA runs as raw Kubernetes workloads (Deployment, Service, Ingress) rather than a Helm chart — the IVIA Helm chart does not exist, and raw manifests as Terraform resources make the full configuration visible and reviewable.
+In this step you deploy IBM Verify Identity Access (IVIA) 11.0.2 as a self-hosted OIDC provider and CIBA authorization server on the EKS cluster. IVIA runs as raw Kubernetes workloads (Deployment, Service, Ingress) rather than a Helm chart — raw manifests as Terraform resources make the full configuration visible and reviewable.
+
+IVIA authenticates users against **AWS Simple AD** — a lightweight managed Active Directory deployed in the same VPC as EKS. In a real enterprise, this would be your organization's existing Active Directory or LDAP directory. The workshop pre-provisions two employees (Oscar and Adriana) so you can test the OAuth and CIBA flows end-to-end.
 
 The IVIA deployment is exposed externally via an AWS Application Load Balancer managed by AWS Load Balancer Controller.
 
@@ -81,11 +83,12 @@ ivia-ingress    alb     *       k8s-verifyac-ivia-xxxx.elb.amazonaws.com   80,44
 
 ## Step 5 — Verify OIDC discovery endpoint
 
-IVIA exposes its OIDC discovery document at `/.well-known/openid-configuration`. Test the in-cluster endpoint (used by Vault `jwt` auth) from within the `vault` namespace:
+IVIA exposes its OIDC discovery document at `/oauth2/.well-known/openid-configuration`. Test the in-cluster endpoint (used by Vault `jwt` auth):
 
 ```bash
-kubectl exec -n vault vault-0 -- \
-  curl -sk https://isvaop.verify-access.svc.cluster.local:8436/.well-known/openid-configuration \
+kubectl run oidc-check --image=curlimages/curl --rm -i --restart=Never \
+  -n verify-access -- \
+  curl -sk https://isvaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration \
   | jq .
 ```
 
@@ -104,8 +107,9 @@ Expected output includes:
 The `issuer` value is the URL Vault will use as `bound_issuer` in the `jwt` auth configuration. Save it:
 
 ```bash
-IVIA_ISSUER=$(kubectl exec -n vault vault-0 -- \
-  curl -sk https://isvaop.verify-access.svc.cluster.local:8436/.well-known/openid-configuration \
+IVIA_ISSUER=$(kubectl run oidc-issuer --image=curlimages/curl --rm -i --restart=Never \
+  -n verify-access -- \
+  curl -sk https://isvaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration \
   | jq -r .issuer)
 echo "IVIA issuer: $IVIA_ISSUER"
 ```

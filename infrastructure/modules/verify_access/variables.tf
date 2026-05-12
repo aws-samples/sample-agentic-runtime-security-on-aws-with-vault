@@ -61,9 +61,38 @@ variable "icr_entitlement_key" {
 }
 
 variable "addons_ready" {
-  description = "Consumed but unused — creates implicit Stacks ordering so IVIA deploys after the AWS LB Controller webhook is serving."
+  description = "Consumed but unused — creates implicit ordering so IVIA deploys after the AWS LB Controller webhook is serving."
   type        = any
   default     = null
+}
+
+# --- Simple AD (LDAP identity source for user authentication) ---
+
+variable "simple_ad_dns_ips" {
+  type        = list(string)
+  description = "DNS IP addresses of the Simple AD directory controllers. Used as LDAP hosts in isvaop config.yaml."
+}
+
+variable "simple_ad_bind_dn" {
+  type        = string
+  description = "Administrator bind DN for Simple AD LDAP operations (e.g. CN=Administrator,CN=Users,DC=workshop,DC=internal)."
+}
+
+variable "simple_ad_admin_password" {
+  type        = string
+  sensitive   = true
+  description = "Simple AD Administrator password — used as LDAP bind password in isvaop config."
+}
+
+variable "simple_ad_base_dn" {
+  type        = string
+  description = "LDAP base DN for user search (e.g. DC=workshop,DC=internal)."
+}
+
+variable "uc2_redirect_uri" {
+  type        = string
+  default     = "http://localhost:3000/callback"
+  description = "OAuth redirect URI for the UC2 banking app. Set to ALB hostname at deploy time."
 }
 
 variable "tags" {

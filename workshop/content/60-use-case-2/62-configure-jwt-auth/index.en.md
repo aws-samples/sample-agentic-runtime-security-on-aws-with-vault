@@ -33,7 +33,7 @@ Key fields:
 
 | Field | Value | Meaning |
 |---|---|---|
-| `oidc_discovery_url` | `https://isvaop.verify-access.svc.cluster.local:8436/pksc/sps/oauth/oauth20` | IVIA's in-cluster OIDC discovery URL. Vault fetches JWKS from this endpoint to validate JWT signatures. |
+| `oidc_discovery_url` | `https://isvaop.verify-access.svc.cluster.local:8436/oauth2` | IVIA's in-cluster OIDC discovery URL. Vault fetches JWKS from this endpoint to validate JWT signatures. |
 | `bound_issuer` | `https://isvaop.verify-access.svc.cluster.local:8436/...` | JWT `iss` claim must match this value. |
 | `default_role` | _(empty)_ | Role must be specified explicitly on each login call. |
 

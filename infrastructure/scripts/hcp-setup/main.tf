@@ -138,6 +138,19 @@ variable "banking_app_mcp_image" {
   description = "ECR image URI for banking app MCP server (set after ECR push)"
 }
 
+variable "simple_ad_admin_password" {
+  type        = string
+  default     = ""
+  sensitive   = true
+  description = "Simple AD Administrator password for LDAP bind + user provisioning"
+}
+
+variable "uc2_redirect_uri" {
+  type        = string
+  default     = "http://localhost:3000/callback"
+  description = "OAuth redirect URI for UC2 banking app (set after ALB provisioned)"
+}
+
 #-------------------------------------------------------------------------------
 # Project
 #-------------------------------------------------------------------------------
@@ -285,6 +298,24 @@ resource "tfe_variable" "banking_app_mcp_image" {
   value           = var.banking_app_mcp_image
   category        = "terraform"
   description     = "ECR image URI for banking app MCP server"
+}
+
+# --- Simple AD ---
+resource "tfe_variable" "simple_ad_admin_password" {
+  variable_set_id = tfe_variable_set.workshop.id
+  key             = "simple_ad_admin_password"
+  value           = var.simple_ad_admin_password
+  category        = "terraform"
+  sensitive       = true
+  description     = "Simple AD Administrator password (sensitive)"
+}
+
+resource "tfe_variable" "uc2_redirect_uri" {
+  variable_set_id = tfe_variable_set.workshop.id
+  key             = "uc2_redirect_uri"
+  value           = var.uc2_redirect_uri
+  category        = "terraform"
+  description     = "OAuth redirect URI for UC2 banking app"
 }
 
 #-------------------------------------------------------------------------------

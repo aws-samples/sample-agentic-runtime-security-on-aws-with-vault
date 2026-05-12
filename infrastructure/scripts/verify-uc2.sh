@@ -280,7 +280,7 @@ fi
 # Verify the JWKS URL is reachable from within the cluster (via vault-0 proxy check).
 # This is a prerequisite for the full OAuth flow, not a full OAuth test.
 #-------------------------------------------------------------------------------
-ivia_jwks_url="https://isvaop.verify-access.svc.cluster.local:8436/pksc/sps/oauth/oauth20/jwks"
+ivia_jwks_url="https://isvaop.verify-access.svc.cluster.local:8436/oauth2/jwks"
 jwks_result=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
     curl -sk --max-time 10 "${ivia_jwks_url}" 2>/dev/null | jq -r '.keys | length' 2>/dev/null || echo "0")
 

@@ -71,7 +71,7 @@ uc1_agent_image = "<ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/workshop/uc1-agen
 
 ## Step 4 — Trigger the workspace apply
 
-Ensure the tfc-agent is running (from the Deploy Foundation step), then push to `main` to trigger a new workspace run:
+Push to `main` to trigger a new workspace run:
 
 ```bash
 git add infrastructure/terraform.tfvars

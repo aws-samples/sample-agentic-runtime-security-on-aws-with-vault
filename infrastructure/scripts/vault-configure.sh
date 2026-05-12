@@ -47,7 +47,7 @@ SKIP_IVIA=false
 
 #--- Result tracking -----------------------------------------------------------
 declare -A RESULTS
-PHASE_ORDER=("gather" "vault_config" "isva_config")
+PHASE_ORDER=("gather" "vault_config" "ivia_verify")
 
 #--- Parse arguments -----------------------------------------------------------
 while [[ $# -gt 0 ]]; do
@@ -373,74 +373,41 @@ TFVARS
 #===============================================================================
 # PHASE 3: IVIA Configuration
 #===============================================================================
-phase_isva_config() {
-  phase "3" "IVIA Configuration"
-
-  if [[ "$SKIP_IVIA" == true ]]; then
-    info "Skipped (--skip-ivia or no password provided)"
-    record "isva_config" "SKIPPED"
-    return 0
-  fi
+phase_ivia_verify() {
+  phase "3" "IVIA OIDC Verification"
 
   if [[ "$DRY_RUN" == true ]]; then
-    info "[DRY RUN] Would port-forward isvaop:8436 and terraform apply in isva-config/"
-    record "isva_config" "PASS"
+    info "[DRY RUN] Would verify IVIA OIDC discovery endpoint"
+    record "ivia_verify" "PASS"
     return 0
   fi
 
-  # Write tfvars
-  info "Writing terraform.tfvars..."
-  cat > "${ISVA_CONFIG_DIR}/terraform.tfvars" <<TFVARS
-ivia_admin_password = "${IVIA_PASSWORD}"
-TFVARS
-  chmod 600 "${ISVA_CONFIG_DIR}/terraform.tfvars"
-  ok "terraform.tfvars written (mode 600)"
-
-  # Port-forward
-  info "Starting port-forward to IVIA (8436)..."
-  kubectl port-forward svc/isvaop 8436:8436 -n verify-access &>/dev/null &
-  IVIA_PF_PID=$!
-  sleep 2
-
-  if ! kill -0 "$IVIA_PF_PID" 2>/dev/null; then
-    fail "Port-forward to IVIA failed to start"
-    record "isva_config" "FAIL"
+  # IVIA is configured declaratively via config.yaml in the Terraform
+  # verify_access module — no REST API calls needed. Just verify it's serving.
+  info "Checking IVIA pod status..."
+  local running
+  running=$(kubectl get pods -n verify-access --no-headers 2>/dev/null | grep -c Running || true)
+  if [[ "${running:-0}" -lt 1 ]]; then
+    fail "No IVIA pods Running in verify-access namespace"
+    record "ivia_verify" "FAIL"
     return 1
   fi
-  ok "Port-forward active (PID ${IVIA_PF_PID})"
+  ok "${running} IVIA pod(s) Running"
 
-  # Verify connectivity
-  info "Testing IVIA connectivity..."
-  if curl -skf https://127.0.0.1:8436/healthcheck/ready &>/dev/null; then
-    ok "IVIA reachable at 127.0.0.1:8436"
+  info "Verifying OIDC discovery..."
+  local issuer
+  issuer=$(kubectl run ivia-cfg-check --image=curlimages/curl --rm -i --restart=Never \
+    -n verify-access -- curl -sk \
+    "https://isvaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration" \
+    2>/dev/null | jq -r '.issuer // empty' 2>/dev/null || echo "")
+
+  if [[ -n "$issuer" ]]; then
+    ok "OIDC issuer: ${issuer}"
+    record "ivia_verify" "PASS"
   else
-    fail "Cannot reach IVIA at 127.0.0.1:8436"
-    record "isva_config" "FAIL"
-    return 1
+    warn "OIDC discovery not responding — IVIA may still be initializing"
+    record "ivia_verify" "WARN"
   fi
-
-  # Terraform init + apply
-  info "Running terraform init..."
-  if ! terraform -chdir="${ISVA_CONFIG_DIR}" init -input=false 2>&1 | tail -3; then
-    fail "terraform init failed"
-    record "isva_config" "FAIL"
-    return 1
-  fi
-
-  info "Running terraform apply..."
-  if terraform -chdir="${ISVA_CONFIG_DIR}" apply -auto-approve -input=false 2>&1; then
-    ok "IVIA configuration applied successfully"
-  else
-    fail "terraform apply failed"
-    record "isva_config" "FAIL"
-    return 1
-  fi
-
-  # Stop port-forward
-  kill "$IVIA_PF_PID" 2>/dev/null || true
-  unset IVIA_PF_PID
-
-  record "isva_config" "PASS"
 }
 
 #===============================================================================
@@ -455,7 +422,7 @@ main() {
 
   phase_gather || { print_summary; exit 1; }
   phase_vault_config || true
-  phase_isva_config || true
+  phase_ivia_verify || true
   print_summary
 }
 

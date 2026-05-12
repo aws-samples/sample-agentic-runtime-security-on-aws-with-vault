@@ -361,6 +361,8 @@ uc1_agent_image     = "${UC1_AGENT_IMAGE:-placeholder}"
 banking_app_ui_image    = "${BANKING_APP_UI_IMAGE:-placeholder}"
 banking_app_agent_image = "${BANKING_APP_AGENT_IMAGE:-placeholder}"
 banking_app_mcp_image   = "${BANKING_APP_MCP_IMAGE:-placeholder}"
+simple_ad_admin_password = "${SIMPLE_AD_ADMIN_PASSWORD:-WorkshopAdmin1!}"
+uc2_redirect_uri         = "${UC2_REDIRECT_URI:-http://localhost:3000/callback}"
 TFVARS
     echo -e "${GREEN}OK: Written: $TFVARS_FILE${NC}"
 }

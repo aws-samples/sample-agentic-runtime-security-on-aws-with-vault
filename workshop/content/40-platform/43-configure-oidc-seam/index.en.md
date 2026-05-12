@@ -5,9 +5,16 @@ weight: 43
 
 ## Overview
 
-In this step you configure the **OIDC seam** — the integration point where an IVIA-issued JWT becomes a Vault-vended dynamic credential. Two Terraform modules apply here: `vault_config` and `isva_config`.
+In this step you configure the **OIDC seam** — the integration point where an IVIA-issued JWT becomes a Vault-vended dynamic credential. This involves two parts:
 
-`vault_config` configures Vault with:
+1. **Vault configuration** (via `configure-workshop.sh` → `vault-configure.sh`) — wires up Vault auth methods, secrets engines, and policies.
+2. **IVIA verification** (via `configure-workshop.sh` → `ivia-configure.sh`) — confirms IVIA's OIDC discovery and OAuth clients are serving correctly. IVIA itself is configured **declaratively** — the `verify_access` Terraform module embeds the full OIDC provider configuration (clients, LDAP, grant types) in `config.yaml` at deploy time. No post-deploy REST API calls are needed.
+
+After this step, Vault trusts IVIA-issued JWTs, and IVIA authenticates users against AWS Simple AD via LDAP.
+
+## What gets configured
+
+### Vault (via vault-configure.sh)
 
 - **Kubernetes auth method** — enables workloads with projected service-account tokens to authenticate as Vault entities.
 - **JWT auth method** — trusts IVIA's OIDC discovery URL; binds user-scoped JWT claims to Vault policies.
@@ -16,16 +23,20 @@ In this step you configure the **OIDC seam** — the integration point where an 
 - **Vault policies** — `uc1-agent-policy`, `uc2-agent-policy`, `uc3-agent-policy` scoped to each use case.
 - **Audit device** — file-based audit log writing to `/vault/audit/vault-audit.log` inside the pod (mapped to a PVC, read by a log-shipper sidecar).
 
-`isva_config` configures IVIA with:
+### IVIA (declarative — deployed with verify_access module)
 
-- Three OAuth 2.0 clients (one per use case agent), each with CIBA support and a `may_act` claim for RFC 8693 delegation.
-- CIBA authorization server policies mapped to the three clients.
-- Rich Authorization Requests (RAR) type definitions (`credential-vend`, `data-query`, `audit-read`).
-- JWT signing configuration aligned with Vault's `bound_issuer` setting.
+IVIA's OIDC provider (`isvaop`) is configured entirely via `config.yaml` embedded in the Terraform `verify_access` module. The configuration includes:
+
+- **OAuth 2.0 clients** — `agent-uc2` (authorization code + PKCE, public client) and `workshop_agent` (confidential client for CIBA flows).
+- **LDAP server connection** — authenticates users against AWS Simple AD on port 389, with bind credentials from a Kubernetes Secret.
+- **User attribute mapping** — maps LDAP attributes (`mail`, `cn`, `uid`) to JWT claims (`sub`, `name`, `email`).
+- **Grant types** — `authorization_code` + `refresh_token` for Use Case 2; CIBA for Use Case 3.
+
+No `isva_config` REST API module is needed — `isvaop` reads its configuration at startup from the ConfigMap.
 
 ## Step 1 — Set VAULT_TOKEN and VAULT_ADDR
 
-The `vault_config` and `isva_config` modules need the Vault root token you saved in the previous module. Add these to the HCP Terraform workspace variable set:
+The `vault-configure.sh` script needs the Vault root token you saved in the previous module. Add these to the HCP Terraform workspace variable set:
 
 | Variable | Value |
 |---|---|
@@ -41,19 +52,21 @@ export VAULT_ADDR="https://vault.vault.svc.cluster.local:8200"
 
 ## Step 2 — Run configure-workshop.sh
 
-`vault_config` and `isva_config` are applied as part of the workspace run. After `vault` and `verify_access` are healthy (verified in the previous steps), run the post-deploy configuration script to complete Vault initialization and IVIA configuration:
+After `vault` and `verify_access` are healthy (verified in the previous steps), run the post-deploy configuration script:
 
 ```bash
 bash infrastructure/scripts/configure-workshop.sh
 ```
 
-This script calls `vault-configure.sh` (which wires up Vault auth methods, secrets engines, and policies) and `ivia-configure.sh` (which registers OAuth 2.0 clients).
+This script runs five steps:
 
-In HCP Terraform UI, review the workspace run outputs. You will see Vault auth methods, secrets engines, roles, and policies being reported.
+1. **vault-init.sh** — initializes and unseals Vault (idempotent — skips if already initialized).
+2. **vault-configure.sh** — wires up Vault auth methods, secrets engines, and policies.
+3. **ivia-configure.sh** — verifies IVIA is serving OIDC discovery and has the expected clients.
+4. **create-simple-ad-users.sh** — provisions Oscar and Adriana in AWS Simple AD (idempotent — skips if users exist).
+5. **seed-banking-db.sh** — seeds the banking database with test data for Use Case 2.
 
-## Step 3 — What was configured
-
-After apply completes, verify Vault auth methods:
+## Step 3 — Verify Vault auth methods
 
 ```bash
 kubectl exec -n vault vault-0 -- vault auth list
@@ -85,7 +98,7 @@ database/     database     Dynamic PostgreSQL credentials
 sys/          system       system endpoints used for control, policy and debugging
 ```
 
-Verify the JWT auth configuration points to IVIA:
+## Step 4 — Verify the JWT auth points to IVIA
 
 ```bash
 kubectl exec -n vault vault-0 -- vault read auth/jwt/config
@@ -98,7 +111,7 @@ oidc_discovery_url    https://isvaop.verify-access.svc.cluster.local:8436/oauth2
 bound_issuer          https://isvaop.verify-access.svc.cluster.local:8436/oauth2
 ```
 
-Verify the database connection:
+## Step 5 — Verify the database connection
 
 ```bash
 kubectl exec -n vault vault-0 -- vault read database/config/workshop-pg
@@ -111,54 +124,75 @@ connection_details    map[username:vault_root ...]
 allowed_roles         uc1-readonly, uc2-readwrite, uc3-audit
 ```
 
-## Step 4 — Verify IVIA OAuth clients
+## Step 6 — Verify IVIA OIDC discovery
 
-From within the cluster, check the registered OAuth 2.0 clients:
+From within the cluster, confirm IVIA is serving the OIDC discovery document:
 
 ```bash
-kubectl exec -n vault vault-0 -- \
-  curl -sk https://isvaop.verify-access.svc.cluster.local:8436/oauth2/clients \
-  | jq '.[] | .client_id'
+kubectl run oidc-check --image=curlimages/curl --rm -i --restart=Never \
+  -n verify-access -- \
+  curl -sk https://isvaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration \
+  | jq .
 ```
 
-Expected output:
+Expected output includes:
 
-```
-"uc1-strands-agent"
-"uc2-strands-agent"
-"uc3-strands-agent"
+```json
+{
+  "issuer": "https://isvaop.verify-access.svc.cluster.local:8436/oauth2",
+  "authorization_endpoint": "https://isvaop.verify-access.svc.cluster.local:8436/oauth2/authorize",
+  "token_endpoint": "https://isvaop.verify-access.svc.cluster.local:8436/oauth2/token",
+  "jwks_uri": "https://isvaop.verify-access.svc.cluster.local:8436/oauth2/jwks",
+  ...
+}
 ```
 
 ## What was configured — summary
 
-| Module | Resource | Count |
+| Source | Resource | Count |
 |---|---|---|
-| vault_config | Kubernetes auth method | 1 |
-| vault_config | JWT auth method (IVIA OIDC) | 1 |
-| vault_config | Database secrets engine | 1 |
-| vault_config | Database roles | 3 (uc1-readonly, uc2-readwrite, uc3-audit) |
-| vault_config | AWS secrets engine | 1 |
-| vault_config | Vault policies | 3 (uc1/uc2/uc3) |
-| vault_config | Audit device | 1 (file, PVC) |
-| isva_config | OAuth 2.0 clients | 3 |
-| isva_config | CIBA policies | 3 |
-| isva_config | RAR type definitions | 3 (credential-vend, data-query, audit-read) |
+| vault-configure.sh | Kubernetes auth method | 1 |
+| vault-configure.sh | JWT auth method (IVIA OIDC) | 1 |
+| vault-configure.sh | Database secrets engine | 1 |
+| vault-configure.sh | Database roles | 3 (uc1-readonly, uc2-readwrite, uc3-audit) |
+| vault-configure.sh | AWS secrets engine | 1 |
+| vault-configure.sh | Vault policies | 3 (uc1/uc2/uc3) |
+| vault-configure.sh | Audit device | 1 (file, PVC) |
+| verify_access config.yaml | OAuth 2.0 clients | 2 (agent-uc2, workshop_agent) |
+| verify_access config.yaml | LDAP server connection | 1 (Simple AD) |
+| verify_access config.yaml | User attribute mappings | 3 (sub, email, name) |
+| create-simple-ad-users.sh | AD user accounts | 2 (Oscar, Adriana) |
 
 ## The OIDC seam — how it works at runtime
 
 ```
-  Agent (uc1-strands-agent) obtains IVIA JWT via CIBA
-         │
-         ▼
-  POST /v1/auth/jwt/login  { role=uc1-agent, jwt=<IVIA token> }
-         │
-  Vault verifies JWT signature against IVIA JWKS endpoint
-  Vault checks bound_claims: { sub=<user>, aud=uc1-strands-agent }
-         │
-  Vault policy: uc1-agent-policy → allows database/creds/uc1-readonly
-         │
-         ▼
-  Vault issues dynamic PostgreSQL credential (TTL 1h, renewable)
+  Employee (Oscar) ──► IVIA ALB ──► IVIA authenticates via LDAP ──► Simple AD
+                                          │
+                                    issues JWT (sub=oscar@cdlbank.com, aud=agent-uc2)
+                                          │
+  Agent workload ──────────────────────► Vault jwt auth
+                                          │
+                                    verifies JWT signature against IVIA JWKS
+                                    checks bound_claims: { aud=agent-uc2 }
+                                          │
+                                    evaluates uc2-agent-policy
+                                          │
+                                          ▼
+                                    vends dynamic PostgreSQL credential (TTL 1h)
+                                    + sets app.current_user_sub = oscar@cdlbank.com
 ```
 
-The `may_act` claim in the JWT (RFC 8693) binds the credential to the specific agent acting on behalf of the specific user. The `uc3-jwt` role additionally enforces `bound_claims.may_act=*` to ensure delegation is explicit.
+The `sub` claim from the JWT flows through Vault into the Postgres session variable that activates Row-Level Security — each user sees only their own data, enforced at the database layer.
+
+:::expand{header="Platform Track — Why declarative IVIA configuration?"}
+
+The `isvaop` image (IBM Verify Identity Access OIDC Provider) reads its entire configuration from a `config.yaml` file mounted as a ConfigMap. This is different from the full ISVA appliance, which exposes a management REST API (`/mga/sps/...`).
+
+Advantages of the declarative approach:
+
+1. **GitOps-friendly** — the full OIDC provider configuration is visible in Terraform HCL, version-controlled, and reviewable.
+2. **Idempotent** — redeploying the pod picks up any config changes. No drift between what the API was told and what the pod is running.
+3. **No bootstrap ordering** — clients, LDAP connections, and attribute mappings are all available at first startup. No need to wait for the pod to be healthy before running configuration scripts.
+
+The `ivia-configure.sh` script is verification-only — it confirms OIDC discovery is responding and the ALB has an address. It does not modify IVIA state.
+:::
