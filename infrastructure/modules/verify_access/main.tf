@@ -430,7 +430,10 @@ clients:
     pkce_s256_required: true
     redirect_uris:
       - "${var.uc2_redirect_uri}"
-    scope: "openid profile email"
+    scope:
+      - openid
+      - profile
+      - email
     id_token_signed_response_alg: RS256
 
 keystore:
