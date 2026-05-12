@@ -420,7 +420,8 @@ hcp_wait_for_vcs_plan() {
     step_header "Waiting for VCS-triggered plan to appear..."
 
     local config_id=""
-    while [ $elapsed -lt $timeout ]; do
+    local vcs_timeout=120
+    while [ $elapsed -lt $vcs_timeout ]; do
         config_id=$(hcp_get_latest_config "$stack_id")
 
         if [ -n "$config_id" ] && [ "$config_id" != "$old_config_id" ]; then
@@ -430,14 +431,14 @@ hcp_wait_for_vcs_plan() {
         sleep 10
         elapsed=$((elapsed + 10))
         if [ $((elapsed % 30)) -eq 0 ]; then
-            print_info "Waiting for new config (${elapsed}s/${timeout}s)"
+            print_info "Waiting for new config (${elapsed}s/${vcs_timeout}s)"
         fi
         config_id=""
     done
 
     if [ -z "$config_id" ]; then
-        print_error "Timeout waiting for VCS-triggered config"
-        return 1
+        print_warn "VCS did not trigger within ${vcs_timeout}s — triggering plan via API"
+        config_id=$(hcp_trigger_plan "$stack_id") || return 1
     fi
 
     print_success "New configuration detected: $config_id"
