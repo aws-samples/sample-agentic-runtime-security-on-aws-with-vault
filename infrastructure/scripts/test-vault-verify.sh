@@ -69,6 +69,12 @@ VAULT_POD="${VAULT_POD:-vault-0}"
 VAULT_LABEL="app.kubernetes.io/name=vault"
 LBC_LABEL="app.kubernetes.io/name=aws-load-balancer-controller"
 
+# Load Vault root token for authenticated checks (raft peers, audit device)
+VAULT_ROOT_TOKEN="${VAULT_ROOT_TOKEN:-}"
+if [ -z "$VAULT_ROOT_TOKEN" ] && [ -f "$HOME/vault-init.json" ]; then
+    VAULT_ROOT_TOKEN=$(jq -r '.root_token // empty' "$HOME/vault-init.json" 2>/dev/null || true)
+fi
+
 print_info "${SCRIPT_DESCRIPTION}"
 echo ""
 
@@ -103,7 +109,7 @@ fi
 # Check 3 — Vault Raft peers (3 peers)
 #-------------------------------------------------------------------------------
 raft_peers=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
-    vault operator raft list-peers -format=json 2>/dev/null \
+    sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault operator raft list-peers -format=json" 2>/dev/null \
     | jq '.data.config.servers | length' 2>/dev/null || echo "0")
 if [ "${raft_peers}" -ge 3 ]; then
     print_pass "Vault Raft peers: ${raft_peers}"
@@ -116,7 +122,8 @@ fi
 # Check 4 — Vault audit device enabled
 #-------------------------------------------------------------------------------
 audit_count=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
-    vault audit list -format=json 2>/dev/null | jq 'length' 2>/dev/null || echo "0")
+    sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault audit list -format=json" 2>/dev/null \
+    | jq 'length' 2>/dev/null || echo "0")
 if [ "${audit_count:-0}" -ge 1 ]; then
     print_pass "Vault audit device: enabled (${audit_count} device(s))"
 else
