@@ -1168,11 +1168,10 @@ phase_aws_sweep() {
 # HCP CLEANUP — delete Stack, variable set, AWS IAM role for HCP, OIDC provider
 #===============================================================================
 phase_hcp_cleanup() {
-    phase_header "HCP Cleanup (Workspace + Stack + variable set + IAM role + OIDC)"
+    phase_header "HCP Cleanup (variable set + project)"
 
     if [ "$DRY_RUN" = true ]; then
-        print_info "[DRY-RUN] Would delete HCP Workspace '$HCP_WORKSPACE_NAME', Stack '$HCP_STACK_NAME',"
-        print_info "          variable set, IAM role '$HCP_ROLE_NAME', OIDC provider 'app.terraform.io'"
+        print_info "[DRY-RUN] Would destroy HCP variable set + project via terraform"
         return 0
     fi
 
@@ -1186,78 +1185,6 @@ phase_hcp_cleanup() {
     fi
     print_info "HCP org: $HCP_ORG"
 
-    #-- Workspace delete via API
-    step_header "Delete HCP Terraform Workspace"
-    if [ -z "${TFE_TOKEN:-}" ]; then
-        print_warn "TFE_TOKEN not set — skipping Workspace delete (manual: HCP UI > Workspaces)"
-    else
-        local ws_id
-        ws_id=$(curl -s -H "Authorization: Bearer $TFE_TOKEN" \
-            -H "Content-Type: application/vnd.api+json" \
-            "$TFE_API/organizations/$HCP_ORG/workspaces/$HCP_WORKSPACE_NAME" 2>/dev/null \
-            | jq -r '.data.id // empty')
-        if [ -z "$ws_id" ]; then
-            print_info "No HCP Workspace '$HCP_WORKSPACE_NAME' found in org '$HCP_ORG'"
-        else
-            print_info "Workspace id: $ws_id"
-            local code
-            code=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
-                -H "Authorization: Bearer $TFE_TOKEN" \
-                -H "Content-Type: application/vnd.api+json" \
-                "$TFE_API/workspaces/$ws_id" 2>/dev/null)
-            case "$code" in
-                200|204|404) print_success "HCP Workspace deleted (HTTP $code)" ;;
-                *)           print_warn "Workspace delete returned HTTP $code — check HCP UI" ;;
-            esac
-        fi
-    fi
-
-    #-- Stack delete via API
-    step_header "Delete HCP Terraform Stack"
-    if [ -z "${TFE_TOKEN:-}" ]; then
-        print_warn "TFE_TOKEN not set — skipping Stack delete (manual: HCP UI > Stack > Settings)"
-    else
-        local stack_id
-        stack_id=$(curl -s -H "Authorization: Bearer $TFE_TOKEN" \
-            -H "Content-Type: application/vnd.api+json" \
-            "$TFE_API/organizations/$HCP_ORG/stacks" 2>/dev/null \
-            | jq -r --arg n "$HCP_STACK_NAME" '.data[] | select(.attributes.name==$n) | .id' | head -1)
-        if [ -z "$stack_id" ]; then
-            print_info "No HCP Stack '$HCP_STACK_NAME' found in org '$HCP_ORG'"
-        else
-            print_info "Stack id: $stack_id"
-            # Disconnect VCS to stop new runs, then cancel any active runs.
-            curl -s -X PATCH -H "Authorization: Bearer $TFE_TOKEN" \
-                -H "Content-Type: application/vnd.api+json" \
-                -d '{"data":{"type":"stacks","attributes":{"vcs-repo":null}}}' \
-                "$TFE_API/stacks/$stack_id" >/dev/null 2>&1
-            for cid in $(curl -s -H "Authorization: Bearer $TFE_TOKEN" \
-                    -H "Content-Type: application/vnd.api+json" \
-                    "$TFE_API/stacks/$stack_id/stack-configurations?page%5Bsize%5D=20" 2>/dev/null \
-                    | jq -r '.data[].id'); do
-                curl -s -H "Authorization: Bearer $TFE_TOKEN" \
-                    -H "Content-Type: application/vnd.api+json" \
-                    "$TFE_API/stack-configurations/$cid/stack-deployment-runs" 2>/dev/null \
-                    | jq -r '.data[] | select(.attributes.status != "abandoned" and .attributes.status != "failed" and .attributes.status != "succeeded") | .id' \
-                    | while read -r rid; do
-                        [ -n "$rid" ] && curl -s -X POST \
-                            -H "Authorization: Bearer $TFE_TOKEN" \
-                            -H "Content-Type: application/vnd.api+json" \
-                            "$TFE_API/stack-deployment-runs/$rid/cancel" >/dev/null 2>&1
-                    done
-            done
-            local code
-            code=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
-                -H "Authorization: Bearer $TFE_TOKEN" \
-                -H "Content-Type: application/vnd.api+json" \
-                "$TFE_API/stacks/$stack_id" 2>/dev/null)
-            case "$code" in
-                200|204|404) print_success "HCP Stack deleted (HTTP $code)" ;;
-                *)           print_warn "Stack delete returned HTTP $code — check HCP UI" ;;
-            esac
-        fi
-    fi
-
     #-- Variable set + project (terraform destroy in hcp-setup)
     step_header "Destroy variable set + project (terraform destroy in hcp-setup/)"
     if [ ! -f "$hcp_setup_dir/terraform.tfstate" ]; then
@@ -1270,37 +1197,6 @@ phase_hcp_cleanup() {
         else
             print_warn "terraform destroy in hcp-setup/ had errors — check HCP UI"
         fi
-    fi
-
-    #-- AWS IAM role for HCP (hcp-stacks-deploy)
-    step_header "Delete AWS IAM role $HCP_ROLE_NAME"
-    if aws iam get-role --role-name "$HCP_ROLE_NAME" &>/dev/null; then
-        for p in $(aws iam list-attached-role-policies --role-name "$HCP_ROLE_NAME" \
-                --query 'AttachedPolicies[].PolicyArn' --output text); do
-            aws iam detach-role-policy --role-name "$HCP_ROLE_NAME" --policy-arn "$p" 2>/dev/null || true
-        done
-        for p in $(aws iam list-role-policies --role-name "$HCP_ROLE_NAME" \
-                --query 'PolicyNames[]' --output text); do
-            aws iam delete-role-policy --role-name "$HCP_ROLE_NAME" --policy-name "$p" 2>/dev/null || true
-        done
-        aws iam delete-role --role-name "$HCP_ROLE_NAME" 2>/dev/null \
-            && print_success "Deleted IAM role $HCP_ROLE_NAME" \
-            || print_error "Could not delete $HCP_ROLE_NAME"
-    else
-        print_info "IAM role $HCP_ROLE_NAME not found"
-    fi
-
-    #-- AWS OIDC provider for app.terraform.io
-    step_header "Delete AWS OIDC provider app.terraform.io"
-    local account_id
-    account_id=$(aws sts get-caller-identity --query Account --output text 2>/dev/null)
-    local oidc_arn="arn:aws:iam::${account_id}:oidc-provider/app.terraform.io"
-    if aws iam get-open-id-connect-provider --open-id-connect-provider-arn "$oidc_arn" &>/dev/null; then
-        aws iam delete-open-id-connect-provider --open-id-connect-provider-arn "$oidc_arn" 2>/dev/null \
-            && print_success "Deleted OIDC provider" \
-            || print_error "Could not delete OIDC provider"
-    else
-        print_info "OIDC provider not found"
     fi
 
     print_success "HCP cleanup complete"
@@ -1527,7 +1423,27 @@ elif [ "$HCP_ONLY" = true ]; then
     print_info "Mode: HCP-only (Stack + varset + IAM role + OIDC)"
     phase_hcp_cleanup
 else
-    print_info "Mode: FULL (AWS resources + HCP infra)"
+    print_info "Mode: FULL (terraform destroy + AWS sweep + HCP cleanup)"
+
+    # Primary destroy via Terraform (removes all managed resources)
+    step_header "Terraform destroy (ordered resource cleanup)..."
+    local infra_dir="$REPO_ROOT/infrastructure"
+    if [ -f "$infra_dir/.terraform/terraform.tfstate" ] || [ -d "$infra_dir/.terraform" ]; then
+        local hcp_org_for_destroy
+        hcp_org_for_destroy=$(grep 'hcp_org' "$SCRIPT_DIR/hcp-setup/terraform.tfvars" 2>/dev/null | awk -F'"' '{print $2}')
+        if [ -n "$hcp_org_for_destroy" ]; then
+            export TF_CLOUD_ORGANIZATION="$hcp_org_for_destroy"
+        fi
+        if [ "$DRY_RUN" = true ]; then
+            print_info "[DRY-RUN] Would run: terraform destroy -auto-approve"
+        else
+            terraform -chdir="$infra_dir" destroy -auto-approve || \
+                print_warn "terraform destroy had errors — falling back to sweep"
+        fi
+    else
+        print_info "No terraform state — skipping terraform destroy"
+    fi
+
     phase_k8s_cleanup
     phase_aws_sweep
     phase_hcp_cleanup

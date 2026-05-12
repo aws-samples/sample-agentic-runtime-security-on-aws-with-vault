@@ -2,21 +2,22 @@
 # Root Module — Provider Configuration
 # Agentic Runtime Security Workshop
 #
-# HCP Terraform Workspace with remote execution + dynamic AWS credentials.
-# HCP injects OIDC token via TFC_AWS_PROVIDER_AUTH + TFC_AWS_RUN_ROLE_ARN
-# env vars — the AWS provider block stays minimal (region only).
+# HCP Terraform Workspace with local execution — state stored in HCP,
+# plans and applies run on the attendee's machine with local AWS credentials.
 #
-# For the aws.kb alias (us-east-1), we use tfc_aws_dynamic_credentials to
-# route through the same OIDC credential with a different region.
-#
-# Kubernetes + Helm use token-based auth via data.aws_eks_cluster_auth
-# (no exec — remote workers don't have the aws CLI).
+# Kubernetes + Helm use exec-based auth via `aws eks get-token`.
 #
 # Canonical region contract:
 #   var.region and var.kb_region are the only region references in .tf files.
 ################################################################################
 
 terraform {
+  cloud {
+    workspaces {
+      name = "agentic-runtime-security"
+    }
+  }
+
   required_version = ">= 1.10"
 
   required_providers {
@@ -64,8 +65,7 @@ terraform {
 }
 
 #-------------------------------------------------------------------------------
-# Primary AWS provider — HCP dynamic credentials handle auth transparently.
-# TFC_AWS_PROVIDER_AUTH=true + TFC_AWS_RUN_ROLE_ARN set as workspace env vars.
+# AWS provider — uses local credentials (AWS_PROFILE, env vars, or SSO).
 #-------------------------------------------------------------------------------
 
 provider "aws" {
@@ -73,7 +73,7 @@ provider "aws" {
 }
 
 #-------------------------------------------------------------------------------
-# KB AWS provider — same OIDC credential, different region.
+# KB AWS provider — same credentials, different region.
 # Nova 2 Multimodal Embeddings is us-east-1 only; Bedrock KB + AOSS
 # must be co-located with the embedding model.
 #-------------------------------------------------------------------------------
@@ -84,8 +84,7 @@ provider "aws" {
 }
 
 #-------------------------------------------------------------------------------
-# Kubernetes + Helm — token-based auth via data.aws_eks_cluster_auth.
-# No exec blocks — HCP remote workers don't have the aws CLI.
+# Kubernetes + Helm — exec-based auth via aws eks get-token.
 # depends_on defers data source evaluation until the cluster exists.
 #-------------------------------------------------------------------------------
 
@@ -94,22 +93,27 @@ data "aws_eks_cluster" "this" {
   depends_on = [module.eks]
 }
 
-data "aws_eks_cluster_auth" "this" {
-  name       = var.cluster_name
-  depends_on = [module.eks]
-}
-
 provider "kubernetes" {
   host                   = data.aws_eks_cluster.this.endpoint
   cluster_ca_certificate = base64decode(data.aws_eks_cluster.this.certificate_authority[0].data)
-  token                  = data.aws_eks_cluster_auth.this.token
+
+  exec {
+    api_version = "client.authentication.k8s.io/v1beta1"
+    command     = "aws"
+    args        = ["eks", "get-token", "--cluster-name", var.cluster_name, "--region", var.region]
+  }
 }
 
 provider "helm" {
   kubernetes {
     host                   = data.aws_eks_cluster.this.endpoint
     cluster_ca_certificate = base64decode(data.aws_eks_cluster.this.certificate_authority[0].data)
-    token                  = data.aws_eks_cluster_auth.this.token
+
+    exec {
+      api_version = "client.authentication.k8s.io/v1beta1"
+      command     = "aws"
+      args        = ["eks", "get-token", "--cluster-name", var.cluster_name, "--region", var.region]
+    }
   }
 }
 

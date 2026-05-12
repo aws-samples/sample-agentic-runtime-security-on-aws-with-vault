@@ -1,20 +1,20 @@
 ################################################################################
 # Root Module — Variable Values (EXAMPLE)
 # Agentic Runtime Security Workshop
-# Migrated from Stacks deployments.tfdeploy.hcl inputs → terraform.tfvars
 #
 # USAGE: Copy this file to terraform.tfvars and fill in your values.
 #   cp terraform.tfvars.example terraform.tfvars
 #
-# terraform.tfvars is gitignored (contains sensitive values — ICR key, ARNs).
+# terraform.tfvars is gitignored (contains account-specific values).
 # This .example file is the committed reference.
+#
+# SENSITIVE VARIABLES (icr_entitlement_key, simple_ad_admin_password) are
+# stored in the HCP Terraform variable set — NOT in this file.
+# bootstrap.sh creates the variable set with these values.
 #
 # CANONICAL REGION CONTRACT
 # The string literals "us-west-2" and "us-east-1" appear ONLY in this file.
 # Every module receives var.region / var.kb_region — no literals in .tf files.
-#
-# Removed from Stacks version:
-#   - role_arn, identity_token (Stacks OIDC auth — attendees use local AWS creds)
 ################################################################################
 
 # Canonical region — every module receives this via var.region.
@@ -34,7 +34,7 @@ audit_retention_days = 7
 rds_instance_class = "db.t3.medium"
 
 # Admin kubectl access — set to the IAM user/role ARN for the attendee account.
-# Example: "arn:aws:iam::<account-id>:user/<username>"
+# bootstrap.sh auto-resolves this from `aws sts get-caller-identity`.
 admin_principal_arn = "arn:aws:iam::<account-id>:root"
 
 tags = {
@@ -44,24 +44,15 @@ tags = {
   ManagedBy   = "terraform"
 }
 
-# IBM Container Registry entitlement key for IVIA images.
-# Attendees obtain from IBM Passport Advantage (M11DCML activation code).
-# Set in terraform.tfvars (gitignored); do NOT commit the real key.
-icr_entitlement_key = "<your-icr-entitlement-key>"
+# UC1 Agent image — set after ECR push (build-uc1-agent.sh).
+# Placeholder is fine for initial deploy — deployment will fail to pull but the
+# Kubernetes resources are created. The e2e script updates this automatically.
+uc1_agent_image = "placeholder"
 
-# UC1 Agent image — attendees set this after ECR push (Phase 4 lab step).
-# Replace with: <account>.dkr.ecr.<region>.amazonaws.com/workshop/uc1-agent:<tag>
-uc1_agent_image = "<account>.dkr.ecr.us-west-2.amazonaws.com/workshop/uc1-agent:latest"
-
-# UC2 Banking App images — attendees set these after ECR push (Phase 5 lab step).
-# Replace with: <account>.dkr.ecr.<region>.amazonaws.com/workshop/banking-app:<tag>
-banking_app_ui_image    = "<account>.dkr.ecr.us-west-2.amazonaws.com/workshop/banking-app:ui"
-banking_app_agent_image = "<account>.dkr.ecr.us-west-2.amazonaws.com/workshop/banking-app:agent"
-banking_app_mcp_image   = "<account>.dkr.ecr.us-west-2.amazonaws.com/workshop/banking-app:mcp"
-
-# Simple AD — LDAP identity source for IVIA user authentication.
-# Workshop test users (Oscar, Adriana) are provisioned in this directory.
-simple_ad_admin_password = "WorkshopAdmin1!"
+# UC2 Banking App images — set after ECR push (build-banking-app.sh).
+banking_app_ui_image    = "placeholder"
+banking_app_agent_image = "placeholder"
+banking_app_mcp_image   = "placeholder"
 
 # UC2 OAuth redirect URI — set to the banking app ALB hostname after deploy.
 # Example: http://k8s-bankinga-banking-xxxxx.us-west-2.elb.amazonaws.com/callback
