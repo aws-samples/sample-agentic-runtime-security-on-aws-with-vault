@@ -1,0 +1,229 @@
+"""agent.py — UC2 Strands banking agent with OAuth identity layer.
+
+This agent is the bridge between the SvelteKit UI and the MCP server:
+
+  Browser (user JWT in cookie)
+    → UI server → POST /chat with JWT in Authorization header
+      → Agent: extracts JWT, passes to MCP tools
+        → MCP server: Vault jwt auth with JWT → per-user DB creds → RDS (RLS)
+
+Security architecture:
+  - Agent extracts the user JWT from the Authorization header on every /chat call.
+  - JWT is forwarded to MCP tool calls as a parameter — agent never stores it.
+  - Agent's OWN identity is established via Kubernetes SA JWT + Vault K8s auth (OBJ-1).
+  - Agent never calls Vault for database credentials — that is the MCP server's job.
+  - This separation ensures OBJ-3: actions are tied to the user's JWT-encoded identity.
+
+Banking operations:
+  - get_accounts: list accounts belonging to the authenticated user
+  - get_transactions: list recent transactions for the user's accounts
+"""
+
+import json
+import logging
+import os
+
+import httpx
+from strands import Agent, tool
+from strands.models import BedrockModel
+
+logger = logging.getLogger(__name__)
+
+MCP_URL = os.getenv("MCP_URL", "http://banking-mcp.banking-app.svc.cluster.local:3001")
+
+
+async def _call_mcp_tool(tool_name: str, jwt: str, **kwargs: object) -> dict:
+    """Call an MCP server tool, forwarding the user JWT.
+
+    The JWT is forwarded in the request body (not Authorization header) so
+    the MCP server can extract it per-tool. The MCP server's Authorization
+    header is reserved for the MCP protocol itself; user identity travels
+    in the tool argument to maintain per-tool Vault auth.
+    """
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": tool_name,
+            "arguments": {"jwt": jwt, **kwargs},
+        },
+    }
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            f"{MCP_URL}/mcp",
+            json=payload,
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                # Forward user JWT in Authorization so MCP server can extract it
+                "Authorization": f"Bearer {jwt}",
+            },
+        )
+        response.raise_for_status()
+        return response.json()
+
+
+# Module-level JWT store for the current request context.
+# Set by main.py before invoking the agent on each /chat call.
+# This is a simple approach for a workshop — in production use async context vars.
+_current_jwt: str = ""
+
+
+def set_request_jwt(jwt: str) -> None:
+    """Set the JWT for the current request context."""
+    global _current_jwt
+    _current_jwt = jwt
+
+
+@tool
+def get_accounts() -> list[dict]:
+    """Retrieve bank accounts for the authenticated user.
+
+    Calls the MCP server with the user's JWT. The MCP server authenticates
+    to Vault using the JWT, receives per-user-scoped DB credentials, and
+    queries PostgreSQL with RLS activated for this user's sub claim.
+
+    Returns:
+        List of account dicts with balance, account_type, currency.
+    """
+    import asyncio
+
+    if not _current_jwt:
+        raise ValueError("No user JWT in request context — call set_request_jwt() first")
+
+    result = asyncio.get_event_loop().run_until_complete(
+        _call_mcp_tool("get_accounts", _current_jwt)
+    )
+
+    # Extract structured content from MCP response
+    content = result.get("result", {})
+    if isinstance(content, dict):
+        structured = content.get("structuredContent", {})
+        if isinstance(structured, dict):
+            accounts = structured.get("accounts", [])
+            meta = structured.get("credential_metadata", {})
+            logger.info(
+                "get_accounts_success",
+                extra={
+                    "account_count": len(accounts),
+                    "vault_lease_id": meta.get("lease_id", "unknown"),
+                    "user_sub": meta.get("user_sub", "unknown"),
+                },
+            )
+            return accounts
+
+    error_content = result.get("result", {}).get("content", [{}])
+    if error_content and error_content[0].get("text"):
+        raise RuntimeError(error_content[0]["text"])
+
+    return []
+
+
+@tool
+def get_transactions(account_id: str = "") -> list[dict]:
+    """Retrieve recent transactions for the authenticated user.
+
+    Calls the MCP server with the user's JWT. Optionally filters to
+    a specific account_id. The MCP server applies Vault JWT auth and
+    PostgreSQL RLS — only this user's transactions are returned.
+
+    Args:
+        account_id: Optional account ID to filter. Empty string = all accounts.
+
+    Returns:
+        List of transaction dicts (amount, description, transaction_type, created_at).
+    """
+    import asyncio
+
+    if not _current_jwt:
+        raise ValueError("No user JWT in request context — call set_request_jwt() first")
+
+    kwargs = {}
+    if account_id:
+        kwargs["account_id"] = account_id
+
+    result = asyncio.get_event_loop().run_until_complete(
+        _call_mcp_tool("get_transactions", _current_jwt, **kwargs)
+    )
+
+    content = result.get("result", {})
+    if isinstance(content, dict):
+        structured = content.get("structuredContent", {})
+        if isinstance(structured, dict):
+            transactions = structured.get("transactions", [])
+            meta = structured.get("credential_metadata", {})
+            logger.info(
+                "get_transactions_success",
+                extra={
+                    "transaction_count": len(transactions),
+                    "vault_lease_id": meta.get("lease_id", "unknown"),
+                    "user_sub": meta.get("user_sub", "unknown"),
+                    "account_filter": account_id or "all",
+                },
+            )
+            return transactions
+
+    error_content = result.get("result", {}).get("content", [{}])
+    if error_content and error_content[0].get("text"):
+        raise RuntimeError(error_content[0]["text"])
+
+    return []
+
+
+def build_uc2_agent() -> Agent:
+    """Construct the UC2 banking Strands Agent.
+
+    Uses Amazon Nova Pro via CRIS profile (us.amazon.nova-pro-v1:0).
+    Tools: get_accounts + get_transactions — both forward user JWT to MCP server.
+
+    Returns:
+        Configured strands.Agent ready to handle banking queries.
+    """
+    region = os.getenv("REGION", "")
+    model_id = os.getenv("BEDROCK_MODEL_ID", "us.amazon.nova-pro-v1:0")
+
+    bedrock_model = BedrockModel(
+        model_id=model_id,
+        region_name=region or None,
+    )
+
+    system_prompt = (
+        "You are the CDL Bank AI Assistant for the Agentic Runtime Security workshop. "
+        "You help authenticated users (Oscar and Adriana) with their banking queries. "
+        "\n\n"
+        "SECURITY MODEL:\n"
+        "- Your identity is established via Kubernetes Service Account JWT + Vault (OBJ-1).\n"
+        "- Every tool call is made with the user's JWT — Vault authenticates each request "
+        "and issues per-user-scoped credentials (OBJ-2, OBJ-3).\n"
+        "- PostgreSQL Row-Level Security ensures you can ONLY retrieve this user's data.\n"
+        "- You have READ-ONLY access — no account modifications are possible (this is UC2).\n"
+        "\n"
+        "AVAILABLE TOOLS:\n"
+        "- get_accounts: List the user's bank accounts with balances.\n"
+        "- get_transactions: Show recent transactions. Optionally pass account_id to filter.\n"
+        "\n"
+        "RESPONSE STYLE:\n"
+        "- Present financial data clearly (format amounts with currency symbol).\n"
+        "- Do NOT include JWT tokens, Vault lease IDs, or credential metadata in your response.\n"
+        "- If a tool call fails, explain what the user can check (session validity, account access).\n"
+        "- This is a read-only banking app — if asked to transfer funds or modify data, "
+        "politely explain that UC2 is read-only and refer to UC3 for write operations."
+    )
+
+    agent = Agent(
+        model=bedrock_model,
+        tools=[get_accounts, get_transactions],
+        system_prompt=system_prompt,
+    )
+
+    logger.info(
+        "uc2_agent_built",
+        extra={
+            "model_id": model_id,
+            "region": region,
+            "tools": ["get_accounts", "get_transactions"],
+        },
+    )
+    return agent
