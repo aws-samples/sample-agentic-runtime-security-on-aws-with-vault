@@ -121,9 +121,13 @@ echo -e "  Region: ${AWS_REGION}"
 echo
 
 # ---- run() helper — gates install commands on $DRY_RUN ----
+# If called with a single quoted argument containing pipes/redirects, uses bash -c.
+# If called with multiple arguments, executes directly via "$@".
 run() {
     if [ "$DRY_RUN" = true ]; then
         echo -e "  ${YELLOW}[dry-run]${NC} $*"
+    elif [ $# -eq 1 ]; then
+        bash -c "$1"
     else
         "$@"
     fi
@@ -155,7 +159,7 @@ if confirm "Install / verify CLI tools (kubectl, helm, terraform, vault, aws, jq
                 # check-*.sh associative arrays and \x1f field separator.
                 if ! brew list bash >/dev/null 2>&1; then
                     if confirm "Install bash 5.x via Homebrew (newer than macOS system bash 3.2)?"; then
-                        print_info "Installing bash"; run "brew install bash"
+                        print_info "Installing bash"; run brew install bash
                     else
                         print_warn "Skipped bash install"
                     fi
@@ -168,19 +172,23 @@ if confirm "Install / verify CLI tools (kubectl, helm, terraform, vault, aws, jq
                         print_info "${tool} already installed"
                     else
                         if confirm "Install ${tool} via Homebrew?"; then
-                            print_info "Installing ${tool}"; run "brew install ${tool}"
+                            print_info "Installing ${tool}"; run brew install "${tool}"
                         else
                             print_warn "Skipped ${tool} install"
                         fi
                     fi
                 done
-                # kubectl — install kubernetes-cli; verify version contains 1.33
-                if command -v kubectl >/dev/null 2>&1 && \
-                   kubectl version --client --output=yaml 2>/dev/null | grep -q "${KUBECTL_MAJOR_MINOR}"; then
-                    print_info "kubectl ${KUBECTL_MAJOR_MINOR}.x already installed"
+                # kubectl — check exists; warn if not target version
+                if command -v kubectl >/dev/null 2>&1; then
+                    if kubectl version --client --output=yaml 2>/dev/null | grep -q "${KUBECTL_MAJOR_MINOR}"; then
+                        print_info "kubectl ${KUBECTL_MAJOR_MINOR}.x already installed"
+                    else
+                        local kv; kv=$(kubectl version --client --short 2>/dev/null || kubectl version --client -o yaml 2>/dev/null | grep gitVersion | head -1 | awk '{print $2}')
+                        print_warn "kubectl installed (${kv}) but not ${KUBECTL_MAJOR_MINOR}.x — should work fine"
+                    fi
                 else
                     if confirm "Install kubectl ${KUBECTL_MAJOR_MINOR}.x via Homebrew?"; then
-                        print_info "Installing kubectl"; run "brew install kubernetes-cli"
+                        print_info "Installing kubectl"; run brew install kubernetes-cli
                     else
                         print_warn "Skipped kubectl install"
                     fi
@@ -210,7 +218,7 @@ if confirm "Install / verify CLI tools (kubectl, helm, terraform, vault, aws, jq
                 if [ ! -f /etc/apt/sources.list.d/kubernetes.list ]; then
                     if confirm "Add Kubernetes ${KUBECTL_MAJOR_MINOR} apt repo (provides kubectl)?"; then
                         print_info "Adding Kubernetes ${KUBECTL_MAJOR_MINOR} apt repo"
-                        run "sudo mkdir -p /etc/apt/keyrings"
+                        run sudo mkdir -p /etc/apt/keyrings"
                         run "curl -fsSL \"https://pkgs.k8s.io/core:/stable:/v${KUBECTL_MAJOR_MINOR}/deb/Release.key\" | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg"
                         run "echo \"deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v${KUBECTL_MAJOR_MINOR}/deb/ /\" | sudo tee /etc/apt/sources.list.d/kubernetes.list"
                     else
@@ -236,9 +244,9 @@ if confirm "Install / verify CLI tools (kubectl, helm, terraform, vault, aws, jq
                 # apt-get update + install
                 if confirm "Refresh apt indexes and install terraform/vault/kubectl/helm/jq/unzip/ca-certificates/curl?"; then
                     print_info "Refreshing apt indexes"
-                    run "sudo apt-get update -qq"
+                    run sudo apt-get update -qq"
                     print_info "Installing terraform, vault, kubectl, helm, jq, unzip, ca-certificates"
-                    run "sudo apt-get install -y -qq terraform vault kubectl helm jq unzip ca-certificates curl"
+                    run sudo apt-get install -y -qq terraform vault kubectl helm jq unzip ca-certificates curl"
                 else
                     print_warn "Skipped apt-get update + batch install"
                 fi
@@ -248,8 +256,8 @@ if confirm "Install / verify CLI tools (kubectl, helm, terraform, vault, aws, jq
                     if confirm "Install yq (direct binary from GitHub)?"; then
                         print_info "Installing yq (direct binary from GitHub)"
                         arch_dpkg=$(dpkg --print-architecture)
-                        run "sudo curl -fsSL \"https://github.com/mikefarah/yq/releases/latest/download/yq_linux_${arch_dpkg}\" -o /usr/local/bin/yq"
-                        run "sudo chmod +x /usr/local/bin/yq"
+                        run sudo curl -fsSL \"https://github.com/mikefarah/yq/releases/latest/download/yq_linux_${arch_dpkg}\" -o /usr/local/bin/yq"
+                        run sudo chmod +x /usr/local/bin/yq"
                     else
                         print_warn "Skipped yq install"
                     fi
@@ -262,8 +270,8 @@ if confirm "Install / verify CLI tools (kubectl, helm, terraform, vault, aws, jq
                     if confirm "Install AWS CLI v${AWS_CLI_MAJOR} (official installer)?"; then
                         print_info "Installing AWS CLI v${AWS_CLI_MAJOR}"
                         run "curl -fsSL \"https://awscli.amazonaws.com/awscli-exe-linux-${ARCH}.zip\" -o /tmp/awscliv2.zip"
-                        run "unzip -q -o /tmp/awscliv2.zip -d /tmp"
-                        run "sudo /tmp/aws/install --update"
+                        run unzip -q -o /tmp/awscliv2.zip -d /tmp"
+                        run sudo /tmp/aws/install --update"
                     else
                         print_warn "Skipped AWS CLI v${AWS_CLI_MAJOR} install"
                     fi
@@ -278,8 +286,8 @@ if confirm "Install / verify CLI tools (kubectl, helm, terraform, vault, aws, jq
                 if [ ! -f /etc/yum.repos.d/hashicorp.repo ]; then
                     if confirm "Add HashiCorp yum repo (provides terraform + vault)?"; then
                         print_info "Adding HashiCorp yum repo"
-                        run "sudo yum install -y -q yum-utils"
-                        run "sudo yum-config-manager --add-repo https://rpm.releases.hashicorp.com/AmazonLinux/hashicorp.repo"
+                        run sudo yum install -y -q yum-utils"
+                        run sudo yum-config-manager --add-repo https://rpm.releases.hashicorp.com/AmazonLinux/hashicorp.repo"
                     else
                         print_warn "Skipped HashiCorp yum repo add"
                     fi
@@ -304,7 +312,7 @@ EOF"
 
                 if confirm "yum install terraform/vault/kubectl/jq/unzip?"; then
                     print_info "Installing terraform, vault, kubectl, jq, unzip"
-                    run "sudo yum install -y -q terraform vault kubectl jq unzip"
+                    run sudo yum install -y -q terraform vault kubectl jq unzip"
                 else
                     print_warn "Skipped yum batch install"
                 fi
@@ -323,8 +331,8 @@ EOF"
                 if ! command -v yq >/dev/null 2>&1; then
                     if confirm "Install yq (direct binary)?"; then
                         print_info "Installing yq (direct binary)"
-                        run "sudo curl -fsSL \"https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64\" -o /usr/local/bin/yq"
-                        run "sudo chmod +x /usr/local/bin/yq"
+                        run sudo curl -fsSL \"https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64\" -o /usr/local/bin/yq"
+                        run sudo chmod +x /usr/local/bin/yq"
                     else
                         print_warn "Skipped yq install"
                     fi
@@ -334,8 +342,8 @@ EOF"
                     if confirm "Install AWS CLI v${AWS_CLI_MAJOR}?"; then
                         print_info "Installing AWS CLI v${AWS_CLI_MAJOR}"
                         run "curl -fsSL \"https://awscli.amazonaws.com/awscli-exe-linux-${ARCH}.zip\" -o /tmp/awscliv2.zip"
-                        run "unzip -q -o /tmp/awscliv2.zip -d /tmp"
-                        run "sudo /tmp/aws/install --update"
+                        run unzip -q -o /tmp/awscliv2.zip -d /tmp"
+                        run sudo /tmp/aws/install --update"
                     else
                         print_warn "Skipped AWS CLI v${AWS_CLI_MAJOR} install"
                     fi
