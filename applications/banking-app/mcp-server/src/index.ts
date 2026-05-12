@@ -51,13 +51,13 @@ mcpServer.registerTool(
       jwt: z.string().describe('IVIA-issued user JWT (access token, without "Bearer " prefix)'),
     },
   },
+  // @ts-expect-error MCP SDK + Zod deep type instantiation
   async ({ jwt }: { jwt: string }) => {
     try {
       console.log('get_accounts called');
       const data = await getAccounts(jwt);
       return {
-        content: [{ type: 'text' as const, text: 'Account data retrieved successfully' }],
-        structuredContent: data,
+        content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }],
       };
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -92,8 +92,7 @@ mcpServer.registerTool(
       console.log('get_transactions called', account_id ? `for account ${account_id}` : '(all accounts)');
       const data = await getTransactions(jwt, account_id);
       return {
-        content: [{ type: 'text' as const, text: 'Transaction data retrieved successfully' }],
-        structuredContent: data,
+        content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }],
       };
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);

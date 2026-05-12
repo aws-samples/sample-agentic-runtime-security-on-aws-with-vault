@@ -220,19 +220,18 @@ build_and_push() {
 
     if [ ! -f "${dockerfile}" ]; then
         print_fail "Dockerfile not found: ${dockerfile}"
-        FAILURES+=("MISSING_DOCKERFILE${FIELD_SEP}${dockerfile}${FIELD_SEP}Ensure Dockerfile exists at ${dockerfile}")
         return 1
     fi
 
-    if run docker build \
+    if run docker buildx build \
         --platform linux/amd64 \
+        --load \
         --tag "${image_uri}" \
         --file "${dockerfile}" \
         "${context_dir}"; then
         print_pass "Built ${image_uri}"
     else
         print_fail "docker build failed for ${tag}"
-        FAILURES+=("BUILD_FAILED${FIELD_SEP}${tag}${FIELD_SEP}docker build --platform linux/amd64 -t ${image_uri} ${context_dir}")
         return 1
     fi
 
@@ -241,7 +240,6 @@ build_and_push() {
         print_pass "Pushed ${image_uri}"
     else
         print_fail "docker push failed for ${tag}"
-        FAILURES+=("PUSH_FAILED${FIELD_SEP}${tag}${FIELD_SEP}docker push ${image_uri}")
         return 1
     fi
 
@@ -250,7 +248,16 @@ build_and_push() {
 
 build_and_push "ui"    "${REPO_ROOT}/applications/banking-app/ui"
 build_and_push "agent" "${REPO_ROOT}/applications/banking-app/agent"
-build_and_push "mcp"   "${REPO_ROOT}/applications/banking-app/mcp-server"
+
+# MCP server: compile TypeScript on host (tsc OOMs under QEMU emulation on ARM Macs)
+print_info "Compiling MCP server TypeScript on host..."
+mcp_dir="${REPO_ROOT}/applications/banking-app/mcp-server"
+(cd "$mcp_dir" && npm ci --silent 2>/dev/null && npm run build) || {
+    print_fail "MCP server TypeScript compilation failed"
+    exit 1
+}
+print_pass "MCP server compiled to dist/"
+build_and_push "mcp"   "$mcp_dir"
 
 # Summary is printed automatically by the common-checks.sh EXIT trap
 

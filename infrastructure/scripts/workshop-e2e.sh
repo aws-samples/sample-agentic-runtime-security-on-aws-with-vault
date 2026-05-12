@@ -10,7 +10,7 @@
 #   Phase 4: Foundation verify (calls test-foundation.sh — EKS + RDS + Bedrock KB)
 #   Phase 5: Identity (IVIA) — placeholder, populated when workshop Phase 3 ships
 #   Phase 6: Vault — placeholder, populated when workshop Phase 4 ships
-#   Phase 7a: Use Case 1 — Non-Personalized Read-Only (ECR build+push, Stacks deploy, verify-uc1.sh)
+#   Phase 7a: Use Case 1 — Non-Personalized Read-Only (build-uc1-agent.sh, Stacks deploy, verify-uc1.sh)
 #   Phase 7b: Use Case 2 — OAuth Personalized Read-Only (ECR build+push, Stacks deploy, ivia-configure.sh, seed-banking-db.sh, verify-uc2.sh)
 #   Phase 7c: Use Case 3 — CIBA Privileged (placeholder; Phase 6)
 #   Phase 8: Teardown (calls teardown.sh — unless --skip-teardown)
@@ -836,54 +836,28 @@ phase_uc1() {
     phase_header "Phase 7a: Use Case 1 — Non-Personalized Read-Only"
 
     if [ "$DRY_RUN" = true ]; then
-        print_info "[DRY-RUN] Would create ECR repo, build+push UC1 agent image"
+        print_info "[DRY-RUN] Would build+push UC1 agent image (build-uc1-agent.sh)"
         print_info "[DRY-RUN] Would update uc1_agent_image in deployments.tfdeploy.hcl"
         print_info "[DRY-RUN] Would trigger Stacks plan+apply, then run verify-uc1.sh"
         return 0
     fi
 
+    # Step 1: Build + push UC1 agent image
+    step_header "Building and pushing UC1 agent image..."
+    bash "$SCRIPT_DIR/build-uc1-agent.sh" \
+        --region "$WORKSHOP_REGION" || {
+        print_error "build-uc1-agent.sh failed"
+        return 1
+    }
+    print_success "UC1 agent image built and pushed to ECR"
+    pause_if_interactive "UC1 agent image pushed to ECR. Verify in AWS Console before continuing."
+
+    # Step 2: Update uc1_agent_image in deployments.tfdeploy.hcl
     local account_id
     account_id=$(aws sts get-caller-identity --query 'Account' --output text 2>/dev/null)
-    local ecr_repo="workshop/uc1-agent"
-    local image_tag="latest"
-    local ecr_uri="${account_id}.dkr.ecr.${WORKSHOP_REGION}.amazonaws.com/${ecr_repo}:${image_tag}"
-    local agent_dir="$PROJECT_ROOT/infrastructure/modules/uc1_agent/agent"
+    local ecr_uri="${account_id}.dkr.ecr.${WORKSHOP_REGION}.amazonaws.com/workshop/uc1-agent:latest"
 
-    # Step 1: Create ECR repository (idempotent)
-    step_header "Creating ECR repository (if needed)..."
-    if aws ecr describe-repositories --repository-names "$ecr_repo" \
-            --region "$WORKSHOP_REGION" &>/dev/null; then
-        print_success "ECR repo exists: $ecr_repo"
-    else
-        aws ecr create-repository --repository-name "$ecr_repo" \
-            --region "$WORKSHOP_REGION" \
-            --image-scanning-configuration scanOnPush=true \
-            --output text --query 'repository.repositoryUri' >/dev/null 2>&1
-        print_success "ECR repo created: $ecr_repo"
-    fi
-
-    # Step 2: Build the UC1 agent container image
-    step_header "Building UC1 agent container image..."
-    docker build -t "${ecr_repo}:${image_tag}" "$agent_dir" || {
-        print_error "Docker build failed"
-        return 1
-    }
-    print_success "Image built: ${ecr_repo}:${image_tag}"
-
-    # Step 3: Authenticate to ECR and push
-    step_header "Pushing image to ECR..."
-    aws ecr get-login-password --region "$WORKSHOP_REGION" \
-        | docker login --username AWS --password-stdin \
-            "${account_id}.dkr.ecr.${WORKSHOP_REGION}.amazonaws.com" >/dev/null 2>&1
-
-    docker tag "${ecr_repo}:${image_tag}" "$ecr_uri"
-    docker push "$ecr_uri" >/dev/null 2>&1 || {
-        print_error "Docker push failed"
-        return 1
-    }
-    print_success "Image pushed: $ecr_uri"
-
-    # Step 4: Update uc1_agent_image in deployments.tfdeploy.hcl
+    # Step 2: Update uc1_agent_image in deployments.tfdeploy.hcl
     step_header "Updating uc1_agent_image in deployments.tfdeploy.hcl..."
     local deploy_file="$PROJECT_ROOT/infrastructure/deployments.tfdeploy.hcl"
     local current_image
@@ -897,7 +871,7 @@ phase_uc1() {
         print_success "uc1_agent_image = $ecr_uri"
     fi
 
-    # Step 5: Find Stack and trigger deploy
+    # Step 3: Find Stack and trigger deploy
     step_header "Finding HCP Terraform Stack..."
     local stack_id
     stack_id=$(hcp_find_stack "$HCP_ORG") || {
@@ -919,26 +893,16 @@ phase_uc1() {
             return 1
         }
     else
-        # Check if latest config already converged (e.g. from a prior run)
-        local latest_status
-        latest_status=$(curl -s \
-            -H "Authorization: Bearer $TFE_TOKEN" \
-            -H "Content-Type: application/vnd.api+json" \
-            "$TFE_API/stack-configurations/$old_config_id" 2>/dev/null \
-            | jq -r '.data.attributes.status // "unknown"')
-        if [ "$latest_status" = "converged" ] || [ "$latest_status" = "completed" ]; then
-            print_success "Latest config already converged — skipping deploy"
-        else
-            step_header "Triggering Stacks plan (UC1 agent)..."
-            hcp_deploy_and_wait "$stack_id" "UC1 agent deploy" 1800 || {
-                print_error "UC1 deploy failed. Check HCP Terraform UI for details."
-                return 1
-            }
-        fi
+        print_info "No deployment changes to push — skipping Stacks trigger"
     fi
     print_success "UC1 agent deployed via Stacks"
 
-    # Step 6: Wait for pod readiness
+    # Rollout restart to pick up new image (tag :latest may be cached by kubelet)
+    step_header "Restarting UC1 deployment to pull latest image..."
+    kubectl rollout restart deployment/uc1-agent -n uc1 2>/dev/null || true
+    pause_if_interactive "Deployment restarted. Waiting for pod to become ready."
+
+    # Step 4: Wait for pod readiness
     step_header "Waiting for UC1 agent pod to be ready..."
     local uc1_ready=false
     local wait_elapsed=0
@@ -960,7 +924,7 @@ phase_uc1() {
         print_warn "UC1 agent pod not Running after 120s — verify-uc1.sh will report details"
     fi
 
-    # Step 7: Verify
+    # Step 5: Verify
     pause_if_interactive "About to verify UC1 deployment"
     bash "$SCRIPT_DIR/verify-uc1.sh" 2>&1 || print_warn "UC1 verification had warnings"
     print_success "UC1 verification complete"
@@ -998,7 +962,7 @@ phase_uc2() {
     step_header "Resolving banking app ECR image URIs..."
     local account_id
     account_id=$(aws sts get-caller-identity --query 'Account' --output text 2>/dev/null)
-    local ecr_base="${account_id}.dkr.ecr.${WORKSHOP_REGION}.amazonaws.com/workshop/banking-app"
+    local ecr_base="${account_id}.dkr.ecr.${WORKSHOP_REGION}.amazonaws.com/workshop-banking-app"
     local ui_image="${ecr_base}:ui"
     local agent_image="${ecr_base}:agent"
     local mcp_image="${ecr_base}:mcp"
@@ -1046,24 +1010,17 @@ phase_uc2() {
             return 1
         }
     else
-        local latest_status
-        latest_status=$(curl -s \
-            -H "Authorization: Bearer $TFE_TOKEN" \
-            -H "Content-Type: application/vnd.api+json" \
-            "$TFE_API/stack-configurations/$old_config_id" 2>/dev/null \
-            | jq -r '.data.attributes.status // "unknown"')
-        if [ "$latest_status" = "converged" ] || [ "$latest_status" = "completed" ]; then
-            print_success "Latest config already converged — skipping deploy"
-        else
-            step_header "Triggering Stacks plan (UC2 banking app)..."
-            hcp_deploy_and_wait "$stack_id" "UC2 banking app deploy" 1800 || {
-                print_error "UC2 deploy failed. Check HCP Terraform UI for details."
-                return 1
-            }
-        fi
+        print_info "No deployment changes to push — skipping Stacks trigger"
     fi
     print_success "UC2 banking app deployed via Stacks"
     pause_if_interactive "Stacks deploy complete. Verify uc2_app in HCP UI before continuing."
+
+    # Rollout restart to pick up new images (tag may be cached by kubelet)
+    step_header "Restarting banking-app deployments to pull latest images..."
+    kubectl rollout restart deployment/banking-ui -n banking-app 2>/dev/null || true
+    kubectl rollout restart deployment/banking-agent -n banking-app 2>/dev/null || true
+    kubectl rollout restart deployment/banking-mcp-server -n banking-app 2>/dev/null || true
+    pause_if_interactive "Deployments restarted. Waiting for pods to become ready."
 
     # Step 4: Wait for all banking-app pods to be ready
     step_header "Waiting for banking-app pods to be ready..."
