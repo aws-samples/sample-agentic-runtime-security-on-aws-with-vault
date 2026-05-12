@@ -1050,10 +1050,10 @@ phase_identity() {
         print_warn "IVIA: no pods Running in ${ivia_ns} — IVIA may still be starting"
     fi
 
-    # Check OIDC discovery via vault-0 (in-cluster path)
-    local ivia_issuer
-    ivia_issuer=$(kubectl exec -n "${vault_ns}" vault-0 -- \
-        curl -sk "${oidc_url}" 2>/dev/null \
+    # Check OIDC discovery via a temporary curl pod (vault-0 may not be ready yet)
+    local ivia_issuer=""
+    ivia_issuer=$(kubectl run ivia-check --image=curlimages/curl --rm -i --restart=Never \
+        -n "${ivia_ns}" -- curl -sk "${oidc_url}" 2>/dev/null \
         | jq -r '.issuer // empty' 2>/dev/null || echo "")
     if [ -n "${ivia_issuer}" ]; then
         print_success "IVIA OIDC discovery: issuer = ${ivia_issuer}"
