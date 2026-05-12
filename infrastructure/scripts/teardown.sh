@@ -34,11 +34,13 @@ WORKSHOP_TAG_KEY="Workshop"
 WORKSHOP_TAG_VAL="agentic-runtime-security"
 HCP_ROLE_NAME="hcp-stacks-deploy"
 HCP_STACK_NAME="agentic-runtime-security"
+HCP_WORKSPACE_NAME="agentic-runtime-security"
+HCP_AGENT_POOL_NAME="workshop-agents"
 HCP_PROJECT_NAME="Agentic Runtime Security"
 HCP_VARSET_NAME="agentic-runtime-stacks-config"
 TFE_API="https://app.terraform.io/api/v2"
 
-# Default cluster — resolved from infrastructure/deployments.tfdeploy.hcl.
+# Default cluster — resolved from infrastructure/terraform.tfvars.
 # Workshop is single-region single-cluster. Override with $CLUSTER_NAME env var.
 DEFAULT_CLUSTER=""
 
@@ -104,28 +106,40 @@ if [ "$AWS_ONLY" = true ] && [ "$HCP_ONLY" = true ]; then
 fi
 
 #-------------------------------------------------------------------------------
-# Region resolution (canonical contract: only deployments.tfdeploy.hcl carries
-# the literal "us-west-2" — everything else reads it from there or $AWS_REGION).
+# Region resolution (canonical contract: terraform.tfvars carries the literal
+# "us-west-2" — everything else reads it from there or $AWS_REGION).
+# Falls back to terraform.tfvars.example if terraform.tfvars doesn't exist.
 #-------------------------------------------------------------------------------
-TF_DEPLOY="${REPO_ROOT}/infrastructure/deployments.tfdeploy.hcl"
+TF_VARS="${REPO_ROOT}/infrastructure/terraform.tfvars"
+TF_VARS_EXAMPLE="${REPO_ROOT}/infrastructure/terraform.tfvars.example"
 
 REGION="${AWS_REGION:-}"
-if [ -z "$REGION" ] && [ -f "$TF_DEPLOY" ]; then
-    REGION=$(grep -E '^\s*region\s*=\s*"' "$TF_DEPLOY" 2>/dev/null \
-        | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+if [ -z "$REGION" ]; then
+    for f in "$TF_VARS" "$TF_VARS_EXAMPLE"; do
+        if [ -f "$f" ]; then
+            REGION=$(grep -E '^\s*region\s*=\s*"' "$f" 2>/dev/null \
+                | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+            [ -n "$REGION" ] && break
+        fi
+    done
 fi
 if [ -z "$REGION" ]; then
-    echo -e "${RED}Error: could not resolve region from deployments.tfdeploy.hcl or AWS_REGION.${NC}" >&2
+    echo -e "${RED}Error: could not resolve region from terraform.tfvars or AWS_REGION.${NC}" >&2
     exit 1
 fi
 
 DEFAULT_CLUSTER="${CLUSTER_NAME:-}"
-if [ -z "$DEFAULT_CLUSTER" ] && [ -f "$TF_DEPLOY" ]; then
-    DEFAULT_CLUSTER=$(grep -E '^\s*cluster_name\s*=\s*"' "$TF_DEPLOY" 2>/dev/null \
-        | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+if [ -z "$DEFAULT_CLUSTER" ]; then
+    for f in "$TF_VARS" "$TF_VARS_EXAMPLE"; do
+        if [ -f "$f" ]; then
+            DEFAULT_CLUSTER=$(grep -E '^\s*cluster_name\s*=\s*"' "$f" 2>/dev/null \
+                | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+            [ -n "$DEFAULT_CLUSTER" ] && break
+        fi
+    done
 fi
 if [ -z "$DEFAULT_CLUSTER" ]; then
-    echo -e "${RED}Error: could not resolve cluster_name from deployments.tfdeploy.hcl or CLUSTER_NAME.${NC}" >&2
+    echo -e "${RED}Error: could not resolve cluster_name from terraform.tfvars or CLUSTER_NAME.${NC}" >&2
     exit 1
 fi
 
@@ -1137,10 +1151,11 @@ phase_aws_sweep() {
 # HCP CLEANUP — delete Stack, variable set, AWS IAM role for HCP, OIDC provider
 #===============================================================================
 phase_hcp_cleanup() {
-    phase_header "HCP Cleanup (Stack + variable set + IAM role + OIDC provider)"
+    phase_header "HCP Cleanup (Workspace + Stack + agent pool + variable set + IAM role + OIDC)"
 
     if [ "$DRY_RUN" = true ]; then
-        print_info "[DRY-RUN] Would delete HCP Stack '$HCP_STACK_NAME', variable set,"
+        print_info "[DRY-RUN] Would delete HCP Workspace '$HCP_WORKSPACE_NAME', Stack '$HCP_STACK_NAME',"
+        print_info "          agent pool '$HCP_AGENT_POOL_NAME', variable set,"
         print_info "          IAM role '$HCP_ROLE_NAME', OIDC provider 'app.terraform.io'"
         return 0
     fi
@@ -1154,6 +1169,66 @@ phase_hcp_cleanup() {
         return 1
     fi
     print_info "HCP org: $HCP_ORG"
+
+    #-- Workspace delete via API
+    step_header "Delete HCP Terraform Workspace"
+    if [ -z "${TFE_TOKEN:-}" ]; then
+        print_warn "TFE_TOKEN not set — skipping Workspace delete (manual: HCP UI > Workspaces)"
+    else
+        local ws_id
+        ws_id=$(curl -s -H "Authorization: Bearer $TFE_TOKEN" \
+            -H "Content-Type: application/vnd.api+json" \
+            "$TFE_API/organizations/$HCP_ORG/workspaces/$HCP_WORKSPACE_NAME" 2>/dev/null \
+            | jq -r '.data.id // empty')
+        if [ -z "$ws_id" ]; then
+            print_info "No HCP Workspace '$HCP_WORKSPACE_NAME' found in org '$HCP_ORG'"
+        else
+            print_info "Workspace id: $ws_id"
+            local code
+            code=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+                -H "Authorization: Bearer $TFE_TOKEN" \
+                -H "Content-Type: application/vnd.api+json" \
+                "$TFE_API/workspaces/$ws_id" 2>/dev/null)
+            case "$code" in
+                200|204|404) print_success "HCP Workspace deleted (HTTP $code)" ;;
+                *)           print_warn "Workspace delete returned HTTP $code — check HCP UI" ;;
+            esac
+        fi
+    fi
+
+    #-- Agent pool delete via API
+    step_header "Delete HCP Agent Pool '$HCP_AGENT_POOL_NAME'"
+    if [ -z "${TFE_TOKEN:-}" ]; then
+        print_warn "TFE_TOKEN not set — skipping agent pool delete"
+    else
+        local pool_id
+        pool_id=$(curl -s -H "Authorization: Bearer $TFE_TOKEN" \
+            -H "Content-Type: application/vnd.api+json" \
+            "$TFE_API/organizations/$HCP_ORG/agent-pools" 2>/dev/null \
+            | jq -r --arg n "$HCP_AGENT_POOL_NAME" \
+              '[.data[] | select(.attributes.name==$n)] | .[0].id // empty')
+        if [ -z "$pool_id" ]; then
+            print_info "No agent pool '$HCP_AGENT_POOL_NAME' found"
+        else
+            print_info "Agent pool id: $pool_id"
+            local code
+            code=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+                -H "Authorization: Bearer $TFE_TOKEN" \
+                -H "Content-Type: application/vnd.api+json" \
+                "$TFE_API/agent-pools/$pool_id" 2>/dev/null)
+            case "$code" in
+                200|204|404) print_success "Agent pool deleted (HTTP $code)" ;;
+                *)           print_warn "Agent pool delete returned HTTP $code — check HCP UI" ;;
+            esac
+        fi
+    fi
+
+    #-- Agent token file cleanup
+    local agent_token_file="$SCRIPT_DIR/.agent-token"
+    if [ -f "$agent_token_file" ]; then
+        rm -f "$agent_token_file"
+        print_success "Removed local agent token file"
+    fi
 
     #-- Stack delete via API
     step_header "Delete HCP Terraform Stack"
