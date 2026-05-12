@@ -310,7 +310,4 @@ else
     print_warn "Credential lifecycle check skipped — VAULT_ROOT_TOKEN not set. Set VAULT_ROOT_TOKEN to enable lease verification."
 fi
 
-#-------------------------------------------------------------------------------
-# Summary
-#-------------------------------------------------------------------------------
-print_summary
+# Summary is printed automatically by the common-checks.sh EXIT trap

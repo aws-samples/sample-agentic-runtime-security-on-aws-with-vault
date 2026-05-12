@@ -33,6 +33,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 SCRIPT_DESCRIPTION="Banking App ECR build+push (UI + Agent + MCP server)"
 
 # Source common helpers (print_pass, print_fail, FAILURES[], print_summary)
+COMMON_CHECKS_SUMMARY=0
 # shellcheck source=common-checks.sh
 source "${SCRIPT_DIR}/common-checks.sh"
 
@@ -251,10 +252,7 @@ build_and_push "ui"    "${REPO_ROOT}/applications/banking-app/ui"
 build_and_push "agent" "${REPO_ROOT}/applications/banking-app/agent"
 build_and_push "mcp"   "${REPO_ROOT}/applications/banking-app/mcp-server"
 
-#-------------------------------------------------------------------------------
-# Summary
-#-------------------------------------------------------------------------------
-print_summary
+# Summary is printed automatically by the common-checks.sh EXIT trap
 
 if [ ${#FAILURES[@]} -gt 0 ]; then
     exit 1

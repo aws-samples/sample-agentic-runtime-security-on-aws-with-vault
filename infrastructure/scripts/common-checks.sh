@@ -36,6 +36,9 @@ if (( BASH_VERSINFO[0] < 4 )); then
     exit 1
 fi
 
+# Disable AWS CLI pager so commands don't block on `less`
+export AWS_PAGER=""
+
 # Terminal capability probe (Plan 01-09 hardening)
 #
 # If the controlling terminal does not support color (tput colors < 8) OR

@@ -27,6 +27,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COMMON_CHECKS_SUMMARY=0
 # shellcheck source=common-checks.sh
 source "${SCRIPT_DIR}/common-checks.sh"
 

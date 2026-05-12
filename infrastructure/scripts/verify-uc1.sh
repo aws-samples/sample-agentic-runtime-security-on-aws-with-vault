@@ -172,7 +172,4 @@ else
         "Vault audit device not enabled — reapply vault_config. Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault audit list"
 fi
 
-#-------------------------------------------------------------------------------
-# Summary
-#-------------------------------------------------------------------------------
-print_summary
+# Summary is printed automatically by the common-checks.sh EXIT trap

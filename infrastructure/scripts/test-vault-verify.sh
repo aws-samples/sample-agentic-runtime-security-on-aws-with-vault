@@ -173,7 +173,4 @@ else
         "No AWS LBC pods Running. Check the addons component: kubectl get pods -n kube-system -l ${LBC_LABEL}. Re-apply the addons component in HCP Terraform if needed."
 fi
 
-#-------------------------------------------------------------------------------
-# Summary
-#-------------------------------------------------------------------------------
-print_summary
+# Summary is printed automatically by the common-checks.sh EXIT trap
