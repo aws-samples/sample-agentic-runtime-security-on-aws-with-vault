@@ -237,7 +237,6 @@ else
     if _run_subscript "Step 2: vault-init" "${SCRIPT_DIR}/vault-init.sh"; then
         # vault-init.sh verifies status internally and exits 0 on success
         # Verify via kubectl exec (no port-forward needed)
-        local vault_sealed
         vault_sealed=$(kubectl --context workshop exec -n vault vault-0 -- \
             vault status -format=json 2>/dev/null \
             | jq -r '.sealed // true' 2>/dev/null || echo "true")
