@@ -17,13 +17,9 @@ The `vault` module calls `infrastructure/modules/vault/` which provisions:
 - An EKS Pod Identity association binding the Vault Kubernetes ServiceAccount to an IAM role with `kms:Decrypt` and `kms:DescribeKey` permissions.
 - A Helm release of the `hashicorp/vault` chart with `server.ha.enabled=true`, `server.ha.raft.enabled=true`, and three replicas.
 
-## Step 2 — Trigger the workspace apply
+## Step 2 — Already deployed
 
-The `vault` module is applied after `addons` completes (enforced by `depends_on` in `main.tf`). The HCP Terraform workspace apply handles this automatically. If you need to trigger a new run:
-
-1. Go to [HCP Terraform](https://app.terraform.io/) > your Project > your Workspace
-2. Click **Actions** > **Start new run**
-3. Select **Plan and apply** and confirm
+The `vault` module was deployed as part of the foundation `terraform apply` in the previous module. The `vault` module applies after `addons` completes (enforced by `depends_on` in `main.tf`). No separate apply step is needed.
 
 ## Step 3 — What happens during apply
 

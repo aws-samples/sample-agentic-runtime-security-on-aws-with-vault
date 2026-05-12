@@ -5,7 +5,7 @@ weight: 51
 
 ## Overview
 
-In this module you build and push the UC1 agent container image to Amazon ECR, set the image URI in `terraform.tfvars`, and trigger a workspace apply to deploy the agent pod and its Kubernetes resources.
+In this module you build and push the Use Case 1 agent container image to Amazon ECR, set the image URI in `terraform.tfvars`, and run `terraform apply` to deploy the agent pod and its Kubernetes resources.
 
 By the end of this module the following Kubernetes objects exist in the `uc1` namespace:
 
@@ -63,23 +63,21 @@ aws ecr describe-images \
 
 ## Step 3 — Set the image URI in terraform.tfvars
 
-Open `infrastructure/terraform.tfvars` and locate the `uc1_agent_image` variable. Replace the placeholder with your ECR URI:
+Open `infrastructure/terraform.tfvars` (a local file, not tracked in version control) and locate the `uc1_agent_image` variable. Replace the placeholder with your ECR URI:
 
 ```hcl
 uc1_agent_image = "<ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/workshop/uc1-agent:latest"
 ```
 
-## Step 4 — Trigger the workspace apply
+## Step 4 — Run terraform apply
 
-Push to `main` to trigger a new workspace run:
+Apply the change to deploy the Use Case 1 agent:
 
 ```bash
-git add infrastructure/terraform.tfvars
-git commit -m "feat: set uc1_agent_image for workspace deploy"
-git push origin main
+terraform -chdir=infrastructure apply
 ```
 
-In HCP Terraform, navigate to your workspace, wait for the plan to complete, then click **Confirm & Apply**.
+Terraform generates a plan showing the `uc1_agent` module resources. Review the plan, then type `yes` to confirm.
 
 The `uc1_agent` module is applied after `vault_config` (Vault Kubernetes auth role and policy must exist before pod startup). During apply the following resources are created:
 

@@ -14,14 +14,7 @@ The IVIA deployment is exposed externally via an AWS Application Load Balancer m
 ## Prerequisites
 
 :::alert{header="IBM entitlement key required" type="warning"}
-The IVIA container image is pulled from IBM Container Registry (`icr.io`). You must have a valid IBM entitlement key. The key must be stored in the HCP Terraform variable set as `ibm_entitlement_key` (sensitive). If this variable is missing, the Kubernetes pod will fail with `ImagePullBackOff`.
-
-To verify the variable is set:
-
-```bash
-# In HCP Terraform UI: Workspace > Variables
-# Look for ibm_entitlement_key (sensitive)
-```
+The IVIA container image is pulled from IBM Container Registry (`icr.io`). You must have a valid IBM entitlement key. The `icr_entitlement_key` was set in the HCP Terraform variable set during bootstrap. If the IVIA pod shows `ImagePullBackOff`, verify the key is correct in the HCP Terraform UI under your variable set.
 :::
 
 ## Step 1 — Review the verify_access module
@@ -36,15 +29,9 @@ The `verify_access` module calls `infrastructure/modules/verify_access/` which p
 - An `Ingress` resource annotated for AWS Load Balancer Controller, which provisions an ALB.
 - A `wait_for_rollout` resource that ensures the deployment is healthy before the module reports success.
 
-## Step 2 — Trigger the workspace apply
+## Step 2 — Already deployed
 
-The `verify_access` module deploys in the same wave as `vault`. After the `addons` wave completes, both `vault` and `verify_access` apply.
-
-The HCP Terraform workspace apply handles this automatically as part of the foundation deploy. If you need to trigger an isolated run:
-
-1. Go to [HCP Terraform](https://app.terraform.io/) > your Project > your Workspace
-2. Click **Actions** > **Start new run**
-3. Select **Plan and apply** and confirm
+The `verify_access` module was deployed as part of the foundation `terraform apply` in the previous module. It deploys in the same wave as `vault` — after the `addons` wave completes, both `vault` and `verify_access` apply. No separate apply step is needed.
 
 ## Step 3 — What happens during apply
 

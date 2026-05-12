@@ -3,38 +3,33 @@ title: 'Deploy Workspace'
 weight: 31
 ---
 
-The bootstrap script already created the HCP Terraform Workspace, variable set, and dynamic provider credentials (OIDC). In this step, you push to `main` to trigger the first workspace plan, approve the apply in the HCP Terraform UI, and then run `configure-workshop.sh` to complete post-deploy configuration.
+The bootstrap script already created the HCP Terraform Workspace (local execution, state-only) and variable set (sensitive vars). In this step, you run `terraform apply` locally to deploy all foundation infrastructure, then run `configure-workshop.sh` to complete post-deploy configuration.
 
-## Step 1 — Push to trigger the workspace plan
+## Step 1 — Set TF_CLOUD_ORGANIZATION
 
-Push any change to `main` to trigger the first workspace plan. If you have no local changes, you can trigger from the HCP Terraform UI instead (see the alert below).
+Export your HCP Terraform organization name so the backend configuration can find your workspace:
 
 ```bash
-git push origin main
+export TF_CLOUD_ORGANIZATION=<YOUR_HCP_ORG>
 ```
 
-HCP Terraform detects the push and queues a new run in the workspace. The remote worker authenticates to your AWS account via OIDC (dynamic provider credentials) and begins planning.
+## Step 2 — Run terraform apply
 
-:::alert{header="Triggering from the UI instead" type="info"}
-If you have no local changes to push, you can trigger a run manually: go to [HCP Terraform](https://app.terraform.io/) > your Project > your Workspace > **Actions** > **Start new run**. Select **Plan and apply** and confirm.
-:::
+Run the apply from the `infrastructure/` directory:
 
-## Step 2 — Review and approve the plan
+```bash
+terraform -chdir=infrastructure apply
+```
 
-In the HCP Terraform UI, navigate to the running plan:
-
-1. Go to [HCP Terraform](https://app.terraform.io/) > your Project > your Workspace
-2. Click the active run
-3. Review the plan — expect ~80–120 resource additions
-4. Click **Confirm & Apply**
+Terraform generates a plan showing ~80-120 resource additions. Review the plan, then type `yes` to confirm.
 
 :::alert{header="First deploy timing" type="info"}
-Total time: ~25–35 minutes (EKS ~12 min, RDS ~10 min including pgaudit reboot, Bedrock KB ~3 min, addons ~5 min).
+Total time: ~25-35 minutes (EKS ~12 min, RDS ~10 min including pgaudit reboot, Bedrock KB ~3 min, addons ~5 min). The apply runs locally but provisions AWS resources remotely — timing depends on AWS API response times, not your machine.
 :::
 
 ## Step 3 — Run configure-workshop.sh
 
-After the workspace apply completes, run the post-deploy configuration script. This configures kubectl, initializes and configures Vault, verifies IVIA, provisions Simple AD users, and seeds the banking database:
+After the apply completes, run the post-deploy configuration script. This configures kubectl, initializes and configures Vault, verifies IVIA, provisions Simple AD users, and seeds the banking database:
 
 ```bash
 bash infrastructure/scripts/configure-workshop.sh
@@ -48,7 +43,7 @@ The script prints a pass/fail summary for each configuration step. All steps mus
 
 ## What Happens During Apply
 
-When the workspace apply runs, HCP Terraform deploys the modules in dependency order:
+When the apply runs, Terraform deploys the modules in dependency order:
 
 1. **audit** + **vpc** + **bedrock_kb_aoss** — apply in parallel (no inter-dependencies)
 2. **eks** — depends on `vpc` + `audit`
@@ -58,7 +53,7 @@ When the workspace apply runs, HCP Terraform deploys the modules in dependency o
 6. **vault_config** — depends on Vault running
 7. **uc1_agent** + **uc2_app** — depend on `vault_config`
 
-When the run completes, note these outputs — you will need them in the next sub-modules:
+When the apply completes, note these outputs — you will need them in the next sub-modules:
 
 - `kubectl_config_command` — the `aws eks update-kubeconfig` one-liner
 - `knowledge_base_id` — the Bedrock KB ID for ingestion

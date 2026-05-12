@@ -72,4 +72,4 @@ kubectl get nodes
 
 All three nodes should be in `Ready` state. If any nodes are `NotReady`, revisit the foundation phase before continuing.
 
-Also confirm the HCP Terraform variable set includes the `ibm_entitlement_key` variable (required for IVIA image pull) and the Vault component's `kms_key_alias` input is set to `vault-unseal` (the default).
+The `icr_entitlement_key` is set in the HCP Terraform variable set during bootstrap. If the IVIA pod shows `ImagePullBackOff`, verify the key is correct in the HCP UI.

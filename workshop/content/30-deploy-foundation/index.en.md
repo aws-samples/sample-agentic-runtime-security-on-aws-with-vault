@@ -3,9 +3,9 @@ title: 'Deploy Foundation'
 weight: 30
 ---
 
-In this module you deploy the entire AWS foundation through an HCP Terraform Workspace apply — VPC, EKS cluster, RDS PostgreSQL, Bedrock Knowledge Base, and the audit-correlation substrate. Work through each sub-module in order:
+In this module you deploy the entire AWS foundation via `terraform apply` (with HCP Terraform storing state remotely) — VPC, EKS cluster, RDS PostgreSQL, Bedrock Knowledge Base, and the audit-correlation substrate. Work through each sub-module in order:
 
-1. **[Deploy Workspace](31-deploy-stacks/)** — Push to trigger the HCP Terraform workspace apply and approve the plan
+1. **[Deploy Workspace](31-deploy-stacks/)** — Run terraform apply to deploy all foundation infrastructure
 2. **[Configure kubectl](32-configure-kubectl/)** — Connect to the EKS cluster
 3. **[Verify Infrastructure](33-verify-infrastructure/)** — Run five checks to confirm everything deployed correctly
 4. **[Ingest Knowledge Base](34-ingest-knowledge-base/)** — Trigger and validate Bedrock KB data source ingestion

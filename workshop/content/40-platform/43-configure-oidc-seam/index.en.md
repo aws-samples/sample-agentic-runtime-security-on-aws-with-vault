@@ -34,21 +34,9 @@ IVIA's OIDC provider (`isvaop`) is configured entirely via `config.yaml` embedde
 
 No `isva_config` REST API module is needed — `isvaop` reads its configuration at startup from the ConfigMap.
 
-## Step 1 — Set VAULT_TOKEN and VAULT_ADDR
+## Step 1 — VAULT_TOKEN and VAULT_ADDR
 
-The `vault-configure.sh` script needs the Vault root token you saved in the previous module. Add these to the HCP Terraform workspace variable set:
-
-| Variable | Value |
-|---|---|
-| `vault_token` | The root token from `~/vault-init.json` |
-| `vault_addr` | `https://vault.vault.svc.cluster.local:8200` |
-
-Or set them locally if running a manual workspace apply:
-
-```bash
-export VAULT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)
-export VAULT_ADDR="https://vault.vault.svc.cluster.local:8200"
-```
+The `vault-configure.sh` script needs the Vault root token and address. These are handled automatically by `configure-workshop.sh` — the `vault-init.sh` step initializes Vault and writes the root token to `~/vault-init.json`, and subsequent steps read from that file. No manual variable setup is needed.
 
 ## Step 2 — Run configure-workshop.sh
 

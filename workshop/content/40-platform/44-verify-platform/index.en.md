@@ -63,8 +63,8 @@ Proceed to the use case modules to see these components in action.
 
 **Vault still sealed after init** — The KMS auto-unseal stanza requires the Vault IAM role to have `kms:Decrypt` and `kms:DescribeKey` on the unseal key. Check the Pod Identity association: `aws eks list-pod-identity-associations --cluster-name <name>`.
 
-**IVIA pods in ImagePullBackOff** — The `ibm_entitlement_key` HCP Terraform variable is missing or incorrect. Update the workspace variable set and trigger a new workspace run.
+**IVIA pods in ImagePullBackOff** — The `icr_entitlement_key` is missing or incorrect. Update `icr_entitlement_key` in the HCP variable set and re-run `terraform -chdir=infrastructure apply`.
 
 **IVIA OIDC discovery not reachable** — The `verify-access` Service may not be ready. Run `kubectl get svc -n verify-access` and confirm `isvaop` has a ClusterIP. If the pod is Running but the service is not responsive, check the pod logs: `kubectl logs -n verify-access -l app=ivia`.
 
-**cert-manager or AWS LBC not running** — These are deployed in the `addons` module. Trigger a new workspace run from HCP Terraform if they are missing.
+**cert-manager or AWS LBC not running** — These are deployed in the `addons` module. Re-run `terraform -chdir=infrastructure apply` if they are missing.
