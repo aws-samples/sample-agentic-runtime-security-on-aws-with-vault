@@ -56,18 +56,19 @@ kubectl get namespace "${VAULT_NS}" &>/dev/null \
   || fail "Namespace '${VAULT_NS}' not found. Is kubectl configured for the workshop cluster?"
 
 info "Checking Vault pods..."
-READY_COUNT=$(kubectl get pods -n "${VAULT_NS}" -l app.kubernetes.io/name=vault,component=server \
-  --no-headers 2>/dev/null | grep -c '1/1' || true)
+# Accept 0/1 Running — uninitialized Vault pods run but fail readiness probe until init.
+RUNNING_COUNT=$(kubectl get pods -n "${VAULT_NS}" -l app.kubernetes.io/name=vault,component=server \
+  --no-headers 2>/dev/null | grep -c 'Running' || true)
 
-if [[ "${READY_COUNT}" -lt 1 ]]; then
+if [[ "${RUNNING_COUNT}" -lt 1 ]]; then
   PODS=$(kubectl get pods -n "${VAULT_NS}" --no-headers 2>/dev/null || true)
-  fail "No Vault server pods are 1/1 Running in namespace '${VAULT_NS}'.
+  fail "No Vault server pods Running in namespace '${VAULT_NS}'.
   Current pods:
 ${PODS}
-  Fix: Ensure the first workspace run (enable_vault_config=false) succeeded and Vault pods are scheduling.
+  Fix: Ensure the workspace run succeeded and Vault pods are scheduling.
   Check: kubectl describe statefulset vault -n ${VAULT_NS}"
 fi
-ok "${READY_COUNT} Vault server pod(s) running"
+ok "${RUNNING_COUNT} Vault server pod(s) running"
 
 #--- Check if already initialized ----------------------------------------------
 info "Checking Vault initialization status..."
