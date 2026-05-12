@@ -27,3 +27,13 @@ output "vault_unseal_kms_key_id" {
   description = "Key ID of the dedicated KMS unseal key. Passed to the Vault seal stanza in Helm values."
   value       = aws_kms_key.vault_unseal.key_id
 }
+
+output "vault_iam_role_arn" {
+  description = "ARN of the Vault Pod Identity IAM role. Used to grant STS assume permissions for the AWS secrets engine."
+  value       = aws_iam_role.vault_kms.arn
+}
+
+output "vault_iam_role_id" {
+  description = "ID of the Vault Pod Identity IAM role. Used for attaching additional IAM policies."
+  value       = aws_iam_role.vault_kms.id
+}

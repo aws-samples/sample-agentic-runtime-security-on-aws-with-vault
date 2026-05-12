@@ -22,6 +22,18 @@ data "aws_iam_policy_document" "kb_assume" {
       identifiers = ["bedrock.amazonaws.com"]
     }
   }
+
+  dynamic "statement" {
+    for_each = length(var.vault_iam_role_arns) > 0 ? [1] : []
+    content {
+      effect  = "Allow"
+      actions = ["sts:AssumeRole", "sts:TagSession"]
+      principals {
+        type        = "AWS"
+        identifiers = var.vault_iam_role_arns
+      }
+    }
+  }
 }
 
 resource "aws_iam_role" "bedrock_kb" {

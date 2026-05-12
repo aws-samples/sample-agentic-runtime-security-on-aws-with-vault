@@ -19,6 +19,12 @@ variable "kb_collection_name" {
   default     = "workshop-kb"
 }
 
+variable "vault_iam_role_arns" {
+  description = "IAM role ARNs allowed to assume the KB role via STS (for Vault AWS secrets engine). Added to the trust policy."
+  type        = list(string)
+  default     = []
+}
+
 variable "tags" {
   description = "Tags applied to all taggable resources in this module."
   type        = map(string)

@@ -87,8 +87,9 @@ module "bedrock_kb_aoss" {
     time = time
   }
 
-  region = var.kb_region
-  tags   = var.tags
+  region              = var.kb_region
+  vault_iam_role_arns = [module.vault.vault_iam_role_arn]
+  tags                = var.tags
 }
 
 #-------------------------------------------------------------------------------
@@ -200,6 +201,19 @@ module "vault" {
   tags                               = var.tags
 
   depends_on = [module.addons]
+}
+
+resource "aws_iam_role_policy" "vault_assume_bedrock" {
+  name = "vault-assume-bedrock"
+  role = module.vault.vault_iam_role_id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["sts:AssumeRole", "sts:TagSession"]
+      Resource = module.bedrock_kb_aoss.kb_role_arn
+    }]
+  })
 }
 
 #-------------------------------------------------------------------------------

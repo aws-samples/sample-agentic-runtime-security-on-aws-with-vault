@@ -99,7 +99,7 @@ class VaultClient:
         Returns:
             boto3.Session configured with the ephemeral STS credentials.
         """
-        response = self.client.secrets.aws.generate_credentials(name="bedrock-reader")
+        response = self.client.read("aws/sts/bedrock-reader")
         data = response["data"]
         session = boto3.Session(
             aws_access_key_id=data["access_key"],
