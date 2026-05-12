@@ -1039,7 +1039,7 @@ phase_identity() {
 
     local ivia_ns="verify-access"
     local vault_ns="vault"
-    local oidc_url="https://isvaop.verify-access.svc.cluster.local:8436/.well-known/openid-configuration"
+    local oidc_url="https://isvaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration"
 
     # Check IVIA pods
     local running_ivia

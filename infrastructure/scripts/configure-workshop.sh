@@ -333,7 +333,7 @@ else
             _IVIA_PF_PID=$!
             sleep 3
             IVIA_HEALTH=$(curl -sk \
-                "https://localhost:8436/sps/oauth/oauth20/.well-known/openid-configuration" \
+                "https://localhost:8436/oauth2/.well-known/openid-configuration" \
                 2>/dev/null | jq -r '.issuer // empty' 2>/dev/null || echo "")
             kill "$_IVIA_PF_PID" 2>/dev/null || true
         fi
