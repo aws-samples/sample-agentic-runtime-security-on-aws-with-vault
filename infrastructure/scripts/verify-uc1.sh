@@ -67,6 +67,12 @@ VAULT_NAMESPACE="${VAULT_NAMESPACE:-vault}"
 VAULT_POD="${VAULT_POD:-vault-0}"
 VAULT_ADDR="${VAULT_ADDR:-http://vault.vault.svc.cluster.local:8200}"
 
+VAULT_ROOT_TOKEN="${VAULT_ROOT_TOKEN:-}"
+if [ -z "$VAULT_ROOT_TOKEN" ] && [ -f "$HOME/vault-init.json" ]; then
+    VAULT_ROOT_TOKEN=$(jq -r '.root_token // empty' "$HOME/vault-init.json" 2>/dev/null || true)
+fi
+VAULT_EXEC="VAULT_TOKEN='${VAULT_ROOT_TOKEN}'"
+
 print_info "${SCRIPT_DESCRIPTION}"
 echo ""
 
@@ -96,7 +102,7 @@ fi
 # Check 3 — Vault role uc1 bound to uc1-retriever-sa
 #-------------------------------------------------------------------------------
 vault_role_sa=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
-    vault read auth/kubernetes/role/uc1 -format=json 2>/dev/null \
+    sh -c "${VAULT_EXEC} vault read auth/kubernetes/role/uc1 -format=json" 2>/dev/null \
     | jq -r '.data.bound_service_account_names[0]' 2>/dev/null || echo "")
 if [ "${vault_role_sa}" = "uc1-retriever-sa" ]; then
     print_pass "Vault role uc1 bound to uc1-retriever-sa"
@@ -109,7 +115,7 @@ fi
 # Check 4 — JIT DB creds issuance (database/creds/uc1-readonly)
 #-------------------------------------------------------------------------------
 db_username=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
-    vault read database/creds/uc1-readonly -format=json 2>/dev/null \
+    sh -c "${VAULT_EXEC} vault read database/creds/uc1-readonly -format=json" 2>/dev/null \
     | jq -r '.data.username' 2>/dev/null || echo "")
 if [ -n "${db_username}" ] && [ "${db_username}" != "null" ]; then
     print_pass "JIT DB creds issuance: username=${db_username}"
@@ -122,7 +128,7 @@ fi
 # Check 5 — JIT STS creds issuance (aws/sts/bedrock-reader)
 #-------------------------------------------------------------------------------
 sts_access_key=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
-    vault read aws/sts/bedrock-reader -format=json 2>/dev/null \
+    sh -c "${VAULT_EXEC} vault read aws/sts/bedrock-reader -format=json" 2>/dev/null \
     | jq -r '.data.access_key' 2>/dev/null || echo "")
 if [ -n "${sts_access_key}" ] && [ "${sts_access_key}" != "null" ]; then
     print_pass "JIT STS creds issuance: access_key=${sts_access_key:0:8}..."
@@ -152,7 +158,7 @@ fi
 # Policy isolation is the ENFC-01 enforcement point.
 #-------------------------------------------------------------------------------
 uc1_policy=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
-    vault policy read uc1-readonly 2>/dev/null || echo "")
+    sh -c "${VAULT_EXEC} vault policy read uc1-readonly" 2>/dev/null || echo "")
 if echo "${uc1_policy}" | grep -q 'uc3-refund-writer'; then
     print_fail "ENFC-01: UC3 cred rejection" \
         "ENFC-01 FAIL: uc1-readonly policy incorrectly grants UC3 database path access (uc3-refund-writer found in policy). Reapply vault_config component to enforce policy isolation."
@@ -164,7 +170,7 @@ fi
 # Check 8 — Vault audit device enabled (>= 1 device)
 #-------------------------------------------------------------------------------
 audit_count=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
-    vault audit list -format=json 2>/dev/null | jq 'length' 2>/dev/null || echo "0")
+    sh -c "${VAULT_EXEC} vault audit list -format=json" 2>/dev/null | jq 'length' 2>/dev/null || echo "0")
 if [ "${audit_count:-0}" -ge 1 ]; then
     print_pass "Vault audit device: enabled (${audit_count} device(s))"
 else

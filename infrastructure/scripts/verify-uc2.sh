@@ -76,13 +76,18 @@ BANKING_NAMESPACE="${BANKING_NAMESPACE:-banking-app}"
 VAULT_NAMESPACE="${VAULT_NAMESPACE:-vault}"
 VAULT_POD="${VAULT_POD:-vault-0}"
 
-# Load root token from vault-init state if not provided
+# Load root token from vault-init.json or local state
+if [ -z "${VAULT_ROOT_TOKEN:-}" ] && [ -f "$HOME/vault-init.json" ]; then
+    VAULT_ROOT_TOKEN=$(jq -r '.root_token // empty' "$HOME/vault-init.json" 2>/dev/null || true)
+fi
 if [ -z "${VAULT_ROOT_TOKEN:-}" ]; then
     local_root_token_file="${SCRIPT_DIR}/.vault-root-token"
     if [ -f "${local_root_token_file}" ]; then
         VAULT_ROOT_TOKEN=$(cat "${local_root_token_file}")
     fi
 fi
+
+VAULT_EXEC="VAULT_TOKEN='${VAULT_ROOT_TOKEN:-}'"
 
 print_info "${SCRIPT_DESCRIPTION}"
 echo ""
@@ -137,7 +142,7 @@ fi
 # Check 5 — Vault k8s auth role uc2 bound to uc2-mcp-server-sa
 #-------------------------------------------------------------------------------
 vault_k8s_role_sa=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
-    vault read auth/kubernetes/role/uc2 -format=json 2>/dev/null \
+    sh -c "${VAULT_EXEC} vault read auth/kubernetes/role/uc2 -format=json" 2>/dev/null \
     | jq -r '.data.bound_service_account_names[0]' 2>/dev/null || echo "")
 if [ "${vault_k8s_role_sa}" = "uc2-mcp-server-sa" ]; then
     print_pass "Vault k8s auth role uc2 bound to uc2-mcp-server-sa"
@@ -150,7 +155,7 @@ fi
 # Check 6 — Vault jwt auth role uc2-jwt exists with bound_audiences=[agent-uc2]
 #-------------------------------------------------------------------------------
 jwt_audiences=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
-    vault read auth/jwt/role/uc2-jwt -format=json 2>/dev/null \
+    sh -c "${VAULT_EXEC} vault read auth/jwt/role/uc2-jwt -format=json" 2>/dev/null \
     | jq -r '.data.bound_audiences[]' 2>/dev/null | tr '\n' ',' | sed 's/,$//' || echo "")
 if echo "${jwt_audiences}" | grep -q "agent-uc2"; then
     print_pass "Vault jwt auth role uc2-jwt exists (bound_audiences contains agent-uc2)"
@@ -162,12 +167,10 @@ fi
 #-------------------------------------------------------------------------------
 # Check 7 — JIT DB creds issuance (database/creds/uc2-personal-readonly)
 #-------------------------------------------------------------------------------
-db_username=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
-    vault read database/creds/uc2-personal-readonly -format=json 2>/dev/null \
-    | jq -r '.data.username' 2>/dev/null || echo "")
-db_password=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
-    vault read database/creds/uc2-personal-readonly -format=json 2>/dev/null \
-    | jq -r '.data.password' 2>/dev/null || echo "")
+db_creds_json=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
+    sh -c "${VAULT_EXEC} vault read database/creds/uc2-personal-readonly -format=json" 2>/dev/null || echo "{}")
+db_username=$(echo "${db_creds_json}" | jq -r '.data.username' 2>/dev/null || echo "")
+db_password=$(echo "${db_creds_json}" | jq -r '.data.password' 2>/dev/null || echo "")
 if [ -n "${db_username}" ] && [ "${db_username}" != "null" ]; then
     print_pass "JIT DB creds issuance: username=${db_username}"
 else
@@ -282,7 +285,7 @@ fi
 #-------------------------------------------------------------------------------
 ivia_jwks_url="https://isvaop.verify-access.svc.cluster.local:8436/oauth2/jwks"
 jwks_result=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
-    curl -sk --max-time 10 "${ivia_jwks_url}" 2>/dev/null | jq -r '.keys | length' 2>/dev/null || echo "0")
+    sh -c "curl -sk --max-time 10 '${ivia_jwks_url}'" 2>/dev/null | jq -r '.keys | length' 2>/dev/null || echo "0")
 
 if [ "${jwks_result:-0}" -ge 1 ] 2>/dev/null; then
     print_pass "IVIA JWKS endpoint reachable (${jwks_result} key(s) returned) — OAuth pre-check passed"
