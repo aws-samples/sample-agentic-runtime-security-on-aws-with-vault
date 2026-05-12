@@ -6,7 +6,8 @@
 #   - Audit device (PLAT-05): file type → stdout, json format, fluent-bit pickup
 #   - Kubernetes auth backend (CONF-01): EKS CA + OIDC issuer
 #   - JWT auth backend (CONF-02): IVIA OIDC discovery URL
-#   - PostgreSQL secrets engine (CONF-03): 3 roles (uc1-readonly, uc2-personal, uc3-refund-writer)
+#   - PostgreSQL secrets engine (CONF-03): 3 roles (uc1-readonly,
+#     uc2-personal-readonly, uc3-refund-writer)
 #   - AWS secrets engine (CONF-04): assumed_role for scoped Bedrock STS credentials
 #   - Policies + auth roles for all three use cases
 #
@@ -96,7 +97,7 @@ resource "vault_mount" "database" {
 resource "vault_database_secret_backend_connection" "pg" {
   backend           = vault_mount.database.path
   name              = "workshop-pg"
-  allowed_roles     = ["uc1-readonly", "uc2-personal", "uc3-refund-writer"]
+  allowed_roles     = ["uc1-readonly", "uc2-personal-readonly", "uc3-refund-writer"]
   verify_connection = false
 
   postgresql {
@@ -125,21 +126,26 @@ resource "vault_database_secret_backend_role" "uc1_readonly" {
   ]
 }
 
-# uc2-personal: SELECT only, 15-min TTL (personal data access — full audit in CONF-03)
-resource "vault_database_secret_backend_role" "uc2_personal" {
+# uc2-personal-readonly: SELECT only on banking schema, 15-min TTL
+# Layer 2 enforcement (ENFC-02): R/O only — INSERT/UPDATE/DELETE denied at Postgres level
+# search_path set to banking,public so the role lands in the banking schema by default.
+resource "vault_database_secret_backend_role" "uc2_personal_readonly" {
   backend     = vault_mount.database.path
-  name        = "uc2-personal"
+  name        = "uc2-personal-readonly"
   db_name     = vault_database_secret_backend_connection.pg.name
   default_ttl = 900  # 15 minutes
   max_ttl     = 1800 # 30 minutes
   creation_statements = [
     "CREATE ROLE \"{{name}}\" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}';",
-    "GRANT SELECT ON ALL TABLES IN SCHEMA public TO \"{{name}}\";",
-    "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO \"{{name}}\";"
+    "ALTER ROLE \"{{name}}\" SET search_path TO banking,public;",
+    "GRANT USAGE ON SCHEMA banking TO \"{{name}}\";",
+    "GRANT SELECT ON ALL TABLES IN SCHEMA banking TO \"{{name}}\";",
+    "ALTER DEFAULT PRIVILEGES IN SCHEMA banking GRANT SELECT ON TABLES TO \"{{name}}\";"
   ]
   revocation_statements = [
-    "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM \"{{name}}\";",
-    "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM \"{{name}}\";",
+    "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA banking FROM \"{{name}}\";",
+    "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA banking FROM \"{{name}}\";",
+    "REVOKE USAGE ON SCHEMA banking FROM \"{{name}}\";",
     "DROP ROLE IF EXISTS \"{{name}}\";"
   ]
 }
@@ -224,9 +230,10 @@ resource "vault_policy" "uc2_personal" {
   name = "uc2-personal"
 
   policy = <<-EOT
-    # UC2: Personal-data agent policy
-    # Allows: kubernetes + jwt auth login, database creds, AWS (Bedrock) STS creds
-    path "database/creds/uc2-personal" {
+    # UC2: Personal-data agent policy (ENFC-02)
+    # Allows: kubernetes + jwt auth login, database creds (R/O), AWS (Bedrock) STS creds
+    # database/creds/uc2-personal-readonly only — no write DB roles accessible
+    path "database/creds/uc2-personal-readonly" {
       capabilities = ["read"]
     }
     path "aws/sts/bedrock-reader" {
@@ -280,8 +287,8 @@ resource "vault_kubernetes_auth_backend_role" "uc1" {
 resource "vault_kubernetes_auth_backend_role" "uc2" {
   backend                          = vault_auth_backend.kubernetes.path
   role_name                        = "uc2"
-  bound_service_account_names      = ["uc2-personal-retriever-sa"]
-  bound_service_account_namespaces = ["uc2"]
+  bound_service_account_names      = ["uc2-mcp-server-sa"]
+  bound_service_account_namespaces = ["banking-app"]
   token_policies                   = [vault_policy.uc2_personal.name]
   token_ttl                        = 3600
   token_max_ttl                    = 7200
@@ -315,8 +322,14 @@ resource "vault_jwt_auth_backend_role" "uc2_jwt" {
 
   user_claim = "sub"
 
-  # Require IVIA-issued tokens only (validated via oidc_discovery_url)
+  # Require IVIA-issued tokens only (validated via jwks_url)
   bound_claims = {}
+
+  # Map user sub claim into Vault entity metadata for audit correlation (OBJ-5)
+  claim_mappings = {
+    "sub"   = "user_sub"
+    "email" = "user_email"
+  }
 }
 
 resource "vault_jwt_auth_backend_role" "uc3_jwt" {

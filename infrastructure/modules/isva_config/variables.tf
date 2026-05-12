@@ -25,3 +25,9 @@ variable "vault_config_jwt_auth_path" {
   type        = string
   default     = "jwt"
 }
+
+variable "uc2_redirect_uri" {
+  description = "OAuth redirect URI for the UC2 banking app client (agent-uc2). Override at deploy time with the ALB hostname: http://<alb-hostname>/callback. Default is for local development. NOTE: workshop setup is HTTP-only — ALB-generated hostnames cannot get public ACM certs."
+  type        = string
+  default     = "http://localhost:5173/callback"
+}

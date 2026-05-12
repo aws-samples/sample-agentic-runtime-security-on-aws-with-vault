@@ -47,6 +47,9 @@ resource "restapi_object" "uc1_client" {
 }
 
 # UC2: authorization_code + PKCE — user-delegated personal data agent
+# redirect_uris uses var.uc2_redirect_uri — set at deploy time to the banking app
+# ALB hostname (HTTP, not HTTPS — workshop setup uses ALB-generated hostnames
+# which cannot get public certs). Default value is for local development.
 resource "restapi_object" "uc2_client" {
   path         = "/mga/sps/oauth/oauth20/clients"
   id_attribute = "client_id"
@@ -59,7 +62,8 @@ resource "restapi_object" "uc2_client" {
     scope                      = "openid profile database:read bedrock:invoke"
     token_endpoint_auth_method = "none"
     pkce_required              = true
-    redirect_uris              = ["https://localhost/callback"]
+    pkce_s256_required         = true
+    redirect_uris              = [var.uc2_redirect_uri]
   })
 }
 

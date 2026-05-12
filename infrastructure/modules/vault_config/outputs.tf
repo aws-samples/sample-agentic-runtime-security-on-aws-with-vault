@@ -29,8 +29,13 @@ output "uc1_role_name" {
 }
 
 output "uc2_role_name" {
-  description = "Kubernetes auth role name for Use Case 2 (value: 'uc2'). Vault Agent init container annotation: vault.hashicorp.com/role=uc2."
+  description = "Kubernetes auth role name for Use Case 2 (value: 'uc2'). Bound to banking-app namespace / uc2-mcp-server-sa service account."
   value       = vault_kubernetes_auth_backend_role.uc2.role_name
+}
+
+output "uc2_db_role_name" {
+  description = "Vault database secrets engine role name for Use Case 2 (value: 'uc2-personal-readonly'). SELECT-only on banking schema — ENFC-02 Layer 2 enforcement."
+  value       = vault_database_secret_backend_role.uc2_personal_readonly.name
 }
 
 output "uc3_role_name" {
