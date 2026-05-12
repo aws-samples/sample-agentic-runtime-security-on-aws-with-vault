@@ -103,6 +103,7 @@ NUKE=false
 CLEANUP_ONLY=false
 SKIP_ADDONS=false
 DRY_RUN=false
+START_FROM=""
 TFE_API="https://app.terraform.io/api/v2"
 
 # IAM role name created by bootstrap.sh / setup-aws-oidc.sh
@@ -187,6 +188,7 @@ while [ $# -gt 0 ]; do
             # surface get a clean run instead of an "Unknown option" error.
             ;;
         --dry-run)        DRY_RUN=true ;;
+        --start-from)     START_FROM="$2"; shift ;;
         --project)        HCP_PROJECT="$2"; shift ;;
         --branch)         GIT_BRANCH="$2"; shift ;;
         -*)               echo -e "${RED}Unknown option: $1${NC}"; usage ;;
@@ -1394,17 +1396,28 @@ if [ "$TEARDOWN_ONLY" = true ]; then
     exit 0
 fi
 
-# Full e2e flow
-phase_prerequisites
-phase_bootstrap
-phase_deploy_foundation
-phase_configure_kubectl
-phase_verify_foundation
-phase_identity
-phase_vault
-phase_uc1
-phase_uc2
-phase_uc3_placeholder
+# Full e2e flow — --start-from skips earlier phases
+_started=true
+if [ -n "$START_FROM" ]; then _started=false; fi
+
+should_run() {
+    local phase_tag="$1"
+    if [ "$_started" = true ]; then return 0; fi
+    if [ "$phase_tag" = "$START_FROM" ]; then _started=true; return 0; fi
+    print_info "Skipping ${phase_tag} (--start-from ${START_FROM})"
+    return 1
+}
+
+should_run prerequisites   && phase_prerequisites
+should_run bootstrap       && phase_bootstrap
+should_run foundation      && phase_deploy_foundation
+should_run kubectl         && phase_configure_kubectl
+should_run verify          && phase_verify_foundation
+should_run identity        && phase_identity
+should_run vault           && phase_vault
+should_run uc1             && phase_uc1
+should_run uc2             && phase_uc2
+should_run uc3             && phase_uc3_placeholder
 
 if [ "$SKIP_TEARDOWN" = false ]; then
     phase_teardown
