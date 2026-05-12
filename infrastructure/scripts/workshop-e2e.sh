@@ -695,18 +695,17 @@ hcp_workspace_deploy_and_wait() {
     print_success "Run created: $run_id"
 
     step_header "Waiting for plan to complete..."
-    hcp_wait_for_run "$run_id" "planned" 600 || {
-        # Check if it reached planned_and_finished (no changes — not an error)
-        local status
-        status=$(curl -s -H "Authorization: Bearer $TFE_TOKEN" \
-            "$TFE_API/runs/$run_id" 2>/dev/null \
-            | jq -r '.data.attributes.status // "unknown"')
-        if [ "$status" = "planned_and_finished" ]; then
-            print_success "Run $run_id: no changes (planned_and_finished)"
-            return 0
-        fi
-        return 1
-    }
+    hcp_wait_for_run "$run_id" "planned" 600 || return 1
+
+    # Check if plan finished with no changes — skip approval + apply
+    local plan_status
+    plan_status=$(curl -s -H "Authorization: Bearer $TFE_TOKEN" \
+        "$TFE_API/runs/$run_id" 2>/dev/null \
+        | jq -r '.data.attributes.status // "unknown"')
+    if [ "$plan_status" = "planned_and_finished" ]; then
+        print_success "Run $run_id: no changes to apply (planned_and_finished)"
+        return 0
+    fi
 
     step_header "Approving run..."
     hcp_approve_run "$run_id" || return 1
