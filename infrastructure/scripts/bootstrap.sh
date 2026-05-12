@@ -14,7 +14,7 @@
 #   - Step 0 detects HCP free tier (Pitfall §2 — free tier EOL 2026-03-31)
 #   - Prereq gate at top of main flow asks "Have you run ./check-prerequisites.sh
 #     and seen all checks pass? [y/N]"
-#   - --mode workspace (default) creates an HCP Terraform Workspace with agent
+#   - --mode workspace (default) creates an HCP Terraform Workspace with remote
 #     execution mode; --mode stacks preserves the original Stacks path
 #
 # Steps:
@@ -36,7 +36,7 @@
 # Options:
 #   --mode workspace|stacks  Deployment mode (default: workspace).
 #                            workspace — create HCP Terraform Workspace with
-#                              agent execution mode (VCS-driven, working-dir=
+#                              remote execution mode (VCS-driven, working-dir=
 #                              infrastructure, auto-apply=false). Recommended
 #                              for all new deploys.
 #                            stacks — create HCP Terraform Stack (retained for
@@ -106,7 +106,7 @@ Arguments:
 
 Options:
   --mode workspace|stacks  Deployment mode (default: workspace).
-                           workspace — HCP Terraform Workspace with agent execution.
+                           workspace — HCP Terraform Workspace with remote execution.
                            stacks   — HCP Terraform Stack (legacy; provider bug #2779).
   --project NAME           HCP project name (default: "Agentic Runtime Security")
   --varset-name NAME       Variable set name (default: "agentic-runtime-stacks-config")
@@ -345,11 +345,22 @@ step_write_tfvars() {
     cat > "$TFVARS_FILE" <<TFVARS
 hcp_org             = "$HCP_ORG"
 aws_account_id      = "$AWS_ACCOUNT_ID"
-aws_region          = "us-west-2"
 iam_role_arn        = "$IAM_ROLE_ARN"
 admin_principal_arn = "$ADMIN_PRINCIPAL_ARN"
 project_name        = "$HCP_PROJECT"
 varset_name         = "$VARSET_NAME"
+
+# Root module variables (mirrored into HCP variable set for remote execution)
+region              = "us-west-2"
+kb_region           = "us-east-1"
+cluster_name        = "agentic-runtime-usw2"
+vpc_cidr            = "10.1.0.0/16"
+azs                 = "[\"us-west-2a\",\"us-west-2b\",\"us-west-2c\"]"
+icr_entitlement_key = "${ICR_ENTITLEMENT_KEY:-}"
+uc1_agent_image     = "${UC1_AGENT_IMAGE:-placeholder}"
+banking_app_ui_image    = "${BANKING_APP_UI_IMAGE:-placeholder}"
+banking_app_agent_image = "${BANKING_APP_AGENT_IMAGE:-placeholder}"
+banking_app_mcp_image   = "${BANKING_APP_MCP_IMAGE:-placeholder}"
 TFVARS
     echo -e "${GREEN}OK: Written: $TFVARS_FILE${NC}"
 }
@@ -376,12 +387,10 @@ step_terraform_apply() {
 }
 
 #===============================================================================
-# STEP 7 (workspace mode): Create HCP Terraform Workspace + assign agent pool
+# STEP 7 (workspace mode): Create HCP Terraform Workspace
 #
-# Creates an agent pool "workshop-agents" and an agent token (saved to
-# $SCRIPT_DIR/.agent-token — gitignored). Then creates the HCP Terraform
-# Workspace with:
-#   - execution-mode: agent (attendee runs tfc-agent locally)
+# Creates the HCP Terraform Workspace with:
+#   - execution-mode: remote (HCP runs plan/apply using OIDC → IAM role)
 #   - working-directory: infrastructure
 #   - VCS connection to current git remote
 #   - auto-apply: false (attendee approves runs in HCP UI)
@@ -392,7 +401,7 @@ create_workspace() {
     step_header "6/7" "Create HCP Terraform Workspace (workspace mode)"
 
     if [ "$DRY_RUN" = true ]; then
-        echo -e "${YELLOW}[DRY-RUN] Would create agent pool 'workshop-agents', agent token, and workspace '$WORKSPACE_NAME'${NC}"
+        echo -e "${YELLOW}[DRY-RUN] Would create workspace '$WORKSPACE_NAME' (remote execution)${NC}"
         return 0
     fi
 
@@ -412,85 +421,7 @@ create_workspace() {
     fi
 
     #---------------------------------------------------------------------------
-    # 6a: Create (or find) agent pool "workshop-agents"
-    #---------------------------------------------------------------------------
-    echo -e "${BLUE}  Checking agent pool 'workshop-agents'...${NC}"
-    local pools_resp agent_pool_id
-    pools_resp=$(curl -s \
-        -H "Authorization: Bearer $TFE_TOKEN" \
-        -H "Content-Type: application/vnd.api+json" \
-        "$TFE_API/organizations/$HCP_ORG/agent-pools" 2>/dev/null)
-    agent_pool_id=$(echo "$pools_resp" | jq -r \
-        '[.data[] | select(.attributes.name == "workshop-agents")] | .[0].id // empty' 2>/dev/null)
-
-    local pool_was_created=false
-    if [ -n "$agent_pool_id" ]; then
-        echo -e "${GREEN}OK: Agent pool 'workshop-agents' already exists (id=${agent_pool_id})${NC}"
-    else
-        local create_pool_resp http_code body
-        create_pool_resp=$(curl -s -w "\n%{http_code}" -X POST \
-            -H "Authorization: Bearer $TFE_TOKEN" \
-            -H "Content-Type: application/vnd.api+json" \
-            -d "$(jq -n '{data:{type:"agent-pools",attributes:{name:"workshop-agents",description:"Workshop attendee local tfc-agent pool"}}}')" \
-            "$TFE_API/organizations/$HCP_ORG/agent-pools" 2>/dev/null)
-        http_code=$(echo "$create_pool_resp" | tail -1)
-        body=$(echo "$create_pool_resp" | sed '$d')
-
-        if [ "$http_code" = "201" ] || [ "$http_code" = "200" ]; then
-            agent_pool_id=$(echo "$body" | jq -r '.data.id // empty')
-            echo -e "${GREEN}OK: Agent pool created (id=${agent_pool_id})${NC}"
-            pool_was_created=true
-        else
-            local err
-            err=$(echo "$body" | jq -r '.errors[0].detail // .errors[0].title // empty')
-            echo -e "${RED}Error: Agent pool creation failed (HTTP $http_code): $err${NC}"
-            return 1
-        fi
-    fi
-
-    #---------------------------------------------------------------------------
-    # 6b: Create agent token (only if pool was just created — token is
-    # unrecoverable after initial display)
-    #---------------------------------------------------------------------------
-    local token_file="$SCRIPT_DIR/.agent-token"
-    if [ "$pool_was_created" = true ]; then
-        echo -e "${BLUE}  Creating agent token...${NC}"
-        local token_resp http_code body
-        token_resp=$(curl -s -w "\n%{http_code}" -X POST \
-            -H "Authorization: Bearer $TFE_TOKEN" \
-            -H "Content-Type: application/vnd.api+json" \
-            -d "$(jq -n '{data:{type:"authentication-tokens",attributes:{description:"workshop-attendee-agent"}}}')" \
-            "$TFE_API/agent-pools/${agent_pool_id}/authentication-tokens" 2>/dev/null)
-        http_code=$(echo "$token_resp" | tail -1)
-        body=$(echo "$token_resp" | sed '$d')
-
-        if [ "$http_code" = "201" ] || [ "$http_code" = "200" ]; then
-            local agent_token
-            agent_token=$(echo "$body" | jq -r '.data.attributes.token // empty')
-            printf '%s' "$agent_token" > "$token_file"
-            echo -e "${GREEN}OK: Agent token created and saved${NC}"
-            echo
-            echo -e "${YELLOW}WARNING: Agent token saved to infrastructure/scripts/.agent-token${NC}"
-            echo -e "${YELLOW}WARNING: This token is shown ONLY ONCE — do not lose this file.${NC}"
-            echo -e "${YELLOW}         Use it to start tfc-agent: tfc-agent -address https://app.terraform.io -token \$(cat infrastructure/scripts/.agent-token)${NC}"
-            echo
-        else
-            local err
-            err=$(echo "$body" | jq -r '.errors[0].detail // .errors[0].title // empty')
-            echo -e "${RED}Error: Agent token creation failed (HTTP $http_code): $err${NC}"
-            return 1
-        fi
-    else
-        if [ -f "$token_file" ]; then
-            echo -e "${GREEN}OK: Agent token already saved at infrastructure/scripts/.agent-token${NC}"
-        else
-            echo -e "${YELLOW}Warning: Agent pool pre-existed — no new token created.${NC}"
-            echo -e "${YELLOW}         If you need a new agent token, delete the pool in HCP UI and re-run bootstrap.${NC}"
-        fi
-    fi
-
-    #---------------------------------------------------------------------------
-    # 6c: Create workspace (idempotent — check if exists first)
+    # 6a: Create workspace (idempotent — check if exists first)
     #---------------------------------------------------------------------------
     echo -e "${BLUE}  Checking workspace '$WORKSPACE_NAME'...${NC}"
     local ws_check_resp ws_check_code ws_existing_id
@@ -550,7 +481,7 @@ create_workspace() {
         echo -e "${BLUE}  Repository:  $repo_identifier${NC}"
         echo -e "${BLUE}  Branch:      $branch${NC}"
         echo -e "${BLUE}  Working dir: $WORKING_DIR${NC}"
-        echo -e "${BLUE}  Exec mode:   agent (pool: workshop-agents)${NC}"
+        echo -e "${BLUE}  Exec mode:   remote${NC}"
 
         # Build vcs-repo JSON block
         local vcs_json
@@ -589,7 +520,6 @@ create_workspace() {
         create_payload=$(jq -n \
             --arg name "$WORKSPACE_NAME" \
             --arg wd "$WORKING_DIR" \
-            --arg pool_id "$agent_pool_id" \
             --argjson vcs "$vcs_json" \
             --arg project_id "$project_id" \
             '{
@@ -597,15 +527,14 @@ create_workspace() {
                     type: "workspaces",
                     attributes: {
                         name: $name,
-                        description: "Agentic Runtime Security on AWS — single-workspace deployment (agent execution, working-dir=infrastructure)",
+                        description: "Agentic Runtime Security on AWS — single-workspace deployment (remote execution, working-dir=infrastructure)",
                         "working-directory": $wd,
-                        "execution-mode": "agent",
+                        "execution-mode": "remote",
                         "auto-apply": false,
                         "vcs-repo": $vcs
                     },
                     relationships: {
-                        project: { data: { type: "projects", id: $project_id } },
-                        "agent-pool": { data: { type: "agent-pools", id: $pool_id } }
+                        project: { data: { type: "projects", id: $project_id } }
                     }
                 }
             }')
@@ -634,7 +563,7 @@ create_workspace() {
     fi
 
     #---------------------------------------------------------------------------
-    # 6d: Assign variable set to workspace
+    # 6b: Assign variable set to workspace
     # The varset is project-scoped via tfe_project_variable_set in hcp-setup/main.tf
     # so workspaces under the project inherit it automatically. This explicit
     # workspace-level assignment is belt-and-suspenders for any workspace-mode
@@ -885,19 +814,15 @@ step_summary() {
     echo -e "  - HCP project '$HCP_PROJECT'"
     echo -e "  - Variable set '$VARSET_NAME'"
     if [ "$DEPLOY_MODE" = "workspace" ]; then
-        echo -e "  - HCP Workspace '$WORKSPACE_NAME' (working dir: $WORKING_DIR, exec-mode: agent)"
-        echo -e "  - Agent pool 'workshop-agents'"
-        echo -e "  - Agent token saved to infrastructure/scripts/.agent-token"
+        echo -e "  - HCP Workspace '$WORKSPACE_NAME' (working dir: $WORKING_DIR, exec-mode: remote)"
     else
         echo -e "  - HCP Stack '$STACK_NAME' (working dir: $WORKING_DIR)"
     fi
     echo
     echo -e "${GREEN}Next steps:${NC}"
     if [ "$DEPLOY_MODE" = "workspace" ]; then
-        echo -e "  1. Start the tfc-agent:"
-        echo -e "     ${BLUE}tfc-agent -address https://app.terraform.io -token \$(cat infrastructure/scripts/.agent-token)${NC}"
-        echo -e "  2. Review the Workspace: ${BLUE}https://app.terraform.io/app/${HCP_ORG}/workspaces${NC}"
-        echo -e "  3. Push code (or trigger a run in HCP UI) — approve the plan to deploy"
+        echo -e "  1. Review the Workspace: ${BLUE}https://app.terraform.io/app/${HCP_ORG}/workspaces/${WORKSPACE_NAME}${NC}"
+        echo -e "  2. Push code (or trigger a run in HCP UI) — approve the plan to deploy"
     else
         echo -e "  1. Review the Stack: ${BLUE}https://app.terraform.io/app/${HCP_ORG}/stacks${NC}"
         echo -e "  2. Push code to trigger the first plan, then approve to deploy"
