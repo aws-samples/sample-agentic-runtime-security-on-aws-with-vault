@@ -131,6 +131,7 @@ variable "banking_app_mcp_image" {
 variable "simple_ad_admin_password" {
   type        = string
   sensitive   = true
+  default     = "WorkshopAdmin1!"
   description = "Administrator password for AWS Simple AD. Used for LDAP bind and user provisioning."
 }
 
