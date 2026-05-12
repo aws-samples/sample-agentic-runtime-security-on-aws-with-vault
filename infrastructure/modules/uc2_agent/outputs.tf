@@ -9,7 +9,7 @@ output "namespace" {
 
 output "banking_ui_alb_hostname" {
   description = "ALB hostname assigned to the banking UI Ingress (internet-facing, HTTP-only)."
-  value       = kubernetes_ingress_v1.banking_ui.status[0].load_balancer[0].ingress[0].hostname
+  value       = try(kubernetes_ingress_v1.banking_ui.status[0].load_balancer[0].ingress[0].hostname, "")
 }
 
 output "banking_ui_service_name" {
