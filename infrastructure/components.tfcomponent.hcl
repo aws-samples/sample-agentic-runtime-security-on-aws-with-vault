@@ -4,7 +4,7 @@
 #                                   + Phase 4 Use Case 1 Agent
 # Single-region stack (canonical region locked in deployments.tfdeploy.hcl):
 # audit foundation + VPC + EKS + addons + RDS + Bedrock KB + Vault + IVIA
-# + uc1_agent
+# + uc1_agent + uc2_app
 # Note: vault_config + isva_config run locally via kubectl port-forward (not in Stacks)
 # Reference: ~/git-repos/eks-terraform-stacks/infrastructure/components.tfcomponent.hcl
 #
@@ -17,6 +17,7 @@
 #   Wave 4: ivia (eks + rds + vault + audit + addons)
 #   Wave 5: vault_config + isva_config  [LOCAL — kubectl port-forward]
 #   Wave 6: uc1_agent (vault + rds + bedrock_kb_index + eks)
+#   Wave 7: uc2_app (vault + rds + ivia + bedrock_kb_index + eks)
 #
 # Per HCP Stacks docs, component output references in `inputs` are sufficient
 # to express ordering; explicit `depends_on` is reserved for non-obvious
@@ -25,6 +26,7 @@
 #
 # Karpenter and ArgoCD are intentionally OUT of scope for this workshop
 # (managed node group only; Helm-direct or Stacks for app deployments).
+# Phase 5: uc2_app added as Wave 7 component.
 ################################################################################
 
 #-------------------------------------------------------------------------------
@@ -302,5 +304,45 @@ component "uc1_agent" {
     agent_image       = var.uc1_agent_image
     bedrock_model_id  = var.bedrock_model_id
     tags              = var.tags
+  }
+}
+
+#-------------------------------------------------------------------------------
+# Use Case 2 Banking App Component (Wave 7)
+# Deploys the UC2 personalized banking app: SvelteKit UI + Strands agent +
+# MCP server. Three pods in banking-app namespace with default-deny
+# NetworkPolicy + per-pod egress rules.
+# UC3 extends this deployment (adds CIBA client + write Vault role, same namespace).
+#-------------------------------------------------------------------------------
+component "uc2_app" {
+  source = "./modules/uc2_agent"
+
+  providers = {
+    kubernetes = provider.kubernetes.main
+    null       = provider.null.main
+    aws        = provider.aws.main
+  }
+
+  inputs = {
+    vault_addr                 = "http://vault.vault.svc.cluster.local:8200"
+    vault_k8s_role             = "uc2"
+    vault_jwt_role             = "uc2-jwt"
+    vault_db_role              = "uc2-personal-readonly"
+    rds_address                = component.rds.address
+    rds_port                   = component.rds.port
+    rds_db_name                = component.rds.db_name
+    rds_endpoint               = component.rds.endpoint
+    rds_master_user_secret_arn = component.rds.master_user_secret_arn
+    rds_cidr                   = component.vpc.vpc_cidr
+    knowledge_base_id          = component.bedrock_kb_index.knowledge_base_id
+    region                     = var.region
+    kb_region                  = var.kb_region
+    ui_image                   = var.banking_app_ui_image
+    agent_image                = var.banking_app_agent_image
+    mcp_image                  = var.banking_app_mcp_image
+    bedrock_model_id           = var.bedrock_model_id
+    ivia_issuer                = "https://ivia-runtime.ivia.svc.cluster.local"
+    ivia_client_id             = "agent-uc2"
+    tags                       = var.tags
   }
 }

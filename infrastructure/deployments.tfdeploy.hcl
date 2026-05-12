@@ -101,6 +101,12 @@ deployment "usw2" {
     # Replace with the actual ECR URI: <account>.dkr.ecr.us-west-2.amazonaws.com/uc1-agent:<tag>
     uc1_agent_image = "<placeholder-ecr-uri>"
 
+    # UC2 Banking App images — attendees set these after ECR push (Phase 5 lab step).
+    # Replace with: <account>.dkr.ecr.<region>.amazonaws.com/workshop-banking-app:<tag>
+    banking_app_ui_image    = "<placeholder-ecr-uri>"
+    banking_app_agent_image = "<placeholder-ecr-uri>"
+    banking_app_mcp_image   = "<placeholder-ecr-uri>"
+
     # OIDC authentication
     role_arn       = store.varset.config.aws_role_arn
     identity_token = identity_token.aws.jwt

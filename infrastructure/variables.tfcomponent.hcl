@@ -114,6 +114,27 @@ variable "bedrock_model_id" {
 }
 
 #-------------------------------------------------------------------------------
+# UC2 Banking App Configuration
+# 3 images: set by attendees after ECR push (Phase 5 lab step).
+# Single ECR repo with :ui, :agent, :mcp tags.
+#-------------------------------------------------------------------------------
+
+variable "banking_app_ui_image" {
+  type        = string
+  description = "ECR image URI for the banking app UI container (tag: ui)."
+}
+
+variable "banking_app_agent_image" {
+  type        = string
+  description = "ECR image URI for the banking app agent container (tag: agent)."
+}
+
+variable "banking_app_mcp_image" {
+  type        = string
+  description = "ECR image URI for the banking app MCP server container (tag: mcp)."
+}
+
+#-------------------------------------------------------------------------------
 # Resource Tags
 #-------------------------------------------------------------------------------
 
