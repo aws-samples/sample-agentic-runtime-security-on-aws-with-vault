@@ -199,7 +199,7 @@ phase_k8s_cleanup() {
 
     # Delete workshop namespaces (vault, verify-access, uc1, etc.) so any LB
     # Services in them get torn down by the LB controller.
-    for ns in vault verify-access uc1; do
+    for ns in vault verify-access uc1 banking-app; do
         if kubectl get namespace "$ns" &>/dev/null; then
             print_info "Deleting namespace $ns..."
             kubectl delete namespace "$ns" --ignore-not-found --timeout=120s 2>/dev/null || true
@@ -1197,6 +1197,16 @@ phase_hcp_cleanup() {
         else
             print_warn "terraform destroy in hcp-setup/ had errors — check HCP UI"
         fi
+    fi
+
+    # Clean up local terraform state for vault-config (prevents stale state on next deploy)
+    step_header "Clean up vault-config local state"
+    local vault_config_dir="$REPO_ROOT/infrastructure/vault-config"
+    if [ -f "$vault_config_dir/terraform.tfstate" ]; then
+        rm -f "$vault_config_dir/terraform.tfstate" "$vault_config_dir/terraform.tfstate.backup"
+        print_success "vault-config local state removed"
+    else
+        print_info "vault-config state: already clean"
     fi
 
     print_success "HCP cleanup complete"
