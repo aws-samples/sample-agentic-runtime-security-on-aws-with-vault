@@ -28,11 +28,11 @@ IVIA serves as the identity provider for user-context delegation (OAuth 2.0, CIB
                   └──────────────────────────────────────────────────────────┘
                                           │
                                           ▼ RDS PostgreSQL backend
-                            (component.rds — workshop database)
+                            (module.rds — workshop database)
 ```
 
 - **Single OIDC provider deployment** — 1 replica, CPU 250m/1, memory 512Mi/1Gi
-- **PostgreSQL backend** — RDS instance from `component.rds` (bootstrap creds from Secrets Manager; Vault rotates post-deploy)
+- **PostgreSQL backend** — RDS instance from `module.rds` (bootstrap creds from Secrets Manager; Vault rotates post-deploy)
 - **ALB Ingress** — AWS Load Balancer Controller provisions an internet-facing ALB for external OIDC discovery endpoint access
 - **Internal ClusterIP** — `isvaop.verify-access.svc.cluster.local:8436` for in-cluster consumers (Vault jwt auth, UC2/UC3 agents)
 
@@ -40,9 +40,9 @@ IVIA serves as the identity provider for user-context delegation (OAuth 2.0, CIB
 
 1. **IBM entitlement key** — Required for the ICR pull secret (Pitfall 3). Without this, pods enter `ImagePullBackOff`. Attendees obtain the key from the IBM Cloud console: `Manage → Account → IBM entitlement keys → Container Registry`.
 
-2. **AWS Load Balancer Controller** — Must be deployed (component.addons, Wave 2) before IVIA for the ALB Ingress to be provisioned.
+2. **AWS Load Balancer Controller** — Must be deployed (`module.addons`) before IVIA for the ALB Ingress to be provisioned.
 
-3. **Vault endpoint** — `component.vault.vault_endpoint` must exist (Wave 3) before IVIA deploys (Wave 4), as it is referenced in IVIA configuration as the OIDC seam target.
+3. **Vault endpoint** — `module.vault.vault_endpoint` must exist before IVIA deploys, as it is referenced in IVIA configuration as the OIDC seam target.
 
 ## Inputs
 
@@ -50,14 +50,14 @@ IVIA serves as the identity provider for user-context delegation (OAuth 2.0, CIB
 |------|------|-----------|-------------|
 | `region` | `string` | no | AWS region. No literals — interpolated from `var.region`. |
 | `cluster_name` | `string` | no | EKS cluster name for tagging. |
-| `rds_endpoint` | `string` | no | Full RDS endpoint `<address>:<port>` from `component.rds.endpoint`. |
-| `rds_address` | `string` | no | RDS hostname without port from `component.rds.address`. |
-| `rds_port` | `number` | no | RDS port from `component.rds.port` (5432). |
-| `rds_master_username` | `string` | no | RDS master username from `component.rds.master_username`. |
+| `rds_endpoint` | `string` | no | Full RDS endpoint `<address>:<port>` from `module.rds.endpoint`. |
+| `rds_address` | `string` | no | RDS hostname without port from `module.rds.address`. |
+| `rds_port` | `number` | no | RDS port from `module.rds.port` (5432). |
+| `rds_master_username` | `string` | no | RDS master username from `module.rds.master_username`. |
 | `rds_master_user_secret_arn` | `string` | yes | Secrets Manager ARN for RDS master password (JSON: `username`/`password` keys). |
-| `rds_db_name` | `string` | no | Database name from `component.rds.db_name` (`workshop`). |
-| `vault_endpoint` | `string` | no | Vault ClusterIP URL from `component.vault.vault_endpoint`. |
-| `audit_log_group_names` | `map(string)` | no | Audit log group names from `component.audit.audit_log_group_names`. |
+| `rds_db_name` | `string` | no | Database name from `module.rds.db_name` (`workshop`). |
+| `vault_endpoint` | `string` | no | Vault ClusterIP URL from `module.vault.vault_endpoint`. |
+| `audit_log_group_names` | `map(string)` | no | Audit log group names from `module.audit.audit_log_group_names`. |
 | `icr_entitlement_key` | `string` | yes | IBM Container Registry entitlement key for image pull auth. |
 | `tags` | `map(string)` | no | Tags applied to all AWS resources. Default: `{}`. |
 
@@ -70,41 +70,36 @@ IVIA serves as the identity provider for user-context delegation (OAuth 2.0, CIB
 | `ivia_service_endpoint` | ClusterIP service DNS without scheme. Format: `isvaop.verify-access.svc.cluster.local` |
 | `ivia_ingress_hostname` | ALB hostname from LBC. May be empty until LBC reconciles the Ingress. |
 
-## Component Wiring
+## Root module wiring
 
-The `ivia` Stacks component in `infrastructure/components.tfcomponent.hcl` references this module:
+`infrastructure/main.tf` calls this module as `module.ivia`:
 
 ```hcl
-component "ivia" {
+module "ivia" {
   source = "./modules/verify_access"
-  providers = {
-    aws        = provider.aws.main
-    kubernetes = provider.kubernetes.main
-    random     = provider.random.main
-    time       = provider.time.main
-  }
-  inputs = {
-    region                     = var.region
-    cluster_name               = component.eks.cluster_name
-    rds_endpoint               = component.rds.endpoint           # Pitfall 8: no rds_ prefix
-    rds_address                = component.rds.address
-    rds_port                   = component.rds.port
-    rds_master_username        = component.rds.master_username
-    rds_master_user_secret_arn = component.rds.master_user_secret_arn
-    rds_db_name                = component.rds.db_name
-    vault_endpoint             = component.vault.vault_endpoint
-    audit_log_group_names      = component.audit.audit_log_group_names
-    icr_entitlement_key        = var.icr_entitlement_key
-    tags                       = var.tags
-  }
+
+  depends_on = [module.addons, time_sleep.alb_webhook_ready]
+
+  region                     = var.region
+  cluster_name               = module.eks.cluster_name
+  rds_endpoint               = module.rds.endpoint           # Pitfall 8: no rds_ prefix
+  rds_address                = module.rds.address
+  rds_port                   = module.rds.port
+  rds_master_username        = module.rds.master_username
+  rds_master_user_secret_arn = module.rds.master_user_secret_arn
+  rds_db_name                = module.rds.db_name
+  vault_endpoint             = module.vault.vault_endpoint
+  audit_log_group_names      = module.audit.audit_log_group_names
+  icr_entitlement_key        = var.icr_entitlement_key
+  tags                       = var.tags
 }
 ```
 
-The `icr_entitlement_key` stack variable is declared in `infrastructure/variables.tfcomponent.hcl` and supplied as a sensitive HCP Terraform variable.
+The `icr_entitlement_key` variable is declared in `infrastructure/variables.tf` and supplied as a sensitive HCP Terraform workspace variable.
 
 ## Post-Deploy Verification
 
-After `terraform stacks apply`, verify the OIDC discovery endpoint returns valid JSON:
+After the workspace apply completes, verify the OIDC discovery endpoint returns valid JSON:
 
 ```bash
 # Check pod is running
@@ -124,6 +119,6 @@ The discovery response must contain `"issuer"`, `"grant_types_supported"`, and `
 
 **Pitfall 3 — ICR pull secret missing.** The IVIA image is hosted at `icr.io/ivia/ivia-oidc-provider`. Without the `icr-pull-secret` Kubernetes secret, pods enter `ImagePullBackOff`. This module creates the secret using `var.icr_entitlement_key` — the secret must be created before the Deployment reconciles. The `depends_on` block in `kubernetes_deployment.isvaop` ensures ordering.
 
-**Pitfall 6 — Use `kubernetes_*` resources, not `kubectl_manifest`.** The `kubernetes` provider (hashicorp/kubernetes ~> 2.25) is already declared in the Stacks providers block. Adding a separate `gavinbunney/kubectl` provider would introduce an extra provider dependency. All manifests in this module use `kubernetes_namespace`, `kubernetes_deployment`, `kubernetes_service`, `kubernetes_ingress_v1`, etc.
+**Pitfall 6 — Use `kubernetes_*` resources, not `kubectl_manifest`.** The `kubernetes` provider (hashicorp/kubernetes ~> 2.25) is already declared in `providers.tf`. Adding a separate `gavinbunney/kubectl` provider would introduce an extra provider dependency. All manifests in this module use `kubernetes_namespace`, `kubernetes_deployment`, `kubernetes_service`, `kubernetes_ingress_v1`, etc.
 
-**Pitfall 8 — RDS output names have no `rds_` prefix.** The RDS module outputs are `endpoint`, `address`, `port`, `master_username`, `master_user_secret_arn`, `db_name` — NOT `rds_endpoint`, `rds_address`, etc. Use `component.rds.endpoint` (not `component.rds.rds_endpoint`) when wiring the ivia component.
+**Pitfall 8 — RDS output names have no `rds_` prefix.** The RDS module outputs are `endpoint`, `address`, `port`, `master_username`, `master_user_secret_arn`, `db_name` — NOT `rds_endpoint`, `rds_address`, etc. Use `module.rds.endpoint` (not `module.rds.rds_endpoint`) when wiring the ivia module in `main.tf`.

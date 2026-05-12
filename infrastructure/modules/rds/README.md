@@ -33,10 +33,10 @@ Storage encryption, the master-user Secrets Manager secret, and the pre-created 
 | Name | Type | Default | Description |
 |------|------|---------|-------------|
 | `identifier` | string | (required) | RDS instance identifier; prefix for subnet group, security group, parameter group, and log group names. |
-| `vpc_id` | string | (required) | VPC ID (output by `component.vpc`). |
+| `vpc_id` | string | (required) | VPC ID (output by `module.vpc`). |
 | `private_subnet_ids` | list(string) | (required) | Private subnet IDs for the RDS subnet group. |
-| `cluster_security_group_id` | string | (required) | EKS cluster security group ID (output by `component.eks`); source of the `:5432` ingress rule. |
-| `workshop_cmk_arn` | string | (required) | Workshop CMK ARN (output by `component.audit`). Used for storage, master-user secret, and CloudWatch log group encryption. |
+| `cluster_security_group_id` | string | (required) | EKS cluster security group ID (output by `module.eks`); source of the `:5432` ingress rule. |
+| `workshop_cmk_arn` | string | (required) | Workshop CMK ARN (output by `module.audit`). Used for storage, master-user secret, and CloudWatch log group encryption. |
 | `instance_class` | string | `db.t3.medium` | RDS instance class. Bump to `db.t3.large` for >15 attendees. |
 | `log_retention_days` | number | `7` | CloudWatch log group retention. |
 | `tags` | map(string) | `{}` | Tags applied to all resources. |
@@ -56,22 +56,23 @@ Storage encryption, the master-user Secrets Manager secret, and the pre-created 
 | `postgresql_log_group_name` | no | `/aws/rds/instance/<id>/postgresql`. |
 | `postgresql_log_group_arn` | no | Log group ARN — used by IAM policies granting pgaudit-log read access. |
 
-## Component wiring
+## Root module wiring
 
-In `infrastructure/components.tfcomponent.hcl`, the `rds` component receives:
+In `infrastructure/main.tf`, the `rds` module receives:
 
 ```hcl
-component "rds" {
+module "rds" {
   source = "./modules/rds"
-  inputs = {
-    identifier                = "workshop-pg17"
-    vpc_id                    = component.vpc.vpc_id
-    private_subnet_ids        = component.vpc.private_subnet_ids
-    cluster_security_group_id = component.eks.cluster_security_group_id
-    workshop_cmk_arn          = component.audit.workshop_cmk_arn
-    instance_class            = var.rds_instance_class
-    tags                      = var.tags
-  }
+
+  depends_on = [module.eks]
+
+  identifier                = "workshop-pg17"
+  vpc_id                    = module.vpc.vpc_id
+  private_subnet_ids        = module.vpc.private_subnet_ids
+  cluster_security_group_id = module.eks.cluster_security_group_id
+  workshop_cmk_arn          = module.audit.workshop_cmk_arn
+  instance_class            = var.rds_instance_class
+  tags                      = var.tags
 }
 ```
 

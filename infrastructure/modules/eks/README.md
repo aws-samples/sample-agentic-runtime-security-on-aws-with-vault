@@ -1,6 +1,6 @@
 # eks
 
-Phase 2 Stacks component that builds the EKS 1.33 control plane, a managed
+Phase 2 root module call that builds the EKS 1.33 control plane, a managed
 node group, EKS Access Entries, and 5 managed addons (with Pod Identity for
 the two addons that need IAM). This is the source of truth for **INFR-02**
 (Kubernetes 1.33 cluster + managed node group + control-plane logs + Access
@@ -11,10 +11,10 @@ Entries) and **INFR-05** (workshop-attendee `kubectl` one-liner).
 Wraps **`terraform-aws-modules/eks/aws ~> 20.37`** plus
 **`terraform-aws-modules/eks-pod-identity/aws ~> 1.12`** (twice — once each for
 the vpc-cni and aws-ebs-csi-driver Pod Identity targets). The cluster sits in
-the private subnets created by the `vpc` component (Plan 02-02), and its
+the private subnets created by the `vpc` module (Plan 02-02), and its
 endpoint is reachable both privately (in-cluster) and publicly (attendee
 laptop kubectl). The 5 control-plane log streams flow into EKS-managed
-CloudWatch log groups; the workshop CMK from the `audit` component is
+CloudWatch log groups; the workshop CMK from the `audit` module is
 intentionally **not** wired here (see Decisions).
 
 The cluster is the K8s substrate for everything in Phase 3+: Vault Raft (3
@@ -47,10 +47,10 @@ CMK (Plan 02-04), and OpenSearch / CloudWatch CMK reuse (Plan 02-05).
 
 | Name                  | Type           | Description                                                                                                |
 | --------------------- | -------------- | ---------------------------------------------------------------------------------------------------------- |
-| `region`              | `string`       | AWS region (canonical region from `deployments.tfdeploy.hcl`; used to format `kubectl_config_command`)     |
+| `region`              | `string`       | AWS region (canonical region from `terraform.tfvars`; used to format `kubectl_config_command`)             |
 | `cluster_name`        | `string`       | Name of the EKS cluster                                                                                    |
-| `vpc_id`              | `string`       | VPC ID — passed from `component.vpc.vpc_id`                                                                |
-| `private_subnet_ids`  | `list(string)` | Private subnet IDs for the control plane and managed node group — `component.vpc.private_subnet_ids`        |
+| `vpc_id`              | `string`       | VPC ID — passed from `module.vpc.vpc_id`                                                                   |
+| `private_subnet_ids`  | `list(string)` | Private subnet IDs for the control plane and managed node group — `module.vpc.private_subnet_ids`          |
 | `admin_principal_arn` | `string`       | ARN of the IAM principal granted `AmazonEKSClusterAdminPolicy` via Access Entries                          |
 | `tags`                | `map(string)`  | Tags applied to all EKS resources                                                                          |
 
@@ -62,44 +62,41 @@ CMK (Plan 02-04), and OpenSearch / CloudWatch CMK reuse (Plan 02-05).
 | `cluster_endpoint`                   | EKS API server endpoint                                                                                                  |
 | `cluster_oidc_issuer`                | OIDC issuer URL (kept for backwards compat — Pod Identity is preferred over IRSA in this workshop)                       |
 | `cluster_security_group_id`          | Control plane security group ID                                                                                          |
-| `cluster_certificate_authority_data` | Base64-encoded CA bundle (consumed by `kubernetes`/`helm` provider configs in `providers.tfcomponent.hcl`)               |
+| `cluster_certificate_authority_data` | Base64-encoded CA bundle (consumed by `kubernetes`/`helm` provider configs in `providers.tf`)                            |
 | `node_security_group_id`             | Managed node group security group ID                                                                                     |
-| `cluster_token`                      | Short-lived auth token from `data.aws_eks_cluster_auth` (consumed by `kubernetes`/`helm` providers in Stacks remote runs) |
+| `cluster_token`                      | Short-lived auth token from `data.aws_eks_cluster_auth` (consumed by `kubernetes`/`helm` providers in root module)       |
 | `kubectl_config_command`             | The one-liner attendees run to populate `~/.kube/config` (**INFR-05**)                                                   |
 
-## Component wiring
+## Root module wiring
 
-`infrastructure/components.tfcomponent.hcl` declares the EKS component as a
-Wave 1 dependency on `vpc` + `audit`:
+`infrastructure/main.tf` declares the EKS module as a Wave 1 dependency on `vpc` + `audit`:
 
 ```hcl
-component "eks" {
-  source     = "./modules/eks"
-  depends_on = [component.vpc, component.audit]
+module "eks" {
+  source = "./modules/eks"
 
-  inputs = {
-    region              = var.region
-    cluster_name        = var.cluster_name
-    vpc_id              = component.vpc.vpc_id
-    private_subnet_ids  = component.vpc.private_subnet_ids
-    admin_principal_arn = var.admin_principal_arn
-    tags                = var.tags
-  }
+  depends_on = [module.vpc, module.audit]
+
+  region              = var.region
+  cluster_name        = var.cluster_name
+  vpc_id              = module.vpc.vpc_id
+  private_subnet_ids  = module.vpc.private_subnet_ids
+  admin_principal_arn = var.admin_principal_arn
+  tags                = var.tags
 }
 ```
 
 The `cluster_endpoint` + `cluster_certificate_authority_data` + `cluster_token`
 outputs flow into the `kubernetes` and `helm` provider configurations in
-`providers.tfcomponent.hcl`, which Plan 02-06's `addons` component (and
-Phase 3's Vault / IVIA components) consume.
+`providers.tf`, which the `addons` module (and Phase 3's Vault / IVIA modules) consume.
 
 ## kubectl one-liner (INFR-05)
 
 The `kubectl_config_command` output produces the workshop one-liner:
 
 ```bash
-# Once the deployment finishes, attendees run:
-eval "$(terraform-stacks output -deployment usw2 kubectl_config_command)"
+# Once the workspace apply finishes, attendees run:
+aws eks update-kubeconfig --region <region> --name <cluster_name> --alias workshop
 kubectl get nodes
 ```
 
@@ -112,7 +109,7 @@ aws eks update-kubeconfig --region <region> --name <cluster_name> --alias worksh
 `<region>` and `<cluster_name>` interpolate from `var.region` and
 `module.eks.cluster_name` — there is no hard-coded region literal anywhere in
 this module (canonical-region contract per ROADMAP success criterion #3 — the
-only place a region string lives is `deployments.tfdeploy.hcl`).
+only place a region string lives is `terraform.tfvars`).
 
 ## Pitfalls addressed
 

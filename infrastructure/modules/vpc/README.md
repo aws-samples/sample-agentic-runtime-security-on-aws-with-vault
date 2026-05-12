@@ -41,24 +41,23 @@ This module wraps [`terraform-aws-modules/vpc/aws ~> 5.16`](https://registry.ter
 
 ## Usage
 
-Wired from `infrastructure/components.tfcomponent.hcl`:
+Wired from `infrastructure/main.tf`:
 
 ```hcl
-component "vpc" {
+module "vpc" {
   source = "./modules/vpc"
-  inputs = {
-    region       = var.region
-    cluster_name = var.cluster_name
-    vpc_cidr     = var.vpc_cidr
-    azs          = var.azs
-    tags         = var.tags
-  }
+
+  region       = var.region
+  cluster_name = var.cluster_name
+  vpc_cidr     = var.vpc_cidr
+  azs          = var.azs
+  tags         = var.tags
 }
 ```
 
 ## Region contract
 
-This module accepts `var.region` and MUST NOT contain a hard-coded canonical-region string literal anywhere in this directory. Single source of truth: `infrastructure/deployments.tfdeploy.hcl`. Plan 02-02 enforces this with a `grep` gate.
+This module accepts `var.region` and MUST NOT contain a hard-coded canonical-region string literal anywhere in this directory. Single source of truth: `infrastructure/terraform.tfvars`. Plan 02-02 enforces this with a `grep` gate.
 
 ## References
 

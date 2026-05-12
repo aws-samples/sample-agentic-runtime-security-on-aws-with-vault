@@ -81,39 +81,38 @@ Vault writes one JSON object per API call to pod stdout. The fluent-bit DaemonSe
 | `uc2_jwt_role_name` | JWT auth role name for Use Case 2 (`uc2-jwt`) |
 | `uc3_jwt_role_name` | JWT auth role name for Use Case 3 (`uc3-jwt`) |
 
-## Component wiring (Stacks)
+## Root module wiring
 
 ```hcl
-# infrastructure/deployments.tfdeploy.hcl (excerpt)
-component "vault_config" {
-  source  = "./modules/vault_config"
-  version = "~> 1.0"
+# infrastructure/main.tf (excerpt)
+module "vault_config" {
+  source = "./modules/vault_config"
 
-  inputs = {
-    cluster_endpoint                    = component.eks.cluster_endpoint
-    cluster_certificate_authority_data  = component.eks.cluster_certificate_authority_data
-    cluster_oidc_issuer                 = component.eks.cluster_oidc_issuer
-    ivia_oidc_discovery_url             = component.ivia.oidc_discovery_url
-    rds_endpoint                        = component.rds.endpoint
-    rds_master_username                 = component.rds.master_username
-    rds_master_user_secret_arn          = component.rds.master_user_secret_arn
-    rds_db_name                         = component.rds.db_name
-    bedrock_role_arn                    = component.bedrock_kb_aoss.kb_role_arn
-    region                              = var.region
-    tags                                = var.tags
-  }
+  depends_on = [module.vault, module.ivia, module.rds]
+
+  cluster_endpoint                    = module.eks.cluster_endpoint
+  cluster_certificate_authority_data  = module.eks.cluster_certificate_authority_data
+  cluster_oidc_issuer                 = module.eks.cluster_oidc_issuer
+  ivia_oidc_discovery_url             = module.ivia.oidc_discovery_url
+  rds_endpoint                        = module.rds.endpoint
+  rds_master_username                 = module.rds.master_username
+  rds_master_user_secret_arn          = module.rds.master_user_secret_arn
+  rds_db_name                         = module.rds.db_name
+  bedrock_role_arn                    = module.bedrock_kb_aoss.kb_role_arn
+  region                              = var.region
+  tags                                = var.tags
 }
 ```
 
 ## Pitfalls
 
-**P1 — `verify_connection = false` on vault_database_secret_backend_connection**: Vault attempts a live DB connection during `terraform apply`. At Stacks plan/apply time the RDS instance exists but may not yet have the Vault-initiated pgaudit extension or the `workshop` database schema. Set `verify_connection = false` to avoid spurious failures; the connection is validated at first credential issuance instead.
+**P1 — `verify_connection = false` on vault_database_secret_backend_connection**: Vault attempts a live DB connection during `terraform apply`. At apply time the RDS instance exists but may not yet have the Vault-initiated pgaudit extension or the `workshop` database schema. Set `verify_connection = false` to avoid spurious failures; the connection is validated at first credential issuance instead.
 
 **P2 — `vault_kubernetes_auth_backend_config.kubernetes_ca_cert` must be PEM, not base64**: EKS outputs base64-encoded CA data. Wrap in `base64decode()` before passing to the config resource, otherwise the Kubernetes auth backend rejects login attempts with a TLS handshake error.
 
 **P3 — `vault_jwt_auth_backend_role.bound_claims` must be a flat `map(string)`**: The `may_act` claim in an RFC 8693 token is a JSON object, not a string. Vault evaluates `bound_claims` as string equality or glob — use `"may_act" = "*"` (glob) to require the claim is present without constraining its value. Never attempt to pass a nested object here.
 
-**P4 — AWS secrets engine `role_arns` requires at least one entry for `assumed_role` credential type**: `role_arns` is wired to `var.bedrock_role_arn` (sourced from `component.bedrock_kb_aoss.kb_role_arn`). Leaving it empty causes `vault read aws/sts/bedrock-reader` to fail at runtime with a configuration error rather than an IAM error.
+**P4 — AWS secrets engine `role_arns` requires at least one entry for `assumed_role` credential type**: `role_arns` is wired to `var.bedrock_role_arn` (sourced from `module.bedrock_kb_aoss.kb_role_arn`). Leaving it empty causes `vault read aws/sts/bedrock-reader` to fail at runtime with a configuration error rather than an IAM error.
 
 ## References
 

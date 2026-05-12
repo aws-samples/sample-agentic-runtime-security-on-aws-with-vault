@@ -32,15 +32,13 @@ The restapi provider uses these IVIA Config Service REST API paths:
 
 ### Pitfall 5: `insecure=true` for self-signed certificate (workshop only)
 
-The IVIA Config Service serves a self-signed TLS certificate in the workshop environment. The `restapi` provider must be configured with `insecure = true` to skip TLS verification. This is declared at the stack level in `providers.tfcomponent.hcl`:
+The IVIA Config Service serves a self-signed TLS certificate in the workshop environment. The `restapi` provider must be configured with `insecure = true` to skip TLS verification. This is declared in the root module's `providers.tf`:
 
 ```hcl
-provider "restapi" "main" {
-  config {
-    uri      = "https://${component.ivia.ivia_service_endpoint}"
-    insecure = true
-    # ... basic auth headers
-  }
+provider "restapi" {
+  uri      = "https://${var.ivia_service_endpoint}"
+  insecure = true
+  # ... basic auth headers
 }
 ```
 
@@ -67,7 +65,7 @@ output "uc1_client_id" {
 | `ivia_service_endpoint` | `string` | IVIA ClusterIP DNS (host only, no scheme). restapi provider constructs URI as `https://<endpoint>`. |
 | `ivia_admin_username` | `string` | IVIA admin username (default: `admin`). |
 | `ivia_admin_password` | `string` (sensitive) | IVIA admin password. |
-| `vault_config_jwt_auth_path` | `string` | JWT auth path from `component.vault_config` (default: `jwt`). Cross-reference for documentation. |
+| `vault_config_jwt_auth_path` | `string` | JWT auth path from `module.vault_config` (default: `jwt`). Cross-reference for documentation. |
 
 ## Outputs
 
@@ -78,25 +76,19 @@ output "uc1_client_id" {
 | `uc3_client_id` | OAuth client ID for UC3 agent (`agent-uc3`). |
 | `ciba_policy_name` | CIBA policy name (`workshop-ciba-policy`). |
 
-## Component Wiring
+## Root module wiring
 
 ```hcl
-# In infrastructure/components.tfcomponent.hcl
-component "isva_config" {
+# In infrastructure/main.tf
+module "isva_config" {
   source = "./modules/isva_config"
 
-  providers = {
-    restapi = provider.restapi.main
-  }
+  ivia_service_endpoint      = module.ivia.ivia_service_endpoint
+  vault_config_jwt_auth_path = module.vault_config.jwt_auth_path
+  ivia_admin_username        = var.ivia_admin_username
+  ivia_admin_password        = var.ivia_admin_password
 
-  inputs = {
-    ivia_service_endpoint      = component.ivia.ivia_service_endpoint
-    vault_config_jwt_auth_path = component.vault_config.jwt_auth_path
-    ivia_admin_username        = var.ivia_admin_username
-    ivia_admin_password        = var.ivia_admin_password
-  }
-
-  depends_on = [component.vault_config]
+  depends_on = [module.vault_config]
 }
 ```
 

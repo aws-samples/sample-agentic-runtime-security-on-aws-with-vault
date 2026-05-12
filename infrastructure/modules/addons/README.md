@@ -1,6 +1,6 @@
 # addons
 
-Phase 2 Stacks component that installs the three **external** (non-managed) EKS cluster addons via [`aws-ia/eks-blueprints-addons ~> 1.0`](https://registry.terraform.io/modules/aws-ia/eks-blueprints-addons/aws/latest):
+Phase 2 root module call that installs the three **external** (non-managed) EKS cluster addons via [`aws-ia/eks-blueprints-addons ~> 1.0`](https://registry.terraform.io/modules/aws-ia/eks-blueprints-addons/aws/latest):
 
 - cert-manager
 - external-dns
@@ -22,18 +22,18 @@ CONTEXT.md ([Phase 2 context](../../../.planning/phases/02-foundation-infrastruc
 - **Pod Identity vs IRSA** — accept the pinned `eks-blueprints-addons` v1.x module's defaults. Per RESEARCH Open Question 2/3, that version installs the 3 external addons via **IRSA** (consumes `oidc_provider_arn`). CONTEXT's "Pod Identity for cluster addons" decision applies to MANAGED addons (vpc-cni, ebs-csi) which are owned by the `eks` module — external addons inherit module defaults.
 - **cert-manager** ships with the default `selfsigned` ClusterIssuer; **Vault PKI integration is deferred to Phase 3+**.
 - **Karpenter is OUT of scope** — `enable_karpenter = false`. Cluster runs with managed node group only (per project [CLAUDE.md](../../../CLAUDE.md)).
-- **ArgoCD is OUT of scope** — `enable_argocd = false`. Deploys are Helm-direct or Stacks (per project [CLAUDE.md](../../../CLAUDE.md)).
+- **ArgoCD is OUT of scope** — `enable_argocd = false`. Deploys are Helm-direct or via HCP Terraform Workspace (per project [CLAUDE.md](../../../CLAUDE.md)).
 - **`aws_load_balancer_controller.replicaCount = 2`** — keeps the mutating webhook reachable across pod restarts; otherwise brief webhook outages can fail concurrent Service applies.
 
 ## Inputs
 
 | Name                | Type          | Default      | Description                                                                                                  |
 | ------------------- | ------------- | ------------ | ------------------------------------------------------------------------------------------------------------ |
-| `region`            | `string`      | _(required)_ | AWS region (canonical value from `deployments.tfdeploy.hcl`).                                                |
-| `cluster_name`      | `string`      | _(required)_ | EKS cluster name — wired from `component.eks.cluster_name`.                                                  |
-| `cluster_endpoint`  | `string`      | _(required)_ | EKS API server endpoint — wired from `component.eks.cluster_endpoint`.                                       |
-| `cluster_version`   | `string`      | _(required)_ | Kubernetes version — wired from `component.eks.cluster_version`. Gates addon chart-version selection.        |
-| `oidc_provider_arn` | `string`      | _(required)_ | IRSA OIDC provider ARN — wired from `component.eks.oidc_provider_arn`.                                       |
+| `region`            | `string`      | _(required)_ | AWS region (canonical value from `terraform.tfvars`).                                                        |
+| `cluster_name`      | `string`      | _(required)_ | EKS cluster name — wired from `module.eks.cluster_name`.                                                     |
+| `cluster_endpoint`  | `string`      | _(required)_ | EKS API server endpoint — wired from `module.eks.cluster_endpoint`.                                          |
+| `cluster_version`   | `string`      | _(required)_ | Kubernetes version — wired from `module.eks.cluster_version`. Gates addon chart-version selection.           |
+| `oidc_provider_arn` | `string`      | _(required)_ | IRSA OIDC provider ARN — wired from `module.eks.oidc_provider_arn`.                                          |
 | `tags`              | `map(string)` | `{}`         | Tags applied to all resources.                                                                               |
 
 ## Outputs
@@ -44,37 +44,28 @@ CONTEXT.md ([Phase 2 context](../../../.planning/phases/02-foundation-infrastruc
 | `external_dns_release`                 | external-dns `helm_release` attributes.                                                                  |
 | `aws_load_balancer_controller_release` | AWS Load Balancer Controller `helm_release` attributes.                                                  |
 
-Phase 3+ components depending on a specific addon's presence (e.g. an Ingress depending on the ALB Controller webhook being live) can `depends_on` these outputs at the component level in `components.tfcomponent.hcl`.
+Phase 3+ modules depending on a specific addon's presence (e.g. an Ingress depending on the ALB Controller webhook being live) can `depends_on = [module.addons]` in `main.tf`.
 
-## Component wiring
+## Root module wiring
 
-The `addons` component is a Wave 2 dependency on `eks`:
+The `addons` module is called in `infrastructure/main.tf` after the `time_sleep.alb_webhook_ready` dependency gate:
 
 ```hcl
-component "addons" {
-  source     = "./modules/addons"
-  depends_on = [component.eks]
+module "addons" {
+  source = "./modules/addons"
 
-  providers = {
-    aws        = provider.aws.main
-    helm       = provider.helm.main
-    kubernetes = provider.kubernetes.main
-    time       = provider.time.main
-    random     = provider.random.main
-  }
+  depends_on = [module.eks]
 
-  inputs = {
-    region            = var.region
-    cluster_name      = component.eks.cluster_name
-    cluster_endpoint  = component.eks.cluster_endpoint
-    cluster_version   = component.eks.cluster_version
-    oidc_provider_arn = component.eks.oidc_provider_arn
-    tags              = var.tags
-  }
+  region            = var.region
+  cluster_name      = module.eks.cluster_name
+  cluster_endpoint  = module.eks.cluster_endpoint
+  cluster_version   = module.eks.cluster_version
+  oidc_provider_arn = module.eks.oidc_provider_arn
+  tags              = var.tags
 }
 ```
 
-The `helm` and `kubernetes` providers are configured at the root of the Stacks deployment (in `providers.tfcomponent.hcl`) using `component.eks.cluster_endpoint`, `component.eks.cluster_certificate_authority_data`, and `component.eks.cluster_token`. This module does not redeclare provider blocks — it inherits them from the Stacks root.
+The `helm` and `kubernetes` providers are configured in `infrastructure/providers.tf` using `data.aws_eks_cluster` + `data.aws_eks_cluster_auth` (chicken-and-egg pattern, `depends_on = [module.eks]`). This module does not redeclare provider blocks — it inherits them from the root module.
 
 ## Pitfall H1 — helm provider 2.17 (NOT 3.x)
 

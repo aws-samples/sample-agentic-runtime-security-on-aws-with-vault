@@ -29,10 +29,10 @@ EKS Cluster
 |------|------|----------|-------------|
 | `region` | `string` | yes | AWS region for KMS unseal key and Vault seal stanza. |
 | `cluster_name` | `string` | yes | EKS cluster name — used for Pod Identity association and IAM role name prefix. |
-| `cluster_endpoint` | `string` | yes | EKS API server endpoint (passed through for Stacks component provider config). |
+| `cluster_endpoint` | `string` | yes | EKS API server endpoint (used for Helm provider configuration). |
 | `cluster_certificate_authority_data` | `string` | yes | Base64-encoded cluster CA data (sensitive). |
 | `oidc_provider_arn` | `string` | yes | OIDC provider ARN — retained for forward compatibility; Vault uses Pod Identity. |
-| `audit_log_group_names` | `map(string)` | yes | Audit log group name map from the `audit` component (keys: vault-audit, ivia-decision, agent-trace). |
+| `audit_log_group_names` | `map(string)` | yes | Audit log group name map from the `audit` module (keys: vault-audit, ivia-decision, agent-trace). |
 | `tags` | `map(string)` | no | Tags applied to all AWS resources. Default: `{}` |
 
 ## Outputs
@@ -45,35 +45,31 @@ EKS Cluster
 | `vault_unseal_kms_key_arn` | ARN of the dedicated KMS unseal key. |
 | `vault_unseal_kms_key_id` | Key ID of the dedicated KMS unseal key. |
 
-## Component Wiring
+## Root module wiring
 
-`components.tfcomponent.hcl` registers this module as the `vault` component in Wave 3:
+`infrastructure/main.tf` calls this module after `module.eks` and `module.addons`:
 
 ```hcl
-component "vault" {
+module "vault" {
   source = "./modules/vault"
-  providers = {
-    aws        = provider.aws.main
-    helm       = provider.helm.main
-    kubernetes = provider.kubernetes.main
-  }
-  inputs = {
-    region                             = var.region
-    cluster_name                       = component.eks.cluster_name
-    cluster_endpoint                   = component.eks.cluster_endpoint
-    cluster_certificate_authority_data = component.eks.cluster_certificate_authority_data
-    oidc_provider_arn                  = component.eks.oidc_provider_arn
-    audit_log_group_names              = component.audit.audit_log_group_names
-    tags                               = var.tags
-  }
+
+  depends_on = [module.addons, time_sleep.alb_webhook_ready]
+
+  region                             = var.region
+  cluster_name                       = module.eks.cluster_name
+  cluster_endpoint                   = module.eks.cluster_endpoint
+  cluster_certificate_authority_data = module.eks.cluster_certificate_authority_data
+  oidc_provider_arn                  = module.eks.oidc_provider_arn
+  audit_log_group_names              = module.audit.audit_log_group_names
+  tags                               = var.tags
 }
 ```
 
-The input references to `component.eks` and `component.audit` create implicit Wave 3 ordering — Stacks will not plan the vault component until both eks and audit are applied.
+The `depends_on = [module.addons]` ensures cert-manager and AWS Load Balancer Controller are available before the Vault Helm release applies.
 
 ## Post-Deploy Steps
 
-After the Terraform Stack applies successfully, an attendee must initialize Vault:
+After the workspace apply completes, an attendee must initialize Vault:
 
 ```bash
 # Forward the vault-0 pod port (run from a kubectl-configured terminal)

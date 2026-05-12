@@ -11,7 +11,7 @@
 #   3. Verifies AWS service quotas in us-west-2 (EC2 vCPU >= 32,
 #      VPC EIP >= 6, RDS DB instances >= 1, AOSS OCU indexing >= 2,
 #      AOSS OCU search >= 2)
-#   4. Verifies IAM permissions for HCP Stacks bootstrap (17 actions via
+#   4. Verifies IAM permissions for HCP Terraform Workspace bootstrap (17 actions via
 #      iam:SimulatePrincipalPolicy with self-test fallback)
 #
 # Exit codes:
@@ -54,7 +54,7 @@ for arg in "$@"; do
 Usage: $0 [--interactive] [--dry-run] [--help]
 
 Workshop pre-flight: installs CLI prereqs, then verifies Bedrock model access,
-AWS service quotas, and IAM permissions for HCP Stacks bootstrap.
+AWS service quotas, and IAM permissions for HCP Terraform Workspace bootstrap.
 
 Modes:
   (no flags)        Default: auto-install missing CLIs (no per-tool prompts),
@@ -143,7 +143,7 @@ KUBECTL_MAJOR_MINOR="1.33"
 AWS_CLI_MAJOR="2"
 
 # Per-section gate (only matters in --interactive mode; auto-yes otherwise)
-if confirm "Install / verify CLI tools (kubectl, helm, terraform, vault, aws, jq, yq)?"; then
+if confirm "Install / verify CLI tools (kubectl, helm, terraform, vault, aws, jq, yq, tfc-agent)?"; then
     OS="$(uname -s)"
     ARCH="$(uname -m)"
 
@@ -382,14 +382,25 @@ if command -v terraform >/dev/null 2>&1; then
         tf_current=$(terraform version 2>/dev/null | head -1 | sed -E 's/^Terraform v([0-9.]+).*/\1/')
     fi
     if [ -n "$tf_current" ] && version_gte "$tf_current" "$TERRAFORM_MIN_VERSION"; then
-        print_pass "terraform v${tf_current} (>= ${TERRAFORM_MIN_VERSION} required for Stacks)"
+        print_pass "terraform v${tf_current} (>= ${TERRAFORM_MIN_VERSION} required for workspace apply)"
     else
         print_fail "terraform v${tf_current:-unknown} is below ${TERRAFORM_MIN_VERSION}" \
-            "Stacks features (terraform stacks plan / apply) require >= ${TERRAFORM_MIN_VERSION}. Upgrade: macOS \`brew upgrade terraform\` | Linux apt \`sudo apt-get install --only-upgrade terraform\` | Linux yum \`sudo yum upgrade terraform\` | Or download the latest from https://developer.hashicorp.com/terraform/install"
+            "Workspace apply requires >= ${TERRAFORM_MIN_VERSION}. Upgrade: macOS \`brew upgrade terraform\` | Linux apt \`sudo apt-get install --only-upgrade terraform\` | Linux yum \`sudo yum upgrade terraform\` | Or download the latest from https://developer.hashicorp.com/terraform/install"
     fi
 else
     print_fail "terraform not found" \
         "Install via the install loop above, or manually from https://developer.hashicorp.com/terraform/install. Minimum: ${TERRAFORM_MIN_VERSION}"
+fi
+
+# tfc-agent — WARN if not found (Docker alternative exists); PASS + print version if found.
+# The HCP Terraform Workspace uses a local agent pool. tfc-agent must be running
+# before any workspace run can execute. Alternative: run via Docker (see prerequisites).
+if command -v tfc-agent >/dev/null 2>&1; then
+    tfc_agent_ver=$(tfc-agent --version 2>/dev/null | head -1 || echo "version unknown")
+    print_pass "tfc-agent found: ${tfc_agent_ver}"
+else
+    print_warn "tfc-agent not found — workspace applies will queue until an agent connects" \
+        "Install: macOS \`brew install hashicorp/tap/tfc-agent\` | Linux binary from https://releases.hashicorp.com/tfc-agent/ | Alternative: run via Docker: \`docker run -e TFC_AGENT_TOKEN=\$(cat infrastructure/scripts/.agent-token) hashicorp/tfc-agent\`"
 fi
 
 echo
@@ -606,7 +617,7 @@ if confirm "Run IAM permissions check (iam:SimulatePrincipalPolicy)?"; then
 
         if [ "$selftest" = "ERROR" ] || [ "$selftest" = "" ] || [ "$selftest" = "None" ]; then
             print_warn "iam:SimulatePrincipalPolicy unavailable — falling back to heuristic"
-            print_info "The calling principal cannot simulate-principal-policy on itself. This is common for SSO/federated/restricted principals. Skipping action-loop verification — proceed and rely on bootstrap.sh / Stacks deploys to surface real permission failures."
+            print_info "The calling principal cannot simulate-principal-policy on itself. This is common for SSO/federated/restricted principals. Skipping action-loop verification — proceed and rely on bootstrap.sh / workspace applies to surface real permission failures."
         else
             print_pass "Simulator is available (self-test EvalDecision=${selftest})"
             echo

@@ -76,11 +76,11 @@ redirect URI configuration (see `ivia-configure.sh`).
 
 ## DB Seed
 
-Database seeding runs post-deploy via `seed-banking-db.sh` (Terraform Stacks
-does not support `local-exec` provisioners). The script retrieves master
+Database seeding runs post-deploy via `seed-banking-db.sh`. The script retrieves master
 credentials from Secrets Manager, creates a ConfigMap from `seed.sql`, and
 runs a disposable `postgres:16-alpine` pod to execute psql against RDS.
 `seed.sql` is idempotent (`IF NOT EXISTS` + `ON CONFLICT DO NOTHING`).
+`configure-workshop.sh` calls this script automatically after each workspace apply.
 
 ## Variables
 
@@ -118,17 +118,15 @@ runs a disposable `postgres:16-alpine` pod to execute psql against RDS.
 | `mcp_server_service_name` | ClusterIP Service name for MCP server |
 | `mcp_server_service_account_name` | SA name bound to Vault uc2 k8s auth role |
 
-## Stacks Component Wiring
+## Root module wiring
 
-This module is registered as a Wave 7 Stacks component (`uc2_app`) in
-`infrastructure/deployments.tfdeploy.hcl`. It depends on:
+This module is called as `module.uc2_app` in `infrastructure/main.tf`. It depends on:
 
-- `component.vault` → `vault_endpoint` (Vault addr)
-- `component.vault_config` → `uc2_role_name`, `uc2_db_role_name`
-- `component.eks` → `cluster_endpoint`, `cluster_ca_certificate`, `cluster_token`
-- `component.rds` → `db_address`, `db_master_user_secret_arn`
-- `component.bedrock_kb` → `knowledge_base_id`
+- `module.vault` → `vault_endpoint` (Vault addr)
+- `module.vault_config` → `uc2_role_name`, `uc2_db_role_name`
+- `module.eks` → cluster providers (via root `providers.tf` chicken-and-egg pattern)
+- `module.rds` → `db_address`, `db_master_user_secret_arn`
+- `module.bedrock_kb_index` → `knowledge_base_id`
 
 Attendee-supplied values (`ui_image`, `agent_image`, `mcp_image`) are set in
-the `deployments.tfdeploy.hcl` `values {}` block after running
-`build-banking-app.sh`.
+`terraform.tfvars` after running `build-banking-app.sh`.
