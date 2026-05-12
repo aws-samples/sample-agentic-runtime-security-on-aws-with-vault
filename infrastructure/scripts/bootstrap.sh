@@ -7,15 +7,15 @@
 #
 # Adapted from ~/git-repos/eks-terraform-stacks/infrastructure/scripts/bootstrap.sh
 # (the canonical pattern source). Workshop-specific edits:
-#   - STACK_NAME defaults to "agentic-runtime-security" (single deployment "usw2",
-#     no region suffix per CONTEXT.md decision: single region us-west-2)
+#   - STACK_NAME / WORKSPACE_NAME defaults to "agentic-runtime-security" (single
+#     deployment "usw2", no region suffix per CONTEXT.md decision)
 #   - VARSET_NAME defaults to "agentic-runtime-stacks-config"
 #   - HCP_PROJECT defaults to "Agentic Runtime Security"
 #   - Step 0 detects HCP free tier (Pitfall §2 — free tier EOL 2026-03-31)
-#   - Prereq gate at top of main flow asks "Have you run ./check-prerequisites.sh and seen
-#     all checks pass? [y/N]" — replaces the old inline IAM verification
-#     (plan 01-08 closure of UAT Gap 2/3). check-prerequisites.sh is the single
-#     pre-flight surface; bootstrap.sh trusts the attendee's confirmation.
+#   - Prereq gate at top of main flow asks "Have you run ./check-prerequisites.sh
+#     and seen all checks pass? [y/N]"
+#   - --mode workspace (default) creates an HCP Terraform Workspace with agent
+#     execution mode; --mode stacks preserves the original Stacks path
 #
 # Steps:
 #   0. Detect HCP free tier (FAIL if free; workshop requires Standard tier)
@@ -24,7 +24,7 @@
 #   3. Resolve admin principal ARN (assumed-role → IAM role rewrite)
 #   4. Write hcp-setup/terraform.tfvars from current environment
 #   5. Run terraform init + apply in hcp-setup (creates project + variable set)
-#   6. Create the HCP Terraform Stack via the HCP API + assign variable set
+#   6. Create the HCP Terraform deployment (workspace or stack mode)
 #   7. Print success summary with next steps
 #
 # Usage:
@@ -34,9 +34,17 @@
 #   HCP_ORG                  HCP Terraform organization name (required)
 #
 # Options:
+#   --mode workspace|stacks  Deployment mode (default: workspace).
+#                            workspace — create HCP Terraform Workspace with
+#                              agent execution mode (VCS-driven, working-dir=
+#                              infrastructure, auto-apply=false). Recommended
+#                              for all new deploys.
+#                            stacks — create HCP Terraform Stack (retained for
+#                              reference; use when Stacks provider bug #2779 is
+#                              resolved).
 #   --project NAME           HCP project name (default: "Agentic Runtime Security")
 #   --varset-name NAME       Variable set name (default: "agentic-runtime-stacks-config")
-#   --stack-name NAME        HCP Stack name (default: "agentic-runtime-security")
+#   --stack-name NAME        HCP Stack/Workspace name (default: "agentic-runtime-security")
 #   --branch NAME            Git branch for VCS connection (default: repo default)
 #   --dry-run                Show what would be done without executing
 #   --skip-prereq-gate       Skip the "Have you run check-prerequisites.sh?" prompt.
@@ -80,9 +88,11 @@ HCP_ORG=""
 HCP_PROJECT="Agentic Runtime Security"
 VARSET_NAME="agentic-runtime-stacks-config"
 STACK_NAME="agentic-runtime-security"
+WORKSPACE_NAME="${STACK_NAME}"
 STACK_BRANCH=""
 DRY_RUN=false
 SKIP_PREREQ_GATE=false
+DEPLOY_MODE="workspace"
 
 usage() {
     cat <<USAGE
@@ -95,9 +105,12 @@ Arguments:
   HCP_ORG                  HCP Terraform organization name (required)
 
 Options:
+  --mode workspace|stacks  Deployment mode (default: workspace).
+                           workspace — HCP Terraform Workspace with agent execution.
+                           stacks   — HCP Terraform Stack (legacy; provider bug #2779).
   --project NAME           HCP project name (default: "Agentic Runtime Security")
   --varset-name NAME       Variable set name (default: "agentic-runtime-stacks-config")
-  --stack-name NAME        HCP Stack name (default: "agentic-runtime-security")
+  --stack-name NAME        HCP Stack/Workspace name (default: "agentic-runtime-security")
   --branch NAME            Git branch for VCS connection (default: repo default)
   --dry-run                Show what would be done without executing
   --skip-prereq-gate       Skip the "Have you run check-prerequisites.sh?" prompt
@@ -107,7 +120,8 @@ Options:
 
 Examples:
   $0 my-org
-  $0 my-org --project "Agentic Runtime Security" --dry-run
+  $0 my-org --mode workspace --project "Agentic Runtime Security" --dry-run
+  $0 my-org --mode stacks
 
 USAGE
 }
@@ -119,9 +133,10 @@ POSITIONAL_SET=false
 while [ $# -gt 0 ]; do
     case "$1" in
         --help|-h) usage; exit 0 ;;
+        --mode)         shift; DEPLOY_MODE="${1:?--mode requires workspace or stacks}" ;;
         --project)      shift; HCP_PROJECT="${1:?--project requires a value}" ;;
         --varset-name)  shift; VARSET_NAME="${1:?--varset-name requires a value}" ;;
-        --stack-name)   shift; STACK_NAME="${1:?--stack-name requires a value}" ;;
+        --stack-name)   shift; STACK_NAME="${1:?--stack-name requires a value}"; WORKSPACE_NAME="$STACK_NAME" ;;
         --branch)       shift; STACK_BRANCH="${1:?--branch requires a value}" ;;
         --dry-run)      DRY_RUN=true ;;
         --skip-prereq-gate) SKIP_PREREQ_GATE=true ;;
@@ -145,13 +160,23 @@ if [ -z "$HCP_ORG" ]; then
     exit 1
 fi
 
+# Validate --mode
+case "$DEPLOY_MODE" in
+    workspace|stacks) ;;
+    *)
+        echo -e "${RED}Error: --mode must be 'workspace' or 'stacks' (got: $DEPLOY_MODE)${NC}"
+        usage
+        exit 1
+        ;;
+esac
+
 step_header() {
     echo
     echo -e "${BLUE}--- Step $1: $2 ---${NC}"
 }
 
 #-------------------------------------------------------------------------------
-# Resolve TFE_TOKEN from credentials file (used by Steps 0 + 7)
+# Resolve TFE_TOKEN from credentials file (used by Steps 0 + 6 + 7)
 #-------------------------------------------------------------------------------
 load_tfe_token() {
     if [ -n "${TFE_TOKEN:-}" ]; then return 0; fi
@@ -197,18 +222,18 @@ step_detect_free_tier() {
     plan_name=$(echo "$org_resp" | jq -r '.data.attributes."subscription"."plan-name" // ""' 2>/dev/null)
 
     if [ -z "$plan_name" ] || [ "$plan_name" = "null" ]; then
-        echo -e "${YELLOW}⚠ Could not detect subscription plan — proceeding (verify Standard tier manually at https://app.terraform.io/app/${HCP_ORG}/settings/billing)${NC}"
+        echo -e "${YELLOW}Warning: Could not detect subscription plan — proceeding (verify Standard tier manually at https://app.terraform.io/app/${HCP_ORG}/settings/billing)${NC}"
         return 0
     fi
 
     case "$plan_name" in
         free|trial|starter|developer)
-            echo -e "${RED}✗ HCP Terraform plan is '$plan_name' — workshop requires Standard tier (free tier EOL 2026-03-31)${NC}"
+            echo -e "${RED}Error: HCP Terraform plan is '$plan_name' — workshop requires Standard tier (free tier EOL 2026-03-31)${NC}"
             echo -e "${YELLOW}Fix: upgrade to Standard at https://app.terraform.io/app/${HCP_ORG}/settings/billing${NC}"
             exit 1
             ;;
         *)
-            echo -e "${GREEN}✓ HCP plan detected: $plan_name${NC}"
+            echo -e "${GREEN}OK: HCP plan detected: $plan_name${NC}"
             ;;
     esac
 }
@@ -254,18 +279,18 @@ step_spot_slr() {
     fi
 
     if aws iam get-role --role-name AWSServiceRoleForEC2Spot >/dev/null 2>&1; then
-        echo -e "${GREEN}✓ EC2 Spot SLR exists${NC}"
+        echo -e "${GREEN}OK: EC2 Spot SLR exists${NC}"
         return 0
     fi
 
     if aws iam create-service-linked-role --aws-service-name spot.amazonaws.com >/dev/null 2>&1; then
-        echo -e "${GREEN}✓ EC2 Spot SLR created${NC}"
+        echo -e "${GREEN}OK: EC2 Spot SLR created${NC}"
     else
         # 409 Conflict (already exists, race condition) — treat as success
         if aws iam get-role --role-name AWSServiceRoleForEC2Spot >/dev/null 2>&1; then
-            echo -e "${GREEN}✓ EC2 Spot SLR exists (race-condition recovery)${NC}"
+            echo -e "${GREEN}OK: EC2 Spot SLR exists (race-condition recovery)${NC}"
         else
-            echo -e "${RED}✗ Failed to create EC2 Spot SLR (need iam:CreateServiceLinkedRole)${NC}"
+            echo -e "${RED}Error: Failed to create EC2 Spot SLR (need iam:CreateServiceLinkedRole)${NC}"
             exit 1
         fi
     fi
@@ -295,11 +320,11 @@ step_get_admin_arn() {
         local ROLE_NAME
         ROLE_NAME=$(echo "$RAW_ARN" | sed 's|.*assumed-role/\([^/]*\)/.*|\1|')
         ADMIN_PRINCIPAL_ARN="arn:aws:iam::${AWS_ACCOUNT_ID}:role/${ROLE_NAME}"
-        echo -e "${GREEN}✓ Admin Principal ARN: $ADMIN_PRINCIPAL_ARN${NC}"
+        echo -e "${GREEN}OK: Admin Principal ARN: $ADMIN_PRINCIPAL_ARN${NC}"
         echo -e "${YELLOW}  (rewritten from assumed-role for EKS access entry compatibility)${NC}"
     else
         ADMIN_PRINCIPAL_ARN="$RAW_ARN"
-        echo -e "${GREEN}✓ Admin Principal ARN: $ADMIN_PRINCIPAL_ARN${NC}"
+        echo -e "${GREEN}OK: Admin Principal ARN: $ADMIN_PRINCIPAL_ARN${NC}"
     fi
 }
 
@@ -326,7 +351,7 @@ admin_principal_arn = "$ADMIN_PRINCIPAL_ARN"
 project_name        = "$HCP_PROJECT"
 varset_name         = "$VARSET_NAME"
 TFVARS
-    echo -e "${GREEN}✓ Written: $TFVARS_FILE${NC}"
+    echo -e "${GREEN}OK: Written: $TFVARS_FILE${NC}"
 }
 
 #===============================================================================
@@ -351,56 +376,134 @@ step_terraform_apply() {
 }
 
 #===============================================================================
-# STEP 7: Create HCP Terraform Stack + assign variable set
+# STEP 7 (workspace mode): Create HCP Terraform Workspace + assign agent pool
 #
-# 1) Idempotency check: GET /organizations/$ORG/stacks?filter[name]=$STACK_NAME.
-#    Skip if data.length > 0.
-# 2) Auto-detect VCS provider (OAuth client OR GitHub App installation).
-# 3) Parse repo identifier from `git remote get-url origin`.
-# 4) POST /stacks with vcs-repo + working-directory=infrastructure +
-#    project relationship.
-# Note: variable-set assignment is project-level (tfe_project_variable_set in
-# hcp-setup/main.tf); the Stack inherits automatically. No Stack-level varset
-# assignment here.
+# Creates an agent pool "workshop-agents" and an agent token (saved to
+# $SCRIPT_DIR/.agent-token — gitignored). Then creates the HCP Terraform
+# Workspace with:
+#   - execution-mode: agent (attendee runs tfc-agent locally)
+#   - working-directory: infrastructure
+#   - VCS connection to current git remote
+#   - auto-apply: false (attendee approves runs in HCP UI)
+#
+# All operations are idempotent (check-then-create).
 #===============================================================================
-step_create_stack() {
-    step_header "6/7" "Create HCP Terraform Stack"
+create_workspace() {
+    step_header "6/7" "Create HCP Terraform Workspace (workspace mode)"
 
     if [ "$DRY_RUN" = true ]; then
-        echo -e "${YELLOW}[DRY-RUN] Would create Stack '$STACK_NAME' with VCS connection${NC}"
+        echo -e "${YELLOW}[DRY-RUN] Would create agent pool 'workshop-agents', agent token, and workspace '$WORKSPACE_NAME'${NC}"
         return 0
     fi
 
     load_tfe_token
     if [ -z "${TFE_TOKEN:-}" ]; then
-        echo -e "${RED}TFE_TOKEN not available — cannot create Stack${NC}"
+        echo -e "${RED}Error: TFE_TOKEN not available — cannot create Workspace${NC}"
         echo -e "${YELLOW}Fix: run 'terraform login' first${NC}"
         return 1
     fi
 
-    # Resolve project_id from terraform output of Step 6.
-    # varset_id is no longer needed here — varset assignment lives at the
-    # project level via tfe_project_variable_set in hcp-setup/main.tf.
+    # Resolve project_id from terraform output of Step 5
     local project_id
     project_id=$(terraform -chdir="$SCRIPT_DIR/hcp-setup" output -raw project_id 2>/dev/null)
-
     if [ -z "$project_id" ]; then
-        echo -e "${RED}Could not resolve project_id from terraform output${NC}"
+        echo -e "${RED}Error: Could not resolve project_id from terraform output${NC}"
         return 1
     fi
 
-    # Idempotency: check if a Stack with this name already exists in the org
-    local stack_data existing_stack_id
-    stack_data=$(curl -s \
+    #---------------------------------------------------------------------------
+    # 6a: Create (or find) agent pool "workshop-agents"
+    #---------------------------------------------------------------------------
+    echo -e "${BLUE}  Checking agent pool 'workshop-agents'...${NC}"
+    local pools_resp agent_pool_id
+    pools_resp=$(curl -s \
         -H "Authorization: Bearer $TFE_TOKEN" \
         -H "Content-Type: application/vnd.api+json" \
-        "$TFE_API/organizations/$HCP_ORG/stacks" 2>/dev/null)
-    existing_stack_id=$(echo "$stack_data" | jq -r --arg n "$STACK_NAME" \
-        '.data[] | select(.attributes.name == $n) | .id // empty' 2>/dev/null | head -1)
+        "$TFE_API/organizations/$HCP_ORG/agent-pools" 2>/dev/null)
+    agent_pool_id=$(echo "$pools_resp" | jq -r \
+        '[.data[] | select(.attributes.name == "workshop-agents")] | .[0].id // empty' 2>/dev/null)
 
-    local stack_id="$existing_stack_id"
-    if [ -n "$existing_stack_id" ]; then
-        echo -e "${GREEN}✓ Stack '$STACK_NAME' already exists (id=${existing_stack_id}) — skipping creation${NC}"
+    local pool_was_created=false
+    if [ -n "$agent_pool_id" ]; then
+        echo -e "${GREEN}OK: Agent pool 'workshop-agents' already exists (id=${agent_pool_id})${NC}"
+    else
+        local create_pool_resp http_code body
+        create_pool_resp=$(curl -s -w "\n%{http_code}" -X POST \
+            -H "Authorization: Bearer $TFE_TOKEN" \
+            -H "Content-Type: application/vnd.api+json" \
+            -d "$(jq -n '{data:{type:"agent-pools",attributes:{name:"workshop-agents",description:"Workshop attendee local tfc-agent pool"}}}')" \
+            "$TFE_API/organizations/$HCP_ORG/agent-pools" 2>/dev/null)
+        http_code=$(echo "$create_pool_resp" | tail -1)
+        body=$(echo "$create_pool_resp" | sed '$d')
+
+        if [ "$http_code" = "201" ] || [ "$http_code" = "200" ]; then
+            agent_pool_id=$(echo "$body" | jq -r '.data.id // empty')
+            echo -e "${GREEN}OK: Agent pool created (id=${agent_pool_id})${NC}"
+            pool_was_created=true
+        else
+            local err
+            err=$(echo "$body" | jq -r '.errors[0].detail // .errors[0].title // empty')
+            echo -e "${RED}Error: Agent pool creation failed (HTTP $http_code): $err${NC}"
+            return 1
+        fi
+    fi
+
+    #---------------------------------------------------------------------------
+    # 6b: Create agent token (only if pool was just created — token is
+    # unrecoverable after initial display)
+    #---------------------------------------------------------------------------
+    local token_file="$SCRIPT_DIR/.agent-token"
+    if [ "$pool_was_created" = true ]; then
+        echo -e "${BLUE}  Creating agent token...${NC}"
+        local token_resp http_code body
+        token_resp=$(curl -s -w "\n%{http_code}" -X POST \
+            -H "Authorization: Bearer $TFE_TOKEN" \
+            -H "Content-Type: application/vnd.api+json" \
+            -d "$(jq -n '{data:{type:"authentication-tokens",attributes:{description:"workshop-attendee-agent"}}}')" \
+            "$TFE_API/agent-pools/${agent_pool_id}/authentication-tokens" 2>/dev/null)
+        http_code=$(echo "$token_resp" | tail -1)
+        body=$(echo "$token_resp" | sed '$d')
+
+        if [ "$http_code" = "201" ] || [ "$http_code" = "200" ]; then
+            local agent_token
+            agent_token=$(echo "$body" | jq -r '.data.attributes.token // empty')
+            printf '%s' "$agent_token" > "$token_file"
+            echo -e "${GREEN}OK: Agent token created and saved${NC}"
+            echo
+            echo -e "${YELLOW}WARNING: Agent token saved to infrastructure/scripts/.agent-token${NC}"
+            echo -e "${YELLOW}WARNING: This token is shown ONLY ONCE — do not lose this file.${NC}"
+            echo -e "${YELLOW}         Use it to start tfc-agent: tfc-agent -address https://app.terraform.io -token \$(cat infrastructure/scripts/.agent-token)${NC}"
+            echo
+        else
+            local err
+            err=$(echo "$body" | jq -r '.errors[0].detail // .errors[0].title // empty')
+            echo -e "${RED}Error: Agent token creation failed (HTTP $http_code): $err${NC}"
+            return 1
+        fi
+    else
+        if [ -f "$token_file" ]; then
+            echo -e "${GREEN}OK: Agent token already saved at infrastructure/scripts/.agent-token${NC}"
+        else
+            echo -e "${YELLOW}Warning: Agent pool pre-existed — no new token created.${NC}"
+            echo -e "${YELLOW}         If you need a new agent token, delete the pool in HCP UI and re-run bootstrap.${NC}"
+        fi
+    fi
+
+    #---------------------------------------------------------------------------
+    # 6c: Create workspace (idempotent — check if exists first)
+    #---------------------------------------------------------------------------
+    echo -e "${BLUE}  Checking workspace '$WORKSPACE_NAME'...${NC}"
+    local ws_check_resp ws_check_code ws_existing_id
+    ws_check_resp=$(curl -s -w "\n%{http_code}" \
+        -H "Authorization: Bearer $TFE_TOKEN" \
+        -H "Content-Type: application/vnd.api+json" \
+        "$TFE_API/organizations/$HCP_ORG/workspaces/$WORKSPACE_NAME" 2>/dev/null)
+    ws_check_code=$(echo "$ws_check_resp" | tail -1)
+    ws_existing_id=$(echo "$ws_check_resp" | sed '$d' | jq -r '.data.id // empty' 2>/dev/null)
+
+    if [ "$ws_check_code" = "200" ] && [ -n "$ws_existing_id" ]; then
+        echo -e "${GREEN}OK: Workspace '$WORKSPACE_NAME' already exists (id=${ws_existing_id}) — skipping creation${NC}"
+        WORKSPACE_ID="$ws_existing_id"
     else
         # Detect VCS provider — try OAuth client first, fall back to GitHub App
         local oauth_token_id="" github_app_id=""
@@ -424,7 +527,7 @@ step_create_stack() {
         fi
 
         if [ -z "$oauth_token_id" ] && [ -z "$github_app_id" ]; then
-            echo -e "${RED}✗ No GitHub VCS connection in org '$HCP_ORG'${NC}"
+            echo -e "${RED}Error: No GitHub VCS connection in org '$HCP_ORG'${NC}"
             echo -e "${YELLOW}Fix: HCP Terraform > Settings > VCS Providers — add GitHub OAuth or GitHub App${NC}"
             return 1
         fi
@@ -432,7 +535,222 @@ step_create_stack() {
         # Resolve repo identifier from origin remote
         local git_url repo_identifier repo_http_url
         git_url=$(git -C "$SCRIPT_DIR/../.." remote get-url origin 2>/dev/null) || {
-            echo -e "${RED}✗ Could not resolve git origin URL${NC}"
+            echo -e "${RED}Error: Could not resolve git origin URL${NC}"
+            return 1
+        }
+        repo_identifier=$(echo "$git_url" | sed -E 's|.*github\.com[:/]([^/]+/[^/.]+)(\.git)?$|\1|')
+        repo_http_url="https://github.com/$repo_identifier"
+
+        # Resolve branch from parameter or current HEAD
+        local branch="${STACK_BRANCH:-}"
+        if [ -z "$branch" ]; then
+            branch=$(git -C "$SCRIPT_DIR/../.." rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
+        fi
+
+        echo -e "${BLUE}  Repository:  $repo_identifier${NC}"
+        echo -e "${BLUE}  Branch:      $branch${NC}"
+        echo -e "${BLUE}  Working dir: $WORKING_DIR${NC}"
+        echo -e "${BLUE}  Exec mode:   agent (pool: workshop-agents)${NC}"
+
+        # Build vcs-repo JSON block
+        local vcs_json
+        if [ -n "$oauth_token_id" ]; then
+            vcs_json=$(jq -n \
+                --arg id "$repo_identifier" \
+                --arg branch "$branch" \
+                --arg url "$repo_http_url" \
+                --arg oauth "$oauth_token_id" \
+                '{
+                    "identifier": $id,
+                    "display-identifier": $id,
+                    "branch": $branch,
+                    "repository-http-url": $url,
+                    "service-provider": "github",
+                    "oauth-token-id": $oauth
+                }')
+        else
+            vcs_json=$(jq -n \
+                --arg id "$repo_identifier" \
+                --arg branch "$branch" \
+                --arg url "$repo_http_url" \
+                --arg ghapp "$github_app_id" \
+                '{
+                    "identifier": $id,
+                    "display-identifier": $id,
+                    "branch": $branch,
+                    "repository-http-url": $url,
+                    "service-provider": "github",
+                    "github-app-installation-id": $ghapp
+                }')
+        fi
+
+        # Build workspace create payload
+        local create_payload
+        create_payload=$(jq -n \
+            --arg name "$WORKSPACE_NAME" \
+            --arg wd "$WORKING_DIR" \
+            --arg pool_id "$agent_pool_id" \
+            --argjson vcs "$vcs_json" \
+            --arg project_id "$project_id" \
+            '{
+                data: {
+                    type: "workspaces",
+                    attributes: {
+                        name: $name,
+                        description: "Agentic Runtime Security on AWS — single-workspace deployment (agent execution, working-dir=infrastructure)",
+                        "working-directory": $wd,
+                        "execution-mode": "agent",
+                        "auto-apply": false,
+                        "vcs-repo": $vcs
+                    },
+                    relationships: {
+                        project: { data: { type: "projects", id: $project_id } },
+                        "agent-pool": { data: { type: "agent-pools", id: $pool_id } }
+                    }
+                }
+            }')
+
+        local resp http_code body
+        resp=$(curl -s -w "\n%{http_code}" -X POST \
+            -H "Authorization: Bearer $TFE_TOKEN" \
+            -H "Content-Type: application/vnd.api+json" \
+            -d "$create_payload" \
+            "$TFE_API/organizations/$HCP_ORG/workspaces" 2>/dev/null)
+        http_code=$(echo "$resp" | tail -1)
+        body=$(echo "$resp" | sed '$d')
+
+        if [ "$http_code" = "201" ] || [ "$http_code" = "200" ]; then
+            WORKSPACE_ID=$(echo "$body" | jq -r '.data.id // empty')
+            echo -e "${GREEN}OK: Workspace created (id=${WORKSPACE_ID})${NC}"
+        elif [ "$http_code" = "422" ] && echo "$body" | jq -r '.errors[0].detail // empty' | grep -qi "already"; then
+            WORKSPACE_ID=$(echo "$body" | jq -r '.data.id // empty')
+            echo -e "${GREEN}OK: Workspace already exists (422 already-exists path)${NC}"
+        else
+            local err
+            err=$(echo "$body" | jq -r '.errors[0].detail // .errors[0].title // empty')
+            echo -e "${RED}Error: Workspace creation failed (HTTP $http_code): $err${NC}"
+            return 1
+        fi
+    fi
+
+    #---------------------------------------------------------------------------
+    # 6d: Assign variable set to workspace
+    # The varset is project-scoped via tfe_project_variable_set in hcp-setup/main.tf
+    # so workspaces under the project inherit it automatically. This explicit
+    # workspace-level assignment is belt-and-suspenders for any workspace-mode
+    # path where the project inherit does not propagate immediately.
+    #---------------------------------------------------------------------------
+    local varset_id
+    varset_id=$(terraform -chdir="$SCRIPT_DIR/hcp-setup" output -raw varset_id 2>/dev/null)
+
+    if [ -n "$varset_id" ] && [ -n "${WORKSPACE_ID:-}" ]; then
+        echo -e "${BLUE}  Assigning variable set to workspace...${NC}"
+        local varset_resp varset_code
+        varset_resp=$(curl -s -w "\n%{http_code}" -X POST \
+            -H "Authorization: Bearer $TFE_TOKEN" \
+            -H "Content-Type: application/vnd.api+json" \
+            -d "$(jq -n --arg wsid "$WORKSPACE_ID" '{data:[{type:"workspaces",id:$wsid}]}')" \
+            "$TFE_API/varsets/$varset_id/relationships/workspaces" 2>/dev/null)
+        varset_code=$(echo "$varset_resp" | tail -1)
+
+        case "$varset_code" in
+            204|200|201)
+                echo -e "${GREEN}OK: Variable set assigned to workspace${NC}" ;;
+            422)
+                echo -e "${GREEN}OK: Variable set already assigned (422 conflict — idempotent)${NC}" ;;
+            *)
+                local varset_err
+                varset_err=$(echo "$varset_resp" | sed '$d' | jq -r '.errors[0].detail // .errors[0].title // empty' 2>/dev/null)
+                echo -e "${YELLOW}Warning: Variable set assignment returned HTTP $varset_code: $varset_err${NC}"
+                echo -e "${YELLOW}         Project-level assignment in hcp-setup still active — workspace will inherit.${NC}"
+                ;;
+        esac
+    fi
+}
+
+#===============================================================================
+# STEP 7 (stacks mode): Create HCP Terraform Stack + assign variable set
+#
+# 1) Idempotency check: GET /organizations/$ORG/stacks?filter[name]=$STACK_NAME.
+#    Skip if data.length > 0.
+# 2) Auto-detect VCS provider (OAuth client OR GitHub App installation).
+# 3) Parse repo identifier from `git remote get-url origin`.
+# 4) POST /stacks with vcs-repo + working-directory=infrastructure +
+#    project relationship.
+# Note: variable-set assignment is project-level (tfe_project_variable_set in
+# hcp-setup/main.tf); the Stack inherits automatically. No Stack-level varset
+# assignment here.
+#===============================================================================
+create_stack() {
+    step_header "6/7" "Create HCP Terraform Stack (stacks mode)"
+
+    if [ "$DRY_RUN" = true ]; then
+        echo -e "${YELLOW}[DRY-RUN] Would create Stack '$STACK_NAME' with VCS connection${NC}"
+        return 0
+    fi
+
+    load_tfe_token
+    if [ -z "${TFE_TOKEN:-}" ]; then
+        echo -e "${RED}Error: TFE_TOKEN not available — cannot create Stack${NC}"
+        echo -e "${YELLOW}Fix: run 'terraform login' first${NC}"
+        return 1
+    fi
+
+    # Resolve project_id from terraform output of Step 6.
+    # varset_id is no longer needed here — varset assignment lives at the
+    # project level via tfe_project_variable_set in hcp-setup/main.tf.
+    local project_id
+    project_id=$(terraform -chdir="$SCRIPT_DIR/hcp-setup" output -raw project_id 2>/dev/null)
+
+    if [ -z "$project_id" ]; then
+        echo -e "${RED}Error: Could not resolve project_id from terraform output${NC}"
+        return 1
+    fi
+
+    # Idempotency: check if a Stack with this name already exists in the org
+    local stack_data existing_stack_id
+    stack_data=$(curl -s \
+        -H "Authorization: Bearer $TFE_TOKEN" \
+        -H "Content-Type: application/vnd.api+json" \
+        "$TFE_API/organizations/$HCP_ORG/stacks" 2>/dev/null)
+    existing_stack_id=$(echo "$stack_data" | jq -r --arg n "$STACK_NAME" \
+        '.data[] | select(.attributes.name == $n) | .id // empty' 2>/dev/null | head -1)
+
+    local stack_id="$existing_stack_id"
+    if [ -n "$existing_stack_id" ]; then
+        echo -e "${GREEN}OK: Stack '$STACK_NAME' already exists (id=${existing_stack_id}) — skipping creation${NC}"
+    else
+        # Detect VCS provider — try OAuth client first, fall back to GitHub App
+        local oauth_token_id="" github_app_id=""
+        local oauth_data
+        oauth_data=$(curl -s \
+            -H "Authorization: Bearer $TFE_TOKEN" \
+            -H "Content-Type: application/vnd.api+json" \
+            "$TFE_API/organizations/$HCP_ORG/oauth-clients" 2>/dev/null)
+        oauth_token_id=$(echo "$oauth_data" | jq -r '
+            [.data[] | select(.attributes["service-provider"] == "github")] |
+            .[0].relationships["oauth-tokens"].data[0].id // empty
+        ' 2>/dev/null)
+
+        if [ -z "$oauth_token_id" ]; then
+            local ghapp_data
+            ghapp_data=$(curl -s \
+                -H "Authorization: Bearer $TFE_TOKEN" \
+                -H "Content-Type: application/vnd.api+json" \
+                "$TFE_API/organizations/$HCP_ORG/github-app-installations" 2>/dev/null)
+            github_app_id=$(echo "$ghapp_data" | jq -r '.data[0].id // empty' 2>/dev/null)
+        fi
+
+        if [ -z "$oauth_token_id" ] && [ -z "$github_app_id" ]; then
+            echo -e "${RED}Error: No GitHub VCS connection in org '$HCP_ORG'${NC}"
+            echo -e "${YELLOW}Fix: HCP Terraform > Settings > VCS Providers — add GitHub OAuth or GitHub App${NC}"
+            return 1
+        fi
+
+        # Resolve repo identifier from origin remote
+        local git_url repo_identifier repo_http_url
+        git_url=$(git -C "$SCRIPT_DIR/../.." remote get-url origin 2>/dev/null) || {
+            echo -e "${RED}Error: Could not resolve git origin URL${NC}"
             return 1
         }
         repo_identifier=$(echo "$git_url" | sed -E 's|.*github\.com[:/]([^/]+/[^/.]+)(\.git)?$|\1|')
@@ -506,13 +824,13 @@ step_create_stack() {
 
         if [ "$http_code" = "201" ] || [ "$http_code" = "200" ]; then
             stack_id=$(echo "$body" | jq -r '.data.id // empty')
-            echo -e "${GREEN}✓ Stack created (id=${stack_id})${NC}"
+            echo -e "${GREEN}OK: Stack created (id=${stack_id})${NC}"
         elif [ "$http_code" = "422" ] && echo "$body" | jq -r '.errors[0].detail // empty' | grep -qi already; then
-            echo -e "${GREEN}✓ Stack already exists (422 already-exists path)${NC}"
+            echo -e "${GREEN}OK: Stack already exists (422 already-exists path)${NC}"
         else
             local err
             err=$(echo "$body" | jq -r '.errors[0].detail // .errors[0].title // empty')
-            echo -e "${RED}✗ Stack creation failed (HTTP $http_code): $err${NC}"
+            echo -e "${RED}Error: Stack creation failed (HTTP $http_code): $err${NC}"
             return 1
         fi
     fi
@@ -524,13 +842,26 @@ step_create_stack() {
 }
 
 #===============================================================================
+# STEP 6 dispatcher: route to workspace or stack creation
+#===============================================================================
+step_create_deployment() {
+    step_header "6/7" "Create HCP Terraform deployment ($DEPLOY_MODE mode)"
+
+    if [ "$DEPLOY_MODE" = "workspace" ]; then
+        create_workspace
+    else
+        create_stack
+    fi
+}
+
+#===============================================================================
 # STEP 8: Success Summary
 #===============================================================================
 step_summary() {
     step_header "7/7" "Summary"
     echo
     echo -e "${GREEN}===============================================================================${NC}"
-    echo -e "${GREEN} ✓ Bootstrap Complete${NC}"
+    echo -e "${GREEN} Bootstrap Complete${NC}"
     echo -e "${GREEN}===============================================================================${NC}"
     echo
     if [ "$DRY_RUN" = true ]; then
@@ -540,8 +871,12 @@ step_summary() {
     echo -e "  Organization:  ${YELLOW}$HCP_ORG${NC}"
     echo -e "  Project:       ${YELLOW}$HCP_PROJECT${NC}"
     echo -e "  Variable Set:  ${YELLOW}$VARSET_NAME${NC}"
-    echo -e "  Stack:         ${YELLOW}$STACK_NAME${NC}"
-    echo -e "  Region:        ${YELLOW}us-west-2${NC} (single deployment 'usw2')"
+    echo -e "  Mode:          ${YELLOW}$DEPLOY_MODE${NC}"
+    if [ "$DEPLOY_MODE" = "workspace" ]; then
+        echo -e "  Workspace:     ${YELLOW}$WORKSPACE_NAME${NC}"
+    else
+        echo -e "  Stack:         ${YELLOW}$STACK_NAME${NC}"
+    fi
     echo
     echo -e "${GREEN}What was created (or verified idempotently):${NC}"
     echo -e "  - AWS OIDC provider for app.terraform.io"
@@ -549,11 +884,24 @@ step_summary() {
     echo -e "  - EC2 Spot Service-Linked Role"
     echo -e "  - HCP project '$HCP_PROJECT'"
     echo -e "  - Variable set '$VARSET_NAME'"
-    echo -e "  - HCP Stack '$STACK_NAME' (working dir: $WORKING_DIR)"
+    if [ "$DEPLOY_MODE" = "workspace" ]; then
+        echo -e "  - HCP Workspace '$WORKSPACE_NAME' (working dir: $WORKING_DIR, exec-mode: agent)"
+        echo -e "  - Agent pool 'workshop-agents'"
+        echo -e "  - Agent token saved to infrastructure/scripts/.agent-token"
+    else
+        echo -e "  - HCP Stack '$STACK_NAME' (working dir: $WORKING_DIR)"
+    fi
     echo
     echo -e "${GREEN}Next steps:${NC}"
-    echo -e "  1. Review the Stack: ${BLUE}https://app.terraform.io/app/${HCP_ORG}/stacks${NC}"
-    echo -e "  2. Push code to trigger the first plan, then approve to deploy"
+    if [ "$DEPLOY_MODE" = "workspace" ]; then
+        echo -e "  1. Start the tfc-agent:"
+        echo -e "     ${BLUE}tfc-agent -address https://app.terraform.io -token \$(cat infrastructure/scripts/.agent-token)${NC}"
+        echo -e "  2. Review the Workspace: ${BLUE}https://app.terraform.io/app/${HCP_ORG}/workspaces${NC}"
+        echo -e "  3. Push code (or trigger a run in HCP UI) — approve the plan to deploy"
+    else
+        echo -e "  1. Review the Stack: ${BLUE}https://app.terraform.io/app/${HCP_ORG}/stacks${NC}"
+        echo -e "  2. Push code to trigger the first plan, then approve to deploy"
+    fi
     echo
     echo -e "${GREEN}===============================================================================${NC}"
 }
@@ -569,8 +917,8 @@ echo
 echo -e "  Organization:  ${YELLOW}$HCP_ORG${NC}"
 echo -e "  Project:       ${YELLOW}$HCP_PROJECT${NC}"
 echo -e "  Variable Set:  ${YELLOW}$VARSET_NAME${NC}"
-echo -e "  Stack:         ${YELLOW}$STACK_NAME${NC}"
-[ "$DRY_RUN" = true ] && echo -e "  Mode:          ${YELLOW}DRY RUN${NC}"
+echo -e "  Mode:          ${YELLOW}$DEPLOY_MODE${NC}"
+[ "$DRY_RUN" = true ] && echo -e "  DRY RUN:       ${YELLOW}yes (no changes will be made)${NC}"
 
 #-------------------------------------------------------------------------------
 # Prereq gate (replaces the former inline Step 1 IAM verification)
@@ -596,5 +944,5 @@ step_spot_slr
 step_get_admin_arn
 step_write_tfvars
 step_terraform_apply
-step_create_stack
+step_create_deployment
 step_summary

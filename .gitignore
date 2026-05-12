@@ -29,6 +29,9 @@ Thumbs.db
 # Note: *.tfvars above already covers terraform.tfvars globally.
 # These explicit paths are intentionally redundant for clarity and safety.
 infrastructure/scripts/hcp-setup/terraform.tfvars
+# Agent token for tfc-agent (workspace mode) — created by bootstrap.sh --mode workspace.
+# This file is shown ONCE at token-creation time; do not commit it.
+infrastructure/scripts/.agent-token
 infrastructure/scripts/hcp-setup/terraform.tfstate
 infrastructure/scripts/hcp-setup/terraform.tfstate.backup
 infrastructure/scripts/hcp-setup/.terraform/
