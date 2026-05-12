@@ -103,9 +103,9 @@ deployment "usw2" {
 
     # UC2 Banking App images — attendees set these after ECR push (Phase 5 lab step).
     # Replace with: <account>.dkr.ecr.<region>.amazonaws.com/workshop-banking-app:<tag>
-    banking_app_ui_image    = "<placeholder-ecr-uri>"
-    banking_app_agent_image = "<placeholder-ecr-uri>"
-    banking_app_mcp_image   = "<placeholder-ecr-uri>"
+    banking_app_ui_image = "865855451418.dkr.ecr.us-west-2.amazonaws.com/workshop/banking-app:ui"
+    banking_app_agent_image = "865855451418.dkr.ecr.us-west-2.amazonaws.com/workshop/banking-app:agent"
+    banking_app_mcp_image = "865855451418.dkr.ecr.us-west-2.amazonaws.com/workshop/banking-app:mcp"
 
     # OIDC authentication
     role_arn       = store.varset.config.aws_role_arn
