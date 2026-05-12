@@ -919,11 +919,22 @@ phase_uc1() {
             return 1
         }
     else
-        step_header "Triggering Stacks plan (UC1 agent)..."
-        hcp_deploy_and_wait "$stack_id" "UC1 agent deploy" 1800 || {
-            print_error "UC1 deploy failed. Check HCP Terraform UI for details."
-            return 1
-        }
+        # Check if latest config already converged (e.g. from a prior run)
+        local latest_status
+        latest_status=$(curl -s \
+            -H "Authorization: Bearer $TFE_TOKEN" \
+            -H "Content-Type: application/vnd.api+json" \
+            "$TFE_API/stack-configurations/$old_config_id" 2>/dev/null \
+            | jq -r '.data.attributes.status // "unknown"')
+        if [ "$latest_status" = "converged" ]; then
+            print_success "Latest config already converged — skipping deploy"
+        else
+            step_header "Triggering Stacks plan (UC1 agent)..."
+            hcp_deploy_and_wait "$stack_id" "UC1 agent deploy" 1800 || {
+                print_error "UC1 deploy failed. Check HCP Terraform UI for details."
+                return 1
+            }
+        fi
     fi
     print_success "UC1 agent deployed via Stacks"
 
@@ -1035,11 +1046,21 @@ phase_uc2() {
             return 1
         }
     else
-        step_header "Triggering Stacks plan (UC2 banking app)..."
-        hcp_deploy_and_wait "$stack_id" "UC2 banking app deploy" 1800 || {
-            print_error "UC2 deploy failed. Check HCP Terraform UI for details."
-            return 1
-        }
+        local latest_status
+        latest_status=$(curl -s \
+            -H "Authorization: Bearer $TFE_TOKEN" \
+            -H "Content-Type: application/vnd.api+json" \
+            "$TFE_API/stack-configurations/$old_config_id" 2>/dev/null \
+            | jq -r '.data.attributes.status // "unknown"')
+        if [ "$latest_status" = "converged" ]; then
+            print_success "Latest config already converged — skipping deploy"
+        else
+            step_header "Triggering Stacks plan (UC2 banking app)..."
+            hcp_deploy_and_wait "$stack_id" "UC2 banking app deploy" 1800 || {
+                print_error "UC2 deploy failed. Check HCP Terraform UI for details."
+                return 1
+            }
+        fi
     fi
     print_success "UC2 banking app deployed via Stacks"
     pause_if_interactive "Stacks deploy complete. Verify uc2_app in HCP UI before continuing."
