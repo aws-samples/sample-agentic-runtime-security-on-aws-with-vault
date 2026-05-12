@@ -1,0 +1,60 @@
+################################################################################
+# Root Module — Variable Values (EXAMPLE)
+# Agentic Runtime Security Workshop
+# Migrated from Stacks deployments.tfdeploy.hcl inputs → terraform.tfvars
+#
+# USAGE: Copy this file to terraform.tfvars and fill in your values.
+#   cp terraform.tfvars.example terraform.tfvars
+#
+# terraform.tfvars is gitignored (contains sensitive values — ICR key, ARNs).
+# This .example file is the committed reference.
+#
+# CANONICAL REGION CONTRACT
+# The string literals "us-west-2" and "us-east-1" appear ONLY in this file.
+# Every module receives var.region / var.kb_region — no literals in .tf files.
+#
+# Removed from Stacks version:
+#   - role_arn, identity_token (Stacks OIDC auth — attendees use local AWS creds)
+################################################################################
+
+# Canonical region — every module receives this via var.region.
+region = "us-west-2"
+
+cluster_name = "agentic-runtime-usw2"
+vpc_cidr     = "10.1.0.0/16"
+azs          = ["us-west-2a", "us-west-2b", "us-west-2c"]
+
+# Bedrock KB region — Nova 2 Multimodal Embeddings is us-east-1 only.
+kb_region = "us-east-1"
+
+# Audit retention (workshop ephemeral; 7-day default)
+audit_retention_days = 7
+
+# RDS sizing (db.t3.medium for ≤15 attendees per CONTEXT)
+rds_instance_class = "db.t3.medium"
+
+# Admin kubectl access — set to the IAM user/role ARN for the attendee account.
+# Example: "arn:aws:iam::<account-id>:user/<username>"
+admin_principal_arn = "arn:aws:iam::<account-id>:root"
+
+tags = {
+  Environment = "workshop"
+  Workshop    = "agentic-runtime-security"
+  Region      = "us-west-2"
+  ManagedBy   = "terraform"
+}
+
+# IBM Container Registry entitlement key for IVIA images.
+# Attendees obtain from IBM Passport Advantage (M11DCML activation code).
+# Set in terraform.tfvars (gitignored); do NOT commit the real key.
+icr_entitlement_key = "<your-icr-entitlement-key>"
+
+# UC1 Agent image — attendees set this after ECR push (Phase 4 lab step).
+# Replace with: <account>.dkr.ecr.<region>.amazonaws.com/workshop/uc1-agent:<tag>
+uc1_agent_image = "<account>.dkr.ecr.us-west-2.amazonaws.com/workshop/uc1-agent:latest"
+
+# UC2 Banking App images — attendees set these after ECR push (Phase 5 lab step).
+# Replace with: <account>.dkr.ecr.<region>.amazonaws.com/workshop/banking-app:<tag>
+banking_app_ui_image    = "<account>.dkr.ecr.us-west-2.amazonaws.com/workshop/banking-app:ui"
+banking_app_agent_image = "<account>.dkr.ecr.us-west-2.amazonaws.com/workshop/banking-app:agent"
+banking_app_mcp_image   = "<account>.dkr.ecr.us-west-2.amazonaws.com/workshop/banking-app:mcp"
