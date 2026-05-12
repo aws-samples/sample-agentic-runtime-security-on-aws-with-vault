@@ -4,28 +4,29 @@
 #
 # Single-command deployment and validation of the entire workshop:
 #   Phase 0: Prerequisites (calls check-prerequisites.sh)
-#   Phase 1: Bootstrap (calls bootstrap.sh — OIDC + variable set + Stack)
-#   Phase 2: Foundation deploy (git push + HCP plan trigger + approve + wait)
-#   Phase 3: Configure kubectl (single deployment usw2)
+#   Phase 1: Bootstrap (calls bootstrap.sh — OIDC + variable set + Stack/Workspace)
+#   Phase 2: Foundation deploy (workspace or stacks mode)
+#   Phase 3: Configure kubectl
 #   Phase 4: Foundation verify (calls test-foundation.sh — EKS + RDS + Bedrock KB)
-#   Phase 5: Identity (IVIA) — placeholder, populated when workshop Phase 3 ships
-#   Phase 6: Vault — placeholder, populated when workshop Phase 4 ships
-#   Phase 7a: Use Case 1 — Non-Personalized Read-Only (build-uc1-agent.sh, Stacks deploy, verify-uc1.sh)
-#   Phase 7b: Use Case 2 — OAuth Personalized Read-Only (ECR build+push, Stacks deploy, ivia-configure.sh, seed-banking-db.sh, verify-uc2.sh)
+#   Phase 5: Identity (IVIA) — verify IVIA pods + OIDC discovery
+#   Phase 6: Vault — init + configure (local via port-forward)
+#   Phase 7a: Use Case 1 — Non-Personalized Read-Only (build images, deploy, verify)
+#   Phase 7b: Use Case 2 — OAuth Personalized Read-Only (build images, deploy, configure, verify)
 #   Phase 7c: Use Case 3 — CIBA Privileged (placeholder; Phase 6)
 #   Phase 8: Teardown (calls teardown.sh — unless --skip-teardown)
 #
 # Usage: ./workshop-e2e.sh <HCP_ORG> [OPTIONS]
 #
 # Options:
+#   --mode workspace|stacks  Deployment mode: workspace (default) or stacks
 #   --interactive       Pause between phases for manual verification
 #   --skip-teardown     Leave deployment running after verification
 #   --teardown-only     Skip deployment, run teardown only
 #   --nuke              Delete EVERYTHING: AWS resources, OIDC, IAM role,
-#                        HCP variable set, AND the HCP Stack itself
+#                        HCP variable set, AND the HCP Stack/Workspace itself
 #   --cleanup-only      Skip HCP destroy plan — just clean up dangling AWS
 #                        resources (ENIs, SGs, EIPs, VPCs) + HCP objects
-#                        (OIDC, IAM role, variable set, Stack)
+#                        (OIDC, IAM role, variable set, Stack/Workspace)
 #   --skip-addons       (no-op for now; reserved for future controllers)
 #   --skip-prereq-gate  (no-op at this level; passed automatically to
 #                        bootstrap.sh in Phase 1 since Phase 0 already runs
@@ -33,6 +34,7 @@
 #   --dry-run           Show what would be done without executing
 #   --project NAME      HCP project name (default: "Agentic Runtime Security")
 #   --branch NAME       Git branch to push to (default: "main")
+#   --workspace NAME    HCP workspace name (workspace mode; default: "agentic-runtime-security")
 #   --help              Show this help message
 #
 # Prerequisites:
@@ -105,33 +107,50 @@ SKIP_ADDONS=false
 DRY_RUN=false
 START_FROM=""
 TFE_API="https://app.terraform.io/api/v2"
+DEPLOY_MODE="workspace"       # workspace (default) or stacks
+WORKSPACE_NAME="agentic-runtime-security"
 
 # IAM role name created by bootstrap.sh / setup-aws-oidc.sh
 HCP_ROLE_NAME="hcp-stacks-deploy"
 
-# Resolve canonical region + cluster_name from infrastructure/deployments.tfdeploy.hcl.
-# No string literals here — only the .hcl file (terraform variables) is the source of truth.
+# Resolve canonical region + cluster_name from infrastructure/terraform.tfvars
+# (workspace mode) or infrastructure/deployments.tfdeploy.hcl (stacks mode).
+# No string literals here — only the config file is the source of truth.
+TF_VARS="${PROJECT_ROOT}/infrastructure/terraform.tfvars"
+TF_VARS_EXAMPLE="${PROJECT_ROOT}/infrastructure/terraform.tfvars.example"
 TF_DEPLOY="${PROJECT_ROOT}/infrastructure/deployments.tfdeploy.hcl"
+
+_e2e_resolve_var() {
+    local key="$1"
+    # Prefer terraform.tfvars (gitignored, has real values), then .example, then .hcl
+    for f in "$TF_VARS" "$TF_VARS_EXAMPLE" "$TF_DEPLOY"; do
+        if [ -f "$f" ]; then
+            local val
+            val=$(grep -E "^\s*${key}\s*=" "$f" 2>/dev/null \
+                | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+            if [ -n "$val" ]; then echo "$val"; return; fi
+        fi
+    done
+}
+
 WORKSHOP_REGION="${AWS_REGION:-}"
-if [ -z "$WORKSHOP_REGION" ] && [ -f "$TF_DEPLOY" ]; then
-    WORKSHOP_REGION=$(grep -E '^\s*region\s*=\s*"' "$TF_DEPLOY" 2>/dev/null \
-        | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+if [ -z "$WORKSHOP_REGION" ]; then
+    WORKSHOP_REGION=$(_e2e_resolve_var "region")
 fi
 CLUSTER_NAME="${CLUSTER_NAME:-}"
-if [ -z "$CLUSTER_NAME" ] && [ -f "$TF_DEPLOY" ]; then
-    CLUSTER_NAME=$(grep -E '^\s*cluster_name\s*=\s*"' "$TF_DEPLOY" 2>/dev/null \
-        | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+if [ -z "$CLUSTER_NAME" ]; then
+    CLUSTER_NAME=$(_e2e_resolve_var "cluster_name")
 fi
 
 # KB region — Nova 2 Multimodal Embeddings is us-east-1 only.
 KB_REGION="${KB_REGION:-}"
-if [ -z "$KB_REGION" ] && [ -f "$TF_DEPLOY" ]; then
-    KB_REGION=$(grep -E '^\s*kb_region\s*=\s*"' "$TF_DEPLOY" 2>/dev/null \
-        | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+if [ -z "$KB_REGION" ]; then
+    KB_REGION=$(_e2e_resolve_var "kb_region")
 fi
 KB_REGION="${KB_REGION:-us-east-1}"
+
 if [ -z "$CLUSTER_NAME" ]; then
-    echo -e "${RED}Error: could not resolve cluster_name from $TF_DEPLOY${NC}" >&2
+    echo -e "${RED}Error: could not resolve cluster_name from terraform.tfvars or deployments.tfdeploy.hcl${NC}" >&2
     exit 1
 fi
 
@@ -174,6 +193,15 @@ usage() {
 while [ $# -gt 0 ]; do
     case "$1" in
         --help|-h)        usage ;;
+        --mode)
+            DEPLOY_MODE="$2"
+            if [[ "$DEPLOY_MODE" != "workspace" && "$DEPLOY_MODE" != "stacks" ]]; then
+                echo -e "${RED}--mode must be 'workspace' or 'stacks'${NC}"
+                exit 1
+            fi
+            shift
+            ;;
+        --workspace)      WORKSPACE_NAME="$2"; shift ;;
         --interactive)    INTERACTIVE=true ;;
         --skip-teardown)  SKIP_TEARDOWN=true ;;
         --teardown-only)  TEARDOWN_ONLY=true ;;
@@ -501,6 +529,151 @@ hcp_deploy_and_wait() {
 }
 
 #===============================================================================
+# HCP Terraform Workspace Run API Functions (--mode workspace)
+#===============================================================================
+
+# Find workspace ID by name within an organization
+hcp_find_workspace() {
+    local org="$1" name="$2"
+    load_tfe_token || return 1
+    curl -s \
+        -H "Authorization: Bearer $TFE_TOKEN" \
+        -H "Content-Type: application/vnd.api+json" \
+        "$TFE_API/organizations/$org/workspaces/$name" 2>/dev/null \
+        | jq -r '.data.id // empty' 2>/dev/null
+}
+
+# Trigger a workspace run via API (creates a run regardless of VCS state)
+# Returns the run ID
+hcp_trigger_workspace_run() {
+    local workspace_id="$1"
+    local message="${2:-"workshop-e2e automated run"}"
+    load_tfe_token || return 1
+    local response
+    response=$(curl -s -X POST \
+        -H "Authorization: Bearer $TFE_TOKEN" \
+        -H "Content-Type: application/vnd.api+json" \
+        -d "{\"data\":{\"attributes\":{\"message\":\"${message}\"},\"type\":\"runs\",\"relationships\":{\"workspace\":{\"data\":{\"id\":\"${workspace_id}\",\"type\":\"workspaces\"}}}}}" \
+        "$TFE_API/runs" 2>/dev/null)
+    local run_id
+    run_id=$(echo "$response" | jq -r '.data.id // empty' 2>/dev/null)
+    if [ -z "$run_id" ]; then
+        local err
+        err=$(echo "$response" | jq -r '.errors[0].detail // .errors[0].title // "unknown"' 2>/dev/null)
+        print_error "Failed to trigger workspace run: $err"
+        return 1
+    fi
+    echo "$run_id"
+}
+
+# Wait for a workspace run to reach a target status
+# target: "planned" (plan done, awaiting apply) or "applied" (fully applied)
+# Also accepts "completed" as an alias for "applied" (some workspace run statuses)
+hcp_wait_for_run() {
+    local run_id="$1"
+    local target="$2"
+    local timeout="${3:-2400}"
+    local elapsed=0
+    local interval=15
+    local retry_count=0
+    local max_retries=2
+
+    while [ $elapsed -lt $timeout ]; do
+        local status
+        status=$(curl -s \
+            -H "Authorization: Bearer $TFE_TOKEN" \
+            -H "Content-Type: application/vnd.api+json" \
+            "$TFE_API/runs/$run_id" 2>/dev/null \
+            | jq -r '.data.attributes.status // "unknown"')
+
+        case "$status" in
+            "$target"|applied|completed|planned_and_finished)
+                print_success "Run $run_id reached status: $status"
+                return 0
+                ;;
+            errored)
+                retry_count=$((retry_count + 1))
+                print_error "Run $run_id errored (attempt ${retry_count}/${max_retries})"
+                if [ $retry_count -ge $max_retries ]; then
+                    print_error "Max retries reached for run $run_id"
+                    return 1
+                fi
+                sleep 30
+                continue
+                ;;
+            canceled|discarded)
+                print_error "Run $run_id reached terminal state: $status"
+                return 1
+                ;;
+            *)
+                if [ $((elapsed % 60)) -eq 0 ]; then
+                    print_info "Run $run_id status: $status (${elapsed}s/${timeout}s)"
+                fi
+                sleep $interval
+                elapsed=$((elapsed + interval))
+                ;;
+        esac
+    done
+
+    print_error "Timeout waiting for run $run_id to reach $target (${timeout}s)"
+    return 1
+}
+
+# Approve a workspace run that is in "planned" status
+hcp_approve_run() {
+    local run_id="$1"
+    load_tfe_token || return 1
+    local response
+    response=$(curl -s -o /dev/null -w "%{http_code}" \
+        -X POST \
+        -H "Authorization: Bearer $TFE_TOKEN" \
+        -H "Content-Type: application/vnd.api+json" \
+        -d '{"comment":"workshop-e2e auto-approve"}' \
+        "$TFE_API/runs/$run_id/actions/apply" 2>/dev/null)
+
+    if [ "$response" = "202" ] || [ "$response" = "200" ]; then
+        print_success "Run $run_id approved for apply"
+        return 0
+    else
+        print_error "Failed to approve run $run_id (HTTP $response)"
+        return 1
+    fi
+}
+
+# Full workspace deploy cycle: trigger → wait planned → approve → wait applied
+hcp_workspace_deploy_and_wait() {
+    local workspace_id="$1"
+    local description="$2"
+    local timeout="${3:-2400}"
+
+    step_header "Triggering workspace run: $description"
+    local run_id
+    run_id=$(hcp_trigger_workspace_run "$workspace_id" "$description") || return 1
+    print_success "Run created: $run_id"
+
+    step_header "Waiting for plan to complete..."
+    hcp_wait_for_run "$run_id" "planned" 600 || {
+        # Check if it reached planned_and_finished (no changes — not an error)
+        local status
+        status=$(curl -s -H "Authorization: Bearer $TFE_TOKEN" \
+            "$TFE_API/runs/$run_id" 2>/dev/null \
+            | jq -r '.data.attributes.status // "unknown"')
+        if [ "$status" = "planned_and_finished" ]; then
+            print_success "Run $run_id: no changes (planned_and_finished)"
+            return 0
+        fi
+        return 1
+    }
+
+    step_header "Approving run..."
+    hcp_approve_run "$run_id" || return 1
+
+    step_header "Waiting for apply to complete..."
+    hcp_wait_for_run "$run_id" "applied" "$timeout" || return 1
+    print_success "$description complete"
+}
+
+#===============================================================================
 # Git Helper
 #===============================================================================
 
@@ -571,7 +744,7 @@ phase_bootstrap() {
     phase_header "Phase 1: Bootstrap (OIDC + Variable Set + Stack)"
 
     if [ "$DRY_RUN" = true ]; then
-        print_info "[DRY-RUN] Would run: bootstrap.sh $HCP_ORG --project \"$HCP_PROJECT\" --branch $GIT_BRANCH --skip-prereq-gate"
+        print_info "[DRY-RUN] Would run: bootstrap.sh $HCP_ORG --mode $DEPLOY_MODE --project \"$HCP_PROJECT\" --branch $GIT_BRANCH --skip-prereq-gate"
         return 0
     fi
 
@@ -607,79 +780,132 @@ phase_bootstrap() {
         print_info "Verifying variable set is current..."
         terraform -chdir="$SCRIPT_DIR/hcp-setup" apply -auto-approve -input=false >/dev/null 2>&1 || {
             print_warn "Variable set refresh failed — re-running bootstrap"
-            bash "$SCRIPT_DIR/bootstrap.sh" "$HCP_ORG" --project "$HCP_PROJECT" --branch "$GIT_BRANCH" --skip-prereq-gate
+            bash "$SCRIPT_DIR/bootstrap.sh" "$HCP_ORG" --mode "$DEPLOY_MODE" --project "$HCP_PROJECT" --branch "$GIT_BRANCH" --skip-prereq-gate
             return $?
         }
         print_success "Variable set verified"
 
-        # Ensure Stack exists even when variable set was already configured
-        step_header "Verifying HCP Stack exists..."
-        local stack_id
-        stack_id=$(hcp_find_stack "$HCP_ORG" 2>/dev/null) && {
-            print_success "Stack found (ID: $stack_id)"
-            return 0
-        }
-        print_warn "Stack not found — running bootstrap to create it"
+        # Verify workspace/stack exists depending on mode
+        if [ "$DEPLOY_MODE" = "workspace" ]; then
+            step_header "Verifying HCP Workspace exists (mode=workspace)..."
+            local ws_id
+            ws_id=$(hcp_find_workspace "$HCP_ORG" "$WORKSPACE_NAME" 2>/dev/null)
+            if [ -n "$ws_id" ]; then
+                print_success "Workspace found (ID: $ws_id)"
+                return 0
+            fi
+            print_warn "Workspace not found — running bootstrap to create it"
+        else
+            step_header "Verifying HCP Stack exists (mode=stacks)..."
+            local stack_id
+            stack_id=$(hcp_find_stack "$HCP_ORG" 2>/dev/null) && {
+                print_success "Stack found (ID: $stack_id)"
+                return 0
+            }
+            print_warn "Stack not found — running bootstrap to create it"
+        fi
     fi
 
-    bash "$SCRIPT_DIR/bootstrap.sh" "$HCP_ORG" --project "$HCP_PROJECT" --branch "$GIT_BRANCH" --skip-prereq-gate
+    bash "$SCRIPT_DIR/bootstrap.sh" "$HCP_ORG" --mode "$DEPLOY_MODE" --project "$HCP_PROJECT" --branch "$GIT_BRANCH" --skip-prereq-gate
 }
 
 #===============================================================================
 # PHASE 2: Foundation Deploy
 #===============================================================================
 phase_deploy_foundation() {
-    phase_header "Phase 2: Foundation Deploy (EKS + RDS + Bedrock KB)"
+    phase_header "Phase 2: Foundation Deploy (EKS + RDS + Bedrock KB) [mode=${DEPLOY_MODE}]"
 
     if [ "$DRY_RUN" = true ]; then
-        print_info "[DRY-RUN] Would set destroy=false on usw2 deployment"
-        print_info "[DRY-RUN] Would commit, push, and trigger HCP plan via API"
+        if [ "$DEPLOY_MODE" = "workspace" ]; then
+            print_info "[DRY-RUN] Would find workspace '${WORKSPACE_NAME}' and trigger API run"
+            print_info "[DRY-RUN] Would call configure-workshop.sh after apply converges"
+        else
+            print_info "[DRY-RUN] Would set destroy=false on usw2 deployment"
+            print_info "[DRY-RUN] Would commit, push, and trigger HCP Stacks plan via API"
+        fi
         return 0
     fi
 
-    # If a prior deploy failed, run `./scripts/teardown.sh --aws-only` first.
-    # The deploy phase no longer auto-cleans — one tool, one job.
+    if [ "$DEPLOY_MODE" = "workspace" ]; then
+        #-------------------------------------------------------------------
+        # Workspace mode: trigger run via API, approve, wait for applied
+        #-------------------------------------------------------------------
+        step_header "Finding HCP Workspace (mode=workspace)..."
+        local ws_id
+        ws_id=$(hcp_find_workspace "$HCP_ORG" "$WORKSPACE_NAME") || {
+            print_error "Could not find workspace '${WORKSPACE_NAME}' in HCP Terraform"
+            print_info "Create via bootstrap.sh --mode workspace first:"
+            print_info "  $SCRIPT_DIR/bootstrap.sh $HCP_ORG --mode workspace"
+            exit 1
+        }
+        if [ -z "$ws_id" ]; then
+            print_error "Workspace '${WORKSPACE_NAME}' returned empty ID"
+            exit 1
+        fi
+        print_success "Workspace found: $ws_id"
 
-    # Find the stack
-    step_header "Finding HCP Terraform Stack..."
-    local stack_id
-    stack_id=$(hcp_find_stack "$HCP_ORG") || {
-        print_error "Could not find Stack in HCP Terraform"
-        print_info "Create a Stack via bootstrap.sh first:"
-        print_info "  $SCRIPT_DIR/bootstrap.sh $HCP_ORG"
-        exit 1
-    }
-    print_success "Stack found: $stack_id"
-
-    # Enable foundation deployment
-    step_header "Setting destroy=false on usw2 deployment..."
-    local deploy_file="$PROJECT_ROOT/infrastructure/deployments.tfdeploy.hcl"
-
-    sed -i.bak 's/destroy[[:space:]]*=[[:space:]]*true/destroy = false/g' "$deploy_file"
-    rm -f "${deploy_file}.bak"
-
-    # Capture current config ID before push so we can detect the new one
-    local old_config_id
-    old_config_id=$(hcp_get_latest_config "$stack_id")
-
-    git_commit_and_push "deploy: enable foundation (usw2) for e2e" \
-        "infrastructure/deployments.tfdeploy.hcl"
-
-    if [ "$GIT_PUSHED" = true ]; then
-        # Wait for VCS-triggered plan (don't create a competing API config)
-        hcp_wait_for_vcs_plan "$stack_id" "$old_config_id" 2400 || {
+        hcp_workspace_deploy_and_wait "$ws_id" \
+            "workshop-e2e Phase 2: Foundation (${WORKSPACE_NAME})" 2400 || {
             print_error "Foundation deploy failed. Check HCP Terraform UI for details."
             exit 1
+        }
+
+        # Call configure-workshop.sh after workspace apply converges
+        step_header "Running post-deploy configuration (configure-workshop.sh)..."
+        bash "$SCRIPT_DIR/configure-workshop.sh" \
+            --region "$WORKSHOP_REGION" \
+            --cluster-name "$CLUSTER_NAME" || {
+            print_warn "configure-workshop.sh reported failures — see above for details"
         }
     else
-        # No git change — trigger plan via API (e.g., re-run after cancel)
-        hcp_deploy_and_wait "$stack_id" "Foundation deploy (usw2)" 2400 || {
-            print_error "Foundation deploy failed. Check HCP Terraform UI for details."
+        #-------------------------------------------------------------------
+        # Stacks mode: existing code path (git push + VCS-triggered plan)
+        #-------------------------------------------------------------------
+
+        # If a prior deploy failed, run `./scripts/teardown.sh --aws-only` first.
+        # The deploy phase no longer auto-cleans — one tool, one job.
+
+        # Find the stack
+        step_header "Finding HCP Terraform Stack (mode=stacks)..."
+        local stack_id
+        stack_id=$(hcp_find_stack "$HCP_ORG") || {
+            print_error "Could not find Stack in HCP Terraform"
+            print_info "Create a Stack via bootstrap.sh first:"
+            print_info "  $SCRIPT_DIR/bootstrap.sh $HCP_ORG --mode stacks"
             exit 1
         }
+        print_success "Stack found: $stack_id"
+
+        # Enable foundation deployment
+        step_header "Setting destroy=false on usw2 deployment..."
+        local deploy_file="$PROJECT_ROOT/infrastructure/deployments.tfdeploy.hcl"
+
+        sed -i.bak 's/destroy[[:space:]]*=[[:space:]]*true/destroy = false/g' "$deploy_file"
+        rm -f "${deploy_file}.bak"
+
+        # Capture current config ID before push so we can detect the new one
+        local old_config_id
+        old_config_id=$(hcp_get_latest_config "$stack_id")
+
+        git_commit_and_push "deploy: enable foundation (usw2) for e2e" \
+            "infrastructure/deployments.tfdeploy.hcl"
+
+        if [ "$GIT_PUSHED" = true ]; then
+            # Wait for VCS-triggered plan (don't create a competing API config)
+            hcp_wait_for_vcs_plan "$stack_id" "$old_config_id" 2400 || {
+                print_error "Foundation deploy failed. Check HCP Terraform UI for details."
+                exit 1
+            }
+        else
+            # No git change — trigger plan via API (e.g., re-run after cancel)
+            hcp_deploy_and_wait "$stack_id" "Foundation deploy (usw2)" 2400 || {
+                print_error "Foundation deploy failed. Check HCP Terraform UI for details."
+                exit 1
+            }
+        fi
     fi
 
-    pause_if_interactive "Foundation plan triggered. Wait for HCP apply to converge before continuing."
+    pause_if_interactive "Foundation deploy complete. Infrastructure is running."
 }
 
 #===============================================================================
@@ -837,8 +1063,13 @@ phase_uc1() {
 
     if [ "$DRY_RUN" = true ]; then
         print_info "[DRY-RUN] Would build+push UC1 agent image (build-uc1-agent.sh)"
-        print_info "[DRY-RUN] Would update uc1_agent_image in deployments.tfdeploy.hcl"
-        print_info "[DRY-RUN] Would trigger Stacks plan+apply, then run verify-uc1.sh"
+        if [ "$DEPLOY_MODE" = "workspace" ]; then
+            print_info "[DRY-RUN] Would trigger HCP workspace run for UC1 agent image"
+            print_info "[DRY-RUN] Would call configure-workshop.sh after apply converges"
+        else
+            print_info "[DRY-RUN] Would update uc1_agent_image in deployments.tfdeploy.hcl"
+            print_info "[DRY-RUN] Would trigger Stacks plan+apply, then run verify-uc1.sh"
+        fi
         return 0
     fi
 
@@ -857,45 +1088,92 @@ phase_uc1() {
     account_id=$(aws sts get-caller-identity --query 'Account' --output text 2>/dev/null)
     local ecr_uri="${account_id}.dkr.ecr.${WORKSHOP_REGION}.amazonaws.com/workshop/uc1-agent:latest"
 
-    # Step 2: Update uc1_agent_image in deployments.tfdeploy.hcl
-    step_header "Updating uc1_agent_image in deployments.tfdeploy.hcl..."
-    local deploy_file="$PROJECT_ROOT/infrastructure/deployments.tfdeploy.hcl"
-    local current_image
-    current_image=$(grep 'uc1_agent_image' "$deploy_file" | sed -E 's/.*"([^"]+)".*/\1/')
+    # Step 2: Update uc1_agent_image and trigger deploy (mode-aware)
+    if [ "$DEPLOY_MODE" = "workspace" ]; then
+        #-------------------------------------------------------------------
+        # Workspace mode: update terraform.tfvars, trigger workspace run
+        #-------------------------------------------------------------------
+        step_header "Updating uc1_agent_image in terraform.tfvars..."
+        local tfvars_file="$PROJECT_ROOT/infrastructure/terraform.tfvars"
+        if [ -f "$tfvars_file" ]; then
+            local current_image
+            current_image=$(grep 'uc1_agent_image' "$tfvars_file" 2>/dev/null | sed -E 's/.*"([^"]+)".*/\1/')
+            if [ "$current_image" = "$ecr_uri" ]; then
+                print_info "uc1_agent_image already set to $ecr_uri"
+            else
+                sed -i.bak "s|uc1_agent_image[[:space:]]*=[[:space:]]*\"[^\"]*\"|uc1_agent_image = \"${ecr_uri}\"|" "$tfvars_file"
+                rm -f "${tfvars_file}.bak"
+                print_success "uc1_agent_image = $ecr_uri (in terraform.tfvars)"
+            fi
+        else
+            print_warn "terraform.tfvars not found — workspace run will use existing variable values"
+        fi
 
-    if [ "$current_image" = "$ecr_uri" ]; then
-        print_info "uc1_agent_image already set to $ecr_uri"
-    else
-        sed -i.bak "s|uc1_agent_image *= *\"[^\"]*\"|uc1_agent_image = \"${ecr_uri}\"|" "$deploy_file"
-        rm -f "${deploy_file}.bak"
-        print_success "uc1_agent_image = $ecr_uri"
-    fi
+        step_header "Finding HCP Workspace and triggering UC1 deploy run..."
+        local ws_id
+        ws_id=$(hcp_find_workspace "$HCP_ORG" "$WORKSPACE_NAME") || {
+            print_error "Could not find workspace '${WORKSPACE_NAME}'"
+            return 1
+        }
+        print_success "Workspace found: $ws_id"
 
-    # Step 3: Find Stack and trigger deploy
-    step_header "Finding HCP Terraform Stack..."
-    local stack_id
-    stack_id=$(hcp_find_stack "$HCP_ORG") || {
-        print_error "Could not find Stack in HCP Terraform"
-        return 1
-    }
-    print_success "Stack found: $stack_id"
-
-    local old_config_id
-    old_config_id=$(hcp_get_latest_config "$stack_id")
-
-    git_commit_and_push "deploy: set uc1_agent_image for UC1 agent deployment" \
-        "infrastructure/deployments.tfdeploy.hcl"
-
-    if [ "$GIT_PUSHED" = true ]; then
-        step_header "Waiting for VCS-triggered deploy (UC1 agent)..."
-        hcp_wait_for_vcs_plan "$stack_id" "$old_config_id" 1800 || {
+        hcp_workspace_deploy_and_wait "$ws_id" \
+            "workshop-e2e Phase 7a: UC1 agent (${WORKSPACE_NAME})" 1800 || {
             print_error "UC1 deploy failed. Check HCP Terraform UI for details."
             return 1
         }
+        print_success "UC1 agent deployed via workspace run"
+
+        # Call configure-workshop.sh (idempotent — re-runs Vault/IVIA/DB config)
+        step_header "Running post-deploy configuration (configure-workshop.sh)..."
+        bash "$SCRIPT_DIR/configure-workshop.sh" \
+            --region "$WORKSHOP_REGION" \
+            --cluster-name "$CLUSTER_NAME" \
+            --skip-vault-init || {
+            print_warn "configure-workshop.sh reported failures — see above for details"
+        }
     else
-        print_info "No deployment changes to push — skipping Stacks trigger"
+        #-------------------------------------------------------------------
+        # Stacks mode: update deployments.tfdeploy.hcl + git push
+        #-------------------------------------------------------------------
+        step_header "Updating uc1_agent_image in deployments.tfdeploy.hcl..."
+        local deploy_file="$PROJECT_ROOT/infrastructure/deployments.tfdeploy.hcl"
+        local current_image
+        current_image=$(grep 'uc1_agent_image' "$deploy_file" 2>/dev/null | sed -E 's/.*"([^"]+)".*/\1/')
+
+        if [ "$current_image" = "$ecr_uri" ]; then
+            print_info "uc1_agent_image already set to $ecr_uri"
+        else
+            sed -i.bak "s|uc1_agent_image *= *\"[^\"]*\"|uc1_agent_image = \"${ecr_uri}\"|" "$deploy_file"
+            rm -f "${deploy_file}.bak"
+            print_success "uc1_agent_image = $ecr_uri"
+        fi
+
+        step_header "Finding HCP Terraform Stack..."
+        local stack_id
+        stack_id=$(hcp_find_stack "$HCP_ORG") || {
+            print_error "Could not find Stack in HCP Terraform"
+            return 1
+        }
+        print_success "Stack found: $stack_id"
+
+        local old_config_id
+        old_config_id=$(hcp_get_latest_config "$stack_id")
+
+        git_commit_and_push "deploy: set uc1_agent_image for UC1 agent deployment" \
+            "infrastructure/deployments.tfdeploy.hcl"
+
+        if [ "$GIT_PUSHED" = true ]; then
+            step_header "Waiting for VCS-triggered deploy (UC1 agent)..."
+            hcp_wait_for_vcs_plan "$stack_id" "$old_config_id" 1800 || {
+                print_error "UC1 deploy failed. Check HCP Terraform UI for details."
+                return 1
+            }
+        else
+            print_info "No deployment changes to push — skipping Stacks trigger"
+        fi
+        print_success "UC1 agent deployed via Stacks"
     fi
-    print_success "UC1 agent deployed via Stacks"
 
     # Rollout restart to pick up new image (tag :latest may be cached by kubelet)
     step_header "Restarting UC1 deployment to pull latest image..."
@@ -957,8 +1235,7 @@ phase_uc2() {
     print_success "Banking app images built and pushed to ECR"
     pause_if_interactive "Banking app images pushed to ECR. Verify in AWS Console before continuing."
 
-    # Step 2: Update banking app image URIs in deployments.tfdeploy.hcl
-    # build-banking-app.sh outputs the ECR URIs; resolve them here.
+    # Step 2: Update banking app image URIs and trigger deploy (mode-aware)
     step_header "Resolving banking app ECR image URIs..."
     local account_id
     account_id=$(aws sts get-caller-identity --query 'Account' --output text 2>/dev/null)
@@ -967,53 +1244,124 @@ phase_uc2() {
     local agent_image="${ecr_base}:agent"
     local mcp_image="${ecr_base}:mcp"
 
-    local deploy_file="$PROJECT_ROOT/infrastructure/deployments.tfdeploy.hcl"
-
-    # Update each image variable (idempotent)
-    for var_name in banking_app_ui_image banking_app_agent_image banking_app_mcp_image; do
-        local var_image=""
-        case "$var_name" in
-            banking_app_ui_image)    var_image="$ui_image" ;;
-            banking_app_agent_image) var_image="$agent_image" ;;
-            banking_app_mcp_image)   var_image="$mcp_image" ;;
-        esac
-        local current_val
-        current_val=$(grep "${var_name}" "$deploy_file" 2>/dev/null | sed -E 's/.*"([^"]+)".*/\1/')
-        if [ "$current_val" = "$var_image" ]; then
-            print_info "${var_name} already set to ${var_image}"
+    if [ "$DEPLOY_MODE" = "workspace" ]; then
+        #-------------------------------------------------------------------
+        # Workspace mode: update terraform.tfvars, trigger workspace run
+        #-------------------------------------------------------------------
+        local tfvars_file="$PROJECT_ROOT/infrastructure/terraform.tfvars"
+        if [ -f "$tfvars_file" ]; then
+            for var_name in banking_app_ui_image banking_app_agent_image banking_app_mcp_image; do
+                local var_image=""
+                case "$var_name" in
+                    banking_app_ui_image)    var_image="$ui_image" ;;
+                    banking_app_agent_image) var_image="$agent_image" ;;
+                    banking_app_mcp_image)   var_image="$mcp_image" ;;
+                esac
+                local current_val
+                current_val=$(grep "${var_name}" "$tfvars_file" 2>/dev/null | sed -E 's/.*"([^"]+)".*/\1/')
+                if [ "$current_val" = "$var_image" ]; then
+                    print_info "${var_name} already set to ${var_image}"
+                else
+                    sed -i.bak "s|${var_name}[[:space:]]*=[[:space:]]*\"[^\"]*\"|${var_name} = \"${var_image}\"|" "$tfvars_file"
+                    rm -f "${tfvars_file}.bak"
+                    print_success "${var_name} = ${var_image}"
+                fi
+            done
         else
-            sed -i.bak "s|${var_name}[[:space:]]*=[[:space:]]*\"[^\"]*\"|${var_name} = \"${var_image}\"|" "$deploy_file"
-            rm -f "${deploy_file}.bak"
-            print_success "${var_name} = ${var_image}"
+            print_warn "terraform.tfvars not found — workspace run will use existing variable values"
         fi
-    done
 
-    # Step 3: Find Stack and trigger Stacks plan+apply
-    step_header "Finding HCP Terraform Stack..."
-    local stack_id
-    stack_id=$(hcp_find_stack "$HCP_ORG") || {
-        print_error "Could not find Stack in HCP Terraform"
-        return 1
-    }
-    print_success "Stack found: $stack_id"
+        step_header "Finding HCP Workspace and triggering UC2 deploy run..."
+        local ws_id
+        ws_id=$(hcp_find_workspace "$HCP_ORG" "$WORKSPACE_NAME") || {
+            print_error "Could not find workspace '${WORKSPACE_NAME}'"
+            return 1
+        }
+        print_success "Workspace found: $ws_id"
 
-    local old_config_id
-    old_config_id=$(hcp_get_latest_config "$stack_id")
-
-    git_commit_and_push "deploy: set banking_app images for UC2 deployment" \
-        "infrastructure/deployments.tfdeploy.hcl"
-
-    if [ "$GIT_PUSHED" = true ]; then
-        step_header "Waiting for VCS-triggered deploy (UC2 banking app)..."
-        hcp_wait_for_vcs_plan "$stack_id" "$old_config_id" 1800 || {
+        hcp_workspace_deploy_and_wait "$ws_id" \
+            "workshop-e2e Phase 7b: UC2 banking app (${WORKSPACE_NAME})" 1800 || {
             print_error "UC2 deploy failed. Check HCP Terraform UI for details."
             return 1
         }
+        print_success "UC2 banking app deployed via workspace run"
+        pause_if_interactive "Workspace run complete. Verify uc2 resources in HCP UI before continuing."
+
+        # configure-workshop.sh handles IVIA + DB seed in workspace mode
+        step_header "Running post-deploy configuration (configure-workshop.sh)..."
+        bash "$SCRIPT_DIR/configure-workshop.sh" \
+            --region "$WORKSHOP_REGION" \
+            --cluster-name "$CLUSTER_NAME" \
+            --skip-vault-init || {
+            print_warn "configure-workshop.sh reported failures — see above for details"
+        }
     else
-        print_info "No deployment changes to push — skipping Stacks trigger"
+        #-------------------------------------------------------------------
+        # Stacks mode: update deployments.tfdeploy.hcl + git push
+        #-------------------------------------------------------------------
+        local deploy_file="$PROJECT_ROOT/infrastructure/deployments.tfdeploy.hcl"
+
+        for var_name in banking_app_ui_image banking_app_agent_image banking_app_mcp_image; do
+            local var_image=""
+            case "$var_name" in
+                banking_app_ui_image)    var_image="$ui_image" ;;
+                banking_app_agent_image) var_image="$agent_image" ;;
+                banking_app_mcp_image)   var_image="$mcp_image" ;;
+            esac
+            local current_val
+            current_val=$(grep "${var_name}" "$deploy_file" 2>/dev/null | sed -E 's/.*"([^"]+)".*/\1/')
+            if [ "$current_val" = "$var_image" ]; then
+                print_info "${var_name} already set to ${var_image}"
+            else
+                sed -i.bak "s|${var_name}[[:space:]]*=[[:space:]]*\"[^\"]*\"|${var_name} = \"${var_image}\"|" "$deploy_file"
+                rm -f "${deploy_file}.bak"
+                print_success "${var_name} = ${var_image}"
+            fi
+        done
+
+        step_header "Finding HCP Terraform Stack..."
+        local stack_id
+        stack_id=$(hcp_find_stack "$HCP_ORG") || {
+            print_error "Could not find Stack in HCP Terraform"
+            return 1
+        }
+        print_success "Stack found: $stack_id"
+
+        local old_config_id
+        old_config_id=$(hcp_get_latest_config "$stack_id")
+
+        git_commit_and_push "deploy: set banking_app images for UC2 deployment" \
+            "infrastructure/deployments.tfdeploy.hcl"
+
+        if [ "$GIT_PUSHED" = true ]; then
+            step_header "Waiting for VCS-triggered deploy (UC2 banking app)..."
+            hcp_wait_for_vcs_plan "$stack_id" "$old_config_id" 1800 || {
+                print_error "UC2 deploy failed. Check HCP Terraform UI for details."
+                return 1
+            }
+        else
+            print_info "No deployment changes to push — skipping Stacks trigger"
+        fi
+        print_success "UC2 banking app deployed via Stacks"
+        pause_if_interactive "Stacks deploy complete. Verify uc2_app in HCP UI before continuing."
+
+        # Step 5 (Stacks mode): Run ivia-configure.sh — update redirect URIs, create test users
+        step_header "Configuring IVIA OAuth client (redirect URIs + test users)..."
+        bash "$SCRIPT_DIR/ivia-configure.sh" || {
+            print_warn "ivia-configure.sh reported failures — IVIA OAuth may not be fully configured"
+        }
+        print_success "IVIA OAuth client configured"
+        pause_if_interactive "IVIA configured. Verify OAuth client in IVIA admin before continuing."
+
+        # Step 6 (Stacks mode): Seed banking database
+        step_header "Seeding banking database (schema + RLS + test data)..."
+        bash "$SCRIPT_DIR/seed-banking-db.sh" \
+            --region "$WORKSHOP_REGION" || {
+            print_warn "seed-banking-db.sh reported failures — banking DB may not be seeded"
+        }
+        print_success "Banking database seeded"
+        pause_if_interactive "Database seeded. Verify test data before continuing."
     fi
-    print_success "UC2 banking app deployed via Stacks"
-    pause_if_interactive "Stacks deploy complete. Verify uc2_app in HCP UI before continuing."
 
     # Rollout restart to pick up new images (tag may be cached by kubelet)
     step_header "Restarting banking-app deployments to pull latest images..."
@@ -1022,7 +1370,7 @@ phase_uc2() {
     kubectl rollout restart deployment/banking-mcp-server -n banking-app 2>/dev/null || true
     pause_if_interactive "Deployments restarted. Waiting for pods to become ready."
 
-    # Step 4: Wait for all banking-app pods to be ready
+    # Step 4 (both modes): Wait for all banking-app pods to be ready
     step_header "Waiting for banking-app pods to be ready..."
     local pods_ready=false
     local wait_elapsed=0
@@ -1055,24 +1403,7 @@ phase_uc2() {
     fi
     pause_if_interactive "Pods ready. Verify with 'kubectl get pods -n banking-app' before continuing."
 
-    # Step 5: Run ivia-configure.sh — update redirect URIs, create test users
-    step_header "Configuring IVIA OAuth client (redirect URIs + test users)..."
-    bash "$SCRIPT_DIR/ivia-configure.sh" || {
-        print_warn "ivia-configure.sh reported failures — IVIA OAuth may not be fully configured"
-    }
-    print_success "IVIA OAuth client configured"
-    pause_if_interactive "IVIA configured. Verify OAuth client in IVIA admin before continuing."
-
-    # Step 6: Seed banking database
-    step_header "Seeding banking database (schema + RLS + test data)..."
-    bash "$SCRIPT_DIR/seed-banking-db.sh" \
-        --region "$WORKSHOP_REGION" || {
-        print_warn "seed-banking-db.sh reported failures — banking DB may not be seeded"
-    }
-    print_success "Banking database seeded"
-    pause_if_interactive "Database seeded. Verify test data before continuing."
-
-    # Step 7: Run verify-uc2.sh
+    # Step 7: Run verify-uc2.sh (both modes)
     pause_if_interactive "About to verify UC2 deployment"
     bash "$SCRIPT_DIR/verify-uc2.sh" 2>&1 || print_warn "UC2 verification had warnings"
     print_success "UC2 verification complete"
@@ -1348,6 +1679,7 @@ echo ""
 echo -e "${BLUE}================================================================${NC}"
 echo -e "${BLUE}  Agentic Runtime Security Workshop — End-to-End${NC}"
 echo -e "${BLUE}================================================================${NC}"
+print_info "Deploy mode: ${DEPLOY_MODE}"
 
 if [ "$DRY_RUN" = true ]; then
     print_warn "DRY RUN MODE — no changes will be made"
