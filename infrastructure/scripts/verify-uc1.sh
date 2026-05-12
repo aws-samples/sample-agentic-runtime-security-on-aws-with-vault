@@ -79,7 +79,7 @@ if [ "${running_uc1:-0}" -ge 1 ]; then
     print_pass "UC1 agent pod Running (${running_uc1} pod(s) in ${UC1_NAMESPACE})"
 else
     print_fail "UC1 agent pod Running" \
-        "UC1 agent pod not running — verify Stacks apply completed and image URI is correct. Check: kubectl get pods -n ${UC1_NAMESPACE} -l app=uc1-agent"
+        "UC1 agent pod not running — verify workspace apply completed and image URI is correct. Check: kubectl get pods -n ${UC1_NAMESPACE} -l app=uc1-agent"
 fi
 
 #-------------------------------------------------------------------------------
@@ -89,7 +89,7 @@ if kubectl get sa uc1-retriever-sa -n "${UC1_NAMESPACE}" --no-headers &>/dev/nul
     print_pass "UC1 ServiceAccount uc1-retriever-sa exists"
 else
     print_fail "UC1 ServiceAccount exists" \
-        "ServiceAccount uc1-retriever-sa not found — check uc1_agent Stacks component. Run: kubectl get sa -n ${UC1_NAMESPACE}"
+        "ServiceAccount uc1-retriever-sa not found — check uc1_agent module in workspace run. Run: kubectl get sa -n ${UC1_NAMESPACE}"
 fi
 
 #-------------------------------------------------------------------------------
@@ -102,7 +102,7 @@ if [ "${vault_role_sa}" = "uc1-retriever-sa" ]; then
     print_pass "Vault role uc1 bound to uc1-retriever-sa"
 else
     print_fail "Vault role uc1 binding" \
-        "Vault role uc1 not bound to uc1-retriever-sa (got '${vault_role_sa}') — reapply vault_config component. Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault read auth/kubernetes/role/uc1"
+        "Vault role uc1 not bound to uc1-retriever-sa (got '${vault_role_sa}') — reapply the workspace run. Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault read auth/kubernetes/role/uc1"
 fi
 
 #-------------------------------------------------------------------------------

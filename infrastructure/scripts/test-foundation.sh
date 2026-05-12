@@ -13,9 +13,9 @@
 #       [--region <region>]
 #
 # Auto-derived when not provided:
-#   --db-instance-id  defaults to ${cluster_name}-pg (Stacks convention)
-#   --region          resolved from deployments.tfdeploy.hcl
-#   KB region         parsed from kb_region in deployments.tfdeploy.hcl
+#   --db-instance-id  defaults to ${cluster_name}-pg (naming convention)
+#   --region          resolved from terraform.tfvars
+#   KB region         parsed from kb_region in terraform.tfvars
 #
 # Env-var fallback:
 #   WORKSHOP_CLUSTER_NAME, WORKSHOP_DB_INSTANCE_ID, WORKSHOP_KB_ID
@@ -43,8 +43,8 @@ Verifies foundation: EKS, RDS, Bedrock KB, audit log groups, region contract.
 
 Auto-derived:
   --db-instance-id  defaults to \${cluster_name}-pg
-  --region          from deployments.tfdeploy.hcl
-  KB region         from kb_region in deployments.tfdeploy.hcl
+  --region          from terraform.tfvars
+  KB region         from kb_region in terraform.tfvars
 
 Env-var fallback:
   WORKSHOP_CLUSTER_NAME, WORKSHOP_DB_INSTANCE_ID, WORKSHOP_KB_ID
@@ -75,15 +75,17 @@ if [ -z "$DB_ID" ] && [ -n "$CLUSTER_NAME" ]; then
     DB_ID="${CLUSTER_NAME}-pg"
 fi
 
-# Resolve KB region from deployments.tfdeploy.hcl (kb_region input)
+# Resolve KB region from terraform.tfvars (or .example fallback)
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-TFDEPLOY="${REPO_ROOT}/infrastructure/deployments.tfdeploy.hcl"
 KB_REGION=""
-if [ -f "$TFDEPLOY" ]; then
-    KB_REGION=$(grep -E '^\s*kb_region\s*=\s*"' "$TFDEPLOY" 2>/dev/null \
-        | head -1 \
-        | sed -E 's/.*"([^"]+)".*/\1/')
-fi
+for _f in "${REPO_ROOT}/infrastructure/terraform.tfvars" "${REPO_ROOT}/infrastructure/terraform.tfvars.example"; do
+    if [ -f "$_f" ]; then
+        KB_REGION=$(grep -E '^\s*kb_region\s*=\s*"' "$_f" 2>/dev/null \
+            | head -1 \
+            | sed -E 's/.*"([^"]+)".*/\1/')
+        [ -n "$KB_REGION" ] && break
+    fi
+done
 if [ -z "$KB_REGION" ]; then
     KB_REGION="$REGION"
 fi
@@ -168,7 +170,7 @@ done
 [ "$audit_ok" = false ] && failures=$((failures + 1))
 
 #-------------------------------------------------------------------------------
-# Region contract — no canonical region literal outside deployments.tfdeploy.hcl
+# Region contract — no canonical region literal outside terraform.tfvars
 # Excludes .terraform/ directories (vendored third-party module test files).
 #-------------------------------------------------------------------------------
 echo
@@ -176,22 +178,21 @@ echo -e "${BLUE}================================================================
 echo -e "${BLUE}  Region Contract${NC}"
 echo -e "${BLUE}===============================================================================${NC}"
 
-DEPLOY_FILE="infrastructure/deployments.tfdeploy.hcl"
+CANONICAL_FILE="infrastructure/terraform.tfvars"
 leaks=$(grep -rn "$REGION" \
     --include='*.tf' \
     --include='*.hcl' \
-    --include='*.tfcomponent.hcl' \
-    --include='*.tfdeploy.hcl' \
     "$REPO_ROOT/infrastructure/" 2>/dev/null \
-    | grep -v "deployments.tfdeploy.hcl" \
+    | grep -v "terraform.tfvars" \
     | grep -v "/.terraform/" \
+    | grep -v "/hcp-setup/" \
     | grep -v ':\s*#\|:\s*//' || true)
 
 if [ -z "$leaks" ]; then
-    print_pass "No region literal '${REGION}' outside ${DEPLOY_FILE}"
+    print_pass "No region literal '${REGION}' outside ${CANONICAL_FILE}"
 else
     leak_count=$(echo "$leaks" | wc -l | tr -d ' ')
-    print_fail "${leak_count} region literal leak(s) found outside ${DEPLOY_FILE}" \
+    print_fail "${leak_count} region literal leak(s) found outside ${CANONICAL_FILE}" \
         "Replace hard-coded '${REGION}' with var.region in these files: $(echo "$leaks" | awk -F: '{print $1}' | sort -u | tr '\n' ' ')"
     failures=$((failures + 1))
 fi

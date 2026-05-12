@@ -2,7 +2,7 @@
 #===============================================================================
 # Vault Initialization Script — Two-Phase Bootstrap (Phase 1)
 #
-# Run after the first Stacks deploy (Waves 0-4) succeeds and Vault pods are
+# Run after the first workspace deploy (Waves 0-4) succeeds and Vault pods are
 # Running. Initializes Vault via `vault operator init`, saves the root token
 # and recovery keys to ~/vault-init.json, and prints next steps.
 #
@@ -64,7 +64,7 @@ if [[ "${READY_COUNT}" -lt 1 ]]; then
   fail "No Vault server pods are 1/1 Running in namespace '${VAULT_NS}'.
   Current pods:
 ${PODS}
-  Fix: Ensure the first Stacks run (enable_vault_config=false) succeeded and Vault pods are scheduling.
+  Fix: Ensure the first workspace run (enable_vault_config=false) succeeded and Vault pods are scheduling.
   Check: kubectl describe statefulset vault -n ${VAULT_NS}"
 fi
 ok "${READY_COUNT} Vault server pod(s) running"

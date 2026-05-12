@@ -2,13 +2,13 @@
 #===============================================================================
 # ivia-configure.sh — IVIA Runtime Configuration
 #
-# Configures IVIA at runtime AFTER the Stacks deploy of uc2_app:
+# Configures IVIA at runtime AFTER the Terraform deploy of uc2_app:
 #   1. Creates test users Oscar and Adriana in the IVIA local user registry
 #   2. Updates the UC2 OAuth client (agent-uc2) redirect_uri to the banking
 #      app ALB hostname (auto-discovered from the banking-app namespace Ingress)
 #   3. Verifies both operations succeed
 #
-# Called from workshop-e2e.sh AFTER the uc2_app Stacks deploy — the banking app
+# Called from workshop-e2e.sh AFTER the uc2_app Terraform deploy — the banking app
 # ALB Ingress must exist before this script runs so the redirect URI is known.
 #
 # Prerequisites:
@@ -53,7 +53,7 @@ Usage: $(basename "$0") [OPTIONS]
 
 IVIA Runtime Configuration Script for the Agentic Runtime Security Workshop.
 
-Configures IVIA after uc2_app Stacks deploy:
+Configures IVIA after uc2_app Terraform deploy:
   - Creates test users Oscar and Adriana in IVIA local user registry
   - Updates agent-uc2 OAuth client redirect_uri to banking app ALB hostname
 
@@ -202,7 +202,7 @@ ALB_HOSTNAME=$(kubectl get ingress -n "${BANKING_APP_NAMESPACE}" \
 
 if [ -z "${ALB_HOSTNAME:-}" ]; then
   print_fail "banking-app Ingress ALB hostname" \
-    "Ensure uc2_app Stacks component is deployed: terraform stacks apply; then re-run this script"
+    "Ensure uc2_app is deployed via HCP Terraform workspace run; then re-run this script"
   print_summary
   exit 1
 fi

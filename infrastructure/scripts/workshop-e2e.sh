@@ -114,11 +114,11 @@ WORKSPACE_NAME="agentic-runtime-security"
 HCP_ROLE_NAME="hcp-stacks-deploy"
 
 # Resolve canonical region + cluster_name from infrastructure/terraform.tfvars
-# (workspace mode) or infrastructure/deployments.tfdeploy.hcl (stacks mode).
+# (workspace mode) or infrastructure/terraform.tfvars (stacks mode).
 # No string literals here — only the config file is the source of truth.
 TF_VARS="${PROJECT_ROOT}/infrastructure/terraform.tfvars"
 TF_VARS_EXAMPLE="${PROJECT_ROOT}/infrastructure/terraform.tfvars.example"
-TF_DEPLOY="${PROJECT_ROOT}/infrastructure/deployments.tfdeploy.hcl"
+TF_DEPLOY="${PROJECT_ROOT}/infrastructure/terraform.tfvars"
 
 _e2e_resolve_var() {
     local key="$1"
@@ -150,7 +150,7 @@ fi
 KB_REGION="${KB_REGION:-us-east-1}"
 
 if [ -z "$CLUSTER_NAME" ]; then
-    echo -e "${RED}Error: could not resolve cluster_name from terraform.tfvars or deployments.tfdeploy.hcl${NC}" >&2
+    echo -e "${RED}Error: could not resolve cluster_name from terraform.tfvars or terraform.tfvars${NC}" >&2
     exit 1
 fi
 
@@ -249,7 +249,7 @@ fi
 
 if [ -z "$WORKSHOP_REGION" ] && [ "$TEARDOWN_ONLY" = false ] && [ "$NUKE" = false ]; then
     echo -e "${RED}Error: could not resolve workshop region${NC}"
-    echo "Set AWS_REGION or ensure infrastructure/deployments.tfdeploy.hcl is present."
+    echo "Set AWS_REGION or ensure infrastructure/terraform.tfvars is present."
     exit 1
 fi
 
@@ -578,6 +578,8 @@ hcp_wait_for_run() {
     local retry_count=0
     local max_retries=2
 
+    load_tfe_token || return 1
+
     while [ $elapsed -lt $timeout ]; do
         local status
         status=$(curl -s \
@@ -617,6 +619,47 @@ hcp_wait_for_run() {
 
     print_error "Timeout waiting for run $run_id to reach $target (${timeout}s)"
     return 1
+}
+
+# Update a variable in the HCP variable set (for remote execution — local
+# terraform.tfvars is gitignored and never reaches the remote worker).
+hcp_update_varset_variable() {
+    local org="$1" key="$2" value="$3"
+    load_tfe_token || return 1
+
+    local varset_id
+    varset_id=$(terraform -chdir="$SCRIPT_DIR/hcp-setup" output -raw varset_id 2>/dev/null)
+    if [ -z "$varset_id" ]; then
+        print_error "Could not resolve varset_id from hcp-setup output"
+        return 1
+    fi
+
+    local var_id
+    var_id=$(curl -s \
+        -H "Authorization: Bearer $TFE_TOKEN" \
+        -H "Content-Type: application/vnd.api+json" \
+        "$TFE_API/varsets/$varset_id/relationships/vars" 2>/dev/null \
+        | jq -r --arg k "$key" '.data[] | select(.attributes.key == $k) | .id' 2>/dev/null | head -1)
+
+    if [ -z "$var_id" ]; then
+        print_error "Variable '$key' not found in variable set"
+        return 1
+    fi
+
+    local code
+    code=$(curl -s -o /dev/null -w "%{http_code}" -X PATCH \
+        -H "Authorization: Bearer $TFE_TOKEN" \
+        -H "Content-Type: application/vnd.api+json" \
+        -d "{\"data\":{\"type\":\"vars\",\"id\":\"$var_id\",\"attributes\":{\"value\":\"$value\"}}}" \
+        "$TFE_API/varsets/$varset_id/relationships/vars/$var_id" 2>/dev/null)
+
+    if [ "$code" = "200" ] || [ "$code" = "201" ]; then
+        print_success "$key updated in HCP variable set"
+        return 0
+    else
+        print_error "Failed to update $key (HTTP $code)"
+        return 1
+    fi
 }
 
 # Approve a workspace run that is in "planned" status
@@ -878,7 +921,7 @@ phase_deploy_foundation() {
 
         # Enable foundation deployment
         step_header "Setting destroy=false on usw2 deployment..."
-        local deploy_file="$PROJECT_ROOT/infrastructure/deployments.tfdeploy.hcl"
+        local deploy_file="$PROJECT_ROOT/infrastructure/terraform.tfvars"
 
         sed -i.bak 's/destroy[[:space:]]*=[[:space:]]*true/destroy = false/g' "$deploy_file"
         rm -f "${deploy_file}.bak"
@@ -888,7 +931,7 @@ phase_deploy_foundation() {
         old_config_id=$(hcp_get_latest_config "$stack_id")
 
         git_commit_and_push "deploy: enable foundation (usw2) for e2e" \
-            "infrastructure/deployments.tfdeploy.hcl"
+            "infrastructure/terraform.tfvars"
 
         if [ "$GIT_PUSHED" = true ]; then
             # Wait for VCS-triggered plan (don't create a competing API config)
@@ -956,8 +999,8 @@ phase_verify_foundation() {
 
     if [ -z "$db_id" ]; then
         db_id=$(aws rds describe-db-instances --region "$WORKSHOP_REGION" \
-            --query "DBInstances[?contains(TagList[?Key=='Workshop'].Value | [0], 'agentic-runtime-security')].DBInstanceIdentifier | [0]" \
-            --output text 2>/dev/null)
+            --query "DBInstances[?DBInstanceIdentifier=='${CLUSTER_NAME}-pg'].DBInstanceIdentifier | [0]" \
+            --output text 2>/dev/null || true)
         [ "$db_id" = "None" ] && db_id=""
     fi
     if [ -z "$kb_id" ]; then
@@ -977,7 +1020,7 @@ phase_verify_foundation() {
         --cluster-name "$CLUSTER_NAME" \
         --db-instance-id "$db_id" \
         --knowledge-base-id "$kb_id" \
-        --region "$KB_REGION" \
+        --region "$WORKSHOP_REGION" \
         || print_warn "Foundation verification reported failures (see above)"
 
     pause_if_interactive "Foundation verification complete."
@@ -1067,7 +1110,7 @@ phase_uc1() {
             print_info "[DRY-RUN] Would trigger HCP workspace run for UC1 agent image"
             print_info "[DRY-RUN] Would call configure-workshop.sh after apply converges"
         else
-            print_info "[DRY-RUN] Would update uc1_agent_image in deployments.tfdeploy.hcl"
+            print_info "[DRY-RUN] Would update uc1_agent_image in terraform.tfvars"
             print_info "[DRY-RUN] Would trigger Stacks plan+apply, then run verify-uc1.sh"
         fi
         return 0
@@ -1083,7 +1126,7 @@ phase_uc1() {
     print_success "UC1 agent image built and pushed to ECR"
     pause_if_interactive "UC1 agent image pushed to ECR. Verify in AWS Console before continuing."
 
-    # Step 2: Update uc1_agent_image in deployments.tfdeploy.hcl
+    # Step 2: Update uc1_agent_image in terraform.tfvars
     local account_id
     account_id=$(aws sts get-caller-identity --query 'Account' --output text 2>/dev/null)
     local ecr_uri="${account_id}.dkr.ecr.${WORKSHOP_REGION}.amazonaws.com/workshop/uc1-agent:latest"
@@ -1091,23 +1134,13 @@ phase_uc1() {
     # Step 2: Update uc1_agent_image and trigger deploy (mode-aware)
     if [ "$DEPLOY_MODE" = "workspace" ]; then
         #-------------------------------------------------------------------
-        # Workspace mode: update terraform.tfvars, trigger workspace run
+        # Workspace mode: update variable set, trigger workspace run
         #-------------------------------------------------------------------
-        step_header "Updating uc1_agent_image in terraform.tfvars..."
-        local tfvars_file="$PROJECT_ROOT/infrastructure/terraform.tfvars"
-        if [ -f "$tfvars_file" ]; then
-            local current_image
-            current_image=$(grep 'uc1_agent_image' "$tfvars_file" 2>/dev/null | sed -E 's/.*"([^"]+)".*/\1/')
-            if [ "$current_image" = "$ecr_uri" ]; then
-                print_info "uc1_agent_image already set to $ecr_uri"
-            else
-                sed -i.bak "s|uc1_agent_image[[:space:]]*=[[:space:]]*\"[^\"]*\"|uc1_agent_image = \"${ecr_uri}\"|" "$tfvars_file"
-                rm -f "${tfvars_file}.bak"
-                print_success "uc1_agent_image = $ecr_uri (in terraform.tfvars)"
-            fi
-        else
-            print_warn "terraform.tfvars not found — workspace run will use existing variable values"
-        fi
+        step_header "Updating uc1_agent_image in HCP variable set..."
+        hcp_update_varset_variable "$HCP_ORG" "uc1_agent_image" "$ecr_uri" || {
+            print_error "Failed to update uc1_agent_image in variable set"
+            return 1
+        }
 
         step_header "Finding HCP Workspace and triggering UC1 deploy run..."
         local ws_id
@@ -1134,10 +1167,10 @@ phase_uc1() {
         }
     else
         #-------------------------------------------------------------------
-        # Stacks mode: update deployments.tfdeploy.hcl + git push
+        # Stacks mode: update terraform.tfvars + git push
         #-------------------------------------------------------------------
-        step_header "Updating uc1_agent_image in deployments.tfdeploy.hcl..."
-        local deploy_file="$PROJECT_ROOT/infrastructure/deployments.tfdeploy.hcl"
+        step_header "Updating uc1_agent_image in terraform.tfvars..."
+        local deploy_file="$PROJECT_ROOT/infrastructure/terraform.tfvars"
         local current_image
         current_image=$(grep 'uc1_agent_image' "$deploy_file" 2>/dev/null | sed -E 's/.*"([^"]+)".*/\1/')
 
@@ -1161,7 +1194,7 @@ phase_uc1() {
         old_config_id=$(hcp_get_latest_config "$stack_id")
 
         git_commit_and_push "deploy: set uc1_agent_image for UC1 agent deployment" \
-            "infrastructure/deployments.tfdeploy.hcl"
+            "infrastructure/terraform.tfvars"
 
         if [ "$GIT_PUSHED" = true ]; then
             step_header "Waiting for VCS-triggered deploy (UC1 agent)..."
@@ -1216,7 +1249,7 @@ phase_uc2() {
 
     if [ "$DRY_RUN" = true ]; then
         print_info "[DRY-RUN] Would build+push banking app images (UI, Agent, MCP Server)"
-        print_info "[DRY-RUN] Would update banking_app_*_image in deployments.tfdeploy.hcl"
+        print_info "[DRY-RUN] Would update banking_app_*_image in terraform.tfvars"
         print_info "[DRY-RUN] Would trigger Stacks plan+apply for uc2_app component"
         print_info "[DRY-RUN] Would wait for banking-app pods to be ready"
         print_info "[DRY-RUN] Would run ivia-configure.sh (redirect URIs + test users)"
@@ -1246,30 +1279,18 @@ phase_uc2() {
 
     if [ "$DEPLOY_MODE" = "workspace" ]; then
         #-------------------------------------------------------------------
-        # Workspace mode: update terraform.tfvars, trigger workspace run
+        # Workspace mode: update variable set, trigger workspace run
         #-------------------------------------------------------------------
-        local tfvars_file="$PROJECT_ROOT/infrastructure/terraform.tfvars"
-        if [ -f "$tfvars_file" ]; then
-            for var_name in banking_app_ui_image banking_app_agent_image banking_app_mcp_image; do
-                local var_image=""
-                case "$var_name" in
-                    banking_app_ui_image)    var_image="$ui_image" ;;
-                    banking_app_agent_image) var_image="$agent_image" ;;
-                    banking_app_mcp_image)   var_image="$mcp_image" ;;
-                esac
-                local current_val
-                current_val=$(grep "${var_name}" "$tfvars_file" 2>/dev/null | sed -E 's/.*"([^"]+)".*/\1/')
-                if [ "$current_val" = "$var_image" ]; then
-                    print_info "${var_name} already set to ${var_image}"
-                else
-                    sed -i.bak "s|${var_name}[[:space:]]*=[[:space:]]*\"[^\"]*\"|${var_name} = \"${var_image}\"|" "$tfvars_file"
-                    rm -f "${tfvars_file}.bak"
-                    print_success "${var_name} = ${var_image}"
-                fi
-            done
-        else
-            print_warn "terraform.tfvars not found — workspace run will use existing variable values"
-        fi
+        step_header "Updating banking app images in HCP variable set..."
+        hcp_update_varset_variable "$HCP_ORG" "banking_app_ui_image" "$ui_image" || {
+            print_error "Failed to update banking_app_ui_image"; return 1
+        }
+        hcp_update_varset_variable "$HCP_ORG" "banking_app_agent_image" "$agent_image" || {
+            print_error "Failed to update banking_app_agent_image"; return 1
+        }
+        hcp_update_varset_variable "$HCP_ORG" "banking_app_mcp_image" "$mcp_image" || {
+            print_error "Failed to update banking_app_mcp_image"; return 1
+        }
 
         step_header "Finding HCP Workspace and triggering UC2 deploy run..."
         local ws_id
@@ -1297,9 +1318,9 @@ phase_uc2() {
         }
     else
         #-------------------------------------------------------------------
-        # Stacks mode: update deployments.tfdeploy.hcl + git push
+        # Stacks mode: update terraform.tfvars + git push
         #-------------------------------------------------------------------
-        local deploy_file="$PROJECT_ROOT/infrastructure/deployments.tfdeploy.hcl"
+        local deploy_file="$PROJECT_ROOT/infrastructure/terraform.tfvars"
 
         for var_name in banking_app_ui_image banking_app_agent_image banking_app_mcp_image; do
             local var_image=""
@@ -1331,7 +1352,7 @@ phase_uc2() {
         old_config_id=$(hcp_get_latest_config "$stack_id")
 
         git_commit_and_push "deploy: set banking_app images for UC2 deployment" \
-            "infrastructure/deployments.tfdeploy.hcl"
+            "infrastructure/terraform.tfvars"
 
         if [ "$GIT_PUSHED" = true ]; then
             step_header "Waiting for VCS-triggered deploy (UC2 banking app)..."
@@ -1530,11 +1551,11 @@ phase_nuke() {
 
         # Now push destroy=true — the VCS webhook triggers a plan with valid OIDC
         step_header "Setting destroy=true on usw2 deployment..."
-        local deploy_file="$PROJECT_ROOT/infrastructure/deployments.tfdeploy.hcl"
+        local deploy_file="$PROJECT_ROOT/infrastructure/terraform.tfvars"
         sed -i.bak 's/destroy[[:space:]]*=[[:space:]]*false/destroy = true/g' "$deploy_file"
         rm -f "${deploy_file}.bak"
         git_commit_and_push "nuke: set destroy=true on usw2" \
-            "infrastructure/deployments.tfdeploy.hcl"
+            "infrastructure/terraform.tfvars"
 
         # Wait for plan — VCS-triggered if we pushed, API-triggered otherwise
         if [ -n "$stack_id" ]; then

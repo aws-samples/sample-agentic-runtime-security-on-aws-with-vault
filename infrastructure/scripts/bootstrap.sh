@@ -19,7 +19,7 @@
 #
 # Steps:
 #   0. Detect HCP free tier (FAIL if free; workshop requires Standard tier)
-#   1. Create AWS OIDC provider + IAM role for Stacks
+#   1. Create AWS OIDC provider + IAM role for HCP Terraform
 #   2. Ensure EC2 Spot service-linked role
 #   3. Resolve admin principal ARN (assumed-role → IAM role rewrite)
 #   4. Write hcp-setup/terraform.tfvars from current environment
@@ -191,7 +191,7 @@ load_tfe_token() {
 # STEP 0: Detect HCP free tier (Pitfall §2)
 #
 # HCP Terraform free tier was deprecated 2026-03-31. The workshop requires
-# Standard (or higher) tier so its Stacks deployments and large variable sets
+# Standard (or higher) tier so its workspace deployments and large variable sets
 # fit within plan limits. FAIL if the org is on a free / starter / trial plan.
 #===============================================================================
 step_detect_free_tier() {
@@ -249,7 +249,7 @@ step_detect_free_tier() {
 #===============================================================================
 
 #===============================================================================
-# STEP 2: Setup AWS OIDC Provider + IAM Role for HCP Stacks
+# STEP 2: Setup AWS OIDC Provider + IAM Role for HCP Terraform
 #
 # Delegates to setup-aws-oidc.sh — same pattern as the eks-terraform-stacks
 # reference repo, so script-by-script comparison stays trivial. Workshop

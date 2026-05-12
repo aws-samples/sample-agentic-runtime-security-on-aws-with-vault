@@ -81,7 +81,7 @@ if [ "${running_vault}" -ge 3 ]; then
     print_pass "Vault pods running (${running_vault} of 3)"
 else
     print_fail "Vault pods running" \
-        "Only ${running_vault}/3 Vault pods Running. Check: kubectl get pods -n ${VAULT_NAMESPACE} -l ${VAULT_LABEL}. If 0, ensure the vault Stacks component applied successfully."
+        "Only ${running_vault}/3 Vault pods Running. Check: kubectl get pods -n ${VAULT_NAMESPACE} -l ${VAULT_LABEL}. If 0, ensure the workspace apply completed successfully."
 fi
 
 #-------------------------------------------------------------------------------
@@ -121,7 +121,7 @@ if [ "${audit_count:-0}" -ge 1 ]; then
     print_pass "Vault audit device: enabled (${audit_count} device(s))"
 else
     print_fail "Vault audit device" \
-        "No audit devices found. The vault_config Stacks component enables the audit device. Verify vault_config applied: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault audit list"
+        "No audit devices found. The vault_config module enables the audit device. Verify vault_config applied: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault audit list"
 fi
 
 #-------------------------------------------------------------------------------
@@ -158,7 +158,7 @@ if [ "${running_cm}" -ge 1 ]; then
     print_pass "cert-manager pods running (${running_cm} pod(s))"
 else
     print_fail "cert-manager pods running" \
-        "No cert-manager pods Running. Check the addons Stacks component: kubectl get pods -n cert-manager. Re-apply the addons component in HCP Terraform if needed."
+        "No cert-manager pods Running. Check the addons module: kubectl get pods -n cert-manager. Re-apply the addons component in HCP Terraform if needed."
 fi
 
 #-------------------------------------------------------------------------------

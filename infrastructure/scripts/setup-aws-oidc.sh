@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #===============================================================================
-# Setup AWS IAM Role for HCP Terraform Stacks OIDC Authentication
+# Setup AWS IAM Role for HCP Terraform OIDC Authentication
 #
 # Mirrors the structure of:
 #   ~/git-repos/eks-terraform-stacks/infrastructure/scripts/setup-aws-oidc.sh
@@ -187,7 +187,7 @@ else
     aws iam create-role \
         --role-name "$ROLE_NAME" \
         --assume-role-policy-document "$TRUST_POLICY" \
-        --description "IAM role for HCP Terraform Stacks OIDC authentication - Agentic Runtime Security workshop" > /dev/null
+        --description "IAM role for HCP Terraform OIDC authentication - Agentic Runtime Security workshop" > /dev/null
     echo -e "${GREEN}IAM role created.${NC}"
 fi
 
@@ -226,6 +226,6 @@ echo -e "Next steps:"
 echo -e "1. In HCP Terraform, set the ${YELLOW}aws_role_arn${NC} variable to:"
 echo -e "   ${ROLE_ARN}"
 echo ""
-echo -e "2. Run your Stack deployment"
+echo -e "2. Run your workspace deployment"
 echo ""
 echo -e "${GREEN}===============================================================================${NC}"

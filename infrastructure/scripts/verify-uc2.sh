@@ -96,7 +96,7 @@ if [ "${running_ui:-0}" -ge 1 ]; then
     print_pass "Banking UI pod Running (${running_ui} pod(s) in ${BANKING_NAMESPACE})"
 else
     print_fail "Banking UI pod Running" \
-        "Banking UI pod not running — verify Stacks apply completed and banking-ui image URI is correct. Check: kubectl get pods -n ${BANKING_NAMESPACE} -l app=banking-ui"
+        "Banking UI pod not running — verify workspace apply completed and banking-ui image URI is correct. Check: kubectl get pods -n ${BANKING_NAMESPACE} -l app=banking-ui"
 fi
 
 #-------------------------------------------------------------------------------
@@ -108,7 +108,7 @@ if [ "${running_agent:-0}" -ge 1 ]; then
     print_pass "Banking Agent pod Running (${running_agent} pod(s) in ${BANKING_NAMESPACE})"
 else
     print_fail "Banking Agent pod Running" \
-        "Banking Agent pod not running — verify Stacks apply completed and banking-agent image URI is correct. Check: kubectl get pods -n ${BANKING_NAMESPACE} -l app=banking-agent"
+        "Banking Agent pod not running — verify workspace apply completed and banking-agent image URI is correct. Check: kubectl get pods -n ${BANKING_NAMESPACE} -l app=banking-agent"
 fi
 
 #-------------------------------------------------------------------------------
@@ -120,7 +120,7 @@ if [ "${running_mcp:-0}" -ge 1 ]; then
     print_pass "MCP Server pod Running (${running_mcp} pod(s) in ${BANKING_NAMESPACE})"
 else
     print_fail "MCP Server pod Running" \
-        "MCP Server pod not running — verify Stacks apply completed and banking-mcp-server image URI is correct. Check: kubectl get pods -n ${BANKING_NAMESPACE} -l app=banking-mcp-server"
+        "MCP Server pod not running — verify workspace apply completed and banking-mcp-server image URI is correct. Check: kubectl get pods -n ${BANKING_NAMESPACE} -l app=banking-mcp-server"
 fi
 
 #-------------------------------------------------------------------------------
@@ -130,7 +130,7 @@ if kubectl get sa uc2-mcp-server-sa -n "${BANKING_NAMESPACE}" --no-headers &>/de
     print_pass "ServiceAccount uc2-mcp-server-sa exists in ${BANKING_NAMESPACE}"
 else
     print_fail "ServiceAccount uc2-mcp-server-sa exists" \
-        "ServiceAccount uc2-mcp-server-sa not found — check uc2_agent Stacks component. Run: kubectl get sa -n ${BANKING_NAMESPACE}"
+        "ServiceAccount uc2-mcp-server-sa not found — check uc2_agent module in workspace run. Run: kubectl get sa -n ${BANKING_NAMESPACE}"
 fi
 
 #-------------------------------------------------------------------------------
@@ -143,7 +143,7 @@ if [ "${vault_k8s_role_sa}" = "uc2-mcp-server-sa" ]; then
     print_pass "Vault k8s auth role uc2 bound to uc2-mcp-server-sa"
 else
     print_fail "Vault k8s auth role uc2 binding" \
-        "Vault k8s role uc2 not bound to uc2-mcp-server-sa (got '${vault_k8s_role_sa}') — reapply vault_config component. Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault read auth/kubernetes/role/uc2"
+        "Vault k8s role uc2 not bound to uc2-mcp-server-sa (got '${vault_k8s_role_sa}') — reapply the workspace run. Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault read auth/kubernetes/role/uc2"
 fi
 
 #-------------------------------------------------------------------------------

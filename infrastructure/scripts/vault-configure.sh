@@ -4,7 +4,7 @@
 #
 # Configures Vault (auth backends, secrets engines, policies, roles) and IVIA
 # (OAuth clients, CIBA policy, RAR types) via local Terraform workspaces with
-# kubectl port-forward. This runs AFTER the first Stacks deploy and vault-init.sh.
+# kubectl port-forward. This runs AFTER the first workspace deploy and vault-init.sh.
 #
 # Phases:
 #   1. Gather inputs    — reads cluster/RDS/Bedrock info from AWS + kubectl

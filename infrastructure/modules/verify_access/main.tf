@@ -777,10 +777,12 @@ resource "kubernetes_ingress_v1" "isvaop" {
     name      = "isvaop"
     namespace = kubernetes_namespace.verify_access.metadata[0].name
     annotations = {
-      "alb.ingress.kubernetes.io/scheme"           = "internet-facing"
-      "alb.ingress.kubernetes.io/target-type"      = "ip"
-      "alb.ingress.kubernetes.io/listen-ports"     = "[{\"HTTPS\":443}]"
-      "alb.ingress.kubernetes.io/backend-protocol" = "HTTPS"
+      "alb.ingress.kubernetes.io/scheme"               = "internet-facing"
+      "alb.ingress.kubernetes.io/target-type"          = "ip"
+      "alb.ingress.kubernetes.io/listen-ports"         = "[{\"HTTP\":80}]"
+      "alb.ingress.kubernetes.io/backend-protocol"     = "HTTPS"
+      "alb.ingress.kubernetes.io/healthcheck-protocol" = "HTTPS"
+      "alb.ingress.kubernetes.io/healthcheck-port"     = "8436"
     }
     labels = {
       "app.kubernetes.io/name"       = "isvaop"

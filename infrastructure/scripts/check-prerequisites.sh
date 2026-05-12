@@ -97,9 +97,9 @@ AWS_REGION="${AWS_REGION:-us-west-2}"
 export AWS_PAGER=""
 
 # ---- Minimum tool versions (enforced in the "Verify CLI tool versions" section) ----
-# Terraform 1.10 is the floor: Stacks features (terraform stacks plan / apply)
+# Terraform 1.10 is the floor: workspace features
 # require 1.10+. The hcp-setup module deliberately keeps a looser >= 1.0 pin
-# so attendees can bootstrap with stock CLIs, but the workshop's actual Stacks
+# so attendees can bootstrap with stock CLIs, but the workshop's actual workspace
 # deploy needs 1.10+ at the local CLI to dry-run / plan.
 TERRAFORM_MIN_VERSION="1.10.0"
 
@@ -143,7 +143,7 @@ KUBECTL_MAJOR_MINOR="1.33"
 AWS_CLI_MAJOR="2"
 
 # Per-section gate (only matters in --interactive mode; auto-yes otherwise)
-if confirm "Install / verify CLI tools (kubectl, helm, terraform, vault, aws, jq, yq, tfc-agent)?"; then
+if confirm "Install / verify CLI tools (kubectl, helm, terraform, vault, aws, jq, yq)?"; then
     OS="$(uname -s)"
     ARCH="$(uname -m)"
 
@@ -218,7 +218,7 @@ if confirm "Install / verify CLI tools (kubectl, helm, terraform, vault, aws, jq
                 if [ ! -f /etc/apt/sources.list.d/kubernetes.list ]; then
                     if confirm "Add Kubernetes ${KUBECTL_MAJOR_MINOR} apt repo (provides kubectl)?"; then
                         print_info "Adding Kubernetes ${KUBECTL_MAJOR_MINOR} apt repo"
-                        run sudo mkdir -p /etc/apt/keyrings"
+                        run "sudo mkdir -p /etc/apt/keyrings"
                         run "curl -fsSL \"https://pkgs.k8s.io/core:/stable:/v${KUBECTL_MAJOR_MINOR}/deb/Release.key\" | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg"
                         run "echo \"deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v${KUBECTL_MAJOR_MINOR}/deb/ /\" | sudo tee /etc/apt/sources.list.d/kubernetes.list"
                     else
@@ -244,9 +244,9 @@ if confirm "Install / verify CLI tools (kubectl, helm, terraform, vault, aws, jq
                 # apt-get update + install
                 if confirm "Refresh apt indexes and install terraform/vault/kubectl/helm/jq/unzip/ca-certificates/curl?"; then
                     print_info "Refreshing apt indexes"
-                    run sudo apt-get update -qq"
+                    run "sudo apt-get update -qq"
                     print_info "Installing terraform, vault, kubectl, helm, jq, unzip, ca-certificates"
-                    run sudo apt-get install -y -qq terraform vault kubectl helm jq unzip ca-certificates curl"
+                    run "sudo apt-get install -y -qq terraform vault kubectl helm jq unzip ca-certificates curl"
                 else
                     print_warn "Skipped apt-get update + batch install"
                 fi
@@ -256,8 +256,8 @@ if confirm "Install / verify CLI tools (kubectl, helm, terraform, vault, aws, jq
                     if confirm "Install yq (direct binary from GitHub)?"; then
                         print_info "Installing yq (direct binary from GitHub)"
                         arch_dpkg=$(dpkg --print-architecture)
-                        run sudo curl -fsSL \"https://github.com/mikefarah/yq/releases/latest/download/yq_linux_${arch_dpkg}\" -o /usr/local/bin/yq"
-                        run sudo chmod +x /usr/local/bin/yq"
+                        run "sudo curl -fsSL \"https://github.com/mikefarah/yq/releases/latest/download/yq_linux_${arch_dpkg}\" -o /usr/local/bin/yq"
+                        run "sudo chmod +x /usr/local/bin/yq"
                     else
                         print_warn "Skipped yq install"
                     fi
@@ -270,8 +270,8 @@ if confirm "Install / verify CLI tools (kubectl, helm, terraform, vault, aws, jq
                     if confirm "Install AWS CLI v${AWS_CLI_MAJOR} (official installer)?"; then
                         print_info "Installing AWS CLI v${AWS_CLI_MAJOR}"
                         run "curl -fsSL \"https://awscli.amazonaws.com/awscli-exe-linux-${ARCH}.zip\" -o /tmp/awscliv2.zip"
-                        run unzip -q -o /tmp/awscliv2.zip -d /tmp"
-                        run sudo /tmp/aws/install --update"
+                        run "unzip -q -o /tmp/awscliv2.zip -d /tmp"
+                        run "sudo /tmp/aws/install --update"
                     else
                         print_warn "Skipped AWS CLI v${AWS_CLI_MAJOR} install"
                     fi
@@ -286,8 +286,8 @@ if confirm "Install / verify CLI tools (kubectl, helm, terraform, vault, aws, jq
                 if [ ! -f /etc/yum.repos.d/hashicorp.repo ]; then
                     if confirm "Add HashiCorp yum repo (provides terraform + vault)?"; then
                         print_info "Adding HashiCorp yum repo"
-                        run sudo yum install -y -q yum-utils"
-                        run sudo yum-config-manager --add-repo https://rpm.releases.hashicorp.com/AmazonLinux/hashicorp.repo"
+                        run "sudo yum install -y -q yum-utils"
+                        run "sudo yum-config-manager --add-repo https://rpm.releases.hashicorp.com/AmazonLinux/hashicorp.repo"
                     else
                         print_warn "Skipped HashiCorp yum repo add"
                     fi
@@ -312,7 +312,7 @@ EOF"
 
                 if confirm "yum install terraform/vault/kubectl/jq/unzip?"; then
                     print_info "Installing terraform, vault, kubectl, jq, unzip"
-                    run sudo yum install -y -q terraform vault kubectl jq unzip"
+                    run "sudo yum install -y -q terraform vault kubectl jq unzip"
                 else
                     print_warn "Skipped yum batch install"
                 fi
@@ -331,8 +331,8 @@ EOF"
                 if ! command -v yq >/dev/null 2>&1; then
                     if confirm "Install yq (direct binary)?"; then
                         print_info "Installing yq (direct binary)"
-                        run sudo curl -fsSL \"https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64\" -o /usr/local/bin/yq"
-                        run sudo chmod +x /usr/local/bin/yq"
+                        run "sudo curl -fsSL \"https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64\" -o /usr/local/bin/yq"
+                        run "sudo chmod +x /usr/local/bin/yq"
                     else
                         print_warn "Skipped yq install"
                     fi
@@ -342,8 +342,8 @@ EOF"
                     if confirm "Install AWS CLI v${AWS_CLI_MAJOR}?"; then
                         print_info "Installing AWS CLI v${AWS_CLI_MAJOR}"
                         run "curl -fsSL \"https://awscli.amazonaws.com/awscli-exe-linux-${ARCH}.zip\" -o /tmp/awscliv2.zip"
-                        run unzip -q -o /tmp/awscliv2.zip -d /tmp"
-                        run sudo /tmp/aws/install --update"
+                        run "unzip -q -o /tmp/awscliv2.zip -d /tmp"
+                        run "sudo /tmp/aws/install --update"
                     else
                         print_warn "Skipped AWS CLI v${AWS_CLI_MAJOR} install"
                     fi
@@ -390,17 +390,6 @@ if command -v terraform >/dev/null 2>&1; then
 else
     print_fail "terraform not found" \
         "Install via the install loop above, or manually from https://developer.hashicorp.com/terraform/install. Minimum: ${TERRAFORM_MIN_VERSION}"
-fi
-
-# tfc-agent — WARN if not found (Docker alternative exists); PASS + print version if found.
-# The HCP Terraform Workspace uses a local agent pool. tfc-agent must be running
-# before any workspace run can execute. Alternative: run via Docker (see prerequisites).
-if command -v tfc-agent >/dev/null 2>&1; then
-    tfc_agent_ver=$(tfc-agent --version 2>/dev/null | head -1 || echo "version unknown")
-    print_pass "tfc-agent found: ${tfc_agent_ver}"
-else
-    print_warn "tfc-agent not found — workspace applies will queue until an agent connects" \
-        "Install: macOS \`brew install hashicorp/tap/tfc-agent\` | Linux binary from https://releases.hashicorp.com/tfc-agent/ | Alternative: run via Docker: \`docker run -e TFC_AGENT_TOKEN=\$(cat infrastructure/scripts/.agent-token) hashicorp/tfc-agent\`"
 fi
 
 echo

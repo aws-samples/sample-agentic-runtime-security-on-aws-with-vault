@@ -35,7 +35,6 @@ WORKSHOP_TAG_VAL="agentic-runtime-security"
 HCP_ROLE_NAME="hcp-stacks-deploy"
 HCP_STACK_NAME="agentic-runtime-security"
 HCP_WORKSPACE_NAME="agentic-runtime-security"
-HCP_AGENT_POOL_NAME="workshop-agents"
 HCP_PROJECT_NAME="Agentic Runtime Security"
 HCP_VARSET_NAME="agentic-runtime-stacks-config"
 TFE_API="https://app.terraform.io/api/v2"
@@ -1151,12 +1150,11 @@ phase_aws_sweep() {
 # HCP CLEANUP — delete Stack, variable set, AWS IAM role for HCP, OIDC provider
 #===============================================================================
 phase_hcp_cleanup() {
-    phase_header "HCP Cleanup (Workspace + Stack + agent pool + variable set + IAM role + OIDC)"
+    phase_header "HCP Cleanup (Workspace + Stack + variable set + IAM role + OIDC)"
 
     if [ "$DRY_RUN" = true ]; then
         print_info "[DRY-RUN] Would delete HCP Workspace '$HCP_WORKSPACE_NAME', Stack '$HCP_STACK_NAME',"
-        print_info "          agent pool '$HCP_AGENT_POOL_NAME', variable set,"
-        print_info "          IAM role '$HCP_ROLE_NAME', OIDC provider 'app.terraform.io'"
+        print_info "          variable set, IAM role '$HCP_ROLE_NAME', OIDC provider 'app.terraform.io'"
         return 0
     fi
 
@@ -1194,40 +1192,6 @@ phase_hcp_cleanup() {
                 *)           print_warn "Workspace delete returned HTTP $code — check HCP UI" ;;
             esac
         fi
-    fi
-
-    #-- Agent pool delete via API
-    step_header "Delete HCP Agent Pool '$HCP_AGENT_POOL_NAME'"
-    if [ -z "${TFE_TOKEN:-}" ]; then
-        print_warn "TFE_TOKEN not set — skipping agent pool delete"
-    else
-        local pool_id
-        pool_id=$(curl -s -H "Authorization: Bearer $TFE_TOKEN" \
-            -H "Content-Type: application/vnd.api+json" \
-            "$TFE_API/organizations/$HCP_ORG/agent-pools" 2>/dev/null \
-            | jq -r --arg n "$HCP_AGENT_POOL_NAME" \
-              '[.data[] | select(.attributes.name==$n)] | .[0].id // empty')
-        if [ -z "$pool_id" ]; then
-            print_info "No agent pool '$HCP_AGENT_POOL_NAME' found"
-        else
-            print_info "Agent pool id: $pool_id"
-            local code
-            code=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
-                -H "Authorization: Bearer $TFE_TOKEN" \
-                -H "Content-Type: application/vnd.api+json" \
-                "$TFE_API/agent-pools/$pool_id" 2>/dev/null)
-            case "$code" in
-                200|204|404) print_success "Agent pool deleted (HTTP $code)" ;;
-                *)           print_warn "Agent pool delete returned HTTP $code — check HCP UI" ;;
-            esac
-        fi
-    fi
-
-    #-- Agent token file cleanup
-    local agent_token_file="$SCRIPT_DIR/.agent-token"
-    if [ -f "$agent_token_file" ]; then
-        rm -f "$agent_token_file"
-        print_success "Removed local agent token file"
     fi
 
     #-- Stack delete via API

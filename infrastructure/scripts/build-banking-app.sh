@@ -106,7 +106,7 @@ done
 # Region resolution (no hardcoded region strings)
 #-------------------------------------------------------------------------------
 if ! resolve_region "${CLI_REGION:-${WORKSHOP_REGION:-}}"; then
-    print_fail "Region resolution failed — set WORKSHOP_REGION, --region flag, or deployments.tfdeploy.hcl"
+    print_fail "Region resolution failed — set WORKSHOP_REGION, --region flag, or terraform.tfvars"
     exit 1
 fi
 REGION="${RESOLVED_REGION}"
@@ -272,7 +272,7 @@ echo "  ${ECR_URI}:ui"
 echo "  ${ECR_URI}:agent"
 echo "  ${ECR_URI}:mcp"
 echo ""
-print_info "Set these in your Stacks deployment:"
+print_info "Set these in your HCP Terraform workspace variables:"
 echo "  banking_ui_image    = \"${ECR_URI}:ui\""
 echo "  banking_agent_image = \"${ECR_URI}:agent\""
 echo "  banking_mcp_image   = \"${ECR_URI}:mcp\""

@@ -12,7 +12,7 @@
 # Usage:
 #   ./test-eks.sh --cluster-name <name> [--region <region>]
 #
-# Region resolution: --region arg, then $AWS_REGION, then deployments.tfdeploy.hcl.
+# Region resolution: --region arg, then $AWS_REGION, then terraform.tfvars.
 #===============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -66,7 +66,7 @@ if [ "$status" = "ACTIVE" ]; then
     print_pass "Cluster status: ACTIVE"
 else
     print_fail "Cluster status: ${status}" \
-        "Run: aws eks describe-cluster --name ${CLUSTER_NAME} --region ${REGION}. If 'ResourceNotFoundException', the cluster does not exist — verify the foundation Stack converged in HCP Terraform UI."
+        "Run: aws eks describe-cluster --name ${CLUSTER_NAME} --region ${REGION}. If 'ResourceNotFoundException', the cluster does not exist — verify the workspace run completed in HCP Terraform UI."
 fi
 
 # 2. kubectl get nodes — require >= 2 Ready
@@ -93,7 +93,7 @@ addon_list=$(aws eks list-addons --cluster-name "$CLUSTER_NAME" --region "$REGIO
 for addon in "${REQUIRED_ADDONS[@]}"; do
     if ! echo "$addon_list" | tr '\t' '\n' | grep -qx "$addon"; then
         print_fail "Addon missing: ${addon}" \
-            "Install: aws eks create-addon --cluster-name ${CLUSTER_NAME} --region ${REGION} --addon-name ${addon}. Or re-run the foundation Stack apply."
+            "Install: aws eks create-addon --cluster-name ${CLUSTER_NAME} --region ${REGION} --addon-name ${addon}. Or re-run the workspace apply."
         continue
     fi
     addon_status=$(aws eks describe-addon --cluster-name "$CLUSTER_NAME" --region "$REGION" \
@@ -113,7 +113,7 @@ if [ -n "$entries" ] && [ "$entries" != "None" ]; then
     print_pass "Access entries present"
 else
     print_fail "No EKS access entries found" \
-        "Run: aws eks list-access-entries --cluster-name ${CLUSTER_NAME} --region ${REGION}. The foundation Stack should create an admin access entry for the workshop principal."
+        "Run: aws eks list-access-entries --cluster-name ${CLUSTER_NAME} --region ${REGION}. The workspace run should create an admin access entry for the workshop principal."
 fi
 
 # common-checks.sh EXIT trap emits print_summary and propagates exit code.

@@ -3,7 +3,7 @@
 # seed-banking-db.sh — Banking Database Seed
 #
 # Seeds the RDS PostgreSQL database with the banking schema, RLS policies,
-# and test data for UC2/UC3. Runs AFTER Stacks deploy of uc2_app.
+# and test data for UC2/UC3. Runs AFTER Terraform deploy of uc2_app.
 #
 # Mechanism:
 #   - Retrieves RDS master credentials from Secrets Manager
@@ -86,7 +86,7 @@ command -v jq &>/dev/null || { print_fail "jq is required"; exit 1; }
 print_pass "CLI tools available"
 
 kubectl get namespace "$NAMESPACE" &>/dev/null || {
-    print_fail "Namespace '${NAMESPACE}' not found. Deploy uc2_app via Stacks first."; exit 1
+    print_fail "Namespace '${NAMESPACE}' not found. Deploy uc2_app via HCP Terraform workspace run first."; exit 1
 }
 print_pass "Namespace '${NAMESPACE}' exists"
 

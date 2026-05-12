@@ -10,7 +10,7 @@ Bootstrapping, end-to-end orchestration, per-component verification, and teardow
 | `bootstrap.sh` | Workshop user | Single-command HCP Terraform setup: project + variable set + OIDC trust + IAM role + Stacks deployment seeding (idempotent). Prompts at the top to confirm `check-prerequisites.sh` has been run; pass `--skip-prereq-gate` to bypass (used automatically by `workshop-e2e.sh`, which runs prereqs in Phase 0). Step 1/7 delegates to `setup-aws-oidc.sh` | PREF-04 |
 | `setup-aws-oidc.sh` | Workshop user, `bootstrap.sh`, `workshop-e2e.sh` | Idempotent: creates the AWS OIDC identity provider for `app.terraform.io`, the IAM role `hcp-stacks-deploy`, and attaches AdministratorAccess (workshop pedagogical scope). Updates trust policy + thumbprint on re-run. Mirrors `eks-terraform-stacks/infrastructure/scripts/setup-aws-oidc.sh` (minor changes: role name + AdministratorAccess instead of scoped policy) | — |
 | `common-checks.sh` | Sourced library (not invoked directly) | Shared bash helpers — color constants, ✓/✗/⚠ unicode markers, FAILURES[] accumulator, `confirm()` y/N prompt, opt-in EXIT-trap summary | (library) |
-| `resolve-region.sh` | Sourced library (not invoked directly) | Shared `resolve_region()` helper — resolves region from CLI arg → `$AWS_REGION` → `infrastructure/deployments.tfdeploy.hcl`. Sets `RESOLVED_REGION`. Honors the canonical-region contract (no `us-west-2` string literals) | (library) |
+| `resolve-region.sh` | Sourced library (not invoked directly) | Shared `resolve_region()` helper — resolves region from CLI arg → `$AWS_REGION` → `infrastructure/terraform.tfvars`. Sets `RESOLVED_REGION`. Honors the canonical-region contract (no `us-west-2` string literals) | (library) |
 | `test-eks.sh` | Workshop user, `test-foundation.sh`, `workshop-e2e.sh` | Verifies workshop EKS cluster: status ACTIVE, ≥2 Ready nodes, 5 managed addons (vpc-cni, coredns, kube-proxy, eks-pod-identity-agent, aws-ebs-csi-driver) ACTIVE, access entry present | — |
 | `test-rds.sh` | Workshop user, `test-foundation.sh`, `workshop-e2e.sh` | Verifies workshop RDS PostgreSQL: status available, engine postgres 17.x, MasterUserSecret present, parameter group has `pgaudit` in `shared_preload_libraries` and `pgaudit.log` set, storage encrypted | — |
 | `test-bedrock-kb.sh` | Workshop user, `test-foundation.sh`, `workshop-e2e.sh` | Verifies Bedrock Knowledge Base: KB status ACTIVE, 3 data sources (hr/customers/finance) AVAILABLE, retrieval smoke query per data source, AOSS collection ACTIVE | — |
@@ -48,7 +48,7 @@ Bootstrapping, end-to-end orchestration, per-component verification, and teardow
 ./test-foundation.sh --cluster-name <name> --db-instance-id <id> --knowledge-base-id <kb_id> [--region <region>]
 ```
 
-Region resolution order: `--region` arg → `$AWS_REGION` env var → `region` value in `infrastructure/deployments.tfdeploy.hcl`. Fail-fast if none resolve.
+Region resolution order: `--region` arg → `$AWS_REGION` env var → `region` value in `infrastructure/terraform.tfvars`. Fail-fast if none resolve.
 
 `test-foundation.sh` also reads `WORKSHOP_CLUSTER_NAME` / `WORKSHOP_DB_INSTANCE_ID` / `WORKSHOP_KB_ID` env vars as fallbacks for missing flags.
 
@@ -63,7 +63,7 @@ Single-command orchestrator. Phase model:
 | 0 | Prerequisites — calls `check-prerequisites.sh` |
 | 1 | Bootstrap — calls `bootstrap.sh --skip-prereq-gate` (Phase 0 already ran prereqs) |
 | 2 | Foundation deploy — git push + HCP plan via API + approve + wait for convergence |
-| 3 | Configure kubectl — single deployment `usw2` (region from `deployments.tfdeploy.hcl`) |
+| 3 | Configure kubectl — single deployment `usw2` (region from `terraform.tfvars`) |
 | 4 | Foundation verify — calls `test-foundation.sh` |
 | 5 | Identity (IVIA) — placeholder; populated when workshop Phase 3 ships |
 | 6 | Vault — placeholder; populated when workshop Phase 4 ships |
