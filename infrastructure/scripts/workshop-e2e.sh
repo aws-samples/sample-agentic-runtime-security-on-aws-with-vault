@@ -451,7 +451,7 @@ hcp_wait_for_vcs_plan() {
             -H "Content-Type: application/vnd.api+json" \
             "$TFE_API/stack-configurations/$config_id" 2>/dev/null \
             | jq -r '.data.attributes.status // "unknown"')
-        if [ "$final_status" = "converged" ]; then
+        if [ "$final_status" = "converged" ] || [ "$final_status" = "completed" ]; then
             print_success "Configuration converged (no changes needed)"
             return 0
         fi
@@ -485,7 +485,7 @@ hcp_deploy_and_wait() {
             -H "Content-Type: application/vnd.api+json" \
             "$TFE_API/stack-configurations/$config_id" 2>/dev/null \
             | jq -r '.data.attributes.status // "unknown"')
-        if [ "$final_status" = "converged" ]; then
+        if [ "$final_status" = "converged" ] || [ "$final_status" = "completed" ]; then
             print_success "Configuration converged (no changes needed)"
             return 0
         fi
@@ -926,7 +926,7 @@ phase_uc1() {
             -H "Content-Type: application/vnd.api+json" \
             "$TFE_API/stack-configurations/$old_config_id" 2>/dev/null \
             | jq -r '.data.attributes.status // "unknown"')
-        if [ "$latest_status" = "converged" ]; then
+        if [ "$latest_status" = "converged" ] || [ "$latest_status" = "completed" ]; then
             print_success "Latest config already converged — skipping deploy"
         else
             step_header "Triggering Stacks plan (UC1 agent)..."
@@ -1052,7 +1052,7 @@ phase_uc2() {
             -H "Content-Type: application/vnd.api+json" \
             "$TFE_API/stack-configurations/$old_config_id" 2>/dev/null \
             | jq -r '.data.attributes.status // "unknown"')
-        if [ "$latest_status" = "converged" ]; then
+        if [ "$latest_status" = "converged" ] || [ "$latest_status" = "completed" ]; then
             print_success "Latest config already converged — skipping deploy"
         else
             step_header "Triggering Stacks plan (UC2 banking app)..."
