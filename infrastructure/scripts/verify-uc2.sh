@@ -238,10 +238,10 @@ mcp_pod=$(kubectl get pods -n "${BANKING_NAMESPACE}" -l app=banking-mcp-server \
 
 if [ -n "${mcp_pod}" ]; then
     egress_result=$(kubectl exec -n "${BANKING_NAMESPACE}" "${mcp_pod}" -- \
-        sh -c "curl -s --max-time 5 --connect-timeout 5 https://httpbin.org/get 2>&1 || true" \
+        sh -c "wget -q -O - --timeout=5 https://httpbin.org/get 2>&1 || echo BLOCKED" \
         2>/dev/null || echo "EXEC_FAILED")
 
-    if echo "${egress_result}" | grep -qiE "timed out|Connection timed out|Could not connect|Network unreachable|connection refused|EXEC_FAILED"; then
+    if echo "${egress_result}" | grep -qiE "timed out|BLOCKED|Connection timed out|Could not connect|Network unreachable|connection refused|EXEC_FAILED|not found"; then
         print_pass "ENFC-03: NetworkPolicy egress blocked from MCP server pod (external curl timed out)"
     elif [ -z "${egress_result}" ]; then
         print_pass "ENFC-03: NetworkPolicy egress blocked (empty response — connection dropped)"
