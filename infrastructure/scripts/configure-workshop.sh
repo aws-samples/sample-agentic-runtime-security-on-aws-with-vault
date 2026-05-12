@@ -234,38 +234,19 @@ elif [[ "$DRY_RUN" = true ]]; then
     print_info "[DRY-RUN] Would run: vault-init.sh"
     print_pass "Step 2: Initialize Vault (dry-run)"
 else
-    # Start port-forward in background (vault-init.sh may also do this; pass
-    # through — vault-init.sh is idempotent if Vault is already initialized)
-    if kubectl --context workshop get pods -n vault vault-0 --no-headers >/dev/null 2>&1; then
-        if _run_subscript "Step 2: vault-init" "${SCRIPT_DIR}/vault-init.sh"; then
-            # Verify: vault status should show initialized=true, sealed=false
-            # port-forward for check (vault-init.sh cleans up its own port-forward)
-            kubectl --context workshop port-forward svc/vault -n vault 8200:8200 \
-                >/dev/null 2>&1 &
-            VAULT_PF_PID=$!
-            if _wait_for_port 8200 30; then
-                VAULT_STATUS=$(VAULT_ADDR="http://localhost:8200" \
-                    vault status -format=json 2>/dev/null || echo '{}')
-                VAULT_INIT=$(echo "$VAULT_STATUS" | jq -r '.initialized // false')
-                VAULT_SEALED=$(echo "$VAULT_STATUS" | jq -r '.sealed // true')
-                if [[ "$VAULT_INIT" = "true" ]] && [[ "$VAULT_SEALED" = "false" ]]; then
-                    print_pass "Step 2: Initialize Vault (initialized=true, sealed=false)"
-                else
-                    print_fail "Step 2: Initialize Vault" \
-                        "Vault status: initialized=${VAULT_INIT} sealed=${VAULT_SEALED}. Check vault-0 logs: kubectl logs -n vault vault-0"
-                fi
-            else
-                print_warn "Step 2: Could not verify Vault status via port-forward — vault-init may still be in progress"
-            fi
-            # Kill our temporary port-forward (vault-configure.sh starts its own)
-            if [[ -n "$VAULT_PF_PID" ]] && kill -0 "$VAULT_PF_PID" 2>/dev/null; then
-                kill "$VAULT_PF_PID" 2>/dev/null || true
-                VAULT_PF_PID=""
-            fi
+    if _run_subscript "Step 2: vault-init" "${SCRIPT_DIR}/vault-init.sh"; then
+        # vault-init.sh verifies status internally and exits 0 on success
+        # Verify via kubectl exec (no port-forward needed)
+        local vault_sealed
+        vault_sealed=$(kubectl --context workshop exec -n vault vault-0 -- \
+            vault status -format=json 2>/dev/null \
+            | jq -r '.sealed // true' 2>/dev/null || echo "true")
+        if [[ "$vault_sealed" = "false" ]]; then
+            print_pass "Step 2: Initialize Vault (initialized, unsealed)"
+        else
+            print_fail "Step 2: Initialize Vault" \
+                "Vault sealed or unreachable. Check: kubectl exec -n vault vault-0 -- vault status"
         fi
-    else
-        print_fail "Step 2: Initialize Vault" \
-            "Vault pod vault-0 not found. Ensure EKS + Vault deploy completed: kubectl get pods -n vault"
     fi
 fi
 

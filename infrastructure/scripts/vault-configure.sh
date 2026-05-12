@@ -25,9 +25,8 @@
 #   --cluster-name NAME   EKS cluster name (default: auto-detect from kubeconfig)
 #   --region REGION        AWS region (default: auto-detect from kubeconfig)
 #   --vault-token TOKEN    Vault root token (default: read from ~/vault-init.json)
-#   --ivia-password PASS   IVIA admin password (default: prompt)
 #   --dry-run              Show what would be done without executing
-#   --skip-ivia            Skip IVIA configuration (Phase 3)
+#   --skip-ivia            Skip IVIA verification (Phase 3)
 #   --help                 Show this help message
 #===============================================================================
 set -euo pipefail
@@ -41,7 +40,6 @@ ISVA_CONFIG_DIR="${REPO_ROOT}/infrastructure/isva-config"
 CLUSTER_NAME=""
 REGION=""
 VAULT_TOKEN=""
-IVIA_PASSWORD=""
 DRY_RUN=false
 SKIP_IVIA=false
 
@@ -55,7 +53,6 @@ while [[ $# -gt 0 ]]; do
     --cluster-name) CLUSTER_NAME="$2"; shift 2 ;;
     --region)       REGION="$2"; shift 2 ;;
     --vault-token)  VAULT_TOKEN="$2"; shift 2 ;;
-    --ivia-password) IVIA_PASSWORD="$2"; shift 2 ;;
     --dry-run)      DRY_RUN=true; shift ;;
     --skip-ivia)    SKIP_IVIA=true; shift ;;
     --help)
@@ -222,16 +219,6 @@ phase_gather() {
     warn "Could not capture IVIA TLS cert — JWT auth backend may fail"
   fi
 
-  # IVIA password
-  if [[ "$SKIP_IVIA" == false && -z "$IVIA_PASSWORD" ]]; then
-    read -rsp "[INPUT] IVIA admin password (or press Enter to skip IVIA): " IVIA_PASSWORD
-    echo ""
-    if [[ -z "$IVIA_PASSWORD" ]]; then
-      SKIP_IVIA=true
-      warn "No IVIA password provided — skipping IVIA configuration"
-    fi
-  fi
-
   # Check pods
   info "Checking Vault pods..."
   VAULT_READY=$(kubectl get pods -n vault -l app.kubernetes.io/name=vault,component=server \
@@ -242,16 +229,6 @@ phase_gather() {
     fail "No Vault pods ready. Check: kubectl get pods -n vault"
     record "gather" "FAIL"
     return 1
-  fi
-
-  if [[ "$SKIP_IVIA" == false ]]; then
-    info "Checking IVIA pods..."
-    IVIA_READY=$(kubectl get pods -n verify-access --no-headers 2>/dev/null | grep Running | grep -c '1/1' || true)
-    if [[ "$IVIA_READY" -ge 1 ]]; then
-      ok "IVIA: ${IVIA_READY} pod(s) ready"
-    else
-      warn "No IVIA pods ready — IVIA config may fail"
-    fi
   fi
 
   record "gather" "PASS"
