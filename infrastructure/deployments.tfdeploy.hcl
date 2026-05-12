@@ -99,7 +99,7 @@ deployment "usw2" {
 
     # UC1 Agent image — attendees set this after ECR push (Phase 4 lab step).
     # Replace with the actual ECR URI: <account>.dkr.ecr.us-west-2.amazonaws.com/uc1-agent:<tag>
-    uc1_agent_image = "<placeholder-ecr-uri>"
+    uc1_agent_image = "865855451418.dkr.ecr.us-west-2.amazonaws.com/workshop/uc1-agent:latest"
 
     # UC2 Banking App images — attendees set these after ECR push (Phase 5 lab step).
     # Replace with: <account>.dkr.ecr.<region>.amazonaws.com/workshop-banking-app:<tag>
