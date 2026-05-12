@@ -67,9 +67,11 @@ module "eks_blueprints_addons" {
   tags = var.tags
 }
 
-# cert-manager deployed AFTER LBC webhook is ready. Deploying them in the same
-# module call causes a race: LBC registers a mutating webhook on Services, but
-# its pods aren't ready when cert-manager's Service resources are created.
+resource "time_sleep" "lbc_webhook_ready" {
+  depends_on      = [module.eks_blueprints_addons]
+  create_duration = "30s"
+}
+
 resource "helm_release" "cert_manager" {
   name             = "cert-manager"
   namespace        = "cert-manager"
@@ -85,5 +87,5 @@ resource "helm_release" "cert_manager" {
     value = "true"
   }
 
-  depends_on = [module.eks_blueprints_addons]
+  depends_on = [time_sleep.lbc_webhook_ready]
 }
