@@ -1,0 +1,29 @@
+{
+  "name": "banking-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server for UC2 personalized banking — Vault JWT auth + dynamic DB credentials",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts"
+  },
+  "type": "commonjs",
+  "keywords": [],
+  "author": "",
+  "license": "MIT-0",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.10.0",
+    "express": "^4.21.2",
+    "node-fetch": "^2.7.0",
+    "pg": "^8.13.3",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.0.0",
+    "@types/node-fetch": "^2.6.12",
+    "@types/pg": "^8.11.10",
+    "typescript": "^5.7.3"
+  }
+}
