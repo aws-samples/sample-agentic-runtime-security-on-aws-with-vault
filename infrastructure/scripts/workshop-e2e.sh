@@ -11,7 +11,7 @@
 #   Phase 5: Identity (IVIA) — placeholder, populated when workshop Phase 3 ships
 #   Phase 6: Vault — placeholder, populated when workshop Phase 4 ships
 #   Phase 7a: Use Case 1 — Non-Personalized Read-Only (ECR build+push, Stacks deploy, verify-uc1.sh)
-#   Phase 7b: Use Case 2 — OAuth Personalized Read-Only (ECR build+push, Stacks deploy, ivia-configure.sh, verify-uc2.sh)
+#   Phase 7b: Use Case 2 — OAuth Personalized Read-Only (ECR build+push, Stacks deploy, ivia-configure.sh, seed-banking-db.sh, verify-uc2.sh)
 #   Phase 7c: Use Case 3 — CIBA Privileged (placeholder; Phase 6)
 #   Phase 8: Teardown (calls teardown.sh — unless --skip-teardown)
 #
@@ -964,6 +964,7 @@ phase_uc2() {
         print_info "[DRY-RUN] Would trigger Stacks plan+apply for uc2_app component"
         print_info "[DRY-RUN] Would wait for banking-app pods to be ready"
         print_info "[DRY-RUN] Would run ivia-configure.sh (redirect URIs + test users)"
+        print_info "[DRY-RUN] Would run seed-banking-db.sh (banking schema + RLS + test data)"
         print_info "[DRY-RUN] Would run verify-uc2.sh"
         return 0
     fi
@@ -976,6 +977,7 @@ phase_uc2() {
         return 1
     }
     print_success "Banking app images built and pushed to ECR"
+    pause_if_interactive "Banking app images pushed to ECR. Verify in AWS Console before continuing."
 
     # Step 2: Update banking app image URIs in deployments.tfdeploy.hcl
     # build-banking-app.sh outputs the ECR URIs; resolve them here.
@@ -1037,6 +1039,7 @@ phase_uc2() {
         }
     fi
     print_success "UC2 banking app deployed via Stacks"
+    pause_if_interactive "Stacks deploy complete. Verify uc2_app in HCP UI before continuing."
 
     # Step 4: Wait for all banking-app pods to be ready
     step_header "Waiting for banking-app pods to be ready..."
@@ -1069,16 +1072,26 @@ phase_uc2() {
     else
         print_warn "Some banking-app pods not Running after 180s — verify-uc2.sh will report details"
     fi
+    pause_if_interactive "Pods ready. Verify with 'kubectl get pods -n banking-app' before continuing."
 
     # Step 5: Run ivia-configure.sh — update redirect URIs, create test users
     step_header "Configuring IVIA OAuth client (redirect URIs + test users)..."
-    bash "$SCRIPT_DIR/ivia-configure.sh" \
-        --region "$WORKSHOP_REGION" || {
+    bash "$SCRIPT_DIR/ivia-configure.sh" || {
         print_warn "ivia-configure.sh reported failures — IVIA OAuth may not be fully configured"
     }
     print_success "IVIA OAuth client configured"
+    pause_if_interactive "IVIA configured. Verify OAuth client in IVIA admin before continuing."
 
-    # Step 6: Run verify-uc2.sh
+    # Step 6: Seed banking database
+    step_header "Seeding banking database (schema + RLS + test data)..."
+    bash "$SCRIPT_DIR/seed-banking-db.sh" \
+        --region "$WORKSHOP_REGION" || {
+        print_warn "seed-banking-db.sh reported failures — banking DB may not be seeded"
+    }
+    print_success "Banking database seeded"
+    pause_if_interactive "Database seeded. Verify test data before continuing."
+
+    # Step 7: Run verify-uc2.sh
     pause_if_interactive "About to verify UC2 deployment"
     bash "$SCRIPT_DIR/verify-uc2.sh" 2>&1 || print_warn "UC2 verification had warnings"
     print_success "UC2 verification complete"

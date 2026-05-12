@@ -319,8 +319,6 @@ component "uc2_app" {
 
   providers = {
     kubernetes = provider.kubernetes.main
-    null       = provider.null.main
-    aws        = provider.aws.main
   }
 
   inputs = {
@@ -331,8 +329,6 @@ component "uc2_app" {
     rds_address                = component.rds.address
     rds_port                   = component.rds.port
     rds_db_name                = component.rds.db_name
-    rds_endpoint               = component.rds.endpoint
-    rds_master_user_secret_arn = component.rds.master_user_secret_arn
     rds_cidr                   = component.vpc.vpc_cidr
     knowledge_base_id          = component.bedrock_kb_index.knowledge_base_id
     region                     = var.region

@@ -25,16 +25,13 @@
 #   20. kubernetes_network_policy   "banking_mcp_ingress"  (← agent:3001)
 #   21. kubernetes_network_policy   "banking_mcp_egress"   (→ Vault:8200, RDS:5432, IVIA:443)
 #   22. kubernetes_ingress_v1       "banking_ui"           (ALB, internet-facing, HTTP-only)
-#   23. kubernetes_config_map       "seed_sql"             (seed.sql content for DB seed pod)
-#   24. null_resource               "db_seed"              (DB seed via kubectl run + psql)
 #
 # Security design:
 #   - Default-deny-all NetworkPolicy in banking-app namespace (ENFC-03 zero-trust baseline).
 #   - Per-pod NetworkPolicies allow only the required egress destinations.
 #   - uc2-mcp-server-sa is the Vault k8s auth role subject — MCP server issues
 #     Vault JWT auth per user request; agent never touches DB credentials.
-#   - DB seed provisioner retrieves master credentials from Secrets Manager at apply
-#     time; the pod auto-deletes after completion (--rm).
+#   - DB seeding runs post-deploy via seed-banking-db.sh (Stacks does not support local-exec).
 ################################################################################
 
 terraform {
@@ -42,14 +39,6 @@ terraform {
     kubernetes = {
       source  = "hashicorp/kubernetes"
       version = "~> 2.25"
-    }
-    null = {
-      source  = "hashicorp/null"
-      version = "~> 3.0"
-    }
-    aws = {
-      source  = "hashicorp/aws"
-      version = "~> 5.0"
     }
   }
 }
@@ -925,88 +914,3 @@ resource "kubernetes_ingress_v1" "banking_ui" {
   ]
 }
 
-################################################################################
-# 23. ConfigMap — seed-sql
-#
-# Loads seed.sql content into a ConfigMap so the DB seed pod can mount it
-# as a volume file. The ConfigMap lives in banking-app namespace alongside
-# the application workloads.
-################################################################################
-
-resource "kubernetes_config_map" "seed_sql" {
-  metadata {
-    name      = "seed-sql"
-    namespace = kubernetes_namespace.banking_app.metadata[0].name
-  }
-
-  data = {
-    "seed.sql" = file("${path.module}/../../applications/banking-app/db/seed.sql")
-  }
-}
-
-################################################################################
-# 24. null_resource — db_seed
-#
-# Runs the banking schema + RLS seed SQL once (or when seed.sql changes).
-#
-# Mechanism:
-#   - Retrieves master credentials from Secrets Manager at apply time.
-#   - Spins up a disposable postgres:16-alpine pod with --rm (auto-deletes).
-#   - Mounts seed-sql ConfigMap volume to /seed/seed.sql.
-#   - Runs psql against the RDS endpoint.
-#
-# Idempotency:
-#   - triggers = { seed_hash } prevents re-run when seed.sql is unchanged.
-#   - seed.sql itself is idempotent (IF NOT EXISTS + ON CONFLICT DO NOTHING).
-################################################################################
-
-resource "null_resource" "db_seed" {
-  triggers = {
-    seed_hash = filemd5("${path.module}/../../applications/banking-app/db/seed.sql")
-  }
-
-  provisioner "local-exec" {
-    command = <<-EOT
-      SECRET=$(aws secretsmanager get-secret-value \
-        --secret-id "${var.rds_master_user_secret_arn}" \
-        --query SecretString --output text)
-      MASTER_USER=$(echo "$SECRET" | jq -r '.username')
-      MASTER_PASSWORD=$(echo "$SECRET" | jq -r '.password')
-
-      kubectl run db-seed-uc2 \
-        --namespace=banking-app \
-        --image=postgres:16-alpine \
-        --restart=Never \
-        --rm \
-        -i \
-        --timeout=60s \
-        --overrides="{
-          \"spec\": {
-            \"containers\": [{
-              \"name\": \"db-seed-uc2\",
-              \"image\": \"postgres:16-alpine\",
-              \"command\": [
-                \"psql\",
-                \"-h\", \"${var.rds_address}\",
-                \"-p\", \"${var.rds_port}\",
-                \"-U\", \"$MASTER_USER\",
-                \"-d\", \"${var.rds_db_name}\",
-                \"-f\", \"/seed/seed.sql\"
-              ],
-              \"volumeMounts\": [{\"name\": \"seed\", \"mountPath\": \"/seed\"}],
-              \"env\": [{\"name\": \"PGPASSWORD\", \"value\": \"$MASTER_PASSWORD\"}]
-            }],
-            \"volumes\": [{\"name\": \"seed\", \"configMap\": {\"name\": \"seed-sql\"}}],
-            \"restartPolicy\": \"Never\"
-          }
-        }"
-    EOT
-  }
-
-  depends_on = [
-    kubernetes_config_map.seed_sql,
-    kubernetes_deployment.banking_ui,
-    kubernetes_deployment.banking_agent,
-    kubernetes_deployment.banking_mcp_server,
-  ]
-}

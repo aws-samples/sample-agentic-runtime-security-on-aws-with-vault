@@ -68,6 +68,7 @@ You must have completed the **Platform** module (Phase 3) before starting here. 
 - `vault_config` — Kubernetes auth backend, jwt auth backend (pointing to IVIA OIDC discovery), `uc2-personal` policy, `uc2` Kubernetes auth role, `uc2-jwt` JWT auth role, and `uc2-personal-readonly` database credentials role configured
 - `isva_config` — IVIA OAuth client `agent-uc2` created with PKCE required and banking app redirect URIs registered
 - `uc2_app` — Banking UI, Banking Agent, and MCP Server deployed via Stacks Wave 7
+- `seed-banking-db.sh` — Banking schema, RLS policies, and test data seeded into RDS (run post-deploy)
 
 ## Sub-Modules
 

@@ -76,16 +76,11 @@ redirect URI configuration (see `ivia-configure.sh`).
 
 ## DB Seed
 
-A `null_resource` provisioner runs after the namespace and seed-sql ConfigMap
-are created. It:
-
-1. Retrieves master credentials from Secrets Manager (`var.rds_master_user_secret_arn`).
-2. Launches a `postgres:16-alpine` pod via `kubectl run --rm` (auto-deletes on completion).
-3. Mounts the `seed-sql` ConfigMap as `/seed/seed.sql`.
-4. Runs `psql` against the RDS endpoint.
-
-Re-runs only when `seed.sql` content changes (MD5 trigger). `seed.sql` is
-idempotent (`IF NOT EXISTS` + `ON CONFLICT DO NOTHING`).
+Database seeding runs post-deploy via `seed-banking-db.sh` (Terraform Stacks
+does not support `local-exec` provisioners). The script retrieves master
+credentials from Secrets Manager, creates a ConfigMap from `seed.sql`, and
+runs a disposable `postgres:16-alpine` pod to execute psql against RDS.
+`seed.sql` is idempotent (`IF NOT EXISTS` + `ON CONFLICT DO NOTHING`).
 
 ## Variables
 

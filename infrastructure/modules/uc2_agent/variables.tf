@@ -47,16 +47,6 @@ variable "rds_db_name" {
   default     = "workshop"
 }
 
-variable "rds_endpoint" {
-  description = "RDS endpoint host:port for the DB seed psql connection."
-  type        = string
-}
-
-variable "rds_master_user_secret_arn" {
-  description = "ARN of the Secrets Manager secret containing the RDS master username and password (for DB seed provisioner)."
-  type        = string
-}
-
 variable "rds_cidr" {
   description = "CIDR block of the VPC subnet group where RDS resides (used in banking-mcp-egress NetworkPolicy to RDS:5432)."
   type        = string

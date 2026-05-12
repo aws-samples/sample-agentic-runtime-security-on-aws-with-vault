@@ -141,7 +141,7 @@ Expected summary output:
 
 :::expand{header="Platform Track — RLS policy SQL and session variable pattern"}
 
-The RLS policy is created by `seed.sql` during the `uc2_app` Stacks apply:
+The RLS policy is created by `seed.sql` when you run `seed-banking-db.sh` after the Stacks deploy:
 
 ```sql
 -- Enable RLS on the accounts and transactions tables
