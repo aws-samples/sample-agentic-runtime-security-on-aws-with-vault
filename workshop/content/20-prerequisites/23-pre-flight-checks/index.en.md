@@ -5,9 +5,37 @@ weight: 23
 
 ## CLI tools
 
-The workshop expects these versions: kubectl 1.33.x, helm 3.12+, terraform 1.10+, vault 1.21.x, aws CLI v2, jq, yq.
+The workshop expects these versions: kubectl 1.33.x, helm 3.12+, terraform 1.10+, vault 1.21.x, aws CLI v2, jq, yq, and `tfc-agent`.
 
 The pre-flight script installs them all and verifies your AWS account in one step. Manual install steps are intentionally omitted — running the script is the documented path. Windows users: use WSL2 (Linux subsystem).
+
+## Install tfc-agent
+
+`tfc-agent` runs the HCP Terraform workspace applies locally, using your machine's AWS credentials and kubectl config. Install it before running `bootstrap.sh`:
+
+**macOS:**
+
+```bash
+brew install hashicorp/tap/tfc-agent
+```
+
+**Linux (binary):**
+
+```bash
+curl -fsSL https://releases.hashicorp.com/tfc-agent/latest/tfc-agent_*_linux_amd64.zip -o /tmp/tfc-agent.zip
+unzip /tmp/tfc-agent.zip -d /usr/local/bin/
+chmod +x /usr/local/bin/tfc-agent
+```
+
+Verify the install:
+
+```bash
+tfc-agent --version
+```
+
+:::alert{header="tfc-agent needs AWS credentials and kubectl" type="info"}
+`tfc-agent` runs on your local machine and executes Terraform applies against your AWS account. It needs your AWS credentials (environment variables or `~/.aws/credentials`) and `kubectl` configured for the workshop cluster. The agent token is written to `infrastructure/scripts/.agent-token` by `bootstrap.sh`.
+:::
 
 ## Run the pre-flight script
 
@@ -32,6 +60,7 @@ kubectl version --client
 helm version --short
 vault version
 aws --version
+tfc-agent --version
 ```
 
 ## Service quotas

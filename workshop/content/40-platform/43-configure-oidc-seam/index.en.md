@@ -5,7 +5,7 @@ weight: 43
 
 ## Overview
 
-In this step you configure the **OIDC seam** — the integration point where an IVIA-issued JWT becomes a Vault-vended dynamic credential. Two Stacks components apply here: `vault_config` and `isva_config`.
+In this step you configure the **OIDC seam** — the integration point where an IVIA-issued JWT becomes a Vault-vended dynamic credential. Two Terraform modules apply here: `vault_config` and `isva_config`.
 
 `vault_config` configures Vault with:
 
@@ -25,29 +25,31 @@ In this step you configure the **OIDC seam** — the integration point where an 
 
 ## Step 1 — Set VAULT_TOKEN and VAULT_ADDR
 
-The `vault_config` and `isva_config` Stacks components need the Vault root token you saved in the previous module. In the HCP Terraform variable set, add:
+The `vault_config` and `isva_config` modules need the Vault root token you saved in the previous module. Add these to the HCP Terraform workspace variable set:
 
 | Variable | Value |
 |---|---|
 | `vault_token` | The root token from `~/vault-init.json` |
 | `vault_addr` | `https://vault.vault.svc.cluster.local:8200` |
 
-Or export them locally if running `terraform stacks plan` directly:
+Or set them locally if running a manual workspace apply:
 
 ```bash
 export VAULT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)
 export VAULT_ADDR="https://vault.vault.svc.cluster.local:8200"
 ```
 
-## Step 2 — Run the Stacks plan for Wave 5
+## Step 2 — Run configure-workshop.sh
 
-`vault_config` and `isva_config` are registered as Wave 5 components. After `vault` and `verify_access` are healthy, trigger the plan:
+`vault_config` and `isva_config` are applied as part of the workspace run. After `vault` and `verify_access` are healthy (verified in the previous steps), run the post-deploy configuration script to complete Vault initialization and IVIA configuration:
 
 ```bash
-terraform stacks plan
+bash infrastructure/scripts/configure-workshop.sh
 ```
 
-In HCP Terraform UI, review the plan output. You will see Vault auth methods, secrets engines, roles, and policies being created. Click **Apply** to proceed.
+This script calls `vault-configure.sh` (which wires up Vault auth methods, secrets engines, and policies) and `ivia-configure.sh` (which registers OAuth 2.0 clients).
+
+In HCP Terraform UI, review the workspace run outputs. You will see Vault auth methods, secrets engines, roles, and policies being reported.
 
 ## Step 3 — What was configured
 
@@ -129,7 +131,7 @@ Expected output:
 
 ## What was configured — summary
 
-| Component | Resource | Count |
+| Module | Resource | Count |
 |---|---|---|
 | vault_config | Kubernetes auth method | 1 |
 | vault_config | JWT auth method (IVIA OIDC) | 1 |

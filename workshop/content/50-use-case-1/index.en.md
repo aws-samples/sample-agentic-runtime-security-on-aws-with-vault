@@ -43,13 +43,13 @@ The diagram below shows the credential flow for Use Case 1.
 
 | Module | What You Do |
 |---|---|
-| [Deploy the Use Case 1 Agent](./51-deploy-agent/) | Build and push the agent container, trigger Stacks apply, verify the pod and ServiceAccount are running |
-| [Configure Vault Auth for Use Case 1](./52-configure-vault-auth/) | Inspect the Vault role and policy that were configured by the `vault_config` Stacks component — understand what was configured and why |
+| [Deploy the Use Case 1 Agent](./51-deploy-agent/) | Build and push the agent container, update terraform.tfvars with the image URI, trigger the workspace apply, and verify the pod and ServiceAccount are running |
+| [Configure Vault Auth for Use Case 1](./52-configure-vault-auth/) | Inspect the Vault role and policy that were configured by the `vault_config` Terraform module — understand what was configured and why |
 | [Verify Credentials and Enforcement](./53-verify-credentials/) | Query the agent, observe JIT credential issuance in the Vault audit log, run the enforcement test, and review the threat-model callout |
 
 ## Prerequisites
 
-You must have completed the **Platform** module (Phase 3) before starting here. Specifically, the following Stacks components must be in applied state:
+You must have completed the **Platform** module (Phase 3) before starting here. Specifically, the following Terraform modules must be in applied state:
 
 - `vault` — Vault HA cluster running and initialized
 - `vault_config` — Kubernetes auth backend, `uc1-readonly` policy, `uc1` Kubernetes auth role, and `uc1-readonly` database credentials role configured

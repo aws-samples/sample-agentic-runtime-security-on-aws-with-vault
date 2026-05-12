@@ -5,7 +5,7 @@ weight: 51
 
 ## Overview
 
-In this module you build and push the UC1 agent container image to Amazon ECR, set the image URI as a Stacks variable, and run `terraform stacks apply` to deploy the agent pod and its Kubernetes resources.
+In this module you build and push the UC1 agent container image to Amazon ECR, set the image URI in `terraform.tfvars`, and trigger a workspace apply to deploy the agent pod and its Kubernetes resources.
 
 By the end of this module the following Kubernetes objects exist in the `uc1` namespace:
 
@@ -61,30 +61,27 @@ aws ecr describe-images \
   --query 'imageDetails[0].{Tag:imageTags[0],PushedAt:imagePushedAt}'
 ```
 
-## Step 3 — Set the image URI in Stacks
+## Step 3 — Set the image URI in terraform.tfvars
 
-Open `infrastructure/deployments.tfdeploy.hcl` and locate the `uc1_agent_image` variable in the `usw2` deployment block. Replace the placeholder with your ECR URI:
+Open `infrastructure/terraform.tfvars` and locate the `uc1_agent_image` variable. Replace the placeholder with your ECR URI:
 
 ```hcl
-values = {
-  ...
-  uc1_agent_image = "<ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/workshop/uc1-agent:latest"
-  ...
-}
+uc1_agent_image = "<ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/workshop/uc1-agent:latest"
 ```
 
-## Step 4 — Apply the Stacks plan
+## Step 4 — Trigger the workspace apply
 
-In HCP Terraform, navigate to your Stack and click **New plan**. The `uc1_agent` component is in Wave 6 and depends on `vault_config` (Vault Kubernetes auth role and policy must exist before pod startup).
-
-Alternatively, trigger from the CLI:
+Ensure the tfc-agent is running (from the Deploy Foundation step), then push to `main` to trigger a new workspace run:
 
 ```bash
-terraform stacks plan
-terraform stacks apply
+git add infrastructure/terraform.tfvars
+git commit -m "feat: set uc1_agent_image for workspace deploy"
+git push origin main
 ```
 
-During apply the following resources are created in sequence:
+In HCP Terraform, navigate to your workspace, wait for the plan to complete, then click **Confirm & Apply**.
+
+The `uc1_agent` module is applied after `vault_config` (Vault Kubernetes auth role and policy must exist before pod startup). During apply the following resources are created:
 
 1. `kubernetes_namespace.uc1` — namespace for all UC1 resources
 2. `kubernetes_service_account.uc1_retriever` — the `uc1-retriever-sa` identity

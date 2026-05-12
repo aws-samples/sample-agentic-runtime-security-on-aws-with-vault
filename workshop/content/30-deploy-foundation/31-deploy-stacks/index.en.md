@@ -1,64 +1,83 @@
 ---
-title: 'Deploy Stacks'
+title: 'Deploy Workspace'
 weight: 31
 ---
 
-The bootstrap script already created the HCP Terraform Stack and connected it to your GitHub repository. In this step, you will trigger the first deployment, which creates the VPC, EKS, RDS, Bedrock KB, and audit foundation in dependency order.
+The bootstrap script already created the HCP Terraform Workspace, agent pool, and agent token. In this step, you start the local tfc-agent, push to `main` to trigger the first workspace plan, approve the apply, and then run `configure-workshop.sh` to complete post-deploy configuration.
 
-## Trigger the First Plan
+## Step 1 — Start the tfc-agent
 
-The Stack watches the `main` branch on **your fork**. The first plan must be triggered manually from the HCP Terraform UI — pushes alone do not initialize a brand-new Stack configuration.
-
-1. Go to [HCP Terraform](https://app.terraform.io/) > your Project > your Stack
-2. Click **New configuration** (or **New plan** > **Start** if a configuration already exists)
-3. Select the `main` branch and confirm
-
-Subsequent runs are triggered automatically by pushing to `main` on your fork:
+The HCP Terraform Workspace is configured to use your local agent pool. Start the agent in a dedicated terminal — keep it running throughout the workshop:
 
 ```bash
-# make a change, e.g. edit a comment in deployments.tfdeploy.hcl
-git add infrastructure/deployments.tfdeploy.hcl
-git commit -m "trigger plan"
+export TFC_AGENT_TOKEN=$(cat infrastructure/scripts/.agent-token)
+tfc-agent
+```
+
+You should see:
+
+```
+INFO agent: Starting agent
+INFO agent: Connected to HCP Terraform
+INFO agent: Waiting for jobs
+```
+
+:::alert{header="Agent token location" type="info"}
+The `.agent-token` file was created by `bootstrap.sh` when it provisioned the agent pool. It is gitignored — never commit it. If the file is missing, re-run `bootstrap.sh --mode workspace` to regenerate it.
+:::
+
+## Step 2 — Push to trigger the workspace plan
+
+Push any change to `main` to trigger the first workspace plan. If you have no local changes, you can trigger from the HCP Terraform UI instead (see the alert below).
+
+```bash
 git push origin main
 ```
 
-:::alert{header="Push not triggering a plan?" type="warning"}
-If `git push origin main` does not produce a new run in HCP Terraform, verify:
-- Your `origin` remote points at **your fork** (`git remote -v`), not the upstream repo
-- The Stack's VCS settings in HCP Terraform reference your fork and the `main` branch
-- The GitHub VCS connection in your HCP Terraform org has access to your fork
+HCP Terraform detects the push and queues a new run in the workspace. Your local tfc-agent picks up the run and begins planning against your AWS account.
+
+:::alert{header="Triggering from the UI instead" type="info"}
+If you have no local changes to push, you can trigger a run manually: go to [HCP Terraform](https://app.terraform.io/) > your Project > your Workspace > **Actions** > **Start new run**. Select **Plan and apply** and confirm.
 :::
 
-## Review and Apply
+## Step 3 — Review and approve the plan
 
-HCP Terraform will automatically:
+In the HCP Terraform UI, navigate to the running plan:
 
-- Detect the `usw2` deployment from `deployments.tfdeploy.hcl` (the only deployment with `destroy = false`)
-- Create a plan — expect ~80–120 resource creations across seven components
-- Wait for your approval before applying
+1. Go to [HCP Terraform](https://app.terraform.io/) > your Project > your Workspace
+2. Click the active run
+3. Review the plan — expect ~80–120 resource additions
+4. Click **Confirm & Apply**
 
-Review the plan and click **Approve & Apply**.
+:::alert{header="First deploy timing" type="info"}
+Total time: ~25–35 minutes (EKS ~12 min, RDS ~10 min including pgaudit reboot, Bedrock KB ~3 min, addons ~5 min). The tfc-agent must remain running in your terminal throughout.
+:::
 
-:::alert{header="First deploy behavior — deferred items" type="info"}
-On first deploy, you will see "deferred items" in the plan. This is expected — Helm and Kubernetes providers defer planning until EKS outputs are available (the cluster endpoint does not exist yet). Apply the plan and a second run will handle the deferred items automatically.
+## Step 4 — Run configure-workshop.sh
+
+After the workspace apply completes, run the post-deploy configuration script. This configures kubectl, initializes and configures Vault, configures IVIA, and seeds the banking database:
+
+```bash
+bash infrastructure/scripts/configure-workshop.sh
+```
+
+The script prints a pass/fail summary for each configuration step. All steps must pass before continuing to the verification module.
+
+:::alert{header="Script is idempotent" type="info"}
+`configure-workshop.sh` is safe to re-run at any point. If a step fails, fix the root cause and re-run — already-completed steps are skipped or produce the same outcome.
 :::
 
 ## What Happens During Apply
 
-When you approve the plan, HCP Terraform deploys the seven components in dependency order:
+When the workspace apply runs, HCP Terraform deploys the eleven modules in dependency order:
 
 1. **audit** + **vpc** + **bedrock_kb_aoss** — apply in parallel (no inter-dependencies)
 2. **eks** — depends on `vpc` + `audit`
 3. **addons** + **rds** — depend on `eks`
 4. **bedrock_kb_index** — depends on `bedrock_kb_aoss`
-
-Total time: ~25–35 minutes (EKS ~12 min, RDS ~10 min including pgaudit reboot, Bedrock KB ~3 min, addons ~5 min).
-
-:::alert{header="Expect multiple plan/apply rounds" type="warning"}
-Stacks runs a **deferred-replan** loop: after the first apply, components whose inputs become resolvable (e.g. `bedrock_kb_index` waiting on the AOSS collection endpoint) get re-planned and you'll be prompted to **Approve** again. A clean first deploy typically goes through **3–5 plan/apply rounds** before the run reaches `succeeded`.
-
-Don't walk away after the first apply. The run isn't done until the status flips from `deploying` to `succeeded`.
-:::
+5. **vault** + **ivia** — depend on `eks` + `addons` (ALB webhook ready)
+6. **vault_config** + **isva_config** — depend on Vault running
+7. **uc1_agent** + **uc2_app** — depend on `vault_config`
 
 When the run completes, note these outputs — you will need them in the next sub-modules:
 
@@ -66,10 +85,10 @@ When the run completes, note these outputs — you will need them in the next su
 - `knowledge_base_id` — the Bedrock KB ID for ingestion
 - `rds_endpoint` — the PostgreSQL connection endpoint
 
-## Component Reference
+## Module Reference
 
 ::::expand{header="audit — Encryption and observability foundation"}
-- Workshop CMK (`alias/workshop-data`) — encrypts all storage across all components
+- Workshop CMK (`alias/workshop-data`) — encrypts all storage across all modules
 - CloudWatch log groups — `/workshop/vault-audit`, `/workshop/ivia-decision`, `/workshop/agent-trace` (KMS-encrypted, 7-day retention)
 - Glue catalog database `workshop_logs` + Athena workgroup `workshop`
 ::::

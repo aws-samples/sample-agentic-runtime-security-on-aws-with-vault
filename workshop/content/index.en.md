@@ -23,7 +23,7 @@ Three progressively-layered Strands agents on EKS, fronted by IBM Verify Access 
 |---|--------|----------------|
 | 10 | [Introduction](10-introduction/) | Understand the problem, five control objectives, and architecture |
 | 20 | [Prerequisites](20-prerequisites/) | Set up AWS account, HCP Terraform, and run pre-flight checks |
-| 30 | [Deploy Foundation](30-deploy-foundation/) | Deploy VPC, EKS, RDS, Bedrock KB via Terraform Stacks |
+| 30 | [Deploy Foundation](30-deploy-foundation/) | Deploy VPC, EKS, RDS, Bedrock KB via HCP Terraform Workspace |
 | 40 | [Platform — Vault & Verify Access](40-platform/) | Deploy and configure Vault + IBM Verify Access on EKS |
 | 50 | [Use Case 1 — Non-personalized R/O](50-use-case-1/) | Workload identity, JIT Postgres + Bedrock credentials |
 | 60 | [Use Case 2 — OAuth Personalized R/O](60-use-case-2/) | User intent via OAuth PKCE, per-user DB GRANTs, NetworkPolicy |

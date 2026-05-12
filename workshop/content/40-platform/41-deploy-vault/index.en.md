@@ -7,35 +7,33 @@ weight: 41
 
 In this step you deploy HashiCorp Vault 2.0 on EKS as a 3-node Raft HA cluster. Each Vault pod is scheduled to a distinct Availability Zone. Auto-unseal is handled by a dedicated AWS KMS key accessed through EKS Pod Identity — Vault pods never touch AWS credentials directly.
 
-## Step 1 — Review the Vault component
+## Step 1 — Review the Vault module
 
-Open `infrastructure/components.tfcomponent.hcl` and locate the `vault` component block. Notice that it depends on `eks` and `addons` (which enable cert-manager and AWS Load Balancer Controller).
+Open `infrastructure/main.tf` and locate the `vault` module block. Notice that it depends on `module.addons` (which enables cert-manager and AWS Load Balancer Controller).
 
-The `vault` component calls `infrastructure/modules/vault/` which provisions:
+The `vault` module calls `infrastructure/modules/vault/` which provisions:
 
 - A dedicated KMS key (`alias/vault-unseal`) with a key policy restricted to the Vault service account.
 - An EKS Pod Identity association binding the Vault Kubernetes ServiceAccount to an IAM role with `kms:Decrypt` and `kms:DescribeKey` permissions.
 - A Helm release of the `hashicorp/vault` chart with `server.ha.enabled=true`, `server.ha.raft.enabled=true`, and three replicas.
 
-## Step 2 — Run the Stacks plan
+## Step 2 — Trigger the workspace apply
 
-In HCP Terraform, navigate to your Stack and click **New plan**. Select **Apply immediately** after review. The vault component is in Wave 3 and will run after the addons component completes.
+The `vault` module is applied after `addons` completes (enforced by `depends_on` in `main.tf`). The HCP Terraform workspace apply handles this automatically. If you need to trigger a new run:
 
-Alternatively, trigger via CLI:
-
-```bash
-terraform stacks plan
-```
+1. Go to [HCP Terraform](https://app.terraform.io/) > your Project > your Workspace
+2. Click **Actions** > **Start new run**
+3. Select **Plan and apply** and confirm
 
 ## Step 3 — What happens during apply
 
-When the `vault` component applies:
+When the `vault` module applies:
 
 1. A dedicated KMS key is created with alias `alias/vault-unseal`. This key is separate from the workshop CMK (`alias/workshop-data`) — a deliberate decision for audit-correlation clarity in Phase 6.
 2. An IAM role is created and an EKS Pod Identity association is registered for the `vault` Kubernetes ServiceAccount in the `vault` namespace.
 3. The `hashicorp/vault` Helm chart is deployed with `server.ha.raft.enabled=true` and `replicas=3`. The chart creates 3 StatefulSet pods (`vault-0`, `vault-1`, `vault-2`).
 4. The Helm chart configures the KMS unseal stanza pointing to the key ID from step 1. Pods will auto-unseal via KMS on every restart — no manual unseal required after the first initialization.
-5. cert-manager and AWS Load Balancer Controller (deployed in the `addons` component) are available for Vault Ingress and TLS if needed.
+5. cert-manager and AWS Load Balancer Controller (deployed in the `addons` module) are available for Vault Ingress and TLS if needed.
 
 ## Step 4 — Verify pods are running
 
@@ -123,7 +121,7 @@ vault-2    vault-2.vault-internal:8201    follower    true
 The root token is a break-glass credential. Store it securely (for example, in AWS Secrets Manager or a hardware token) and do not use it for day-to-day operations. In production, generate a narrowly scoped token via Vault Agent + AppRole and revoke the root token. For this workshop the root token is used in the next module to configure the OIDC seam.
 :::
 
-:::collapsible{header="Component reference — Helm chart values summary"}
+:::collapsible{header="Module reference — Helm chart values summary"}
 The `vault` module passes the following key values to the Vault Helm chart:
 
 | Value | Setting |
@@ -138,5 +136,5 @@ The `vault` module passes the following key values to the Vault Helm chart:
 | `auditStorage.enabled` | `false` (audit logs go to stdout via `-log-format=json`) |
 | `server.logFormat` | `json` |
 
-The Vault audit device that writes to the `/workshop/vault-audit` CloudWatch log group is configured in the `vault_config` component (next module), not the Helm chart.
+The Vault audit device that writes to the `/workshop/vault-audit` CloudWatch log group is configured in the `vault_config` module (next module), not the Helm chart.
 :::

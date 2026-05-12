@@ -17,36 +17,36 @@ The IVIA container image is pulled from IBM Container Registry (`icr.io`). You m
 To verify the variable is set:
 
 ```bash
-# In HCP Terraform UI: Stack > Variable Sets > agentic-runtime-stacks-config
+# In HCP Terraform UI: Workspace > Variables
 # Look for ibm_entitlement_key (sensitive)
 ```
 :::
 
-## Step 1 — Review the verify_access component
+## Step 1 — Review the verify_access module
 
-Open `infrastructure/components.tfcomponent.hcl` and locate the `verify_access` component block. It depends on `vault` (same wave) which ensures cert-manager and AWS Load Balancer Controller are available.
+Open `infrastructure/main.tf` and locate the `verify_access` module block. It depends on `module.addons` (same `time_sleep.alb_webhook_ready` gate) which ensures cert-manager and AWS Load Balancer Controller are available.
 
-The `verify_access` component calls `infrastructure/modules/verify_access/` which provisions:
+The `verify_access` module calls `infrastructure/modules/verify_access/` which provisions:
 
 - A `verify-access` Kubernetes namespace.
 - An ICR pull secret (`icr-pull-secret`) for `icr.io` authentication, wired into both the ServiceAccount's `imagePullSecrets` and the Deployment's pod template.
 - The IVIA Deployment (image `icr.io/ibmid/verify-access:26.03`), ConfigMap, and Service.
 - An `Ingress` resource annotated for AWS Load Balancer Controller, which provisions an ALB.
-- A `wait_for_rollout` resource that ensures the deployment is healthy before the component reports success.
+- A `wait_for_rollout` resource that ensures the deployment is healthy before the module reports success.
 
-## Step 2 — Run the Stacks plan
+## Step 2 — Trigger the workspace apply
 
-The `verify_access` component deploys in the same wave as `vault`. After the `addons` wave completes, both `vault` and `verify_access` apply in parallel.
+The `verify_access` module deploys in the same wave as `vault`. After the `addons` wave completes, both `vault` and `verify_access` apply.
 
-Trigger via HCP Terraform UI or:
+The HCP Terraform workspace apply handles this automatically as part of the foundation deploy. If you need to trigger an isolated run:
 
-```bash
-terraform stacks plan
-```
+1. Go to [HCP Terraform](https://app.terraform.io/) > your Project > your Workspace
+2. Click **Actions** > **Start new run**
+3. Select **Plan and apply** and confirm
 
 ## Step 3 — What happens during apply
 
-When the `verify_access` component applies:
+When the `verify_access` module applies:
 
 1. The `verify-access` namespace is created.
 2. An `icr-pull-secret` Kubernetes Secret of type `kubernetes.io/dockerconfigjson` is created with the IBM entitlement key as the password for `icr.io`.

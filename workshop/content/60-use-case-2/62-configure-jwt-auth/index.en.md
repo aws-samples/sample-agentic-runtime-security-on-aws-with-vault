@@ -5,7 +5,7 @@ weight: 62
 
 ## Overview
 
-In this module you inspect the Vault `jwt` auth backend configuration that was applied by the `vault_config` Stacks component. You trace the path from a user's IVIA-issued JWT through Vault JWT validation to the issuance of per-user-scoped Postgres credentials.
+In this module you inspect the Vault `jwt` auth backend configuration that was applied by the `vault_config` Terraform module. You trace the path from a user's IVIA-issued JWT through Vault JWT validation to the issuance of per-user-scoped Postgres credentials.
 
 ## The Token Exchange Pattern
 
@@ -151,7 +151,7 @@ You will see a Postgres username and password with a 15-minute TTL. This is the 
 
 :::expand{header="Platform Track — Vault jwt auth role configuration and IVIA OIDC wiring"}
 
-The `uc2-jwt` Vault role is created by the `vault_config` Stacks component:
+The `uc2-jwt` Vault role is created by the `vault_config` Terraform module:
 
 ```hcl
 resource "vault_jwt_auth_backend_role" "uc2_jwt" {

@@ -19,7 +19,7 @@ The workshop is organized into progressive modules, executed in order:
 
 1. **Introduction** — The problem, five control objectives, architecture overview (you are here).
 2. **Prerequisites** — Environment setup, pre-flight checks, HCP Terraform bootstrap.
-3. **Deploy Foundation** — VPC, EKS cluster, RDS PostgreSQL, Bedrock Knowledge Base — all deployed via Terraform Stacks.
+3. **Deploy Foundation** — VPC, EKS cluster, RDS PostgreSQL, Bedrock Knowledge Base — all deployed via HCP Terraform Workspace.
 4. **Platform — Vault and Verify Access** — Self-hosted Vault and IVIA on EKS, including OIDC discovery seam configuration and secrets engine wiring.
 5. **Use Case 1** — Non-personalized read-only Strands agent; Vault Kubernetes auth method; JIT Postgres + Bedrock credentials.
 6. **Use Case 2** — OAuth Authorization Code + PKCE; Vault `jwt` auth method; per-user database GRANTs; Kubernetes NetworkPolicy egress controls.

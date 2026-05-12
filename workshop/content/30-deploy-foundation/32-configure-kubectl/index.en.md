@@ -3,7 +3,7 @@ title: 'Configure kubectl'
 weight: 32
 ---
 
-The `eks` module emits a one-liner output. Copy it from the HCP Terraform run output (or read it from `terraform-stacks output`):
+The `eks` module emits a one-liner output. Copy it from the HCP Terraform workspace run output, or read it from the workspace outputs tab in the HCP Terraform UI:
 
 ```bash
 aws eks update-kubeconfig \

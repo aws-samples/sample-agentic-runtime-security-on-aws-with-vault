@@ -3,12 +3,12 @@ title: 'Verify Infrastructure'
 weight: 33
 ---
 
-Run the foundation verification script to confirm all components deployed correctly. It checks EKS cluster status + nodes + addons, RDS status + pgaudit + encryption, Bedrock KB + data sources + retrieval, audit log groups with KMS, and the region contract.
+Run the foundation verification script to confirm all modules deployed correctly. It checks EKS cluster status + nodes + addons, RDS status + pgaudit + encryption, Bedrock KB + data sources + retrieval, audit log groups with KMS, and the region contract.
 
-Get the two required values — `cluster_name` from the deploy file, `knowledge_base_id` from the AWS CLI:
+Get the two required values — `cluster_name` from `terraform.tfvars`, `knowledge_base_id` from the AWS CLI:
 
 ```bash
-grep 'cluster_name' infrastructure/deployments.tfdeploy.hcl
+grep 'cluster_name' infrastructure/terraform.tfvars
 ```
 
 ```bash
@@ -26,7 +26,7 @@ bash infrastructure/scripts/test-foundation.sh \
   --knowledge-base-id <KB_ID>
 ```
 
-The script auto-derives everything else — DB instance ID (`${cluster_name}-pg`), region and KB region from `infrastructure/deployments.tfdeploy.hcl`.
+The script auto-derives everything else — DB instance ID (`${cluster_name}-pg`), region and KB region from `infrastructure/terraform.tfvars`.
 
 When all checks pass, you will see:
 
@@ -48,6 +48,6 @@ If any check fails, the script prints a red error with a `Fix:` remediation hint
 
 **Audit log groups** — `/workshop/vault-audit`, `/workshop/ivia-decision`, `/workshop/agent-trace` exist and are KMS-encrypted with the workshop CMK
 
-**Region contract** — no canonical region literal (e.g. `us-west-2`) anywhere in `infrastructure/` outside `deployments.tfdeploy.hcl`
+**Region contract** — no canonical region literal (e.g. `us-west-2`) anywhere in `infrastructure/` outside `terraform.tfvars`
 
 ::::
