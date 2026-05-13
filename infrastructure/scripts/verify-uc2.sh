@@ -350,7 +350,7 @@ client_secret=$(kubectl get configmap banking-ui-config -n "${BANKING_NAMESPACE}
 if [ -n "${ivia_endpoint}" ] && [ -n "${client_secret}" ]; then
     token_response=$(curl -s -X POST "http://${ivia_endpoint}/oauth2/token" \
         --max-time 15 \
-        -d "grant_type=password&client_id=agent-uc2&client_secret=${client_secret}&username=oscar&password=Workshop2026!&scope=openid" \
+        -d "grant_type=password&client_id=agent-uc2&client_secret=${client_secret}&username=oscar&password=WorkshopUser1!&scope=openid" \
         2>/dev/null || echo "{}")
     if echo "${token_response}" | jq -e '.access_token' >/dev/null 2>&1; then
         print_pass "ROPC token grant: IVIA returned access_token for oscar (grant_type=password)"

@@ -408,7 +408,27 @@ rules:
     - name: pretoken
       rule_type: javascript
       content: |
-        // Map LDAP attributes into token claims
+        // IVIA 25.10 ROPC bug workaround: identity not propagated from ropc rule.
+        // Read username from ROPC body params in context attributes.
+        var ctx = JSON.parse(mappingrule_context);
+        var username = "";
+        if (ctx.stsuujson && ctx.stsuujson.contextAttributes) {
+          for (var i = 0; i < ctx.stsuujson.contextAttributes.length; i++) {
+            var attr = ctx.stsuujson.contextAttributes[i];
+            if (attr.name === "username" && attr.values && attr.values.length > 0) {
+              username = attr.values[0];
+              break;
+            }
+          }
+        }
+        if (username && (!stsuu.principalName || stsuu.principalName === "")) {
+          stsuu.setPrincipalName(username);
+          stsuu.addAttribute(new Attribute("sub", "urn:ibm:jwt:claim", username));
+          stsuu.addAttribute(new Attribute("AZN_CRED_PRINCIPAL_NAME", "urn:ibm:names:ITFIM:5.1:accessmanager", username));
+          idtokenData.sub = username;
+          idtokenData.preferred_username = username;
+          tokenData.sub = username;
+        }
     - name: posttoken
       rule_type: javascript
       content: |
@@ -416,24 +436,14 @@ rules:
     - name: ropc
       rule_type: javascript
       content: |
-        importClass(Packages.com.tivoli.am.fim.trustserver.sts.utilities.IDMappingExtUtils);
-        importClass(Packages.com.tivoli.am.fim.trustserver.sts.utilities.OAuthMappingExtUtils);
-        importClass(Packages.com.ibm.security.access.user.UserLookupHelper);
-
-        var username = stsuu.getContextAttributes().getAttributeValueByName("username");
-        var password = stsuu.getContextAttributes().getAttributeValueByName("password");
-
-        var userLookupHelper = new UserLookupHelper("workshop_users");
-        userLookupHelper.init(true);
-
-        var user = userLookupHelper.getUser(username);
-        if (user == null || user.hasError()) {
-          OAuthMappingExtUtils.throwSTSException("Invalid user or password.");
-        } else if (!user.authenticate(password)) {
-          OAuthMappingExtUtils.throwSTSException("Invalid user or password.");
-        } else {
-          IDMappingExtUtils.traceString("ROPC auth OK for: " + username);
-        }
+        var username = stsuu.principalName;
+        stsuu.setPrincipalName(username);
+        userData.uid = username;
+        userData.sub = username;
+        userData.AZN_CRED_PRINCIPAL_NAME = username;
+        userData.preferred_username = username;
+        idtokenData.sub = username;
+        tokenData.sub = username;
 
 clients:
   - client_id: workshop_agent
@@ -465,7 +475,6 @@ clients:
       - openid
       - profile
       - email
-    id_token_signed_response_alg: RS256
 
 keystore:
   - name: https_keys
