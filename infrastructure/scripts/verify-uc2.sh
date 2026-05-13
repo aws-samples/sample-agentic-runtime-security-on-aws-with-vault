@@ -189,8 +189,8 @@ rds_host=$(kubectl get configmap banking-mcp-config -n "${BANKING_NAMESPACE}" \
     -o jsonpath='{.data.RDS_ADDRESS}' 2>/dev/null || echo "")
 
 if [ -n "${db_username}" ] && [ "${db_username}" != "null" ] && [ -n "${rds_host}" ]; then
-    kubectl delete pod verify-uc2-psql -n "${BANKING_NAMESPACE}" --ignore-not-found --wait=false &>/dev/null
-    select_result=$(kubectl run verify-uc2-psql -n "${BANKING_NAMESPACE}" --rm -i --restart=Never \
+    kubectl delete pod verify-uc2-psql -n default --ignore-not-found --wait=false &>/dev/null
+    select_result=$(kubectl run verify-uc2-psql -n default --rm -i --restart=Never \
         --image=postgres:17-alpine --env="PGPASSWORD=${db_password}" -- \
         psql -h "${rds_host}" -U "${db_username}" -d workshop \
             -c "SET app.current_user_sub = 'test-verify-script'; SELECT count(*) FROM banking.accounts;" \
@@ -215,8 +215,8 @@ fi
 # Expected: "ERROR: permission denied for table accounts"
 #-------------------------------------------------------------------------------
 if [ -n "${db_username}" ] && [ "${db_username}" != "null" ] && [ -n "${rds_host}" ]; then
-    kubectl delete pod verify-uc2-insert -n "${BANKING_NAMESPACE}" --ignore-not-found --wait=false &>/dev/null
-    insert_result=$(kubectl run verify-uc2-insert -n "${BANKING_NAMESPACE}" --rm -i --restart=Never \
+    kubectl delete pod verify-uc2-insert -n default --ignore-not-found --wait=false &>/dev/null
+    insert_result=$(kubectl run verify-uc2-insert -n default --rm -i --restart=Never \
         --image=postgres:17-alpine --env="PGPASSWORD=${db_password}" -- \
         psql -h "${rds_host}" -U "${db_username}" -d workshop \
             -c "INSERT INTO banking.accounts (user_sub, account_number, balance) VALUES ('verify-test', 'ACC999', 0.00);" \
