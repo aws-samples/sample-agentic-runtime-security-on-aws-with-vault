@@ -192,14 +192,15 @@ if [ "${ad_stage}" = "Active" ]; then
         --output text --region "${REGION}" 2>/dev/null || echo "")
 
     ad_password=$(grep -E '^simple_ad_admin_password\s*=' "${REPO_ROOT}/infrastructure/terraform.tfvars" 2>/dev/null \
-        | sed 's/.*=\s*"\(.*\)"/\1/' || echo "")
-    local ad_bind_dn="CN=Administrator,CN=Users,DC=workshop,DC=internal"
+        | sed 's/^[^"]*"\([^"]*\)".*/\1/' || echo "")
+    ad_bind_dn="CN=Administrator,CN=Users,DC=workshop,DC=internal"
 
     if [ -n "${ad_dns_ip}" ] && [ "${ad_dns_ip}" != "None" ] && [ -n "${ad_password}" ]; then
-        kubectl delete pod verify-ad-ldap --ignore-not-found --wait=false &>/dev/null
-        ldap_result=$(kubectl run verify-ad-ldap -n default --rm -i --restart=Never \
-            --image=alpine:3 -- \
-            sh -c "apk add --no-cache openldap-clients >/dev/null 2>&1 && echo 'LDAP_CONNECT:OK' && \
+        verify_pod="verify-ad-ldap-$$"
+        kubectl delete pod "${verify_pod}" -n default --ignore-not-found --wait=true &>/dev/null
+        kubectl run "${verify_pod}" -n default --restart=Never \
+            --image=alpine:3 \
+            --command -- sh -c "apk add --no-cache openldap-clients >/dev/null 2>&1 && echo 'LDAP_CONNECT:OK' && \
                 for user in oscar adriana; do \
                     if ldapsearch -x -H ldap://${ad_dns_ip} -D '${ad_bind_dn}' -w '${ad_password}' \
                         -b 'CN=Users,DC=workshop,DC=internal' \
@@ -208,8 +209,10 @@ if [ "${ad_stage}" = "Active" ]; then
                     else \
                         echo \"USER_MISSING:\${user}\"; \
                     fi; \
-                done" \
-            2>&1 | grep -v 'pod.*deleted' || echo "LDAP_CONNECT:FAIL")
+                done" &>/dev/null
+        kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/"${verify_pod}" -n default --timeout=120s &>/dev/null || true
+        ldap_result=$(kubectl logs "${verify_pod}" -n default 2>/dev/null || echo "LDAP_CONNECT:FAIL")
+        kubectl delete pod "${verify_pod}" -n default --ignore-not-found &>/dev/null
 
         if echo "${ldap_result}" | grep -q 'LDAP_CONNECT:OK'; then
             print_pass "LDAP connectivity from cluster to Simple AD (${ad_dns_ip}:389)"

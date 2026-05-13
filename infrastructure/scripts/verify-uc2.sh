@@ -189,12 +189,16 @@ rds_host=$(kubectl get configmap banking-mcp-config -n "${BANKING_NAMESPACE}" \
     -o jsonpath='{.data.RDS_ADDRESS}' 2>/dev/null || echo "")
 
 if [ -n "${db_username}" ] && [ "${db_username}" != "null" ] && [ -n "${rds_host}" ]; then
-    kubectl delete pod verify-uc2-psql -n default --ignore-not-found --wait=false &>/dev/null
-    select_result=$(kubectl run verify-uc2-psql -n default --rm -i --restart=Never \
-        --image=postgres:17-alpine --env="PGPASSWORD=${db_password}" -- \
-        psql -h "${rds_host}" -U "${db_username}" -d workshop \
+    psql_pod="verify-uc2-psql-$$"
+    kubectl delete pod "${psql_pod}" -n default --ignore-not-found --wait=true &>/dev/null
+    kubectl run "${psql_pod}" -n default --restart=Never \
+        --image=postgres:17-alpine --env="PGPASSWORD=${db_password}" \
+        --command -- psql -h "${rds_host}" -U "${db_username}" -d workshop \
             -c "SET app.current_user_sub = 'test-verify-script'; SELECT count(*) FROM banking.accounts;" \
-            --no-password --tuples-only 2>&1 | grep -v 'pod.*deleted' || echo "PSQL_FAILED")
+            --no-password --tuples-only &>/dev/null
+    kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/"${psql_pod}" -n default --timeout=60s &>/dev/null || true
+    select_result=$(kubectl logs "${psql_pod}" -n default 2>/dev/null || echo "PSQL_FAILED")
+    kubectl delete pod "${psql_pod}" -n default --ignore-not-found &>/dev/null
 
     if echo "${select_result}" | grep -qE "^[[:space:]]*[0-9]+"; then
         row_count=$(echo "${select_result}" | grep -E "^[[:space:]]*[0-9]+" | tr -d ' ')
@@ -215,12 +219,17 @@ fi
 # Expected: "ERROR: permission denied for table accounts"
 #-------------------------------------------------------------------------------
 if [ -n "${db_username}" ] && [ "${db_username}" != "null" ] && [ -n "${rds_host}" ]; then
-    kubectl delete pod verify-uc2-insert -n default --ignore-not-found --wait=false &>/dev/null
-    insert_result=$(kubectl run verify-uc2-insert -n default --rm -i --restart=Never \
-        --image=postgres:17-alpine --env="PGPASSWORD=${db_password}" -- \
-        psql -h "${rds_host}" -U "${db_username}" -d workshop \
+    insert_pod="verify-uc2-insert-$$"
+    kubectl delete pod "${insert_pod}" -n default --ignore-not-found --wait=true &>/dev/null
+    kubectl run "${insert_pod}" -n default --restart=Never \
+        --image=postgres:17-alpine --env="PGPASSWORD=${db_password}" \
+        --command -- psql -h "${rds_host}" -U "${db_username}" -d workshop \
             -c "INSERT INTO banking.accounts (user_sub, account_number, balance) VALUES ('verify-test', 'ACC999', 0.00);" \
-            --no-password 2>&1 | grep -v 'pod.*deleted' || echo "PSQL_FAILED")
+            --no-password &>/dev/null
+    kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/"${insert_pod}" -n default --timeout=60s &>/dev/null
+    kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/"${insert_pod}" -n default --timeout=60s &>/dev/null || true
+    insert_result=$(kubectl logs "${insert_pod}" -n default 2>/dev/null || echo "PSQL_FAILED")
+    kubectl delete pod "${insert_pod}" -n default --ignore-not-found &>/dev/null
 
     if echo "${insert_result}" | grep -qi "permission denied"; then
         print_pass "ENFC-02: INSERT rejected by PostgreSQL (permission denied for table)"

@@ -397,15 +397,16 @@ phase_verify_foundation() {
     ad_dns_ip=$(cd "${PROJECT_ROOT}/infrastructure" && terraform output -json 2>/dev/null \
         | jq -r '.simple_ad_dns_ips.value[0] // empty' 2>/dev/null || echo "")
     ad_password=$(grep -E '^simple_ad_admin_password\s*=' "${TF_VARS}" 2>/dev/null \
-        | sed 's/.*=\s*"\(.*\)"/\1/' || echo "")
+        | sed 's/^[^"]*"\([^"]*\)".*/\1/' || echo "")
     if [ -n "$ad_dns_ip" ] && [ -n "$ad_password" ]; then
         step_header "Provisioning Simple AD users..."
         local bind_dn="CN=Administrator,CN=Users,DC=workshop,DC=internal"
         local base_dn="CN=Users,DC=workshop,DC=internal"
-        kubectl delete pod provision-ad-users --ignore-not-found --wait=false &>/dev/null
-        kubectl run provision-ad-users -n default --rm -i --restart=Never \
-            --image=alpine:3 -- \
-            sh -c "apk add --no-cache openldap-clients >/dev/null 2>&1 && \
+        local provision_pod="provision-ad-users-$$"
+        kubectl delete pod "${provision_pod}" -n default --ignore-not-found --wait=true &>/dev/null
+        kubectl run "${provision_pod}" -n default --restart=Never \
+            --image=alpine:3 \
+            --command -- sh -c "apk add --no-cache openldap-clients >/dev/null 2>&1 && \
                 for uid in oscar adriana; do \
                     case \${uid} in oscar) cn='Oscar Medina'; sn=Medina; gn=Oscar;; adriana) cn='Adriana Medina'; sn=Medina; gn=Adriana;; esac; \
                     if ldapsearch -x -H ldap://${ad_dns_ip} -D '${bind_dn}' -w '${ad_password}' -b '${base_dn}' \"(sAMAccountName=\${uid})\" dn 2>/dev/null | grep -q '^dn:'; then \
@@ -415,9 +416,14 @@ phase_verify_foundation() {
                         ldapadd -x -H ldap://${ad_dns_ip} -D '${bind_dn}' -w '${ad_password}' && \
                         echo \"CREATED: \${uid}\" || echo \"FAILED: \${uid}\"; \
                     fi; \
-                done" \
-            2>&1 | grep -v 'pod.*deleted' \
-            || print_warn "Simple AD user provisioning had warnings"
+                done" &>/dev/null
+        kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/"${provision_pod}" -n default --timeout=120s &>/dev/null || true
+        local provision_result
+        provision_result=$(kubectl logs "${provision_pod}" -n default 2>/dev/null || echo "")
+        kubectl delete pod "${provision_pod}" -n default --ignore-not-found &>/dev/null
+        if [ -n "${provision_result}" ]; then
+            echo "${provision_result}" | grep -E 'CREATED|SKIP|FAILED'
+        fi
     fi
 
     bash "$SCRIPT_DIR/test-foundation.sh" \
