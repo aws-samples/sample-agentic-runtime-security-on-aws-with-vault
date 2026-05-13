@@ -543,10 +543,13 @@ phase_uc1() {
 
     if [ "$current_image" = "$ecr_uri" ]; then
         print_info "uc1_agent_image already set to $ecr_uri"
-    else
+    elif [ -n "$current_image" ]; then
         sed -i.bak "s|uc1_agent_image *= *\"[^\"]*\"|uc1_agent_image = \"${ecr_uri}\"|" "$deploy_file"
         rm -f "${deploy_file}.bak"
         print_success "uc1_agent_image = $ecr_uri"
+    else
+        echo "uc1_agent_image = \"${ecr_uri}\"" >> "$deploy_file"
+        print_success "uc1_agent_image = $ecr_uri (appended)"
     fi
 
     # Step 3: Terraform apply
@@ -638,10 +641,13 @@ phase_uc2() {
         current_val=$(grep "${var_name}" "$deploy_file" 2>/dev/null | sed -E 's/.*"([^"]+)".*/\1/')
         if [ "$current_val" = "$var_image" ]; then
             print_info "${var_name} already set to ${var_image}"
-        else
+        elif [ -n "$current_val" ]; then
             sed -i.bak "s|${var_name}[[:space:]]*=[[:space:]]*\"[^\"]*\"|${var_name} = \"${var_image}\"|" "$deploy_file"
             rm -f "${deploy_file}.bak"
             print_success "${var_name} = ${var_image}"
+        else
+            echo "${var_name} = \"${var_image}\"" >> "$deploy_file"
+            print_success "${var_name} = ${var_image} (appended)"
         fi
     done
 
@@ -738,10 +744,13 @@ phase_uc3() {
     current_image=$(grep 'uc3_agent_image' "$deploy_file" 2>/dev/null | sed -E 's/.*"([^"]+)".*/\1/')
     if [ "$current_image" = "$ecr_uri" ]; then
         print_info "uc3_agent_image already set to $ecr_uri"
-    else
+    elif [ -n "$current_image" ]; then
         sed -i.bak "s|uc3_agent_image *= *\"[^\"]*\"|uc3_agent_image = \"${ecr_uri}\"|" "$deploy_file"
         rm -f "${deploy_file}.bak"
         print_success "uc3_agent_image = $ecr_uri"
+    else
+        echo "uc3_agent_image = \"${ecr_uri}\"" >> "$deploy_file"
+        print_success "uc3_agent_image = $ecr_uri (appended)"
     fi
 
     # Step 3: Terraform apply (picks up uc3_agent + observability modules)
