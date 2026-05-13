@@ -390,6 +390,20 @@ phase_verify_foundation() {
         return 0
     fi
 
+    # Provision Simple AD users before verification checks them
+    local ad_dns_ip ad_password
+    ad_dns_ip=$(cd "${PROJECT_ROOT}/infrastructure" && terraform output -json 2>/dev/null \
+        | jq -r '.simple_ad_dns_ips.value[0] // empty' 2>/dev/null || echo "")
+    ad_password=$(grep -E '^simple_ad_admin_password\s*=' "${TF_VARS}" 2>/dev/null \
+        | sed 's/.*=\s*"\(.*\)"/\1/' || echo "")
+    if [ -n "$ad_dns_ip" ] && [ -n "$ad_password" ]; then
+        step_header "Provisioning Simple AD users..."
+        bash "$SCRIPT_DIR/create-simple-ad-users.sh" \
+            --ldap-host "$ad_dns_ip" \
+            --admin-password "$ad_password" \
+            || print_warn "Simple AD user provisioning had warnings"
+    fi
+
     bash "$SCRIPT_DIR/test-foundation.sh" \
         --cluster-name "$CLUSTER_NAME" \
         --db-instance-id "$db_id" \
