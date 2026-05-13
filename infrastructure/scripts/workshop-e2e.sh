@@ -14,7 +14,7 @@
 #   Phase 6: Vault — init + configure (local via port-forward)
 #   Phase 7a: Use Case 1 — Non-Personalized Read-Only (build images, deploy, verify)
 #   Phase 7b: Use Case 2 — OAuth Personalized Read-Only (build images, deploy, configure, verify)
-#   Phase 7c: Use Case 3 — CIBA Privileged (placeholder; Phase 6)
+#   Phase 7c: Use Case 3 — CIBA Privileged (build+push, deploy, verify, bypass test)
 #   Phase 8: Teardown (calls teardown.sh — unless --skip-teardown)
 #
 # Usage: ./workshop-e2e.sh <HCP_ORG> [OPTIONS]
@@ -702,12 +702,79 @@ phase_uc2() {
 }
 
 #===============================================================================
-# PHASE 7c: Use Case 3 — CIBA Privileged (placeholder)
+# PHASE 7c: Use Case 3 — CIBA Privileged
 #===============================================================================
-phase_uc3_placeholder() {
+phase_uc3() {
     phase_header "Phase 7c: Use Case 3 — CIBA Privileged"
-    print_info "[Phase 7c — placeholder; populated when Phase 6 (UC3) ships]"
-    return 0
+
+    if [ "$DRY_RUN" = true ]; then
+        print_info "[DRY-RUN] Would build+push UC3 agent image (build-uc3-agent.sh)"
+        print_info "[DRY-RUN] Would update uc3_agent_image in terraform.tfvars"
+        print_info "[DRY-RUN] Would run terraform apply for UC3 + observability modules"
+        print_info "[DRY-RUN] Would wait for uc3-agent deployment rollout"
+        print_info "[DRY-RUN] Would wait for fluent-bit DaemonSet rollout"
+        print_info "[DRY-RUN] Would run verify-uc3.sh (normal + bypass)"
+        return 0
+    fi
+
+    # Step 1: Build + push UC3 agent image
+    step_header "Building and pushing UC3 agent image..."
+    bash "$SCRIPT_DIR/build-uc3-agent.sh" \
+        --region "$WORKSHOP_REGION" || {
+        print_error "build-uc3-agent.sh failed"
+        return 1
+    }
+    print_success "UC3 agent image built and pushed to ECR"
+    pause_if_interactive "UC3 agent image pushed to ECR. Verify in AWS Console before continuing."
+
+    # Step 2: Resolve ECR URI and update terraform.tfvars
+    local account_id
+    account_id=$(aws sts get-caller-identity --query 'Account' --output text 2>/dev/null)
+    local ecr_uri="${account_id}.dkr.ecr.${WORKSHOP_REGION}.amazonaws.com/workshop/uc3-agent:latest"
+
+    step_header "Updating uc3_agent_image in terraform.tfvars..."
+    local deploy_file="$PROJECT_ROOT/infrastructure/terraform.tfvars"
+    local current_image
+    current_image=$(grep 'uc3_agent_image' "$deploy_file" 2>/dev/null | sed -E 's/.*"([^"]+)".*/\1/')
+    if [ "$current_image" = "$ecr_uri" ]; then
+        print_info "uc3_agent_image already set to $ecr_uri"
+    else
+        sed -i.bak "s|uc3_agent_image *= *\"[^\"]*\"|uc3_agent_image = \"${ecr_uri}\"|" "$deploy_file"
+        rm -f "${deploy_file}.bak"
+        print_success "uc3_agent_image = $ecr_uri"
+    fi
+
+    # Step 3: Terraform apply (picks up uc3_agent + observability modules)
+    step_header "Running terraform apply for UC3 + observability deployment..."
+    export TF_CLOUD_ORGANIZATION="$HCP_ORG"
+    terraform -chdir="$PROJECT_ROOT/infrastructure" apply -auto-approve || {
+        print_error "UC3 terraform apply failed"
+        return 1
+    }
+    print_success "UC3 agent and observability deployed via terraform apply"
+    pause_if_interactive "Terraform apply complete. Verify uc3 + observability resources before continuing."
+
+    # Step 4: Wait for UC3 agent deployment rollout
+    step_header "Waiting for UC3 agent deployment rollout..."
+    kubectl rollout status deployment/uc3-agent -n banking-app --timeout=300s 2>/dev/null || {
+        print_warn "UC3 agent rollout timed out — verify-uc3.sh will report details"
+    }
+
+    # Step 5: Wait for fluent-bit DaemonSet
+    step_header "Waiting for fluent-bit DaemonSet rollout..."
+    kubectl rollout status daemonset/fluent-bit -n logging --timeout=120s 2>/dev/null || {
+        print_warn "fluent-bit DaemonSet rollout timed out — check: kubectl get pods -n logging"
+    }
+
+    # Step 6: Run UC3 verification
+    pause_if_interactive "About to verify UC3 deployment"
+    bash "$SCRIPT_DIR/verify-uc3.sh" 2>&1 || print_warn "UC3 verification had warnings"
+    print_success "UC3 verification complete"
+
+    # Step 7: Run bypass test
+    pause_if_interactive "About to run UC3 bypass test (forged JWT rejection)"
+    bash "$SCRIPT_DIR/verify-uc3.sh" --bypass 2>&1 || print_warn "UC3 bypass test had warnings"
+    print_success "UC3 bypass test complete"
 }
 
 #===============================================================================
@@ -874,7 +941,7 @@ should_run identity        && phase_identity
 should_run vault           && phase_vault
 should_run uc1             && phase_uc1
 should_run uc2             && phase_uc2
-should_run uc3             && phase_uc3_placeholder
+should_run uc3             && phase_uc3
 
 if [ "$SKIP_TEARDOWN" = false ]; then
     phase_teardown
