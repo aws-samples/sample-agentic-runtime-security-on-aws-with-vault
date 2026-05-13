@@ -191,20 +191,25 @@ if [ "${ad_stage}" = "Active" ]; then
         --query 'DirectoryDescriptions[?Name==`workshop.internal`].DnsIpAddrs[0] | [0]' \
         --output text --region "${REGION}" 2>/dev/null || echo "")
 
-    if [ -n "${ad_dns_ip}" ] && [ "${ad_dns_ip}" != "None" ]; then
+    ad_password=$(grep -E '^simple_ad_admin_password\s*=' "${REPO_ROOT}/infrastructure/terraform.tfvars" 2>/dev/null \
+        | sed 's/.*=\s*"\(.*\)"/\1/' || echo "")
+    local ad_bind_dn="CN=Administrator,CN=Users,DC=workshop,DC=internal"
+
+    if [ -n "${ad_dns_ip}" ] && [ "${ad_dns_ip}" != "None" ] && [ -n "${ad_password}" ]; then
         kubectl delete pod verify-ad-ldap --ignore-not-found --wait=false &>/dev/null
-        ldap_result=$(kubectl run verify-ad-ldap -n verify-access --rm -i --restart=Never \
+        ldap_result=$(kubectl run verify-ad-ldap -n default --rm -i --restart=Never \
             --image=alpine:3 -- \
             sh -c "apk add --no-cache openldap-clients >/dev/null 2>&1 && echo 'LDAP_CONNECT:OK' && \
                 for user in oscar adriana; do \
-                    if ldapsearch -x -H ldap://${ad_dns_ip} -b 'CN=Users,DC=workshop,DC=internal' \
+                    if ldapsearch -x -H ldap://${ad_dns_ip} -D '${ad_bind_dn}' -w '${ad_password}' \
+                        -b 'CN=Users,DC=workshop,DC=internal' \
                         \"(sAMAccountName=\${user})\" dn 2>/dev/null | grep -q '^dn:'; then \
                         echo \"USER_FOUND:\${user}\"; \
                     else \
                         echo \"USER_MISSING:\${user}\"; \
                     fi; \
                 done" \
-            2>/dev/null | grep -v 'pod.*deleted' || echo "LDAP_CONNECT:FAIL")
+            2>&1 | grep -v 'pod.*deleted' || echo "LDAP_CONNECT:FAIL")
 
         if echo "${ldap_result}" | grep -q 'LDAP_CONNECT:OK'; then
             print_pass "LDAP connectivity from cluster to Simple AD (${ad_dns_ip}:389)"
