@@ -150,7 +150,13 @@ resource "vault_database_secret_backend_role" "uc2_personal_readonly" {
   ]
 }
 
-# uc3-refund-writer: SELECT + INSERT + UPDATE, 5-min TTL (tightest scope — financial write)
+# uc3-refund-writer: tightly-scoped banking schema grants, 5-min TTL (financial write)
+# Pitfall 6 fix: original creation_statements targeted public schema — UC3 data lives in
+# banking schema. Fixed to:
+#   - USAGE on banking schema
+#   - SELECT on banking.transactions (read source records, no write)
+#   - SELECT + INSERT + UPDATE on banking.refunds (write approved refunds, no DELETE)
+#   - search_path set to banking,public so the role lands in the right schema by default
 resource "vault_database_secret_backend_role" "uc3_refund_writer" {
   backend     = vault_mount.database.path
   name        = "uc3-refund-writer"
@@ -159,12 +165,15 @@ resource "vault_database_secret_backend_role" "uc3_refund_writer" {
   max_ttl     = 600 # 10 minutes
   creation_statements = [
     "CREATE ROLE \"{{name}}\" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}';",
-    "GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO \"{{name}}\";",
-    "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE ON TABLES TO \"{{name}}\";"
+    "GRANT USAGE ON SCHEMA banking TO \"{{name}}\";",
+    "GRANT SELECT ON banking.transactions TO \"{{name}}\";",
+    "GRANT SELECT, INSERT, UPDATE ON banking.refunds TO \"{{name}}\";",
+    "ALTER ROLE \"{{name}}\" SET search_path TO banking,public;"
   ]
   revocation_statements = [
-    "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM \"{{name}}\";",
-    "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM \"{{name}}\";",
+    "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA banking FROM \"{{name}}\";",
+    "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA banking FROM \"{{name}}\";",
+    "REVOKE USAGE ON SCHEMA banking FROM \"{{name}}\";",
     "DROP ROLE IF EXISTS \"{{name}}\";"
   ]
 }
@@ -320,10 +329,12 @@ resource "vault_kubernetes_auth_backend_role" "uc2_agent" {
 }
 
 resource "vault_kubernetes_auth_backend_role" "uc3" {
-  backend                          = vault_auth_backend.kubernetes.path
-  role_name                        = "uc3"
-  bound_service_account_names      = ["uc3-privileged-actor-sa"]
-  bound_service_account_namespaces = ["uc3"]
+  backend                     = vault_auth_backend.kubernetes.path
+  role_name                   = "uc3"
+  bound_service_account_names = ["uc3-privileged-actor-sa"]
+  # Pitfall 5 fix: UC3 agent runs in banking-app namespace (same as UC1/UC2 agents)
+  # not a dedicated "uc3" namespace — bound namespace must match actual pod namespace.
+  bound_service_account_namespaces = ["banking-app"]
   token_policies                   = [vault_policy.uc3_refund_writer.name]
   token_ttl                        = 3600
   token_max_ttl                    = 7200
@@ -370,7 +381,13 @@ resource "vault_jwt_auth_backend_role" "uc3_jwt" {
   user_claim = "sub"
 
   # may_act claim signals RFC 8693 delegation — agent must present token with
-  # may_act.sub matching the delegating user before Vault issues DB write creds.
+  # a may_act claim before Vault issues DB write creds.
+  #
+  # Open Question 3: glob "*" used for initial deploy. After first successful
+  # UC3 token exchange reveals the actual may_act claim format from IVIA (e.g.,
+  # {"sub":"uc3-agent@banking-app.svc"}), tighten this to the exact sub value.
+  # Keeping glob here avoids a boot-time chicken-and-egg: the exact sub string
+  # is only known after the agent has authenticated at least once.
   bound_claims = {
     "may_act" = "*"
   }

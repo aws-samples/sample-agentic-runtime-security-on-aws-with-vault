@@ -131,3 +131,23 @@ VALUES
   ('a2000000-0000-0000-0000-000000000002', 'credit', 2000.00, 'Savings goal deposit',   'CDL Bank',               'savings'),
   ('a2000000-0000-0000-0000-000000000002', 'debit',  -500.00, 'Emergency fund draw',    'Internal Transfer',      'transfer')
 ON CONFLICT DO NOTHING;
+
+-- ---------------------------------------------------------------------------
+-- Refunds table (UC3 — CIBA privileged write)
+--
+-- The UC3 agent (privileged actor) writes approved refund records here.
+-- Vault uc3-refund-writer role grants SELECT on banking.transactions and
+-- SELECT + INSERT + UPDATE on banking.refunds (no DELETE — audit preservation).
+-- approved_by holds the Vault entity alias (agent service account) so the
+-- write is attributable in the three-plane audit JOIN.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS banking.refunds (
+  refund_id   UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id  UUID          NOT NULL REFERENCES banking.accounts(id),
+  amount      DECIMAL(12,2) NOT NULL,
+  currency    VARCHAR(3)    NOT NULL DEFAULT 'USD',
+  approved_by VARCHAR(255)  NOT NULL,
+  request_id  UUID          NOT NULL,
+  created_at  TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+);
