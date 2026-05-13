@@ -413,6 +413,27 @@ rules:
       rule_type: javascript
       content: |
         // No post-processing needed for workshop
+    - name: ropc
+      rule_type: javascript
+      content: |
+        importClass(Packages.com.tivoli.am.fim.trustserver.sts.utilities.IDMappingExtUtils);
+        importClass(Packages.com.tivoli.am.fim.trustserver.sts.utilities.OAuthMappingExtUtils);
+        importClass(Packages.com.ibm.security.access.user.UserLookupHelper);
+
+        var username = stsuu.getContextAttributes().getAttributeValueByName("username");
+        var password = stsuu.getContextAttributes().getAttributeValueByName("password");
+
+        var userLookupHelper = new UserLookupHelper("workshop_users");
+        userLookupHelper.init(true);
+
+        var user = userLookupHelper.getUser(username);
+        if (user == null || user.hasError()) {
+          OAuthMappingExtUtils.throwSTSException("Invalid user or password.");
+        } else if (!user.authenticate(password)) {
+          OAuthMappingExtUtils.throwSTSException("Invalid user or password.");
+        } else {
+          IDMappingExtUtils.traceString("ROPC auth OK for: " + username);
+        }
 
 clients:
   - client_id: workshop_agent
