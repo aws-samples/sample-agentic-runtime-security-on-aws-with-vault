@@ -359,7 +359,7 @@ resource "aws_cloudwatch_log_subscription_filter" "vault_audit" {
   filter_pattern  = ""
   destination_arn = aws_kinesis_firehose_delivery_stream.vault_audit.arn
   role_arn        = aws_iam_role.cw_firehose.arn
-  distribution    = "ByLogStreamName"
+  distribution    = "ByLogStream"
 
   depends_on = [aws_iam_role_policy.cw_to_firehose]
 }
@@ -370,7 +370,7 @@ resource "aws_cloudwatch_log_subscription_filter" "ivia_decision" {
   filter_pattern  = ""
   destination_arn = aws_kinesis_firehose_delivery_stream.ivia_decision.arn
   role_arn        = aws_iam_role.cw_firehose.arn
-  distribution    = "ByLogStreamName"
+  distribution    = "ByLogStream"
 
   depends_on = [aws_iam_role_policy.cw_to_firehose]
 }
@@ -381,7 +381,7 @@ resource "aws_cloudwatch_log_subscription_filter" "agent_trace" {
   filter_pattern  = ""
   destination_arn = aws_kinesis_firehose_delivery_stream.agent_trace.arn
   role_arn        = aws_iam_role.cw_firehose.arn
-  distribution    = "ByLogStreamName"
+  distribution    = "ByLogStream"
 
   depends_on = [aws_iam_role_policy.cw_to_firehose]
 }
