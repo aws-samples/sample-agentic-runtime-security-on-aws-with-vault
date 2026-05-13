@@ -14,6 +14,7 @@ intentional and pedagogically important for the UC2 workshop demo.
 import logging
 import os
 
+import boto3
 import hvac
 
 logger = logging.getLogger(__name__)
@@ -64,6 +65,30 @@ class AgentVaultClient:
                 "note": "agent workload identity only; user DB creds via MCP server",
             },
         )
+
+    def get_bedrock_session(self, region: str) -> boto3.Session:
+        """Obtain ephemeral AWS STS credentials from Vault aws secrets engine (OBJ-2).
+
+        Returns a boto3.Session with Vault-issued short-lived credentials
+        scoped to the bedrock-reader IAM role.
+        """
+        response = self.client.read("aws/sts/bedrock-reader")
+        data = response["data"]
+        session = boto3.Session(
+            aws_access_key_id=data["access_key"],
+            aws_secret_access_key=data["secret_key"],
+            aws_session_token=data["security_token"],
+            region_name=region,
+        )
+        logger.info(
+            "bedrock_sts_credentials_issued",
+            extra={
+                "vault_aws_role": "bedrock-reader",
+                "lease_id": response.get("lease_id", "n/a"),
+                "region": region,
+            },
+        )
+        return session
 
     def is_authenticated(self) -> bool:
         """Return True if the cached Vault token is still valid."""

@@ -294,6 +294,31 @@ resource "vault_kubernetes_auth_backend_role" "uc2" {
   token_max_ttl                    = 7200
 }
 
+resource "vault_policy" "uc2_agent" {
+  name = "uc2-agent"
+
+  policy = <<-EOT
+    # UC2 Agent: Bedrock STS only — no database credentials
+    # Agent's DB access flows through MCP server (user JWT → Vault jwt auth → per-user DB creds)
+    path "aws/sts/bedrock-reader" {
+      capabilities = ["read", "update"]
+    }
+    path "auth/token/lookup-self" {
+      capabilities = ["read"]
+    }
+  EOT
+}
+
+resource "vault_kubernetes_auth_backend_role" "uc2_agent" {
+  backend                          = vault_auth_backend.kubernetes.path
+  role_name                        = "uc2-agent"
+  bound_service_account_names      = ["uc2-agent-sa"]
+  bound_service_account_namespaces = ["banking-app"]
+  token_policies                   = [vault_policy.uc2_agent.name]
+  token_ttl                        = 3600
+  token_max_ttl                    = 7200
+}
+
 resource "vault_kubernetes_auth_backend_role" "uc3" {
   backend                          = vault_auth_backend.kubernetes.path
   role_name                        = "uc3"

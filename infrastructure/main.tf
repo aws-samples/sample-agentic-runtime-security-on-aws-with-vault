@@ -305,7 +305,7 @@ module "uc2_app" {
   # No explicit providers block needed — only default (non-aliased) providers used.
 
   vault_addr            = "http://vault.vault.svc.cluster.local:8200"
-  vault_k8s_role        = "uc2"
+  vault_k8s_role        = "uc2-agent"
   vault_jwt_role        = "uc2-jwt"
   vault_db_role         = "uc2-personal-readonly"
   rds_address           = module.rds.address

@@ -56,8 +56,7 @@ async def _call_mcp_tool(tool_name: str, jwt: str, **kwargs: object) -> dict:
             json=payload,
             headers={
                 "Content-Type": "application/json",
-                "Accept": "application/json",
-                # Forward user JWT in Authorization so MCP server can extract it
+                "Accept": "application/json, text/event-stream",
                 "Authorization": f"Bearer {jwt}",
             },
         )
@@ -172,22 +171,30 @@ def get_transactions(account_id: str = "") -> list[dict]:
     return []
 
 
-def build_uc2_agent() -> Agent:
+def build_uc2_agent(vault_client=None) -> Agent:
     """Construct the UC2 banking Strands Agent.
 
     Uses Amazon Nova Pro via CRIS profile (us.amazon.nova-pro-v1:0).
+    Bedrock credentials come from Vault AWS STS (OBJ-2) — not the node IAM role.
     Tools: get_accounts + get_transactions — both forward user JWT to MCP server.
 
     Returns:
         Configured strands.Agent ready to handle banking queries.
     """
-    region = os.getenv("REGION", "")
+    region = os.getenv("REGION", "us-west-2")
     model_id = os.getenv("BEDROCK_MODEL_ID", "us.amazon.nova-pro-v1:0")
 
-    bedrock_model = BedrockModel(
-        model_id=model_id,
-        region_name=region or None,
-    )
+    boto_session = None
+    if vault_client:
+        boto_session = vault_client.get_bedrock_session(region)
+
+    model_kwargs = {"model_id": model_id}
+    if boto_session:
+        model_kwargs["boto_session"] = boto_session
+    else:
+        model_kwargs["region_name"] = region
+
+    bedrock_model = BedrockModel(**model_kwargs)
 
     system_prompt = (
         "You are the CDL Bank AI Assistant for the Agentic Runtime Security workshop. "

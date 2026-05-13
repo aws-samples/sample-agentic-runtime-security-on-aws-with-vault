@@ -119,7 +119,10 @@ locals {
   embedding_model_arn = "arn:aws:bedrock:${var.region}::foundation-model/${local.embedding_model_id}"
 }
 
-# 3/5 — Bedrock InvokeModel on the embedding model.
+# 3/5 — Bedrock InvokeModel on the embedding model + agent LLM inference.
+# This role is also assumed by Vault (aws/sts/bedrock-reader) for agent
+# Bedrock calls. Vault's session policy scopes down to specific actions,
+# but the IAM role must permit them as the ceiling.
 resource "aws_iam_role_policy" "kb_bedrock" {
   depends_on = [time_sleep.wait_for_kb_role_propagation]
   name       = "${var.kb_name}-bedrock"
@@ -132,6 +135,17 @@ resource "aws_iam_role_policy" "kb_bedrock" {
         Effect   = "Allow"
         Action   = ["bedrock:InvokeModel"]
         Resource = local.embedding_model_arn
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "bedrock:InvokeModel",
+          "bedrock:InvokeModelWithResponseStream"
+        ]
+        Resource = [
+          "arn:aws:bedrock:*:*:inference-profile/us.amazon.nova-pro-v1:0",
+          "arn:aws:bedrock:*::foundation-model/amazon.nova-pro-v1:0"
+        ]
       }
     ]
   })

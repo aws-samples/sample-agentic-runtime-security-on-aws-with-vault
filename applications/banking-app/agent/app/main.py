@@ -53,8 +53,8 @@ async def lifespan(app: FastAPI):
         # Non-fatal in development (no K8s SA token mount outside cluster)
         logger.warning("agent_vault_auth_skipped", extra={"reason": str(exc)})
 
-    # Build the Strands agent with Bedrock Nova Pro
-    _agent = build_uc2_agent()
+    # Build the Strands agent with Vault-issued Bedrock STS credentials (OBJ-2)
+    _agent = build_uc2_agent(vault_client=_vault_client if _vault_client and _vault_client.is_authenticated() else None)
 
     yield
 
@@ -116,7 +116,7 @@ async def chat(request: Request, body: ChatRequest):
             yield f"data: {json.dumps({'role': 'ai', 'content': 'Processing your request...', 'type': 'tool_planning'})}\n\n"
 
             # Invoke the Strands agent
-            response = _agent.invoke(message)
+            response = _agent(message)
 
             # Stream the response
             content = str(response)
@@ -124,7 +124,7 @@ async def chat(request: Request, body: ChatRequest):
             yield f"data: {json.dumps({'type': 'end'})}\n\n"
 
         except Exception as exc:
-            logger.error("agent_error", extra={"error": str(exc), "message": message})
+            logger.error("agent_error: %s | user_message: %s", str(exc), message)
             yield f"data: {json.dumps({'type': 'error', 'content': str(exc)})}\n\n"
             yield f"data: {json.dumps({'type': 'end'})}\n\n"
         finally:
