@@ -4,8 +4,8 @@ import { env } from '$env/dynamic/private';
 const AGENT_URL = env.AGENT_URL ?? 'http://banking-agent-svc:3002';
 
 export const POST: RequestHandler = async ({ request, cookies }) => {
-	const accessToken = cookies.get('access_token');
-	if (!accessToken) {
+	const idToken = cookies.get('id_token');
+	if (!idToken) {
 		return new Response(JSON.stringify({ error: 'Not authenticated' }), { status: 401 });
 	}
 
@@ -15,7 +15,7 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
 		method: 'POST',
 		headers: {
 			'Content-Type': 'application/json',
-			Authorization: `Bearer ${accessToken}`,
+			Authorization: `Bearer ${idToken}`,
 		},
 		body: JSON.stringify(body),
 	});

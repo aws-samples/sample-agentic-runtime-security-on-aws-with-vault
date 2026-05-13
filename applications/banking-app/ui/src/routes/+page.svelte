@@ -73,17 +73,19 @@
 
 <style>
 	.login-page {
-		min-height: calc(100vh - 4rem);
+		min-height: 100vh;
 		display: flex;
 		align-items: center;
 		justify-content: center;
 		padding: 2rem;
+		background: #161616;
 	}
 
 	.login-card {
 		max-width: 420px;
 		width: 100%;
 		text-align: center;
+		border-top: 3px solid #0f62fe;
 	}
 
 	.login-logo {
@@ -93,7 +95,7 @@
 
 	h1 {
 		font-size: 1.8rem;
-		font-weight: 700;
+		font-weight: 600;
 		margin: 0 0 0.25rem;
 		color: var(--color-text);
 	}

@@ -5,13 +5,22 @@ weight: 12
 
 ## The IBM Verify + HashiCorp Vault answer
 
-![Reference architecture](/static/images/architecture-overview.svg)
+![Workshop Architecture](/static/images/architecture-overview.svg)
 
 IBM Verify Identity Access owns the user-identity plane: OAuth, OIDC, CIBA, and the JWT signing key. IVIA authenticates users against your organization's Active Directory (AWS Simple AD in this workshop) via LDAP. HashiCorp Vault owns the workload-identity plane and the credential-vending plane: Kubernetes auth method bound to the EKS OIDC provider, `jwt` auth method bound to IVIA's OIDC discovery URL, and dynamic Postgres + AWS secrets engines. The two systems meet at a single seam — Vault's `jwt` auth trusts IVIA's OIDC discovery URL — which is where user intent gets converted into a Vault-vended credential.
 
-![Verify and Vault responsibility split](/static/images/verify-vault-split.svg)
+### Responsibility split
 
-The diagram above shows the responsibility split. Verify never sees the database. Vault never authenticates an end user. Each system is the source of truth for one trust plane, and the boundary between them is a single, auditable, OIDC-mediated seam.
+| Plane | Owner | Scope |
+|---|---|---|
+| **User identity** | IBM Verify Identity Access | OAuth ROPC/PKCE, CIBA, JWT signing, JWKS endpoint, LDAP authentication against Simple AD |
+| **Workload identity** | HashiCorp Vault | Kubernetes auth (ServiceAccount JWT), JWT auth (IVIA-issued id_token), policy-bound tokens |
+| **Credential vending** | HashiCorp Vault | Dynamic Postgres credentials (per-use-case roles, TTL 5–15 min), AWS STS assumed_role for Bedrock |
+| **Data isolation** | PostgreSQL RLS | `app.current_user_sub` session variable activates row-level security per authenticated user |
+| **Network enforcement** | Kubernetes NetworkPolicy | Default-deny per namespace, per-pod egress allowlists (Vault, RDS, IVIA, Bedrock only) |
+| **Encryption** | AWS KMS | Single workshop CMK encrypts RDS, S3, OpenSearch Serverless, and CloudWatch |
+
+Verify never sees the database. Vault never authenticates an end user. Each system is the source of truth for one trust plane, and the boundary between them is a single, auditable, OIDC-mediated seam.
 
 ## How the workshop is structured
 

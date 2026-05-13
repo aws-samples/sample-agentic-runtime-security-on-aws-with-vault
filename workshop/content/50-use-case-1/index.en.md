@@ -25,24 +25,11 @@ The agent pod never holds a long-lived database password or an AWS IAM credentia
 - How Vault's NetworkPolicy egress rules constrain what the pod can reach
 - How to verify JIT credential issuance and enforce the boundary between Use Case 1 and Use Case 3 credential scopes
 
-## Architecture
-
-The diagram below shows the credential flow for Use Case 1.
-
-![Use Case 1 flow diagram](../assets/uc1-flow.svg)
-
-1. The agent pod presents its ServiceAccount JWT to `vault.vault.svc.cluster.local:8200` over the `uc1-egress` NetworkPolicy allowed port (8200/TCP).
-2. Vault calls the EKS TokenReview API to validate the JWT and confirms the role binding for `uc1-retriever-sa` in the `uc1` namespace.
-3. Vault issues a short-lived token bound to the `uc1-readonly` policy.
-4. The agent uses that token to call `database/creds/uc1-readonly` — Vault issues a JIT Postgres read-only credential.
-5. The agent uses the same token to call `aws/sts/bedrock-reader` — Vault generates a scoped STS session credential.
-6. The agent opens a Postgres connection and calls the Bedrock Knowledge Base using those ephemeral credentials.
-7. Both credentials expire after their respective TTLs; Vault's dynamic secrets engine automatically revokes the Postgres role.
-
 ## Sub-Modules
 
 | Module | What You Do |
 |---|---|
+| [Request Flow](./50-request-flow/) | Walk through the end-to-end credential and data flow — workload identity, JIT Postgres + STS credentials, and automatic revocation |
 | [Deploy the Use Case 1 Agent](./51-deploy-agent/) | Build and push the agent container, update terraform.tfvars with the image URI, trigger the workspace apply, and verify the pod and ServiceAccount are running |
 | [Configure Vault Auth for Use Case 1](./52-configure-vault-auth/) | Inspect the Vault role and policy that were configured by the `vault_config` Terraform module — understand what was configured and why |
 | [Verify Credentials and Enforcement](./53-verify-credentials/) | Query the agent, observe JIT credential issuance in the Vault audit log, run the enforcement test, and review the threat-model callout |

@@ -118,8 +118,9 @@ resource "kubernetes_deployment" "uc1" {
         automount_service_account_token = true
 
         container {
-          name  = "agent"
-          image = var.agent_image
+          name              = "agent"
+          image             = var.agent_image
+          image_pull_policy = "Always"
 
           port {
             container_port = 8080

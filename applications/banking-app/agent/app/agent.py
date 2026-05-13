@@ -32,14 +32,8 @@ logger = logging.getLogger(__name__)
 MCP_URL = os.getenv("MCP_URL", "http://banking-mcp.banking-app.svc.cluster.local:3001")
 
 
-async def _call_mcp_tool(tool_name: str, jwt: str, **kwargs: object) -> dict:
-    """Call an MCP server tool, forwarding the user JWT.
-
-    The JWT is forwarded in the request body (not Authorization header) so
-    the MCP server can extract it per-tool. The MCP server's Authorization
-    header is reserved for the MCP protocol itself; user identity travels
-    in the tool argument to maintain per-tool Vault auth.
-    """
+def _call_mcp_tool(tool_name: str, jwt: str, **kwargs: object) -> dict:
+    """Call an MCP server tool, forwarding the user JWT."""
     payload = {
         "jsonrpc": "2.0",
         "id": 1,
@@ -50,8 +44,8 @@ async def _call_mcp_tool(tool_name: str, jwt: str, **kwargs: object) -> dict:
         },
     }
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.post(
+    with httpx.Client(timeout=30.0) as client:
+        response = client.post(
             f"{MCP_URL}/mcp",
             json=payload,
             headers={
@@ -87,35 +81,31 @@ def get_accounts() -> list[dict]:
     Returns:
         List of account dicts with balance, account_type, currency.
     """
-    import asyncio
-
     if not _current_jwt:
         raise ValueError("No user JWT in request context — call set_request_jwt() first")
 
-    result = asyncio.get_event_loop().run_until_complete(
-        _call_mcp_tool("get_accounts", _current_jwt)
-    )
+    result = _call_mcp_tool("get_accounts", _current_jwt)
 
-    # Extract structured content from MCP response
-    content = result.get("result", {})
-    if isinstance(content, dict):
-        structured = content.get("structuredContent", {})
-        if isinstance(structured, dict):
-            accounts = structured.get("accounts", [])
-            meta = structured.get("credential_metadata", {})
-            logger.info(
-                "get_accounts_success",
-                extra={
-                    "account_count": len(accounts),
-                    "vault_lease_id": meta.get("lease_id", "unknown"),
-                    "user_sub": meta.get("user_sub", "unknown"),
-                },
-            )
-            return accounts
+    mcp_result = result.get("result", {})
+    content_blocks = mcp_result.get("content", [])
 
-    error_content = result.get("result", {}).get("content", [{}])
-    if error_content and error_content[0].get("text"):
-        raise RuntimeError(error_content[0]["text"])
+    if mcp_result.get("isError"):
+        msg = content_blocks[0].get("text", "Unknown MCP error") if content_blocks else "Unknown MCP error"
+        raise RuntimeError(msg)
+
+    if content_blocks and content_blocks[0].get("type") == "text":
+        parsed = json.loads(content_blocks[0]["text"])
+        accounts = parsed.get("accounts", [])
+        meta = parsed.get("credential_metadata", {})
+        logger.info(
+            "get_accounts_success",
+            extra={
+                "account_count": len(accounts),
+                "vault_lease_id": meta.get("lease_id", "unknown"),
+                "user_sub": meta.get("user_sub", "unknown"),
+            },
+        )
+        return accounts
 
     return []
 
@@ -134,8 +124,6 @@ def get_transactions(account_id: str = "") -> list[dict]:
     Returns:
         List of transaction dicts (amount, description, transaction_type, created_at).
     """
-    import asyncio
-
     if not _current_jwt:
         raise ValueError("No user JWT in request context — call set_request_jwt() first")
 
@@ -143,30 +131,29 @@ def get_transactions(account_id: str = "") -> list[dict]:
     if account_id:
         kwargs["account_id"] = account_id
 
-    result = asyncio.get_event_loop().run_until_complete(
-        _call_mcp_tool("get_transactions", _current_jwt, **kwargs)
-    )
+    result = _call_mcp_tool("get_transactions", _current_jwt, **kwargs)
 
-    content = result.get("result", {})
-    if isinstance(content, dict):
-        structured = content.get("structuredContent", {})
-        if isinstance(structured, dict):
-            transactions = structured.get("transactions", [])
-            meta = structured.get("credential_metadata", {})
-            logger.info(
-                "get_transactions_success",
-                extra={
-                    "transaction_count": len(transactions),
-                    "vault_lease_id": meta.get("lease_id", "unknown"),
-                    "user_sub": meta.get("user_sub", "unknown"),
-                    "account_filter": account_id or "all",
-                },
-            )
-            return transactions
+    mcp_result = result.get("result", {})
+    content_blocks = mcp_result.get("content", [])
 
-    error_content = result.get("result", {}).get("content", [{}])
-    if error_content and error_content[0].get("text"):
-        raise RuntimeError(error_content[0]["text"])
+    if mcp_result.get("isError"):
+        msg = content_blocks[0].get("text", "Unknown MCP error") if content_blocks else "Unknown MCP error"
+        raise RuntimeError(msg)
+
+    if content_blocks and content_blocks[0].get("type") == "text":
+        parsed = json.loads(content_blocks[0]["text"])
+        transactions = parsed.get("transactions", [])
+        meta = parsed.get("credential_metadata", {})
+        logger.info(
+            "get_transactions_success",
+            extra={
+                "transaction_count": len(transactions),
+                "vault_lease_id": meta.get("lease_id", "unknown"),
+                "user_sub": meta.get("user_sub", "unknown"),
+                "account_filter": account_id or "all",
+            },
+        )
+        return transactions
 
     return []
 

@@ -17,26 +17,100 @@ For this workshop, WebSEAL is not deployed. Instead, the Banking UI hosts its ow
 The ROPC grant transmits user credentials directly to the authorization server. It requires a confidential client (the Banking UI sends its `client_secret` in the POST body). In production, the Authorization Code + PKCE flow is preferred — it moves credential handling entirely to the identity provider and eliminates the application as a credential intermediary. PKCE functions are retained in `auth.ts` as the upgrade path when WebSEAL or an external IdP is available.
 :::
 
-## ROPC Login Flow
+## Request Flow
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#d0e2ff',
+  'primaryTextColor': '#161616',
+  'primaryBorderColor': '#0f62fe',
+  'lineColor': '#0f62fe',
+  'secondaryColor': '#bae6ff',
+  'tertiaryColor': '#f4f4f4',
+  'noteBkgColor': '#e8daff',
+  'noteTextColor': '#161616',
+  'noteBorderColor': '#8a3ffc',
+  'actorBkg': '#d0e2ff',
+  'actorBorder': '#0f62fe',
+  'actorTextColor': '#161616',
+  'signalColor': '#161616',
+  'signalTextColor': '#161616',
+  'labelBoxBkgColor': '#d0e2ff',
+  'labelBoxBorderColor': '#0f62fe',
+  'labelTextColor': '#161616',
+  'loopTextColor': '#161616',
+  'activationBorderColor': '#0f62fe',
+  'activationBkgColor': '#edf5ff',
+  'sequenceNumberColor': '#ffffff'
+}}}%%
+sequenceDiagram
+    autonumber
+    actor User
+    participant UI as Banking UI<br/>(SvelteKit)
+    participant IVIA as IVIA OIDC<br/>Provider
+    participant Agent as Banking Agent<br/>(Strands SDK)
+    participant MCP as MCP Server<br/>(Express)
+    participant Vault as HashiCorp<br/>Vault
+    participant RDS as PostgreSQL<br/>(RDS + RLS)
+
+    rect rgba(208, 226, 255, 0.3)
+    Note over User,IVIA: Authentication — ROPC grant
+    User->>UI: Submit username + password
+    UI->>IVIA: POST /oauth2/token<br/>grant_type=password, scope=openid
+    IVIA->>IVIA: Authenticate against Simple AD (LDAP)
+    IVIA-->>UI: access_token + id_token (JWT with sub claim)
+    UI->>UI: Store tokens in httpOnly cookies
+    UI-->>User: Redirect to /dashboard
+    end
+
+    rect rgba(186, 230, 255, 0.3)
+    Note over User,RDS: Banking query — identity propagation
+    User->>UI: "What are my accounts?"
+    UI->>Agent: POST /chat + Authorization: Bearer id_token
+    Agent->>Agent: Extract JWT from header
+    Agent->>MCP: JSON-RPC tools/call get_accounts<br/>Authorization: Bearer id_token
+    MCP->>MCP: Decode JWT → extract sub claim
+
+    MCP->>Vault: POST /v1/auth/jwt/login<br/>{jwt, role: "uc2-jwt"}
+    Vault->>IVIA: Validate JWT signature via JWKS
+    IVIA-->>Vault: Public key confirmation
+    Vault->>Vault: Check bound_audiences = "agent-uc2"
+    Vault-->>MCP: Vault token (uc2-personal policy)
+
+    MCP->>Vault: GET /v1/database/creds/uc2-personal-readonly
+    Vault->>RDS: CREATE ROLE with 15-min TTL
+    Vault-->>MCP: JIT credentials {username, password}
+
+    MCP->>RDS: Connect with JIT creds
+    MCP->>RDS: set_config('app.current_user_sub', 'oscar')
+    MCP->>RDS: SELECT * FROM accounts
+    RDS->>RDS: RLS filters rows WHERE owner_sub = 'oscar'
+    RDS-->>MCP: Oscar's accounts only
+    end
+
+    MCP-->>Agent: Tool result (accounts JSON)
+    Agent->>Agent: LLM formats response
+    Agent-->>UI: SSE stream with formatted answer
+    UI-->>User: "Checking: $4,250 · Savings: $18,750"
+
+    rect rgba(167, 240, 186, 0.3)
+    Note over Vault,RDS: Credential lifecycle
+    Vault->>RDS: TTL expires → DROP ROLE (auto-revocation)
+    end
 ```
-Browser                    Banking UI (SvelteKit)           IVIA /oauth2/token
-   |                              |                                |
-   |-- POST /login ------------>  |                                |
-   |   username=oscar             |                                |
-   |   password=Workshop2026!     |                                |
-   |                              |-- grant_type=password -------> |
-   |                              |   client_id=agent-uc2          |
-   |                              |   client_secret=<secret>       |
-   |                              |   username=oscar               |
-   |                              |   password=Workshop2026!       |
-   |                              |   scope=openid profile email   |
-   |                              |                                |
-   |                              | <-- access_token + id_token -- |
-   |                              |                                |
-   |                              | Set-Cookie: access_token (httpOnly)
-   |<-- 302 /dashboard --------   |
-```
+
+**Step-by-step breakdown:**
+
+1. The user submits credentials on the Banking UI login form. The SvelteKit server-side action calls IVIA's token endpoint with the ROPC grant.
+2. IVIA authenticates against Simple AD, runs the `ropc` and `pretoken` mapping rules, and returns an access token + ID token (JWT with `sub` claim).
+3. The Banking UI stores tokens in httpOnly cookies and redirects to the dashboard.
+4. When the user asks a banking question, the UI's server-side proxy reads the `id_token` cookie and forwards it to the Banking Agent as a Bearer token.
+5. The Banking Agent forwards the JWT unchanged to the MCP Server for each tool invocation.
+6. The MCP Server presents the JWT to Vault's `jwt` auth method. Vault validates the signature against IVIA's JWKS endpoint and checks the `bound_audiences` claim (`agent-uc2`).
+7. Vault issues a short-lived token bound to the `uc2-personal` policy.
+8. The MCP Server uses that token to call `database/creds/uc2-personal-readonly`. Vault issues a JIT Postgres credential with a 15-minute TTL.
+9. The MCP Server opens a Postgres connection, sets `app.current_user_sub` to the JWT's `sub` claim, and executes `SELECT` queries. PostgreSQL Row-Level Security filters results to the authenticated user's rows only.
+10. The credential expires at TTL; Vault revokes the Postgres role automatically.
 
 The `sub` claim in the `id_token` (e.g. `oscar`) flows to:
 

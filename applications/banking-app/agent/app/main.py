@@ -90,6 +90,7 @@ async def chat(request: Request, body: ChatRequest):
     in the request context before invoking the agent. The JWT is forwarded
     to MCP tool calls — the agent never stores or discloses it.
     """
+    global _agent
     if _agent is None:
         raise HTTPException(status_code=503, detail="Agent not initialized")
 
@@ -107,6 +108,10 @@ async def chat(request: Request, body: ChatRequest):
 
     # Set JWT in request context for tool calls
     set_request_jwt(jwt)
+
+    # Refresh Bedrock STS session before each request (OBJ-2: no standing creds)
+    if _vault_client and _vault_client.is_authenticated():
+        _agent = build_uc2_agent(vault_client=_vault_client)
 
     message = body.message
 

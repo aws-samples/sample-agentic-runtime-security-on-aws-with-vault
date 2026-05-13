@@ -5,14 +5,9 @@
  *   GET  /health  — liveness probe for Kubernetes
  *   POST /mcp     — MCP tool dispatch; receives agent tool calls with user JWT
  *
- * The server extracts the user JWT from the Authorization header on each
- * incoming request and passes it to the tool implementations in tools.ts.
- * No JWT is stored server-side — each request independently authenticates
- * to Vault and obtains ephemeral DB credentials (OBJ-2).
- *
- * MCP tools exposed:
- *   - get_accounts      — list user bank accounts (RLS-filtered)
- *   - get_transactions  — list recent transactions (RLS-filtered, optional account_id)
+ * Each POST /mcp creates a fresh McpServer + transport (stateless mode).
+ * The MCP SDK requires this — a single McpServer cannot be reused across
+ * requests because connect() binds it to one transport at a time.
  */
 
 import express, { Request, Response } from 'express';
@@ -32,81 +27,83 @@ app.get('/health', (_req: Request, res: Response) => {
 });
 
 // ---------------------------------------------------------------------------
-// MCP Server setup
+// MCP Server factory — new instance per request (stateless mode)
 // ---------------------------------------------------------------------------
-const mcpServer = new McpServer({
-  name: 'banking-tools',
-  version: '1.0.0',
-});
+function createMcpServer(): McpServer {
+  const server = new McpServer({
+    name: 'banking-tools',
+    version: '1.0.0',
+  });
 
-// Tool: get_accounts
-mcpServer.registerTool(
-  'get_accounts',
-  {
-    title: 'Get Bank Accounts',
-    description:
-      'Retrieve bank accounts for the authenticated user. ' +
-      'Vault JWT auth + PostgreSQL RLS ensures only the calling user\'s accounts are returned.',
-    inputSchema: {
-      jwt: z.string().describe('IVIA-issued user JWT (access token, without "Bearer " prefix)'),
+  server.registerTool(
+    'get_accounts',
+    {
+      title: 'Get Bank Accounts',
+      description:
+        'Retrieve bank accounts for the authenticated user. ' +
+        'Vault JWT auth + PostgreSQL RLS ensures only the calling user\'s accounts are returned.',
+      inputSchema: {
+        jwt: z.string().describe('IVIA-issued user JWT (access token, without "Bearer " prefix)'),
+      },
     },
-  },
-  // @ts-expect-error MCP SDK + Zod deep type instantiation
-  async ({ jwt }: { jwt: string }) => {
-    try {
-      console.log('get_accounts called');
-      const data = await getAccounts(jwt);
-      return {
-        content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }],
-      };
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      console.error('get_accounts error:', msg);
-      return {
-        content: [{ type: 'text' as const, text: `Error fetching accounts: ${msg}` }],
-        isError: true,
-      };
+    // @ts-expect-error MCP SDK + Zod deep type instantiation
+    async ({ jwt }: { jwt: string }) => {
+      try {
+        console.log('get_accounts called');
+        const data = await getAccounts(jwt);
+        return {
+          content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }],
+        };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        console.error('get_accounts error:', msg);
+        return {
+          content: [{ type: 'text' as const, text: `Error fetching accounts: ${msg}` }],
+          isError: true,
+        };
+      }
     }
-  }
-);
+  );
 
-// Tool: get_transactions
-mcpServer.registerTool(
-  'get_transactions',
-  {
-    title: 'Get Transactions',
-    description:
-      'Retrieve recent transactions for the authenticated user. ' +
-      'Vault JWT auth + PostgreSQL RLS ensures only the calling user\'s transactions are returned. ' +
-      'Optionally filter by account_id.',
-    inputSchema: {
-      jwt: z.string().describe('IVIA-issued user JWT (access token, without "Bearer " prefix)'),
-      account_id: z
-        .string()
-        .optional()
-        .describe('Optional account ID to filter transactions to a single account'),
+  server.registerTool(
+    'get_transactions',
+    {
+      title: 'Get Transactions',
+      description:
+        'Retrieve recent transactions for the authenticated user. ' +
+        'Vault JWT auth + PostgreSQL RLS ensures only the calling user\'s transactions are returned. ' +
+        'Optionally filter by account_id.',
+      inputSchema: {
+        jwt: z.string().describe('IVIA-issued user JWT (access token, without "Bearer " prefix)'),
+        account_id: z
+          .string()
+          .optional()
+          .describe('Optional account ID to filter transactions to a single account'),
+      },
     },
-  },
-  async ({ jwt, account_id }: { jwt: string; account_id?: string }) => {
-    try {
-      console.log('get_transactions called', account_id ? `for account ${account_id}` : '(all accounts)');
-      const data = await getTransactions(jwt, account_id);
-      return {
-        content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }],
-      };
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      console.error('get_transactions error:', msg);
-      return {
-        content: [{ type: 'text' as const, text: `Error fetching transactions: ${msg}` }],
-        isError: true,
-      };
+    async ({ jwt, account_id }: { jwt: string; account_id?: string }) => {
+      try {
+        console.log('get_transactions called', account_id ? `for account ${account_id}` : '(all accounts)');
+        const data = await getTransactions(jwt, account_id);
+        return {
+          content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }],
+        };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        console.error('get_transactions error:', msg);
+        return {
+          content: [{ type: 'text' as const, text: `Error fetching transactions: ${msg}` }],
+          isError: true,
+        };
+      }
     }
-  }
-);
+  );
+
+  return server;
+}
 
 // ---------------------------------------------------------------------------
-// MCP transport — Streamable HTTP (stateless, one transport per request)
+// MCP transport — Streamable HTTP (stateless, one server+transport per request)
 // ---------------------------------------------------------------------------
 app.post('/mcp', async (req: Request, res: Response) => {
   const authHeader = req.get('Authorization') ?? '';
@@ -119,13 +116,19 @@ app.post('/mcp', async (req: Request, res: Response) => {
 
   console.log('MCP request received');
 
+  const server = createMcpServer();
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
     enableJsonResponse: true,
   });
 
+  res.on('close', () => {
+    transport.close();
+    server.close();
+  });
+
   try {
-    await mcpServer.connect(transport);
+    await server.connect(transport);
     await transport.handleRequest(req, res, req.body);
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
@@ -152,7 +155,7 @@ const PORT = parseInt(process.env.MCP_PORT ?? '3001', 10);
 app.listen(PORT, () => {
   console.log(`banking-mcp-server listening on port ${PORT}`);
   console.log(`VAULT_ADDR: ${process.env.VAULT_ADDR ?? 'http://vault.vault.svc.cluster.local:8200'}`);
-  console.log(`DB_HOST:    ${process.env.DB_HOST ?? 'localhost'}`);
+  console.log(`DB_HOST:    ${process.env.RDS_ADDRESS ?? process.env.DB_HOST ?? 'localhost'}`);
 });
 
 process.on('SIGTERM', () => {

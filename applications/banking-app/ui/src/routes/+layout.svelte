@@ -12,11 +12,11 @@
 				<div class="brand">
 					<span class="brand-icon">🏦</span>
 					<span class="brand-name">CDL Bank</span>
-					<span class="brand-badge">Workshop Demo</span>
+					<span class="brand-badge">Agentic Runtime Security Demo</span>
 				</div>
 				<nav class="header-nav">
-					<a href="/dashboard">Dashboard</a>
-					<a href="/logout" class="btn btn-secondary">Logout</a>
+					<a href="/dashboard" data-sveltekit-reload>Dashboard</a>
+					<button class="btn btn-secondary" onclick={() => { window.location.href = '/logout'; }}>Logout</button>
 				</nav>
 			</div>
 		</header>
@@ -35,13 +35,11 @@
 	}
 
 	.app-header {
-		background: #fff;
-		border-bottom: 1px solid var(--color-border);
+		background: #161616;
 		padding: 0.75rem 0;
 		position: sticky;
 		top: 0;
 		z-index: 100;
-		box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
 	}
 
 	.header-inner {
@@ -62,14 +60,14 @@
 
 	.brand-name {
 		font-size: 1.1rem;
-		font-weight: 700;
-		color: var(--color-text);
+		font-weight: 600;
+		color: #ffffff;
 	}
 
 	.brand-badge {
 		font-size: 0.7rem;
-		background: #dbeafe;
-		color: #1e40af;
+		background: #0f62fe;
+		color: #ffffff;
 		padding: 0.15rem 0.5rem;
 		border-radius: 999px;
 		font-weight: 600;
@@ -82,14 +80,24 @@
 	}
 
 	.header-nav a {
-		font-size: 0.9rem;
-		color: var(--color-text-secondary);
+		font-size: 0.875rem;
+		color: #c6c6c6;
 		font-weight: 500;
 	}
 
 	.header-nav a:hover {
-		color: var(--color-primary);
+		color: #ffffff;
 		text-decoration: none;
+	}
+
+	.header-nav :global(.btn-secondary) {
+		background: #393939;
+		color: #ffffff;
+		font-size: 0.8rem;
+	}
+
+	.header-nav :global(.btn-secondary:hover) {
+		background: #525252;
 	}
 
 	.main-content {

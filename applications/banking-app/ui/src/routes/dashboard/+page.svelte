@@ -32,7 +32,8 @@
 				const parts = data.idToken.split('.');
 				if (parts.length === 3) {
 					const payload = JSON.parse(atob(parts[1]));
-					displayName = payload.name ?? payload.preferred_username ?? payload.sub ?? 'User';
+					const raw = payload.name ?? payload.preferred_username ?? payload.sub ?? 'User';
+					displayName = raw.charAt(0).toUpperCase() + raw.slice(1);
 				}
 			} catch {
 				displayName = 'User';
@@ -102,7 +103,7 @@
 	<div class="card chat-card">
 		<div class="chat-header">
 			<h2>Banking Agent</h2>
-			<span class="badge badge-blue">Powered by Amazon Nova Pro</span>
+			<span class="badge badge-aws">Powered by Amazon Nova Pro</span>
 		</div>
 
 		<div class="messages-container">
@@ -245,18 +246,19 @@
 	}
 
 	.suggestion-btn {
-		background: var(--color-bg);
+		background: var(--color-surface);
 		border: 1px solid var(--color-border);
-		border-radius: 6px;
-		padding: 0.4rem 0.75rem;
+		border-radius: 0;
+		padding: 0.5rem 0.75rem;
 		font-size: 0.8rem;
 		cursor: pointer;
-		color: var(--color-primary);
+		color: #0f62fe;
+		font-family: inherit;
 	}
 
 	.suggestion-btn:hover {
-		background: #dbeafe;
-		border-color: var(--color-primary);
+		background: #d0e2ff;
+		border-color: #0f62fe;
 	}
 
 	.message {
@@ -266,27 +268,28 @@
 	}
 
 	.message-user {
-		background: var(--color-primary);
+		background: #0f62fe;
 		color: #fff;
 		align-self: flex-end;
 	}
 
 	.message-ai {
-		background: #f3f4f6;
+		background: #e0e0e0;
+		color: #161616;
 		align-self: flex-start;
 	}
 
 	.message-tool,
 	.tool-planning {
-		background: #fef9c3;
+		background: #d0e2ff;
 		font-size: 0.8rem;
 		align-self: flex-start;
 		opacity: 0.85;
 	}
 
 	.message-error {
-		background: #fee2e2;
-		color: var(--color-danger);
+		background: #ffd7d9;
+		color: #750e13;
 		align-self: flex-start;
 	}
 

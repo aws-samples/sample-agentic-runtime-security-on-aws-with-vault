@@ -20,25 +20,6 @@ This use case adds **Objective 3 — actions tied to user intent** on top of the
 | Enforcement at the point of use | ENFC-03 | Kubernetes NetworkPolicy restricts MCP Server egress to Vault, RDS, and DNS only — external HTTP calls are blocked at the network layer |
 | Audit trail ties credential issuance to user identity | OBJ-5 | The Vault audit log records both the jwt auth login (with the user's `sub` claim) and the subsequent database/creds issuance — providing a correlated audit trail from user identity to data access |
 
-## Architecture
-
-The diagram below shows the full credential and data flow for Use Case 2.
-
-![Use Case 2 OAuth flow diagram](../assets/uc2-flow.svg)
-
-### Request flow
-
-1. The user opens the Banking UI in a browser. The SvelteKit frontend detects no active session and redirects to IVIA's OAuth authorization endpoint.
-2. The user authenticates with IVIA (username and password). IVIA issues an authorization code and redirects the browser back to the Banking UI callback URL.
-3. The SvelteKit server-side `/callback` route exchanges the authorization code for an access token + ID token using PKCE verification.
-4. The Banking UI passes the user's JWT in the `Authorization: Bearer` header of every API call to the Banking Agent.
-5. The Banking Agent forwards the JWT (unchanged) to the MCP Server for each tool invocation.
-6. The MCP Server presents the JWT to Vault's `jwt` auth method (`POST /v1/auth/jwt/login`). Vault validates the JWT signature against IVIA's JWKS endpoint and evaluates the `bound_audiences` claim (`agent-uc2`).
-7. Vault issues a short-lived token bound to the `uc2-personal` policy.
-8. The MCP Server uses that token to call `database/creds/uc2-personal-readonly`. Vault issues a JIT Postgres credential.
-9. The MCP Server opens a Postgres connection using the JIT credential, sets `app.current_user_sub = '<jwt-sub>'` as a session-level setting, and executes `SELECT` queries. PostgreSQL Row-Level Security filters each query to the authenticated user's rows only.
-10. The credential expires at TTL; Vault revokes the Postgres role automatically.
-
 ## Services Deployed
 
 | Service | Runtime | Port | Role |

@@ -19,9 +19,9 @@
 import { Client as PgClient } from 'pg';
 import { loginJwt, getDbCreds, type DbCredentials } from './vault-client.js';
 
-const DB_HOST = process.env.DB_HOST ?? 'localhost';
-const DB_PORT = parseInt(process.env.DB_PORT ?? '5432', 10);
-const DB_NAME = process.env.DB_NAME ?? 'workshop';
+const DB_HOST = process.env.RDS_ADDRESS ?? process.env.DB_HOST ?? 'localhost';
+const DB_PORT = parseInt(process.env.RDS_PORT ?? process.env.DB_PORT ?? '5432', 10);
+const DB_NAME = process.env.RDS_DB_NAME ?? process.env.DB_NAME ?? 'workshop';
 
 /**
  * Extract the sub claim from a JWT without verifying its signature.
@@ -80,6 +80,7 @@ async function buildRlsClient(jwt: string): Promise<{ client: PgClient; creds: D
     database: DB_NAME,
     user: creds.username,
     password: creds.password,
+    ssl: { rejectUnauthorized: false },
   });
 
   await client.connect();
@@ -87,7 +88,7 @@ async function buildRlsClient(jwt: string): Promise<{ client: PgClient; creds: D
   // Step 4: CRITICAL — activate PostgreSQL Row-Level Security.
   // RLS policies use current_setting('app.current_user_sub', true) to filter rows.
   // Without this SET, current_setting() returns NULL and all rows are filtered out.
-  await client.query(`SET app.current_user_sub = $1`, [sub]);
+  await client.query(`SELECT set_config('app.current_user_sub', $1, false)`, [sub]);
 
   return { client, creds, sub };
 }
@@ -137,8 +138,8 @@ export async function getTransactions(jwt: string, accountId?: string): Promise<
     let params: string[];
 
     if (accountId) {
-      query = `SELECT t.id, t.account_id, t.amount, t.currency, t.description,
-                      t.transaction_type, t.created_at
+      query = `SELECT t.id, t.account_id, t.amount, t.description,
+                      t.transaction_type, t.merchant, t.category, t.created_at
                FROM transactions t
                JOIN accounts a ON t.account_id = a.id
                WHERE t.account_id = $1
@@ -146,8 +147,8 @@ export async function getTransactions(jwt: string, accountId?: string): Promise<
                LIMIT 50`;
       params = [accountId];
     } else {
-      query = `SELECT t.id, t.account_id, t.amount, t.currency, t.description,
-                      t.transaction_type, t.created_at
+      query = `SELECT t.id, t.account_id, t.amount, t.description,
+                      t.transaction_type, t.merchant, t.category, t.created_at
                FROM transactions t
                JOIN accounts a ON t.account_id = a.id
                ORDER BY t.created_at DESC

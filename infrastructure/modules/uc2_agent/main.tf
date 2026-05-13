@@ -155,7 +155,7 @@ resource "kubernetes_config_map" "banking_agent_config" {
   data = {
     VAULT_ADDR        = var.vault_addr
     VAULT_ROLE        = var.vault_k8s_role
-    MCP_URL           = "http://banking-mcp-svc:3001/mcp"
+    MCP_URL           = "http://banking-mcp-svc:3001"
     BEDROCK_MODEL_ID  = var.bedrock_model_id
     AWS_REGION        = var.region
     KB_REGION         = var.kb_region
@@ -224,8 +224,9 @@ resource "kubernetes_deployment" "banking_ui" {
         automount_service_account_token = true
 
         container {
-          name  = "banking-ui"
-          image = var.ui_image
+          name              = "banking-ui"
+          image             = var.ui_image
+          image_pull_policy = "Always"
 
           port {
             container_port = 5173
@@ -315,8 +316,9 @@ resource "kubernetes_deployment" "banking_agent" {
         automount_service_account_token = true
 
         container {
-          name  = "banking-agent"
-          image = var.agent_image
+          name              = "banking-agent"
+          image             = var.agent_image
+          image_pull_policy = "Always"
 
           port {
             container_port = 3002
@@ -406,8 +408,9 @@ resource "kubernetes_deployment" "banking_mcp_server" {
         automount_service_account_token = true
 
         container {
-          name  = "banking-mcp-server"
-          image = var.mcp_image
+          name              = "banking-mcp-server"
+          image             = var.mcp_image
+          image_pull_policy = "Always"
 
           port {
             container_port = 3001

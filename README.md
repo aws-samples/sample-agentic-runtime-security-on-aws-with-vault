@@ -121,6 +121,54 @@ The cleanup story will cover the one-shot `infrastructure/scripts/teardown.sh` t
 
 > **HCP Terraform Working Directory:** When creating the Stack in HCP Terraform, set the working directory to `infrastructure/`. This tells HCP Terraform where to find the Stacks HCL files.
 
+## Diagram Style Guide
+
+All Mermaid diagrams in `workshop/content/` use the **IBM Design Language** color palette ([source](https://www.ibm.com/design/language/color/)) via the `base` theme with custom `themeVariables`.
+
+### Token mapping
+
+| Role | IBM Token | Hex |
+|---|---|---|
+| Participant background | Blue 20 | `#d0e2ff` |
+| Participant border / lines | Blue 60 | `#0f62fe` |
+| Note background | Purple 20 | `#e8daff` |
+| Note border | Purple 60 | `#8a3ffc` |
+| All text | Gray 100 | `#161616` |
+| Activation background | Blue 10 | `#edf5ff` |
+| Sequence numbers | White | `#ffffff` |
+| Section tint — auth | Blue 20 | `rgba(208, 226, 255, 0.3)` |
+| Section tint — data flow | Cyan 20 | `rgba(186, 230, 255, 0.3)` |
+| Section tint — lifecycle | Green 20 | `rgba(167, 240, 186, 0.3)` |
+| Section tint — security | Teal 20 | `rgba(158, 240, 240, 0.3)` |
+
+### Init block (copy-paste for new diagrams)
+
+````
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#d0e2ff',
+  'primaryTextColor': '#161616',
+  'primaryBorderColor': '#0f62fe',
+  'lineColor': '#0f62fe',
+  'secondaryColor': '#bae6ff',
+  'tertiaryColor': '#f4f4f4',
+  'noteBkgColor': '#e8daff',
+  'noteTextColor': '#161616',
+  'noteBorderColor': '#8a3ffc',
+  'actorBkg': '#d0e2ff',
+  'actorBorder': '#0f62fe',
+  'actorTextColor': '#161616',
+  'signalColor': '#161616',
+  'signalTextColor': '#161616',
+  'labelBoxBkgColor': '#d0e2ff',
+  'labelBoxBorderColor': '#0f62fe',
+  'labelTextColor': '#161616',
+  'loopTextColor': '#161616',
+  'activationBorderColor': '#0f62fe',
+  'activationBkgColor': '#edf5ff',
+  'sequenceNumberColor': '#ffffff'
+}}}%%
+````
+
 ## Known Issues
 
 - **IVIA OIDC Provider 25.10 — ROPC + `scope=openid` crashes id_token generation.** The ROPC flow does not propagate the authenticated user identity to the `pretoken` mapping rule, causing a nil pointer at `access_response_writer.go:28`. A workaround is applied in the `pretoken` rule. See [`infrastructure/modules/verify_access/README.md`](infrastructure/modules/verify_access/README.md#known-issue--ivia-2510-ropc--scopeopenid-id_token-generation-crash) for full details, root cause analysis, and the Goja JS runtime API reference.
