@@ -239,7 +239,7 @@ else
         # Verify via kubectl exec (no port-forward needed)
         vault_sealed=$(kubectl --context workshop exec -n vault vault-0 -- \
             vault status -format=json 2>/dev/null \
-            | jq -r '.sealed // true' 2>/dev/null || echo "true")
+            | jq -r '.sealed' 2>/dev/null || echo "true")
         if [[ "$vault_sealed" = "false" ]]; then
             print_pass "Step 2: Initialize Vault (initialized, unsealed)"
         else
