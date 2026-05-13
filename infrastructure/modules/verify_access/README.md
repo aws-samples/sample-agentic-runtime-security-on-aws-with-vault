@@ -115,6 +115,24 @@ kubectl get ingress -n verify-access
 
 The discovery response must contain `"issuer"`, `"grant_types_supported"`, and `"jwks_uri"` fields.
 
+## Known Issue — IVIA 25.10 ROPC + `scope=openid` (id_token generation crash)
+
+**Affected version:** `icr.io/ivia/ivia-oidc-provider:25.10` (Go binary: `/app/ristretto`, Goja JS runtime)
+
+**Symptom:** `grant_type=password` with `scope=openid` returns HTTP 500 (`FBTAQ5102E`). Without `openid`, the same request succeeds. Stack trace: `flow_resource_owner.go:51 → access_response_writer.go:28`.
+
+**Root cause:** The ROPC flow authenticates the user against LDAP successfully, but does **not propagate the authenticated identity** (principalName, sub, AZN_CRED_PRINCIPAL_NAME) to the `pretoken` mapping rule. The pretoken context is completely empty — `stsuu.principalName` is `""`, `userData.uid` is `undefined`, `stsuu.ctxAttrs` is `{"ntmap":{}}`. When `scope=openid` triggers id_token (JWT) assembly, the response writer nil-dereferences on the missing `sub` claim.
+
+**Key discovery:** Values set in the `ropc` mapping rule (via `userData.uid`, `stsuu.setPrincipalName()`, `stsuu.addAttribute()`) are **discarded** between the ropc and pretoken execution contexts. The two rules do NOT share state.
+
+**Workaround (applied in this module):** The `pretoken` rule parses the `mappingrule_context` JSON string (a global available in the Goja runtime). This JSON contains the original ROPC body parameters including `username`. The pretoken rule extracts it and explicitly populates `stsuu.setPrincipalName()`, `stsuu.addAttribute()` for `sub` and `AZN_CRED_PRINCIPAL_NAME`, and `idtokenData.sub`/`tokenData.sub`.
+
+**IVIA Goja JS runtime API (confirmed by runtime probing):**
+- Available globals: `stsuu`, `userData`, `tokenData`, `idtokenData`, `claims`, `oauth_client`, `oauth_definition`, `Attribute` (constructor), `paramsOverride`, `headersOverride`, `cfgOverride`, `mappingrule_context` (JSON string)
+- **NOT available** (despite IBM docs targeting traditional ISAM): `UserLookupHelper`, `OAuthMappingExtUtils`, `IDMappingExtUtils`, `importClass`, `Packages.com.tivoli.*`
+
+**If upgrading IVIA:** Re-test ROPC + `scope=openid` without the pretoken workaround. If IBM fixes the identity propagation, the workaround can be removed — the pretoken rule guards with `if (!stsuu.principalName || stsuu.principalName === "")` so it's safe to leave in place.
+
 ## Pitfalls
 
 **Pitfall 3 — ICR pull secret missing.** The IVIA image is hosted at `icr.io/ivia/ivia-oidc-provider`. Without the `icr-pull-secret` Kubernetes secret, pods enter `ImagePullBackOff`. This module creates the secret using `var.icr_entitlement_key` — the secret must be created before the Deployment reconciles. The `depends_on` block in `kubernetes_deployment.isvaop` ensures ordering.

@@ -121,6 +121,10 @@ The cleanup story will cover the one-shot `infrastructure/scripts/teardown.sh` t
 
 > **HCP Terraform Working Directory:** When creating the Stack in HCP Terraform, set the working directory to `infrastructure/`. This tells HCP Terraform where to find the Stacks HCL files.
 
+## Known Issues
+
+- **IVIA OIDC Provider 25.10 — ROPC + `scope=openid` crashes id_token generation.** The ROPC flow does not propagate the authenticated user identity to the `pretoken` mapping rule, causing a nil pointer at `access_response_writer.go:28`. A workaround is applied in the `pretoken` rule. See [`infrastructure/modules/verify_access/README.md`](infrastructure/modules/verify_access/README.md#known-issue--ivia-2510-ropc--scopeopenid-id_token-generation-crash) for full details, root cause analysis, and the Goja JS runtime API reference.
+
 ## References
 
 - [Terraform Stacks Documentation](https://developer.hashicorp.com/terraform/language/stacks)
