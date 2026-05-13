@@ -1,17 +1,11 @@
 /**
- * agent-client.ts — HTTP client for the banking agent pod.
+ * agent-client.ts — Browser-side HTTP client for the banking agent.
  *
- * Forwards user JWT in Authorization: Bearer header on every request.
- * The agent never stores the JWT — it extracts it from each inbound request
- * and forwards it to the MCP server for Vault authentication.
- *
- * Security note:
- *   - The JWT is a Bearer credential; HTTPS is required in production.
- *     Workshop uses HTTP (HTTP-only ALB hostnames per CONTEXT decision).
- *     Workshop content documents this as lab-only.
+ * Calls the SvelteKit server-side proxy at /api/chat, which forwards
+ * the request (with the user's JWT from httpOnly cookies) to the
+ * cluster-internal banking-agent pod. The browser never calls the
+ * agent directly — it can't reach cluster-internal services.
  */
-
-import { env } from '$env/dynamic/public';
 
 export interface ChatResponse {
   role: string;
@@ -19,39 +13,17 @@ export interface ChatResponse {
   type?: string;
 }
 
-/**
- * Send a chat message to the agent pod with the user's JWT.
- *
- * @param message    - User's natural-language query
- * @param jwt        - IVIA access token from session cookie
- * @param sessionId  - Session identifier for conversation history
- * @param onMessage  - Callback invoked for each SSE chunk
- * @param onError    - Callback invoked on error
- */
 export async function sendChatMessage(
   message: string,
-  jwt: string,
+  _jwt: string,
   sessionId: string,
   onMessage: (chunk: ChatResponse) => void,
   onError: (error: string) => void
 ): Promise<void> {
-  const agentUrl = env.PUBLIC_AGENT_URL ?? '';
-
-  if (!agentUrl) {
-    onError('PUBLIC_AGENT_URL is not configured');
-    return;
-  }
-
-  const url = `${agentUrl}/chat`;
-
   try {
-    const res = await fetch(url, {
+    const res = await fetch('/api/chat', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        // Forward user JWT — agent validates this and passes it to MCP server
-        Authorization: `Bearer ${jwt}`,
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message, sessionId }),
     });
 
