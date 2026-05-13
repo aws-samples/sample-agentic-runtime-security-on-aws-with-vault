@@ -753,9 +753,15 @@ phase_uc3() {
         print_success "uc3_agent_image = $ecr_uri (appended)"
     fi
 
-    # Step 3: Terraform apply (picks up uc3_agent + observability modules)
-    step_header "Running terraform apply for UC3 + observability deployment..."
+    # Step 3: Init (new modules) + apply
+    step_header "Running terraform init for new UC3 + observability modules..."
     export TF_CLOUD_ORGANIZATION="$HCP_ORG"
+    terraform -chdir="$PROJECT_ROOT/infrastructure" init -upgrade || {
+        print_error "UC3 terraform init failed"
+        return 1
+    }
+
+    step_header "Running terraform apply for UC3 + observability deployment..."
     terraform -chdir="$PROJECT_ROOT/infrastructure" apply -auto-approve || {
         print_error "UC3 terraform apply failed"
         return 1
