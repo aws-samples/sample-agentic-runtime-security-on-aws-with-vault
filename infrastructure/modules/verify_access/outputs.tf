@@ -15,8 +15,8 @@ output "ivia_jwks_url" {
 }
 
 output "ivia_issuer" {
-  description = "IVIA token issuer URL. Matches the iss claim in IVIA-issued JWTs."
-  value       = "https://${kubernetes_service.isvaop.metadata[0].name}.${kubernetes_namespace.verify_access.metadata[0].name}.svc.cluster.local:8436"
+  description = "IVIA token issuer URL. Matches the iss claim in IVIA-issued JWTs (external ALB, HTTP)."
+  value       = "http://${try(kubernetes_ingress_v1.isvaop.status[0].load_balancer[0].ingress[0].hostname, "")}"
 }
 
 output "ivia_namespace" {
@@ -36,11 +36,17 @@ output "ivia_ingress_hostname" {
 
 output "ivia_external_endpoint" {
   description = "IVIA external endpoint via ALB (scheme + host). Used by the restapi provider in isva_config since HCP Terraform cannot reach cluster-internal DNS."
-  value       = "https://${try(kubernetes_ingress_v1.isvaop.status[0].load_balancer[0].ingress[0].hostname, "")}"
+  value       = "http://${try(kubernetes_ingress_v1.isvaop.status[0].load_balancer[0].ingress[0].hostname, "")}"
 }
 
 output "ivia_tls_cert_pem" {
   description = "IVIA self-signed TLS certificate PEM. Passed to Vault jwt auth backend as oidc_discovery_ca_pem so Vault trusts the IVIA OIDC discovery endpoint."
   value       = tls_self_signed_cert.isvaop.cert_pem
+  sensitive   = true
+}
+
+output "ivia_client_secret" {
+  description = "IVIA OAuth client secret for the agent-uc2 client. Wired to uc2_agent ConfigMap so the banking-ui ROPC login can authenticate with IVIA."
+  value       = random_password.client_secret.result
   sensitive   = true
 }

@@ -88,8 +88,8 @@ variable "bedrock_model_id" {
   default     = "us.amazon.nova-pro-v1:0"
 }
 
-variable "ivia_issuer" {
-  description = "IVIA OIDC issuer URL (e.g. https://ivia.verify.svc.cluster.local/oidc/endpoint/OP)."
+variable "ivia_ingress_hostname" {
+  description = "ALB hostname for the IVIA Ingress (internet-facing). Used to build the browser-facing IVIA issuer URL and the OAuth redirect URI."
   type        = string
 }
 
@@ -97,6 +97,13 @@ variable "ivia_client_id" {
   description = "IVIA OAuth client ID registered for the banking UI."
   type        = string
   default     = "agent-uc2"
+}
+
+variable "ivia_client_secret" {
+  description = "IVIA OAuth client secret for the agent-uc2 client (ROPC token endpoint auth). Sourced from verify_access module output (random_password.client_secret). Workshop: stored in ConfigMap (acceptable for lab). Production: use a Kubernetes Secret."
+  type        = string
+  sensitive   = true
+  default     = ""
 }
 
 variable "tags" {

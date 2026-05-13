@@ -1,27 +1,53 @@
 ---
-title: 'OAuth Authorization Code + PKCE Flow'
+title: 'OAuth Login Flow'
 weight: 61
 ---
 
 ## Overview
 
-In this module you open the Banking UI, authenticate as a test user through IBM Verify Identity Access (IVIA), and inspect the JWT that the SvelteKit server-side code receives at the OAuth callback. You will observe how PKCE prevents authorization code interception attacks, and how the resulting JWT carries the claims that Vault's `jwt` auth method validates.
+In this module you open the Banking UI, sign in with your LDAP credentials, and observe how the ROPC (Resource Owner Password Credentials) grant delivers a JWT to the SvelteKit server. You will see how the JWT carries the `sub` claim that Vault's `jwt` auth method validates and that PostgreSQL Row-Level Security uses to filter rows.
 
-## What Is PKCE?
+## IVIA OIDC Provider — Authorization Only
 
-**Proof Key for Code Exchange (PKCE)** is an extension to the OAuth Authorization Code flow that prevents authorization code injection attacks. Without PKCE, an attacker who intercepts the authorization code can exchange it for a token at the token endpoint. PKCE closes this gap with a one-time cryptographic binding:
+IBM Verify Identity Access (IVIA) OIDC Provider is an **authorization** service, not an **authentication** UI. It issues tokens and validates policies but does not render a login form. In a production deployment, an external identity proxy such as WebSEAL presents the login form, the user authenticates, and IVIA issues tokens via the Authorization Code flow.
 
-1. **Before redirecting to IVIA**, the Banking UI server generates a random `code_verifier` (43–128 characters, URL-safe).
-2. It computes `code_challenge = BASE64URL(SHA-256(code_verifier))` using the `S256` method.
-3. The authorization request to IVIA includes `code_challenge` and `code_challenge_method=S256`.
-4. IVIA stores the challenge.
-5. **When exchanging the code**, the Banking UI includes the original `code_verifier`. IVIA re-computes the challenge and compares — a mismatched verifier rejects the exchange.
+For this workshop, WebSEAL is not deployed. Instead, the Banking UI hosts its own login form and uses the **ROPC grant** (`grant_type=password`) — the canonical IBM pattern validated by the `ibm-verify-login` reference implementation. The user's credentials are posted directly to IVIA's token endpoint; IVIA authenticates the user against the Simple AD directory (LDAP) and returns an `access_token` and `id_token`.
 
-The `code_verifier` never leaves the server-side session (stored in an `httpOnly` cookie). A browser-side attacker who intercepts the authorization code cannot use it without the verifier.
+:::alert{header="ROPC and production security" type="warning"}
+The ROPC grant transmits user credentials directly to the authorization server. It requires a confidential client (the Banking UI sends its `client_secret` in the POST body). In production, the Authorization Code + PKCE flow is preferred — it moves credential handling entirely to the identity provider and eliminates the application as a credential intermediary. PKCE functions are retained in `auth.ts` as the upgrade path when WebSEAL or an external IdP is available.
+:::
+
+## ROPC Login Flow
+
+```
+Browser                    Banking UI (SvelteKit)           IVIA /oauth2/token
+   |                              |                                |
+   |-- POST /login ------------>  |                                |
+   |   username=oscar             |                                |
+   |   password=Workshop2026!     |                                |
+   |                              |-- grant_type=password -------> |
+   |                              |   client_id=agent-uc2          |
+   |                              |   client_secret=<secret>       |
+   |                              |   username=oscar               |
+   |                              |   password=Workshop2026!       |
+   |                              |   scope=openid profile email   |
+   |                              |                                |
+   |                              | <-- access_token + id_token -- |
+   |                              |                                |
+   |                              | Set-Cookie: access_token (httpOnly)
+   |<-- 302 /dashboard --------   |
+```
+
+The `sub` claim in the `id_token` (e.g. `oscar`) flows to:
+
+1. The **Banking UI** — identifies the logged-in user for display.
+2. The **Strands agent** — forwarded in the `Authorization: Bearer` header to the MCP server.
+3. **Vault jwt auth** — the MCP server exchanges the JWT for a Vault token scoped to the `uc2-jwt` role.
+4. **PostgreSQL RLS** — the `app.current_user_sub` session variable is set from `sub`; the RLS policy filters `banking.accounts` rows to the authenticated user.
 
 ## Step 1 — Get the Banking UI URL
 
-The Banking UI is exposed via an ALB Ingress in the `banking-app` namespace. Retrieve its hostname:
+Retrieve the ALB hostname for the banking-ui Ingress:
 
 ```bash
 kubectl get ingress -n banking-app banking-ui-ingress \
@@ -35,88 +61,90 @@ http://<ALB_HOSTNAME>/
 ```
 
 :::alert{header="HTTP only — lab environment" type="info"}
-The ALB uses HTTP (not HTTPS) because ALB-generated hostnames cannot be registered in Route 53 for ACM certificate issuance. In a production deployment, use HTTPS with a custom domain. The workshop marks this clearly so attendees understand the lab constraint.
+The ALB uses HTTP (not HTTPS) because ALB-generated hostnames cannot be registered in Route 53 for ACM certificate issuance. In a production deployment, use HTTPS with a custom domain and `secure: true` cookie flags.
 :::
 
-## Step 2 — Authenticate as Oscar
+## Step 2 — Sign in as Oscar
 
-On the Banking UI login page, you are redirected automatically to IVIA's login screen. IVIA authenticates users against the AWS Simple AD directory that was provisioned during the workshop setup. Use the pre-created test user credentials:
+On the Banking UI landing page you will see a login form with **Username** and **Password** fields. Enter the pre-created test user credentials:
 
 - **Username:** `oscar`
-- **Password:** `WorkshopUser1!`
+- **Password:** `Workshop2026!`
+
+Click **Sign in with IBM Verify**. The form POSTs to the `/login` SvelteKit action, which calls `passwordGrant()` against IVIA and sets an `httpOnly` `access_token` cookie. The browser is redirected to `/dashboard`.
 
 :::alert{header="Where do these users come from?" type="info"}
-Your organization uses Active Directory for employee identity management. This workshop uses AWS Simple AD — a lightweight managed directory — with two pre-provisioned employees (Oscar and Adriana). IVIA authenticates them via LDAP and issues JWTs that agents use to obtain user-scoped credentials from Vault.
+Your organization uses Active Directory for employee identity management. This workshop uses AWS Simple AD — a lightweight managed directory — with two pre-provisioned employees (Oscar and Adriana). IVIA authenticates them via LDAP and issues JWTs that the MCP Server uses to obtain user-scoped database credentials from Vault.
 :::
-
-After login, IVIA redirects the browser back to the Banking UI callback URL (`http://<ALB>/callback`). The SvelteKit server-side route handles the code exchange and stores the JWT in a server-side session.
 
 ## Step 3 — Inspect the Banking UI logs
 
-The Banking UI logs the decoded JWT claims at the callback (without printing the raw token). View the logs:
+The Banking UI logs the ROPC login outcome. View the logs:
 
 ```bash
 kubectl logs -n banking-app -l app=banking-ui --tail=30
 ```
 
-Look for a log line similar to:
+Look for a log line that confirms the access_token was received and the cookie was set. Note that no credentials appear in logs — only the outcome.
 
-```
-INFO callback: jwt_claims sub=oscar@cdlbank.com aud=agent-uc2 azp=agent-uc2 exp=<timestamp>
-```
+## Step 4 — Confirm personalized dashboard data
 
-Note:
+After login, the dashboard shows Oscar's accounts and transactions. Observe:
 
-- `sub` — the user's unique identity. This claim flows through to the MCP Server and from there into the Postgres `app.current_user_sub` session variable that activates Row-Level Security.
-- `aud` — `agent-uc2`. This is the OAuth client ID that the Vault `jwt` auth role `uc2-jwt` validates against `bound_audiences`.
-- `azp` — the authorized party. Set to the Banking UI client ID.
+- The balance figures are specific to Oscar — RLS is filtering the `banking.accounts` table by `sub = 'oscar'`.
+- The agent responds to natural-language queries about Oscar's financial data.
 
-## Step 4 — Switch users: authenticate as Adriana
+## Step 5 — Switch users: sign in as Adriana
 
-Log out (click **Logout** in the top-right corner), then log in as:
+Log out (click **Logout** in the top-right corner), then sign in as:
 
 - **Username:** `adriana`
-- **Password:** (provided by your workshop facilitator)
+- **Password:** `Workshop2026!`
 
-Observe that the Banking UI now shows Adriana's accounts and transactions — not Oscar's. The user `sub` claim changed, activating a different Row-Level Security filter in Postgres.
+The dashboard now shows Adriana's accounts and transactions — not Oscar's. The `sub` claim changed, activating a different RLS filter in PostgreSQL.
 
-:::expand{header="Platform Track — IVIA OAuth client configuration and PKCE enforcement"}
+:::expand{header="Platform Track — IVIA OAuth client configuration for ROPC"}
 
-The IVIA OAuth client `agent-uc2` is configured by `ivia-configure.sh` with these settings:
+The IVIA `agent-uc2` client is provisioned by the `verify_access` Terraform module with these settings:
 
 | Setting | Value | Why |
 |---|---|---|
 | `client_id` | `agent-uc2` | Matches Vault jwt role `bound_audiences` |
-| `grant_types` | `authorization_code` | PKCE flow only — no implicit, no client_credentials |
-| `pkce_required` | `true` | Rejects token requests without `code_verifier` |
-| `redirect_uris` | `http://<ALB>/callback` | ALB hostname injected at configure time |
-| `token_endpoint_auth_method` | `none` | Public client — no client_secret; PKCE is the proof |
+| `client_secret` | `<generated>` | Required for ROPC — confidential client |
+| `grant_types` | `authorization_code`, `refresh_token`, `password` | ROPC active; authorization_code retained for PKCE upgrade |
+| `token_endpoint_auth_method` | `client_secret_post` | Secret sent in POST body (ROPC pattern) |
+| `redirect_uris` | `http://<UI_ALB>/callback` | Retained for PKCE upgrade path |
+| `scopes` | `openid`, `profile`, `email` | JWT carries sub, email, name claims |
 
-IVIA's authorization endpoint URL pattern:
+The token endpoint call the Banking UI makes:
 
 ```
-http://<IVIA_ALB>/oauth2/authorize
-  ?response_type=code
-  &client_id=agent-uc2
-  &redirect_uri=http%3A%2F%2F<UI_ALB>%2Fcallback
-  &code_challenge=<BASE64URL_SHA256_verifier>
-  &code_challenge_method=S256
-  &scope=openid+profile
+POST http://<IVIA_ALB>/oauth2/token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=password
+&client_id=agent-uc2
+&client_secret=<secret>
+&username=oscar
+&password=Workshop2026!
+&scope=openid+profile+email
 ```
 
-The SvelteKit `/login` server route generates the `code_verifier` using Node.js `crypto.randomBytes(32)`, computes the challenge, stores the verifier in an `httpOnly` session cookie, then redirects the browser to this URL. The browser never sees the `code_verifier` — it lives only on the server side, protecting against XSS-based token theft.
+The `client_secret` is injected into the Banking UI pod via the `banking-ui-config` ConfigMap, populated from the `verify_access` Terraform module output at deploy time.
 
 How the Banking UI maps to the SvelteKit file structure:
 
 ```
 src/routes/
-  +page.svelte          — Landing page (redirects to /login if no session)
+  +page.svelte          — Landing page with login form (action="/login")
+  +page.server.ts       — Load: reads ?error= param, redirects if authenticated
   login/
-    +server.ts          — Generates code_verifier, sets httpOnly cookie, redirects to IVIA
-  callback/
-    +server.ts          — Exchanges code + verifier for JWT, stores in server session
+    +page.server.ts     — Action: calls passwordGrant(), sets httpOnly cookies
+    +page.svelte        — Minimal page (route target for SvelteKit)
+  dashboard/
+    +page.svelte        — Personalized banking dashboard
   logout/
-    +server.ts          — Clears session, optionally revokes Vault lease
+    +server.ts          — Clears session cookies
 ```
 :::
 
@@ -144,7 +172,7 @@ async loginWithJwt(userJwt: string): Promise<string> {
 
 Vault validates the JWT against IVIA's JWKS endpoint (fetched from the `oidc_discovery_url` configured in the jwt auth backend). Vault then maps the `sub` claim from the JWT to the Vault entity metadata — enabling per-user policy evaluation.
 
-The `sub` claim value (e.g., `oscar@cdlbank.com`) is also passed directly to the Postgres session:
+The `sub` claim value (e.g., `oscar`) is also passed directly to the Postgres session:
 
 ```typescript
 // mcp-server tools handler

@@ -37,9 +37,8 @@ variable "ivia_jwks_url" {
 }
 
 variable "ivia_issuer" {
-  description = "IVIA token issuer URL. Vault validates the iss claim against this."
+  description = "IVIA token issuer URL (external ALB). Vault validates the iss claim against this. Must match IVIA definition.token_settings.issuer."
   type        = string
-  default     = "https://isvaop.verify-access.svc.cluster.local:8436"
 }
 
 variable "ivia_oidc_ca_pem" {

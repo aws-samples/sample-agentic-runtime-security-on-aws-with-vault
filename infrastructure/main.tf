@@ -224,7 +224,7 @@ resource "aws_iam_role_policy" "vault_assume_bedrock" {
 #-------------------------------------------------------------------------------
 
 resource "time_sleep" "alb_webhook_ready" {
-  depends_on     = [module.addons]
+  depends_on      = [module.addons]
   create_duration = "30s"
 }
 
@@ -304,24 +304,25 @@ module "uc2_app" {
 
   # No explicit providers block needed — only default (non-aliased) providers used.
 
-  vault_addr                 = "http://vault.vault.svc.cluster.local:8200"
-  vault_k8s_role             = "uc2"
-  vault_jwt_role             = "uc2-jwt"
-  vault_db_role              = "uc2-personal-readonly"
-  rds_address                = module.rds.address
-  rds_port                   = module.rds.port
-  rds_db_name                = module.rds.db_name
-  rds_cidr                   = module.vpc.vpc_cidr
-  knowledge_base_id          = module.bedrock_kb_index.knowledge_base_id
-  region                     = var.region
-  kb_region                  = var.kb_region
-  ui_image                   = var.banking_app_ui_image
-  agent_image                = var.banking_app_agent_image
-  mcp_image                  = var.banking_app_mcp_image
-  bedrock_model_id           = var.bedrock_model_id
-  ivia_issuer                = "https://ivia-runtime.ivia.svc.cluster.local"
-  ivia_client_id             = "agent-uc2"
-  tags                       = var.tags
+  vault_addr            = "http://vault.vault.svc.cluster.local:8200"
+  vault_k8s_role        = "uc2"
+  vault_jwt_role        = "uc2-jwt"
+  vault_db_role         = "uc2-personal-readonly"
+  rds_address           = module.rds.address
+  rds_port              = module.rds.port
+  rds_db_name           = module.rds.db_name
+  rds_cidr              = module.vpc.vpc_cidr
+  knowledge_base_id     = module.bedrock_kb_index.knowledge_base_id
+  region                = var.region
+  kb_region             = var.kb_region
+  ui_image              = var.banking_app_ui_image
+  agent_image           = var.banking_app_agent_image
+  mcp_image             = var.banking_app_mcp_image
+  bedrock_model_id      = var.bedrock_model_id
+  ivia_ingress_hostname = module.verify_access.ivia_ingress_hostname
+  ivia_client_id        = "agent-uc2"
+  ivia_client_secret    = module.verify_access.ivia_client_secret
+  tags                  = var.tags
 
   depends_on = [time_sleep.alb_webhook_ready]
 }

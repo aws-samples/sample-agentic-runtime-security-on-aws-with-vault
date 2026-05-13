@@ -45,4 +45,5 @@ module "isva_config" {
   vault_config_jwt_auth_path = "jwt"
   ivia_admin_username        = var.ivia_admin_username
   ivia_admin_password        = var.ivia_admin_password
+  uc2_redirect_uri           = var.uc2_redirect_uri
 }

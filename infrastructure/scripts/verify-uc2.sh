@@ -16,6 +16,7 @@
 #   11. Agent /health endpoint returns "healthy"
 #   12. IVIA OAuth pre-check: JWKS endpoint reachable (prerequisite for jwt auth)
 #   13. Active lease exists after cred issuance (credential lifecycle check)
+#   14. ROPC token grant: IVIA returns access_token for oscar (grant_type=password)
 #
 # Usage:
 #   ./verify-uc2.sh [--help]
@@ -45,7 +46,7 @@ verify-uc2.sh — ${SCRIPT_DESCRIPTION}
 Usage:
   ./verify-uc2.sh [--help]
 
-Checks (13 total):
+Checks (14 total):
   1.  Banking UI pod Running (app=banking-ui in banking-app namespace)
   2.  Banking Agent pod Running (app=banking-agent)
   3.  MCP Server pod Running (app=banking-mcp-server)
@@ -59,6 +60,7 @@ Checks (13 total):
   11. Agent /health endpoint returns "healthy"
   12. IVIA JWKS endpoint reachable (OAuth pre-check)
   13. Active lease exists after cred issuance (credential lifecycle)
+  14. ROPC token grant: IVIA returns access_token for oscar (grant_type=password)
 
 Env-var overrides:
   BANKING_NAMESPACE   (default: banking-app)
@@ -324,6 +326,43 @@ if [ -n "${VAULT_ROOT_TOKEN:-}" ]; then
     fi
 else
     print_warn "Credential lifecycle check skipped — VAULT_ROOT_TOKEN not set. Set VAULT_ROOT_TOKEN to enable lease verification."
+fi
+
+#-------------------------------------------------------------------------------
+# Check 14 — ROPC token grant: programmatic login returns access_token
+#
+# Tests the ROPC flow end-to-end from outside the cluster:
+#   1. Resolve the IVIA ALB hostname from the isvaop Ingress
+#   2. Read the client_secret from the banking-ui-config ConfigMap
+#   3. POST grant_type=password to IVIA /oauth2/token
+#   4. Verify the response contains an access_token
+#
+# This check validates that:
+#   - IVIA agent-uc2 client has password grant type enabled
+#   - IVIA can authenticate oscar against Simple AD (LDAP)
+#   - The token endpoint returns a valid ROPC response
+#-------------------------------------------------------------------------------
+ivia_endpoint=$(kubectl get ingress -n verify-access isvaop \
+    -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
+client_secret=$(kubectl get configmap banking-ui-config -n "${BANKING_NAMESPACE}" \
+    -o jsonpath='{.data.IVIA_CLIENT_SECRET}' 2>/dev/null || echo "")
+
+if [ -n "${ivia_endpoint}" ] && [ -n "${client_secret}" ]; then
+    token_response=$(curl -s -X POST "http://${ivia_endpoint}/oauth2/token" \
+        --max-time 15 \
+        -d "grant_type=password&client_id=agent-uc2&client_secret=${client_secret}&username=oscar&password=Workshop2026!&scope=openid" \
+        2>/dev/null || echo "{}")
+    if echo "${token_response}" | jq -e '.access_token' >/dev/null 2>&1; then
+        print_pass "ROPC token grant: IVIA returned access_token for oscar (grant_type=password)"
+    else
+        error_desc=$(echo "${token_response}" | jq -r '.error_description // .error // "unknown"' 2>/dev/null || echo "parse failed")
+        print_fail "ROPC token grant failed" \
+            "IVIA did not return access_token — error: ${error_desc}. Full response: ${token_response:0:300}. Verify IVIA agent-uc2 client has password grant_type and Simple AD is reachable."
+    fi
+elif [ -z "${ivia_endpoint}" ]; then
+    print_warn "ROPC token grant check skipped — IVIA ALB hostname not resolved (check isvaop Ingress)"
+else
+    print_warn "ROPC token grant check skipped — IVIA_CLIENT_SECRET not in banking-ui-config ConfigMap (check uc2_agent Terraform module)"
 fi
 
 # Summary is printed automatically by the common-checks.sh EXIT trap

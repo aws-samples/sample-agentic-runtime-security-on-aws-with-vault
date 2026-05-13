@@ -102,6 +102,31 @@ resource "kubernetes_service_account" "uc2_mcp_server_sa" {
 }
 
 ################################################################################
+# Locals — compute URLs from Ingress ALB hostnames
+################################################################################
+
+locals {
+  banking_ui_alb_hostname = kubernetes_ingress_v1.banking_ui.status[0].load_balancer[0].ingress[0].hostname
+  banking_ui_external_url = "http://${local.banking_ui_alb_hostname}"
+  ivia_external_url       = "http://${var.ivia_ingress_hostname}"
+
+  banking_ui_config_data = {
+    # Server-side vars (SvelteKit $env/dynamic/private — login + callback routes)
+    IVIA_ISSUER    = local.ivia_external_url
+    IVIA_CLIENT_ID = var.ivia_client_id
+    # IVIA_CLIENT_SECRET: workshop stores in ConfigMap for simplicity.
+    # Production deployments should use a Kubernetes Secret with secretKeyRef.
+    IVIA_CLIENT_SECRET = var.ivia_client_secret
+    REDIRECT_URI       = "${local.banking_ui_external_url}/callback"
+    # Client-side vars (SvelteKit PUBLIC_ prefix — auth.ts PKCE upgrade path)
+    PUBLIC_IVIA_ISSUER    = local.ivia_external_url
+    PUBLIC_IVIA_CLIENT_ID = var.ivia_client_id
+    PUBLIC_REDIRECT_URI   = "${local.banking_ui_external_url}/callback"
+    PUBLIC_AGENT_URL      = "http://banking-agent-svc:3002"
+  }
+}
+
+################################################################################
 # 5. ConfigMap — banking-ui-config
 ################################################################################
 
@@ -111,12 +136,7 @@ resource "kubernetes_config_map" "banking_ui_config" {
     namespace = kubernetes_namespace.banking_app.metadata[0].name
   }
 
-  data = {
-    PUBLIC_IVIA_ISSUER   = var.ivia_issuer
-    PUBLIC_IVIA_CLIENT_ID = var.ivia_client_id
-    PUBLIC_REDIRECT_URI  = "http://localhost:5173/callback"
-    PUBLIC_AGENT_URL     = "http://banking-agent-svc:3002"
-  }
+  data = local.banking_ui_config_data
 }
 
 ################################################################################
@@ -151,12 +171,12 @@ resource "kubernetes_config_map" "banking_mcp_config" {
   }
 
   data = {
-    VAULT_ADDR      = var.vault_addr
-    VAULT_JWT_ROLE  = var.vault_jwt_role
-    VAULT_DB_ROLE   = var.vault_db_role
-    RDS_ADDRESS     = var.rds_address
-    RDS_PORT        = tostring(var.rds_port)
-    RDS_DB_NAME     = var.rds_db_name
+    VAULT_ADDR     = var.vault_addr
+    VAULT_JWT_ROLE = var.vault_jwt_role
+    VAULT_DB_ROLE  = var.vault_db_role
+    RDS_ADDRESS    = var.rds_address
+    RDS_PORT       = tostring(var.rds_port)
+    RDS_DB_NAME    = var.rds_db_name
   }
 }
 
@@ -190,6 +210,9 @@ resource "kubernetes_deployment" "banking_ui" {
         labels = {
           app       = "banking-ui"
           component = "uc2"
+        }
+        annotations = {
+          "checksum/config" = sha256(jsonencode(local.banking_ui_config_data))
         }
       }
 
@@ -656,8 +679,13 @@ resource "kubernetes_network_policy" "banking_ui_egress" {
       }
     }
 
-    # To IVIA OIDC endpoints (443) — IVIA runs in verify namespace or external
+    # To IVIA OIDC endpoints — server-side token exchange via ALB (HTTP:80)
+    # and OIDC discovery/JWKS via internal service (HTTPS:443)
     egress {
+      ports {
+        port     = "80"
+        protocol = "TCP"
+      }
       ports {
         port     = "443"
         protocol = "TCP"
@@ -876,6 +904,8 @@ resource "kubernetes_network_policy" "banking_mcp_egress" {
 ################################################################################
 
 resource "kubernetes_ingress_v1" "banking_ui" {
+  wait_for_load_balancer = true
+
   metadata {
     name      = "banking-ui-ingress"
     namespace = kubernetes_namespace.banking_app.metadata[0].name
@@ -910,7 +940,6 @@ resource "kubernetes_ingress_v1" "banking_ui" {
 
   depends_on = [
     kubernetes_service.banking_ui_svc,
-    kubernetes_deployment.banking_ui,
   ]
 }
 

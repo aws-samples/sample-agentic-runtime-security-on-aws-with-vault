@@ -14,3 +14,9 @@ variable "ivia_admin_password" {
   type        = string
   sensitive   = true
 }
+
+variable "uc2_redirect_uri" {
+  description = "OAuth redirect URI for UC2 banking app. Set to http://<banking-ui-alb>/callback after deployment."
+  type        = string
+  default     = "http://localhost:5173/callback"
+}

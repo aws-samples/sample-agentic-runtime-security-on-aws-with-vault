@@ -310,12 +310,13 @@ definition:
     - client_credentials
     - authorization_code
     - refresh_token
+    - password
   access_policy_id: allow_all
   pre_mappingrule_id: pretoken
   post_mappingrule_id: posttoken
-  base_url: "https://isvaop.verify-access.svc.cluster.local:8436"
+  base_url: "http://${kubernetes_ingress_v1.isvaop.status[0].load_balancer[0].ingress[0].hostname}"
   token_settings:
-    issuer: "https://isvaop.verify-access.svc.cluster.local:8436"
+    issuer: "http://${kubernetes_ingress_v1.isvaop.status[0].load_balancer[0].ingress[0].hostname}"
     signing_alg: RS256
     signing_keystore: https_keys
     signing_keylabel: serverkey
@@ -325,6 +326,11 @@ definition:
     sub: ldap_sub
     email: ldap_email
     name: ldap_name
+
+authentication:
+  endpoint: "http://${kubernetes_ingress_v1.isvaop.status[0].load_balancer[0].ingress[0].hostname}/oauth2/auth"
+  callback_param_name: Target
+  subject_attribute_name: sAMAccountName
 
 jwks:
   signing_keystore: https_keys
@@ -418,16 +424,20 @@ clients:
     token_endpoint_auth_method: client_secret_basic
     id_token_signed_response_alg: RS256
   - client_id: agent-uc2
-    client_name: "Banking App (UC2 — Authorization Code + PKCE)"
+    client_secret: "${random_password.client_secret.result}"
+    client_name: "Banking App (UC2 — ROPC Login)"
     enabled: true
     grant_types:
       - authorization_code
       - refresh_token
+      - password
     response_types:
       - code
-    token_endpoint_auth_method: none
-    pkce_required: true
-    pkce_s256_required: true
+    # client_secret_post: ROPC requires client authentication; secret is sent
+    # in the POST body. PKCE fields removed — ROPC does not use PKCE.
+    # authorization_code + refresh_token grants are retained for the PKCE
+    # production upgrade path (add WebSEAL/external IdP to re-enable).
+    token_endpoint_auth_method: client_secret_post
     redirect_uris:
       - "${var.uc2_redirect_uri}"
     scopes:
@@ -649,10 +659,10 @@ resource "kubernetes_job" "ivia_db_init" {
 
             -- General key-value store with TTL
             CREATE TABLE IF NOT EXISTS DMAP_ENTRIES (
-                KEY               VARCHAR(512) NOT NULL PRIMARY KEY,
-                VALUE             TEXT,
-                DATATYPE          VARCHAR(64),
-                EXPIRY            BIGINT
+                DMAP_KEY          VARCHAR(512) NOT NULL PRIMARY KEY,
+                DMAP_VALUE        TEXT,
+                DMAP_DATATYPE     VARCHAR(64),
+                DMAP_EXPIRY       BIGINT
             );
 
             -- Indexes for performance
@@ -665,7 +675,7 @@ resource "kubernetes_job" "ivia_db_init" {
             CREATE INDEX IF NOT EXISTS IDX_JTI_EXPIRES
               ON OAUTH20_JTI (EXPIRES);
             CREATE INDEX IF NOT EXISTS IDX_DMAP_EXPIRY
-              ON DMAP_ENTRIES (EXPIRY);
+              ON DMAP_ENTRIES (DMAP_EXPIRY);
 
             SQL
             echo "IVIA database schema initialized successfully"
@@ -864,6 +874,8 @@ resource "kubernetes_service" "isvaop" {
 ################################################################################
 
 resource "kubernetes_ingress_v1" "isvaop" {
+  wait_for_load_balancer = true
+
   metadata {
     name      = "isvaop"
     namespace = kubernetes_namespace.verify_access.metadata[0].name
