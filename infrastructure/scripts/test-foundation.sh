@@ -192,15 +192,31 @@ if [ "${ad_stage}" = "Active" ]; then
         --output text --region "${REGION}" 2>/dev/null || echo "")
 
     if [ -n "${ad_dns_ip}" ] && [ "${ad_dns_ip}" != "None" ]; then
+        kubectl delete pod verify-ad-ldap --ignore-not-found --wait=false &>/dev/null
+        ldap_result=$(kubectl run verify-ad-ldap -n verify-access --rm -i --restart=Never \
+            --image=python:3.12-slim -- \
+            bash -c "apt-get update -qq && apt-get install -y -qq ldap-utils >/dev/null 2>&1 && \
+                echo 'LDAP_CONNECT:OK' && \
+                for user in oscar adriana; do \
+                    if ldapsearch -x -H ldap://${ad_dns_ip} -b 'CN=Users,DC=workshop,DC=internal' \
+                        \"(sAMAccountName=\${user})\" dn 2>/dev/null | grep -q '^dn:'; then \
+                        echo \"USER_FOUND:\${user}\"; \
+                    else \
+                        echo \"USER_MISSING:\${user}\"; \
+                    fi; \
+                done" \
+            2>/dev/null | grep -v 'pod.*deleted' || echo "LDAP_CONNECT:FAIL")
+
+        if echo "${ldap_result}" | grep -q 'LDAP_CONNECT:OK'; then
+            print_pass "LDAP connectivity from cluster to Simple AD (${ad_dns_ip}:389)"
+        else
+            print_fail "LDAP connectivity to Simple AD" \
+                "Cannot reach ${ad_dns_ip}:389 from cluster. Check security group rule eks_to_simple_ad_ldap."
+            failures=$((failures + 1))
+        fi
+
         for ad_user in oscar adriana; do
-            kubectl delete pod "verify-ad-${ad_user}" --ignore-not-found --wait=false &>/dev/null
-            user_dn=$(kubectl run "verify-ad-${ad_user}" --rm -i --restart=Never \
-                --image=python:3.12-slim -- \
-                bash -c "apt-get update -qq && apt-get install -y -qq ldap-utils >/dev/null 2>&1 && \
-                    ldapsearch -x -H ldap://${ad_dns_ip} -b 'CN=Users,DC=workshop,DC=internal' \
-                    '(sAMAccountName=${ad_user})' dn 2>/dev/null | grep '^dn:'" \
-                2>/dev/null | grep -v 'pod.*deleted' || echo "")
-            if [ -n "${user_dn}" ]; then
+            if echo "${ldap_result}" | grep -q "USER_FOUND:${ad_user}"; then
                 print_pass "Simple AD user '${ad_user}' exists"
             else
                 print_fail "Simple AD user '${ad_user}' not found" \
@@ -209,7 +225,7 @@ if [ "${ad_stage}" = "Active" ]; then
             fi
         done
     else
-        print_warn "Simple AD DNS IP not found — skipping user checks"
+        print_warn "Simple AD DNS IP not found — skipping LDAP and user checks"
     fi
 else
     print_fail "Simple AD directory workshop.internal" \
