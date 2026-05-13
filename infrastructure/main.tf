@@ -13,6 +13,8 @@
 #   Wave 5: vault_config + isva_config  [LOCAL — kubectl port-forward, not in this root module]
 #   Wave 6: uc1_agent (vault + rds + bedrock_kb_index + eks)
 #   Wave 7: uc2_app (vault + rds + ivia + bedrock_kb_index + eks)
+#   Wave 8: uc3_agent (vault + rds + ivia + uc2_app)
+#   Wave 9: observability (eks + addons + audit)
 #
 # Karpenter and ArgoCD are intentionally OUT of scope for this workshop
 # (managed node group only; Helm-direct or plain terraform apply for deploys).
@@ -326,3 +328,51 @@ module "uc2_app" {
 
   depends_on = [time_sleep.alb_webhook_ready]
 }
+
+#-------------------------------------------------------------------------------
+# Wave 8 — Use Case 3 Agent (privileged refund writer)
+# UC3 agent joins banking-app namespace; CIBA + token exchange + refund write.
+# Depends on vault (k8s auth + secret backend), rds (write creds), ivia (CIBA
+# authorization endpoint), and uc2_app (banking-app namespace must exist first).
+#-------------------------------------------------------------------------------
+
+module "uc3_agent" {
+  source = "./modules/uc3_agent"
+
+  namespace          = "banking-app"
+  vault_endpoint     = "http://vault.vault.svc.cluster.local:8200"
+  ivia_base_url      = "https://${module.ivia.ivia_service_endpoint}:8436"
+  ivia_client_id     = "agent-uc3"
+  ivia_client_secret = var.ivia_uc3_client_secret
+  db_host            = module.rds.address
+  db_name            = "workshop"
+  uc3_agent_image    = var.uc3_agent_image
+  bedrock_model_id   = var.bedrock_model_id
+  region             = var.region
+  rds_cidr           = module.vpc.vpc_cidr
+  tags               = var.tags
+
+  depends_on = [module.vault, module.rds, module.ivia, module.uc2_app]
+}
+
+#-------------------------------------------------------------------------------
+# Wave 9 — Observability (fluent-bit DaemonSet + Firehose + Glue tables)
+# Deployed after UC3 to capture agent logs from all three planes.
+# Depends on eks (cluster, Pod Identity), addons (IAM infra ready),
+# and audit (Glue DB + Athena workgroup + workshop CMK).
+#-------------------------------------------------------------------------------
+
+module "observability" {
+  source = "./modules/observability"
+
+  region             = var.region
+  cluster_name       = module.eks.cluster_name
+  log_bucket_name    = "${module.eks.cluster_name}-workshop-logs"
+  glue_database_name = module.audit.glue_database_name
+  athena_workgroup   = module.audit.athena_workgroup_name
+  kms_key_arn        = module.audit.workshop_cmk_arn
+  tags               = var.tags
+
+  depends_on = [module.eks, module.addons, module.audit]
+}
+
