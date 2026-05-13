@@ -1,34 +1,158 @@
 /**
- * auth.ts — OIDC Authorization Code + PKCE client configuration for UC2.
+ * auth.ts — OIDC + ROPC authentication utilities for UC2.
  *
- * Uses oidc-client-ts to handle the Authorization Code flow with PKCE
- * against IBM Verify Access (IVIA). This is a public client — no client_secret.
- * PKCE (code_challenge_method=S256) replaces the secret for public clients.
+ * Primary flow: ROPC (Resource Owner Password Credentials) via a self-hosted
+ * login form. IVIA OIDC Provider is "authorization only" — it has no built-in
+ * login form. PKCE requires WebSEAL or an external IdP to present the form,
+ * which is not available in this workshop environment. ROPC with a self-hosted
+ * login form is the canonical IBM pattern (validated by ibm-verify-login
+ * reference implementation).
  *
- * Environment variables (set at build time via SvelteKit PUBLIC_ prefix):
- *   PUBLIC_IVIA_ISSUER      — IVIA issuer URL (e.g. https://ivia.workshop.example/oidc)
- *   PUBLIC_IVIA_CLIENT_ID   — OAuth client ID registered in IVIA (default: agent-uc2)
- *   PUBLIC_REDIRECT_URI     — Full callback URL (e.g. http://<alb-hostname>/callback)
- *   PUBLIC_AGENT_URL        — Banking agent endpoint (e.g. http://<alb-hostname>:3002)
+ * ROPC flow:
+ *   1. User submits username + password on the landing page form.
+ *   2. SvelteKit /login action calls passwordGrant() — POSTs grant_type=password
+ *      to IVIA /oauth2/token with client_id + client_secret.
+ *   3. IVIA authenticates the user against Simple AD (LDAP).
+ *   4. On success, IVIA returns access_token + id_token.
+ *   5. /login action sets httpOnly cookies and redirects to /dashboard.
  *
- * Security notes:
- *   - PKCE code_challenge_method=S256 is enforced (prevents auth code interception)
- *   - No client_secret — this is a public client per CONTEXT decision
- *   - Access token stored server-side in httpOnly cookie (handled in callback route)
- *   - No tokens stored in localStorage or sessionStorage
+ * PKCE functions (buildUserManager, startLogin, handleCallback) are retained
+ * as the production upgrade path — when WebSEAL or an external IdP provides
+ * the IVIA login form, the PKCE flow can replace ROPC without changes to the
+ * rest of the application.
+ *
+ * Environment variables:
+ *   Server-side ($env/dynamic/private):
+ *     IVIA_ISSUER        — IVIA issuer URL (ALB endpoint, e.g. http://<alb-hostname>)
+ *     IVIA_CLIENT_ID     — OAuth client ID (default: agent-uc2)
+ *     IVIA_CLIENT_SECRET — OAuth client secret (set in banking-ui ConfigMap)
+ *   Client-side ($env/dynamic/public — used by PKCE fallback):
+ *     PUBLIC_IVIA_ISSUER      — same as IVIA_ISSUER
+ *     PUBLIC_IVIA_CLIENT_ID   — same as IVIA_CLIENT_ID
+ *     PUBLIC_REDIRECT_URI     — full callback URL
+ *     PUBLIC_AGENT_URL        — banking agent endpoint
  */
 
+// ── PKCE imports (production upgrade path) ────────────────────────────────────
 import { env } from '$env/dynamic/public';
 import { UserManager, WebStorageStateStore } from 'oidc-client-ts';
 
+// ── Error class ───────────────────────────────────────────────────────────────
+
 /**
- * Build a UserManager configured for Authorization Code + PKCE flow.
+ * IBMVerifyError — thrown when the IVIA token endpoint returns a non-2xx
+ * response. Includes the HTTP status code and the parsed response body for
+ * structured error logging.
  *
- * Called once per browser session. The UserManager handles:
- *   - PKCE code_verifier/challenge generation
- *   - State parameter for CSRF protection
- *   - Redirect to IVIA authorization endpoint
- *   - Callback code exchange
+ * Ported from ibm-verify-login reference implementation.
+ */
+export class IBMVerifyError extends Error {
+  status: number;
+  body: unknown;
+
+  constructor(message: string, status: number, body: unknown) {
+    super(message);
+    this.name = 'IBMVerifyError';
+    this.status = status;
+    this.body = body;
+  }
+}
+
+// ── Internal helpers ──────────────────────────────────────────────────────────
+
+/**
+ * postForm — POST application/x-www-form-urlencoded, parse JSON response.
+ * Throws IBMVerifyError on non-2xx responses.
+ *
+ * Server-side only (called from +page.server.ts actions).
+ * Ported from ibm-verify-login reference implementation.
+ */
+async function postForm(url: string, params: Record<string, string>): Promise<unknown> {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Accept: 'application/json'
+    },
+    body: new URLSearchParams(params).toString()
+  });
+
+  let body: unknown;
+  const contentType = res.headers.get('content-type') ?? '';
+  if (contentType.includes('application/json')) {
+    body = await res.json();
+  } else {
+    body = await res.text();
+  }
+
+  if (!res.ok) {
+    throw new IBMVerifyError(
+      `IBM Verify request failed: ${res.status} ${res.statusText}`,
+      res.status,
+      body
+    );
+  }
+
+  return body;
+}
+
+// ── Token response shape ──────────────────────────────────────────────────────
+
+export interface TokenResponse {
+  access_token: string;
+  token_type: string;
+  expires_in: number;
+  scope?: string;
+  id_token?: string;
+  refresh_token?: string;
+}
+
+// ── ROPC: passwordGrant ───────────────────────────────────────────────────────
+
+interface PasswordGrantParams {
+  clientId: string;
+  clientSecret: string;
+  username: string;
+  password: string;
+  scope?: string;
+}
+
+/**
+ * passwordGrant — Resource Owner Password Credentials grant.
+ *
+ * POSTs grant_type=password to the IVIA /oauth2/token endpoint.
+ * IVIA authenticates the user against Simple AD (LDAP) and returns
+ * access_token + id_token on success.
+ *
+ * Server-side only — never call from browser code.
+ * Ported from ibm-verify-login reference implementation (lines 98-111).
+ *
+ * @param baseUri  IVIA issuer URL (e.g. http://<alb-hostname>)
+ * @param params   clientId, clientSecret, username, password, scope
+ */
+export async function passwordGrant(
+  baseUri: string,
+  params: PasswordGrantParams
+): Promise<TokenResponse> {
+  const url = `${baseUri}/oauth2/token`;
+  return postForm(url, {
+    grant_type: 'password',
+    client_id: params.clientId,
+    client_secret: params.clientSecret,
+    username: params.username,
+    password: params.password,
+    ...(params.scope ? { scope: params.scope } : {})
+  }) as Promise<TokenResponse>;
+}
+
+// ── PKCE: production upgrade path ─────────────────────────────────────────────
+
+/**
+ * buildUserManager — UserManager for Authorization Code + PKCE flow.
+ *
+ * Production upgrade path: replace ROPC when WebSEAL or an external
+ * IdP provides the IVIA login form. No changes needed to the rest of
+ * the application — swap the /login action to call startLogin() instead.
  */
 export function buildUserManager(): UserManager {
   const issuer = env.PUBLIC_IVIA_ISSUER ?? '';
@@ -45,36 +169,23 @@ export function buildUserManager(): UserManager {
     redirect_uri: redirectUri,
     scope: 'openid profile email',
     response_type: 'code',
-    // PKCE — code_challenge_method=S256 (RFC 7636)
-    // oidc-client-ts defaults to S256; explicitly noted for workshop pedagogy
     response_mode: 'query',
-    // Store PKCE state in sessionStorage (browser-side only; tokens stored server-side)
-    userStore: new WebStorageStateStore({ store: typeof window !== 'undefined' ? window.sessionStorage : undefined }),
-    // Disable silent renewal — session is managed server-side via httpOnly cookies
-    automaticSilentRenew: false,
-    // Request offline_access if IVIA supports refresh tokens
-    // Omitted for UC2 simplicity — session expires with access token TTL
+    userStore: new WebStorageStateStore({
+      store: typeof window !== 'undefined' ? window.sessionStorage : undefined
+    }),
+    automaticSilentRenew: false
   });
 }
 
 /**
- * Initiate Authorization Code + PKCE redirect to IVIA.
- *
- * Generates a random code_verifier, computes code_challenge=S256(verifier),
- * and redirects the browser to IVIA's /authorize endpoint.
+ * startLogin — initiate Authorization Code + PKCE redirect to IVIA.
  */
 export async function startLogin(userManager: UserManager): Promise<void> {
   await userManager.signinRedirect();
 }
 
 /**
- * Complete the PKCE callback — exchange auth code for tokens.
- *
- * Called from the /callback route after IVIA redirects back with ?code=&state=
- * Verifies the state parameter (CSRF) and exchanges the code using the
- * stored code_verifier.
- *
- * Returns the access_token for forwarding to the agent pod.
+ * handleCallback — complete the PKCE callback and return the access_token.
  */
 export async function handleCallback(userManager: UserManager): Promise<string> {
   const user = await userManager.signinRedirectCallback();
@@ -87,7 +198,7 @@ export async function handleCallback(userManager: UserManager): Promise<string> 
 }
 
 /**
- * Agent URL for forwarding user JWTs.
+ * getAgentUrl — returns the banking agent URL for client-side API calls.
  */
 export function getAgentUrl(): string {
   return env.PUBLIC_AGENT_URL ?? '';

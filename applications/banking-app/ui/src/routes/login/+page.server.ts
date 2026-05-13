@@ -1,67 +1,94 @@
 /**
- * /login — Server-side redirect to IVIA Authorization Code + PKCE endpoint.
+ * /login — SvelteKit form action for ROPC (Resource Owner Password Credentials) login.
  *
- * Builds the IVIA /authorize URL with:
- *   - response_type=code
- *   - code_challenge_method=S256 (PKCE)
- *   - code_challenge derived from a random code_verifier
- *   - state parameter for CSRF protection
+ * The landing page (+page.svelte) hosts the login form with action="/login".
+ * This module handles the form POST:
+ *   1. Reads username + password from request.formData()
+ *   2. Reads IVIA_ISSUER, IVIA_CLIENT_ID, IVIA_CLIENT_SECRET from $env/dynamic/private
+ *   3. Calls passwordGrant() — POSTs grant_type=password to IVIA /oauth2/token
+ *   4. On success: sets httpOnly cookies (access_token, id_token, refresh_token)
+ *      and redirects 302 to /dashboard
+ *   5. On error: redirects to /?error=login_failed
  *
- * Stores code_verifier + state in a short-lived httpOnly cookie for
- * verification in the /callback handler.
+ * Reference: ibm-verify-login/src/routes/auth/+page.server.ts
+ *
+ * Note: IVIA_CLIENT_SECRET is set in the banking-ui-config ConfigMap by the
+ * uc2_agent Terraform module. In this workshop environment, a ConfigMap is
+ * acceptable. Production deployments should use a Kubernetes Secret.
  */
 
 import { redirect } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
-import crypto from 'crypto';
-import type { PageServerLoad } from './$types';
+import type { Actions } from './$types';
+import { passwordGrant, IBMVerifyError } from '$lib/auth';
 
-function base64url(buf: Buffer): string {
-  return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
-}
+export const actions: Actions = {
+  default: async ({ request, cookies }) => {
+    const data = await request.formData();
+    const username = data.get('username')?.toString() ?? '';
+    const password = data.get('password')?.toString() ?? '';
 
-export const load: PageServerLoad = async ({ cookies, locals }) => {
-  // Already authenticated — go to dashboard
-  if (locals.accessToken) {
+    const baseUri = env.IVIA_ISSUER ?? '';
+    const clientId = env.IVIA_CLIENT_ID ?? 'agent-uc2';
+    // IVIA_CLIENT_SECRET comes from the banking-ui-config ConfigMap wired from
+    // the verify_access Terraform output. Empty string is passed as-is — IVIA
+    // accepts it for clients configured with client_secret_post auth method.
+    const clientSecret = env.IVIA_CLIENT_SECRET ?? '';
+
+    if (!baseUri) {
+      console.error('IVIA_ISSUER not set — cannot perform ROPC login');
+      throw redirect(302, '/?error=login_failed');
+    }
+
+    let tokens;
+    try {
+      tokens = await passwordGrant(baseUri, {
+        clientId,
+        clientSecret,
+        username,
+        password,
+        scope: 'openid profile email'
+      });
+    } catch (err) {
+      if (err instanceof IBMVerifyError) {
+        console.error('ROPC login failed:', JSON.stringify(err.body));
+      } else {
+        console.error('ROPC login error:', err);
+      }
+      throw redirect(302, '/?error=login_failed');
+    }
+
+    // Store access_token in httpOnly cookie — forwarded to agent in Authorization header
+    cookies.set('access_token', tokens.access_token, {
+      path: '/',
+      httpOnly: true,
+      secure: false, // HTTP-only ALB — lab environment; use true in production
+      sameSite: 'lax',
+      maxAge: tokens.expires_in
+    });
+
+    // Store id_token if present — contains user claims (sub, email, name)
+    if (tokens.id_token) {
+      cookies.set('id_token', tokens.id_token, {
+        path: '/',
+        httpOnly: true,
+        secure: false,
+        sameSite: 'lax',
+        maxAge: 60 * 60 * 24 // 24h default if expires_in not in id_token
+      });
+    }
+
+    // Store refresh_token if IVIA issued one
+    if (tokens.refresh_token) {
+      cookies.set('refresh_token', tokens.refresh_token, {
+        path: '/',
+        httpOnly: true,
+        secure: false,
+        sameSite: 'lax',
+        maxAge: 60 * 60 * 24 * 30 // 30 days
+      });
+    }
+
     throw redirect(302, '/dashboard');
   }
-
-  const issuer = env.IVIA_ISSUER ?? '';
-  const clientId = env.IVIA_CLIENT_ID ?? 'agent-uc2';
-  const redirectUri = env.REDIRECT_URI ?? '';
-
-  if (!issuer || !redirectUri) {
-    throw new Error('IVIA_ISSUER and REDIRECT_URI environment variables must be set');
-  }
-
-  // Generate PKCE code_verifier (RFC 7636 §4.1: 43-128 chars of base64url)
-  const codeVerifier = base64url(crypto.randomBytes(32));
-
-  // code_challenge = BASE64URL(SHA256(ASCII(code_verifier)))
-  const codeChallenge = base64url(crypto.createHash('sha256').update(codeVerifier).digest());
-
-  // State for CSRF protection
-  const state = base64url(crypto.randomBytes(16));
-
-  // Store verifier + state in httpOnly cookie (30min TTL)
-  const pkcePayload = JSON.stringify({ codeVerifier, state });
-  cookies.set('pkce', pkcePayload, {
-    path: '/',
-    httpOnly: true,
-    secure: false, // HTTP-only ALB — lab environment only
-    sameSite: 'lax',
-    maxAge: 60 * 30,
-  });
-
-  // Build IVIA /authorize URL
-  const authUrl = new URL(`${issuer}/oauth2/authorize`);
-  authUrl.searchParams.set('response_type', 'code');
-  authUrl.searchParams.set('client_id', clientId);
-  authUrl.searchParams.set('redirect_uri', redirectUri);
-  authUrl.searchParams.set('scope', 'openid profile email');
-  authUrl.searchParams.set('code_challenge_method', 'S256');
-  authUrl.searchParams.set('code_challenge', codeChallenge);
-  authUrl.searchParams.set('state', state);
-
-  throw redirect(302, authUrl.toString());
 };

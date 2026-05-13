@@ -1,17 +1,24 @@
 <!--
   Landing / Login page.
 
-  If user is already authenticated (has access_token cookie), redirects
-  to dashboard. Otherwise, shows a login button that initiates the
-  Authorization Code + PKCE flow to IVIA.
+  Hosts the ROPC login form. Submitting username + password POSTs to the
+  /login SvelteKit action (actions.default in login/+page.server.ts).
 
-  The login redirect is done server-side via +page.server.ts to avoid
-  exposing the IVIA issuer URL in client-side JavaScript.
+  The form action="/login" uses method="POST" so the submission goes to
+  the SvelteKit action handler at src/routes/login/+page.server.ts, which
+  calls passwordGrant() against IVIA, sets httpOnly cookies, and redirects
+  to /dashboard.
+
+  Error messages from failed login attempts arrive via the `error` query
+  param (e.g. /?error=login_failed) and are surfaced below the form.
 -->
 <script lang="ts">
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
+
+	let username = $state('');
+	let password = $state('');
 </script>
 
 <div class="login-page">
@@ -23,9 +30,41 @@
 			Sign in with your IBM Verify Access identity to access your personalized banking dashboard.
 			Your identity is cryptographically bound to every database query via OAuth + Vault JWT auth.
 		</p>
-		<a href="/login" class="btn btn-primary login-btn">Sign in with IBM Verify</a>
+
+		<form method="POST" action="/login" class="login-form">
+			<div class="field">
+				<label for="username">Username</label>
+				<input
+					id="username"
+					type="text"
+					name="username"
+					required
+					autocomplete="username"
+					placeholder="e.g. oscar"
+					bind:value={username}
+				/>
+			</div>
+			<div class="field">
+				<label for="password">Password</label>
+				<input
+					id="password"
+					type="password"
+					name="password"
+					required
+					autocomplete="current-password"
+					placeholder="Password"
+					bind:value={password}
+				/>
+			</div>
+			<button type="submit" class="btn btn-primary login-btn">Sign in with IBM Verify</button>
+		</form>
+
+		{#if data.error}
+			<p class="error-message">{data.error}</p>
+		{/if}
+
 		<div class="security-note">
-			<span class="badge badge-blue">OAuth 2.0 + PKCE</span>
+			<span class="badge badge-blue">OAuth 2.0 ROPC</span>
 			<span class="badge badge-green">Vault JWT Auth</span>
 			<span class="badge badge-blue">PostgreSQL RLS</span>
 		</div>
@@ -72,12 +111,57 @@
 		margin-bottom: 1.5rem;
 	}
 
+	.login-form {
+		display: flex;
+		flex-direction: column;
+		gap: 1rem;
+		text-align: left;
+		margin-bottom: 1rem;
+	}
+
+	.field {
+		display: flex;
+		flex-direction: column;
+		gap: 0.25rem;
+	}
+
+	.field label {
+		font-size: 0.85rem;
+		font-weight: 600;
+		color: var(--color-text);
+	}
+
+	.field input {
+		padding: 0.6rem 0.75rem;
+		border: 1px solid var(--color-border, #d1d5db);
+		border-radius: 6px;
+		font-size: 0.95rem;
+		color: var(--color-text);
+		background: var(--color-surface, #fff);
+		outline: none;
+	}
+
+	.field input:focus {
+		border-color: var(--color-primary, #0f62fe);
+		box-shadow: 0 0 0 2px rgba(15, 98, 254, 0.15);
+	}
+
 	.login-btn {
 		width: 100%;
 		justify-content: center;
 		padding: 0.75rem;
 		font-size: 1rem;
-		margin-bottom: 1.5rem;
+		margin-top: 0.5rem;
+	}
+
+	.error-message {
+		color: #c53030;
+		font-size: 0.875rem;
+		margin: 0.5rem 0 1rem;
+		padding: 0.5rem 0.75rem;
+		background: #fff5f5;
+		border: 1px solid #feb2b2;
+		border-radius: 4px;
 	}
 
 	.security-note {
@@ -85,5 +169,6 @@
 		gap: 0.5rem;
 		justify-content: center;
 		flex-wrap: wrap;
+		margin-top: 1rem;
 	}
 </style>
