@@ -194,9 +194,8 @@ if [ "${ad_stage}" = "Active" ]; then
     if [ -n "${ad_dns_ip}" ] && [ "${ad_dns_ip}" != "None" ]; then
         kubectl delete pod verify-ad-ldap --ignore-not-found --wait=false &>/dev/null
         ldap_result=$(kubectl run verify-ad-ldap -n verify-access --rm -i --restart=Never \
-            --image=python:3.12-slim -- \
-            bash -c "apt-get update -qq && apt-get install -y -qq ldap-utils >/dev/null 2>&1 && \
-                echo 'LDAP_CONNECT:OK' && \
+            --image=bitnami/openldap:latest -- \
+            bash -c "echo 'LDAP_CONNECT:OK' && \
                 for user in oscar adriana; do \
                     if ldapsearch -x -H ldap://${ad_dns_ip} -b 'CN=Users,DC=workshop,DC=internal' \
                         \"(sAMAccountName=\${user})\" dn 2>/dev/null | grep -q '^dn:'; then \

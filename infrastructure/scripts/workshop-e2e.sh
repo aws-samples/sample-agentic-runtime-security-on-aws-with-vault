@@ -400,9 +400,35 @@ phase_verify_foundation() {
         | sed 's/.*=\s*"\(.*\)"/\1/' || echo "")
     if [ -n "$ad_dns_ip" ] && [ -n "$ad_password" ]; then
         step_header "Provisioning Simple AD users..."
-        bash "$SCRIPT_DIR/create-simple-ad-users.sh" \
-            --ldap-host "$ad_dns_ip" \
-            --admin-password "$ad_password" \
+        local bind_dn="CN=Administrator,CN=Users,DC=workshop,DC=internal"
+        local base_dn="CN=Users,DC=workshop,DC=internal"
+        kubectl delete pod provision-ad-users --ignore-not-found --wait=false &>/dev/null
+        kubectl run provision-ad-users -n default --rm -i --restart=Never \
+            --image=bitnami/openldap:latest -- \
+            bash -c "
+                for user_entry in 'oscar:Oscar:Medina:oscar@workshop.internal' 'adriana:Adriana:Medina:adriana@workshop.internal'; do
+                    IFS=: read -r uid first last email <<< \"\${user_entry}\"
+                    if ldapsearch -x -H ldap://${ad_dns_ip} -b '${base_dn}' \"(sAMAccountName=\${uid})\" dn 2>/dev/null | grep -q '^dn:'; then
+                        echo \"SKIP: \${uid} already exists\"
+                    else
+                        ldapadd -x -H ldap://${ad_dns_ip} -D '${bind_dn}' -w '${ad_password}' <<LDIF
+dn: CN=\${first} \${last},${base_dn}
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: user
+cn: \${first} \${last}
+sn: \${last}
+givenName: \${first}
+displayName: \${first} \${last}
+sAMAccountName: \${uid}
+userPrincipalName: \${email}
+mail: \${email}
+LDIF
+                        if [ \$? -eq 0 ]; then echo \"CREATED: \${uid}\"; else echo \"FAILED: \${uid}\"; fi
+                    fi
+                done
+            " 2>/dev/null | grep -v 'pod.*deleted' \
             || print_warn "Simple AD user provisioning had warnings"
     fi
 
