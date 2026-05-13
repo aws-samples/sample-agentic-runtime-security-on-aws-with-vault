@@ -319,9 +319,9 @@ module "uc2_app" {
   agent_image           = var.banking_app_agent_image
   mcp_image             = var.banking_app_mcp_image
   bedrock_model_id      = var.bedrock_model_id
-  ivia_ingress_hostname = module.verify_access.ivia_ingress_hostname
+  ivia_ingress_hostname = module.ivia.ivia_ingress_hostname
   ivia_client_id        = "agent-uc2"
-  ivia_client_secret    = module.verify_access.ivia_client_secret
+  ivia_client_secret    = module.ivia.ivia_client_secret
   tags                  = var.tags
 
   depends_on = [time_sleep.alb_webhook_ready]
