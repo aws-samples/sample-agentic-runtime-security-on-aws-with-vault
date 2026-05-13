@@ -343,7 +343,7 @@ module "uc3_agent" {
   vault_endpoint     = "http://vault.vault.svc.cluster.local:8200"
   ivia_base_url      = "https://${module.ivia.ivia_service_endpoint}:8436"
   ivia_client_id     = "agent-uc3"
-  ivia_client_secret = var.ivia_uc3_client_secret
+  ivia_client_secret = module.ivia.ivia_client_secret
   db_host            = module.rds.address
   db_name            = "workshop"
   uc3_agent_image    = var.uc3_agent_image

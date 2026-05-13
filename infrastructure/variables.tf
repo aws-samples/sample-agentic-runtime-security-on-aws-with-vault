@@ -144,19 +144,11 @@ variable "uc2_redirect_uri" {
 #-------------------------------------------------------------------------------
 # UC3 Agent Configuration
 # uc3_agent_image: set by attendees after ECR push (Phase 6 lab step).
-# ivia_uc3_client_secret: IVIA OAuth client secret for agent-uc3 (CIBA-capable).
 #-------------------------------------------------------------------------------
 
 variable "uc3_agent_image" {
   type        = string
   description = "ECR image URI for the UC3 privileged-action agent container. Built from applications/uc3-agent/Dockerfile."
-}
-
-variable "ivia_uc3_client_secret" {
-  type        = string
-  sensitive   = true
-  description = "IVIA OAuth client secret for agent-uc3. CIBA backchannel auth; stored in ConfigMap for workshop simplicity."
-  default     = ""
 }
 
 #-------------------------------------------------------------------------------

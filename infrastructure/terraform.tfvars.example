@@ -62,6 +62,3 @@ uc2_redirect_uri = "http://localhost:3000/callback"
 # Placeholder is fine for initial deploy; the e2e script updates this automatically.
 uc3_agent_image = "ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/uc3-agent:latest"
 
-# UC3 IVIA client secret — set after IVIA client registration (vault_config + isva_config local apply).
-# Must match the secret registered for agent-uc3 in IVIA.
-ivia_uc3_client_secret = "YOUR_UC3_CLIENT_SECRET"
