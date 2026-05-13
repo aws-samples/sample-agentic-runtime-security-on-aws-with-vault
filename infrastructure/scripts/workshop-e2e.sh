@@ -777,7 +777,7 @@ phase_uc3() {
 
     # Step 5: Wait for fluent-bit DaemonSet
     step_header "Waiting for fluent-bit DaemonSet rollout..."
-    kubectl rollout status daemonset/fluent-bit -n logging --timeout=120s 2>/dev/null || {
+    kubectl rollout status daemonset/aws-for-fluent-bit -n logging --timeout=120s 2>/dev/null || {
         print_warn "fluent-bit DaemonSet rollout timed out — check: kubectl get pods -n logging"
     }
 

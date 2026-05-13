@@ -359,9 +359,7 @@ fi
 #-------------------------------------------------------------------------------
 # Check 9 — fluent-bit DaemonSet pods Running in logging namespace
 #-------------------------------------------------------------------------------
-running_fluentbit=$(kubectl get pods -n "${LOGGING_NAMESPACE}" -l app.kubernetes.io/name=fluent-bit \
-    --no-headers 2>/dev/null | grep -c Running || \
-    kubectl get pods -n "${LOGGING_NAMESPACE}" -l app=fluent-bit \
+running_fluentbit=$(kubectl get pods -n "${LOGGING_NAMESPACE}" -l app.kubernetes.io/name=aws-for-fluent-bit \
     --no-headers 2>/dev/null | grep -c Running || true)
 if [ "${running_fluentbit:-0}" -ge 1 ]; then
     print_pass "fluent-bit DaemonSet Running (${running_fluentbit} pod(s) in ${LOGGING_NAMESPACE})"
