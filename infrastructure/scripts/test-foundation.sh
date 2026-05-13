@@ -3,7 +3,7 @@
 # test-foundation.sh — verify the entire workshop foundation in one command
 #
 # Calls test-eks.sh, test-rds.sh, test-bedrock-kb.sh, then checks audit log
-# groups and the region contract. Aggregates results.
+# groups, Simple AD directory, and the region contract. Aggregates results.
 #
 # Usage:
 #   ./test-foundation.sh \
@@ -39,7 +39,7 @@ while [ $# -gt 0 ]; do
             cat <<USAGE
 Usage: $0 --cluster-name <name> --knowledge-base-id <kb> [--db-instance-id <id>] [--region <region>]
 
-Verifies foundation: EKS, RDS, Bedrock KB, audit log groups, region contract.
+Verifies foundation: EKS, RDS, Bedrock KB, audit log groups, Simple AD, region contract.
 
 Auto-derived:
   --db-instance-id  defaults to \${cluster_name}-pg
@@ -168,6 +168,29 @@ for lg in "${EXPECTED_LOG_GROUPS[@]}"; do
     fi
 done
 [ "$audit_ok" = false ] && failures=$((failures + 1))
+
+#-------------------------------------------------------------------------------
+# Simple AD — verify workshop.internal directory is Active
+#-------------------------------------------------------------------------------
+echo
+echo -e "${BLUE}===============================================================================${NC}"
+echo -e "${BLUE}  Simple AD${NC}"
+echo -e "${BLUE}===============================================================================${NC}"
+
+ad_stage=$(aws ds describe-directories \
+    --query 'DirectoryDescriptions[?Name==`workshop.internal`].Stage | [0]' \
+    --output text --region "${REGION}" 2>/dev/null || echo "NONE")
+
+if [ "${ad_stage}" = "Active" ]; then
+    ad_id=$(aws ds describe-directories \
+        --query 'DirectoryDescriptions[?Name==`workshop.internal`].DirectoryId | [0]' \
+        --output text --region "${REGION}" 2>/dev/null || echo "")
+    print_pass "Simple AD directory workshop.internal: Active (${ad_id})"
+else
+    print_fail "Simple AD directory workshop.internal" \
+        "Expected Active, got '${ad_stage}'. Check: aws ds describe-directories --region ${REGION}"
+    failures=$((failures + 1))
+fi
 
 #-------------------------------------------------------------------------------
 # Region contract — no canonical region literal outside terraform.tfvars
