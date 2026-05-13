@@ -32,7 +32,9 @@
 #                        bootstrap.sh in Phase 1 since Phase 0 already runs
 #                        check-prerequisites.sh — accepted for CLI symmetry)
 #   --dry-run           Show what would be done without executing
-#   --start-from PHASE  Skip phases before PHASE (e.g., --start-from uc1)
+#   --start-from PHASE  Skip phases before PHASE. Valid values:
+#                        prerequisites, bootstrap, foundation, kubectl,
+#                        verify, identity, vault, uc1, uc2
 #   --project NAME      HCP project name (default: "Agentic Runtime Security")
 #   --workspace NAME    HCP workspace name (default: "agentic-runtime-security")
 #   --help              Show this help message
