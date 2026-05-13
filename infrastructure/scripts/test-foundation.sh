@@ -186,6 +186,31 @@ if [ "${ad_stage}" = "Active" ]; then
         --query 'DirectoryDescriptions[?Name==`workshop.internal`].DirectoryId | [0]' \
         --output text --region "${REGION}" 2>/dev/null || echo "")
     print_pass "Simple AD directory workshop.internal: Active (${ad_id})"
+
+    ad_dns_ip=$(aws ds describe-directories \
+        --query 'DirectoryDescriptions[?Name==`workshop.internal`].DnsIpAddrs[0] | [0]' \
+        --output text --region "${REGION}" 2>/dev/null || echo "")
+
+    if [ -n "${ad_dns_ip}" ] && [ "${ad_dns_ip}" != "None" ]; then
+        for ad_user in oscar adriana; do
+            kubectl delete pod "verify-ad-${ad_user}" --ignore-not-found --wait=false &>/dev/null
+            user_dn=$(kubectl run "verify-ad-${ad_user}" --rm -i --restart=Never \
+                --image=python:3.12-slim -- \
+                bash -c "apt-get update -qq && apt-get install -y -qq ldap-utils >/dev/null 2>&1 && \
+                    ldapsearch -x -H ldap://${ad_dns_ip} -b 'CN=Users,DC=workshop,DC=internal' \
+                    '(sAMAccountName=${ad_user})' dn 2>/dev/null | grep '^dn:'" \
+                2>/dev/null | grep -v 'pod.*deleted' || echo "")
+            if [ -n "${user_dn}" ]; then
+                print_pass "Simple AD user '${ad_user}' exists"
+            else
+                print_fail "Simple AD user '${ad_user}' not found" \
+                    "Run create-simple-ad-users.sh --ldap-host ${ad_dns_ip} --admin-password <password>"
+                failures=$((failures + 1))
+            fi
+        done
+    else
+        print_warn "Simple AD DNS IP not found — skipping user checks"
+    fi
 else
     print_fail "Simple AD directory workshop.internal" \
         "Expected Active, got '${ad_stage}'. Check: aws ds describe-directories --region ${REGION}"
