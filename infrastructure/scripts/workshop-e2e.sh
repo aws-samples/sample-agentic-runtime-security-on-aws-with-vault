@@ -403,33 +403,34 @@ phase_verify_foundation() {
         local bind_dn="CN=Administrator,CN=Users,DC=workshop,DC=internal"
         local base_dn="CN=Users,DC=workshop,DC=internal"
         kubectl delete pod provision-ad-users --ignore-not-found --wait=false &>/dev/null
-        kubectl run provision-ad-users -n default --rm -i --restart=Never \
-            --image=bitnami/openldap:latest -- \
-            bash -c "
-                for user_entry in 'oscar:Oscar:Medina:oscar@workshop.internal' 'adriana:Adriana:Medina:adriana@workshop.internal'; do
-                    IFS=: read -r uid first last email <<< \"\${user_entry}\"
-                    if ldapsearch -x -H ldap://${ad_dns_ip} -b '${base_dn}' \"(sAMAccountName=\${uid})\" dn 2>/dev/null | grep -q '^dn:'; then
-                        echo \"SKIP: \${uid} already exists\"
-                    else
-                        ldapadd -x -H ldap://${ad_dns_ip} -D '${bind_dn}' -w '${ad_password}' <<LDIF
-dn: CN=\${first} \${last},${base_dn}
-objectClass: top
-objectClass: person
-objectClass: organizationalPerson
-objectClass: user
-cn: \${first} \${last}
-sn: \${last}
-givenName: \${first}
-displayName: \${first} \${last}
-sAMAccountName: \${uid}
-userPrincipalName: \${email}
-mail: \${email}
-LDIF
-                        if [ \$? -eq 0 ]; then echo \"CREATED: \${uid}\"; else echo \"FAILED: \${uid}\"; fi
-                    fi
-                done
-            " 2>/dev/null | grep -v 'pod.*deleted' \
-            || print_warn "Simple AD user provisioning had warnings"
+        for ad_user_spec in "oscar:Oscar:Medina" "adriana:Adriana:Medina"; do
+            local ad_uid="${ad_user_spec%%:*}"
+            local ad_rest="${ad_user_spec#*:}"
+            local ad_first="${ad_rest%%:*}"
+            local ad_last="${ad_rest#*:}"
+            local ad_cn="${ad_first} ${ad_last}"
+
+            # Check if user exists via temp pod
+            local ad_exists
+            ad_exists=$(kubectl run "check-ad-${ad_uid}" -n default --rm -i --restart=Never \
+                --image=alpine:3 -- \
+                sh -c "apk add --no-cache openldap-clients >/dev/null 2>&1 && \
+                    ldapsearch -x -H ldap://${ad_dns_ip} -b '${base_dn}' '(sAMAccountName=${ad_uid})' dn 2>/dev/null | grep -c '^dn:'" \
+                2>/dev/null | grep -v 'pod.*deleted' | tr -d '[:space:]' || echo "0")
+
+            if [ "${ad_exists}" -ge 1 ] 2>/dev/null; then
+                print_info "SKIP: ${ad_uid} already exists"
+            else
+                kubectl run "create-ad-${ad_uid}" -n default --rm -i --restart=Never \
+                    --image=alpine:3 -- \
+                    sh -c "apk add --no-cache openldap-clients >/dev/null 2>&1 && \
+                        printf 'dn: CN=${ad_cn},${base_dn}\nobjectClass: top\nobjectClass: person\nobjectClass: organizationalPerson\nobjectClass: user\ncn: ${ad_cn}\nsn: ${ad_last}\ngivenName: ${ad_first}\ndisplayName: ${ad_cn}\nsAMAccountName: ${ad_uid}\nuserPrincipalName: ${ad_uid}@workshop.internal\nmail: ${ad_uid}@workshop.internal\n' | \
+                        ldapadd -x -H ldap://${ad_dns_ip} -D '${bind_dn}' -w '${ad_password}'" \
+                    2>/dev/null | grep -v 'pod.*deleted' \
+                    && print_pass "Created AD user: ${ad_uid}" \
+                    || print_warn "Failed to create AD user: ${ad_uid}"
+            fi
+        done
     fi
 
     bash "$SCRIPT_DIR/test-foundation.sh" \
