@@ -156,6 +156,7 @@ variable "ivia_uc3_client_secret" {
   type        = string
   sensitive   = true
   description = "IVIA OAuth client secret for agent-uc3. CIBA backchannel auth; stored in ConfigMap for workshop simplicity."
+  default     = ""
 }
 
 #-------------------------------------------------------------------------------

@@ -37,6 +37,7 @@ variable "ivia_client_secret" {
   description = "IVIA OAuth client secret for the agent-uc3 client. Workshop: stored in ConfigMap (acceptable for lab). Production: use a Kubernetes Secret."
   type        = string
   sensitive   = true
+  default     = ""
 }
 
 variable "db_host" {
