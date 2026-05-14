@@ -824,6 +824,233 @@ phase_uc3() {
 }
 
 #===============================================================================
+# PHASE 7d: Observability — Three-Plane Audit Verification
+#===============================================================================
+phase_observability() {
+    phase_header "Phase 7d: Observability — Three-Plane Audit Verification"
+
+    if [ "$DRY_RUN" = true ]; then
+        print_info "[DRY-RUN] Would verify fluent-bit + CloudWatch + Firehose + S3 + Athena"
+        print_info "[DRY-RUN] Would pretty-print recent events from all 3 audit planes"
+        return 0
+    fi
+
+    # Step 1: Verify all 3 CloudWatch log groups have streams
+    step_header "Verifying CloudWatch log groups..."
+    local all_cw_ok=true
+    for lg in vault-audit ivia-decision agent-trace; do
+        stream_count=$(aws logs describe-log-streams \
+            --log-group-name "/workshop/${lg}" \
+            --region "$WORKSHOP_REGION" \
+            --query 'logStreams | length(@)' \
+            --output text 2>/dev/null || echo "0")
+        if [ "${stream_count:-0}" -ge 1 ]; then
+            print_success "/workshop/${lg} — ${stream_count} stream(s)"
+        else
+            print_warn "/workshop/${lg} — no streams yet"
+            all_cw_ok=false
+        fi
+    done
+
+    # Step 2: Verify fluent-bit DaemonSet is healthy
+    step_header "Verifying fluent-bit DaemonSet..."
+    local fb_running
+    fb_running=$(kubectl get pods -n logging -l app.kubernetes.io/name=aws-for-fluent-bit \
+        --no-headers 2>/dev/null | grep -c Running || true)
+    if [ "${fb_running:-0}" -ge 1 ]; then
+        print_success "fluent-bit DaemonSet healthy (${fb_running} pods Running)"
+    else
+        print_error "fluent-bit DaemonSet: no Running pods in logging namespace"
+        return 1
+    fi
+
+    # Step 3: Verify Firehose delivery streams are ACTIVE
+    step_header "Verifying Firehose delivery streams..."
+    local active_count=0
+    for stream_suffix in vault-audit ivia-decision agent-trace; do
+        local stream_name="${CLUSTER_NAME}-${stream_suffix}"
+        local stream_status
+        stream_status=$(aws firehose describe-delivery-stream \
+            --delivery-stream-name "${stream_name}" \
+            --region "$WORKSHOP_REGION" \
+            --query 'DeliveryStreamDescription.DeliveryStreamStatus' \
+            --output text 2>/dev/null || echo "NOT_FOUND")
+        if [ "${stream_status}" = "ACTIVE" ]; then
+            active_count=$((active_count + 1))
+            print_success "Firehose ${stream_name} — ACTIVE"
+        else
+            print_warn "Firehose ${stream_name} — ${stream_status}"
+        fi
+    done
+    [ "${active_count}" -ge 3 ] || print_warn "Only ${active_count}/3 Firehose streams ACTIVE"
+
+    # Step 4: Verify S3 log bucket has objects
+    step_header "Verifying S3 log delivery..."
+    local log_bucket="${CLUSTER_NAME}-workshop-logs"
+    local s3_count
+    s3_count=$(aws s3api list-objects-v2 --bucket "${log_bucket}" --max-items 5 \
+        --query 'length(Contents)' --output text 2>/dev/null || echo "0")
+    if [ "${s3_count:-0}" -ge 1 ] 2>/dev/null; then
+        print_success "S3 bucket '${log_bucket}' has objects (Firehose delivering)"
+    else
+        print_warn "S3 bucket '${log_bucket}' empty — Firehose buffers 60s. Will re-check after plane dump."
+    fi
+
+    # Step 5: Verify Athena named query exists in workshop workgroup
+    step_header "Verifying Athena named query..."
+    local athena_ok=false
+    local query_ids
+    query_ids=$(aws athena list-named-queries \
+        --work-group workshop \
+        --region "$WORKSHOP_REGION" \
+        --query 'NamedQueryIds' --output json 2>/dev/null || echo "[]")
+    local qid_count
+    qid_count=$(echo "$query_ids" | jq 'length' 2>/dev/null || echo "0")
+    if [ "${qid_count:-0}" -ge 1 ]; then
+        for qid in $(echo "$query_ids" | jq -r '.[]' 2>/dev/null); do
+            local qname
+            qname=$(aws athena get-named-query --named-query-id "$qid" \
+                --region "$WORKSHOP_REGION" \
+                --query 'NamedQuery.Name' --output text 2>/dev/null || echo "")
+            if echo "$qname" | grep -qi "audit.correlation\|audit-correlation"; then
+                print_success "Athena named query '${qname}' exists (workgroup: workshop)"
+                athena_ok=true
+                break
+            fi
+        done
+        [ "$athena_ok" = true ] || print_warn "Athena workshop workgroup has ${qid_count} queries but none named audit_correlation"
+    else
+        print_warn "No named queries in Athena workshop workgroup"
+    fi
+
+    # Step 6: Pretty-print recent events from all 3 audit planes
+    step_header "Three-Plane Audit Log Dump"
+    echo ""
+
+    # --- Plane 1: Vault Audit ---
+    echo "┌──────────────────────────────────────────────────────────────────┐"
+    echo "│  PLANE 1: Vault Audit (/workshop/vault-audit)                   │"
+    echo "└──────────────────────────────────────────────────────────────────┘"
+    local vault_stream
+    vault_stream=$(aws logs describe-log-streams --log-group-name /workshop/vault-audit \
+        --region "$WORKSHOP_REGION" --order-by LastEventTime --descending \
+        --query 'logStreams[0].logStreamName' --output text 2>/dev/null || echo "")
+    if [ -n "$vault_stream" ] && [ "$vault_stream" != "None" ]; then
+        aws logs get-log-events --log-group-name /workshop/vault-audit \
+            --log-stream-name "$vault_stream" --region "$WORKSHOP_REGION" \
+            --limit 5 --query 'events[*].message' --output json 2>/dev/null \
+        | python3 -c "
+import sys, json
+msgs = json.load(sys.stdin)
+for m in msgs[-5:]:
+    try:
+        obj = json.loads(m)
+        t = obj.get('time', obj.get('kubernetes',{}).get('time',''))[:19]
+        typ = obj.get('type','?')
+        path = obj.get('request',{}).get('path','?')
+        display = obj.get('auth',{}).get('display_name','')
+        role = obj.get('auth',{}).get('metadata',{}).get('role','')
+        policies = ','.join(obj.get('auth',{}).get('policies',[]))
+        err = obj.get('error','')
+        parts = [f'time={t}', f'type={typ}', f'path={path}']
+        if display: parts.append(f'identity={display}')
+        if role: parts.append(f'role={role}')
+        if policies: parts.append(f'policies=[{policies}]')
+        if err: parts.append(f'ERROR={err[:80]}')
+        print('  ' + ' | '.join(parts))
+    except: pass
+" 2>/dev/null || print_warn "  (could not parse vault audit events)"
+    else
+        echo "  (no log streams yet)"
+    fi
+    echo ""
+
+    # --- Plane 2: IVIA Decisions ---
+    echo "┌──────────────────────────────────────────────────────────────────┐"
+    echo "│  PLANE 2: IVIA Decisions (/workshop/ivia-decision)              │"
+    echo "└──────────────────────────────────────────────────────────────────┘"
+    local ivia_stream
+    ivia_stream=$(aws logs describe-log-streams --log-group-name /workshop/ivia-decision \
+        --region "$WORKSHOP_REGION" --order-by LastEventTime --descending \
+        --query 'logStreams[0].logStreamName' --output text 2>/dev/null || echo "")
+    if [ -n "$ivia_stream" ] && [ "$ivia_stream" != "None" ]; then
+        aws logs get-log-events --log-group-name /workshop/ivia-decision \
+            --log-stream-name "$ivia_stream" --region "$WORKSHOP_REGION" \
+            --limit 5 --query 'events[*].message' --output json 2>/dev/null \
+        | python3 -c "
+import sys, json
+msgs = json.load(sys.stdin)
+for m in msgs[-5:]:
+    try:
+        obj = json.loads(m)
+        t = obj.get('time','')[:19]
+        log = obj.get('log','').strip()
+        pod = obj.get('kubernetes',{}).get('pod_name','isvaop')
+        # Try to extract structured fields from the log line
+        try:
+            inner = json.loads(log)
+            parts = [f'time={inner.get(\"timestamp\", t)[:19]}']
+            for k in ['grant_type','client_id','user_identity','decision','request_id']:
+                v = inner.get(k,'')
+                if v: parts.append(f'{k}={v}')
+            print('  ' + ' | '.join(parts))
+        except:
+            print(f'  {t} | {pod} | {log[:150]}')
+    except: pass
+" 2>/dev/null || print_warn "  (could not parse IVIA decision events)"
+    else
+        echo "  (no log streams yet — will populate during CIBA browser flow)"
+    fi
+    echo ""
+
+    # --- Plane 3: Agent Traces ---
+    echo "┌──────────────────────────────────────────────────────────────────┐"
+    echo "│  PLANE 3: Agent Traces (/workshop/agent-trace)                  │"
+    echo "└──────────────────────────────────────────────────────────────────┘"
+    local agent_stream
+    agent_stream=$(aws logs describe-log-streams --log-group-name /workshop/agent-trace \
+        --region "$WORKSHOP_REGION" --order-by LastEventTime --descending \
+        --query 'logStreams[0].logStreamName' --output text 2>/dev/null || echo "")
+    if [ -n "$agent_stream" ] && [ "$agent_stream" != "None" ]; then
+        aws logs get-log-events --log-group-name /workshop/agent-trace \
+            --log-stream-name "$agent_stream" --region "$WORKSHOP_REGION" \
+            --limit 5 --query 'events[*].message' --output json 2>/dev/null \
+        | python3 -c "
+import sys, json
+msgs = json.load(sys.stdin)
+for m in msgs[-5:]:
+    try:
+        obj = json.loads(m)
+        t = obj.get('time','')[:19]
+        log = obj.get('log','').strip()
+        pod = obj.get('kubernetes',{}).get('pod_name','?')
+        ns = obj.get('kubernetes',{}).get('namespace_name','?')
+        # Skip health checks for cleaner output
+        if '/health' in log: continue
+        print(f'  {t} | {ns}/{pod} | {log[:150]}')
+    except: pass
+" 2>/dev/null || print_warn "  (could not parse agent trace events)"
+    else
+        echo "  (no log streams yet)"
+    fi
+    echo ""
+
+    # Step 7: Re-check S3 if it was empty earlier
+    if [ "${s3_count:-0}" -lt 1 ] 2>/dev/null; then
+        step_header "Re-checking S3 log delivery after plane dump..."
+        s3_count=$(aws s3api list-objects-v2 --bucket "${log_bucket}" --max-items 5 \
+            --query 'length(Contents)' --output text 2>/dev/null || echo "0")
+        if [ "${s3_count:-0}" -ge 1 ] 2>/dev/null; then
+            print_success "S3 bucket '${log_bucket}' now has objects"
+        else
+            print_warn "S3 bucket still empty — Firehose may need more time (60s buffer). Check: aws s3 ls s3://${log_bucket}/"
+        fi
+    fi
+
+    print_success "Three-plane audit verification complete"
+}
+
+#===============================================================================
 # PHASE 8: Teardown
 #===============================================================================
 phase_teardown() {
@@ -988,6 +1215,7 @@ should_run vault           && phase_vault
 should_run uc1             && phase_uc1
 should_run uc2             && phase_uc2
 should_run uc3             && phase_uc3
+should_run observability   && phase_observability
 
 if [ "$SKIP_TEARDOWN" = false ]; then
     phase_teardown

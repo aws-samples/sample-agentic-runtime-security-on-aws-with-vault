@@ -386,18 +386,40 @@ if [ -n "${AWS_REGION:-}" ]; then
     fi
 
     if [ -n "${log_bucket}" ] && [ "${log_bucket}" != "None" ]; then
+        # Verify Firehose delivery streams are ACTIVE (3 streams)
+        active_streams=0
+        for stream_suffix in vault-audit ivia-decision agent-trace; do
+            cluster_prefix=$(echo "${log_bucket}" | sed 's/-workshop-logs$//')
+            stream_name="${cluster_prefix}-${stream_suffix}"
+            stream_status=$(aws firehose describe-delivery-stream \
+                --delivery-stream-name "${stream_name}" \
+                --region "${AWS_REGION}" \
+                --query 'DeliveryStreamDescription.DeliveryStreamStatus' \
+                --output text 2>/dev/null || echo "NOT_FOUND")
+            if [ "${stream_status}" = "ACTIVE" ]; then
+                active_streams=$((active_streams + 1))
+            fi
+        done
+        if [ "${active_streams}" -ge 3 ]; then
+            print_pass "Firehose delivery streams ACTIVE (${active_streams}/3) → S3 bucket '${log_bucket}'"
+        elif [ "${active_streams}" -ge 1 ]; then
+            print_warn "Only ${active_streams}/3 Firehose streams ACTIVE — some log planes may not deliver to S3. Check: aws firehose list-delivery-streams --region ${AWS_REGION}"
+        else
+            print_warn "No Firehose delivery streams ACTIVE — observability module may not have been applied. Check: aws firehose list-delivery-streams --region ${AWS_REGION}"
+        fi
+
         s3_obj_count=$(aws s3api list-objects-v2 \
             --bucket "${log_bucket}" \
             --max-items 1 \
             --query 'length(Contents)' \
             --output text 2>/dev/null || echo "0")
         if [ "${s3_obj_count:-0}" -ge 1 ] 2>/dev/null; then
-            print_pass "S3 log bucket '${log_bucket}' exists and has objects"
+            print_pass "S3 log bucket '${log_bucket}' has objects (Firehose delivering)"
         else
-            print_warn "S3 log bucket '${log_bucket}' exists but has no objects yet — fluent-bit may still be buffering. Check: aws s3 ls s3://${log_bucket}/"
+            print_warn "S3 log bucket '${log_bucket}' has no objects yet — Firehose buffers for 60s before flushing. Re-run after generating UC3 traffic."
         fi
     else
-        print_warn "S3 log bucket not found — observability module may not have been applied or bucket name differs. Check: aws s3api list-buckets --query \"Buckets[?contains(Name,'workshop')]\""
+        print_warn "S3 log bucket not found — observability module may not have been applied. Check: aws s3api list-buckets --query \"Buckets[?contains(Name,'workshop')]\""
     fi
 else
     print_warn "Check 10 skipped — AWS_REGION not resolved"
@@ -412,13 +434,14 @@ fi
 #-------------------------------------------------------------------------------
 if [ -n "${AWS_REGION:-}" ]; then
     named_query_count=$(aws athena list-named-queries \
+        --work-group workshop \
         --region "${AWS_REGION}" \
         --query "NamedQueryIds | length(@)" \
         --output text 2>/dev/null || echo "0")
 
     if [ "${named_query_count:-0}" -ge 1 ] 2>/dev/null; then
-        # Check if any named query contains audit_correlation
         correlation_query=$(aws athena list-named-queries \
+            --work-group workshop \
             --region "${AWS_REGION}" \
             --query "NamedQueryIds" \
             --output json 2>/dev/null \
@@ -435,12 +458,12 @@ if [ -n "${AWS_REGION:-}" ]; then
             done)
 
         if [ -n "${correlation_query}" ]; then
-            print_pass "Athena audit_correlation named query exists: '${correlation_query}'"
+            print_pass "Athena audit_correlation named query exists: '${correlation_query}' (workgroup: workshop)"
         else
-            print_warn "Athena has ${named_query_count} named query(ies) but none named 'audit_correlation' — observability module named query may not have been applied. Check: aws athena list-named-queries --region ${AWS_REGION}"
+            print_warn "Athena workshop workgroup has ${named_query_count} named query(ies) but none named 'audit_correlation' — check: aws athena list-named-queries --work-group workshop --region ${AWS_REGION}"
         fi
     else
-        print_warn "No Athena named queries found — observability module may not have been applied. Check: aws athena list-named-queries --region ${AWS_REGION}"
+        print_warn "No Athena named queries in workshop workgroup — observability module may not have been applied. Check: aws athena list-named-queries --work-group workshop --region ${AWS_REGION}"
     fi
 else
     print_warn "Check 11 skipped — AWS_REGION not resolved"

@@ -30,6 +30,13 @@ filter:
 
 service:
   extraService: |
+    HTTP_Server  On
+    HTTP_Listen  0.0.0.0
+    HTTP_PORT    2020
+    Health_Check On
+    HC_Errors_Count 5
+    HC_Retry_Failure_Count 5
+    HC_Period 5
     Flush         5
     Daemon        Off
     Log_Level     info
