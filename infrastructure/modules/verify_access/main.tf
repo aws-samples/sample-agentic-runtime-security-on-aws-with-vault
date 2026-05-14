@@ -311,6 +311,11 @@ definition:
     - authorization_code
     - refresh_token
     - password
+    - urn:openid:params:grant-type:ciba
+    - urn:ietf:params:oauth:grant-type:token-exchange
+  authorization_details_types_supported:
+    - type: refund_approval
+      strategy: default
   access_policy_id: allow_all
   pre_mappingrule_id: pretoken
   post_mappingrule_id: posttoken
@@ -488,6 +493,8 @@ clients:
       - urn:ietf:params:oauth:grant-type:token-exchange
     token_endpoint_auth_method: client_secret_post
     backchannel_token_delivery_mode: poll
+    authorization_details_types:
+      - refund_approval
     scopes:
       - openid
       - profile
