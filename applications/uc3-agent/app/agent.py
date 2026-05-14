@@ -40,6 +40,7 @@ _vault_client = None
 IVIA_BASE_URL = os.getenv("IVIA_BASE_URL", "https://ivia.banking-app.svc.cluster.local")
 IVIA_CLIENT_ID = os.getenv("IVIA_CLIENT_ID", "uc3-agent")
 IVIA_CLIENT_SECRET = os.getenv("IVIA_CLIENT_SECRET", "")
+IVIA_EXTERNAL_URL = os.getenv("IVIA_EXTERNAL_URL", "")
 
 # CIBA polling config
 CIBA_POLL_INTERVAL_SECONDS = 5
@@ -456,10 +457,11 @@ def process_refund(
     # Step 2: Initiate CIBA — sends consent request to user's IVIA app
     auth_req_id = _initiate_ciba(login_hint, authorization_details, request_id)
 
-    # Step 3: Print consent URL for workshop attendee
-    consent_url = (
-        f"{IVIA_BASE_URL}/pkmslogin.form?token={auth_req_id}&auth_req_id={auth_req_id}"
-    )
+    # Step 3: Build browser consent URL for the workshop attendee.
+    # IVIA_EXTERNAL_URL is the ALB hostname reachable from the user's browser.
+    # IVIA_BASE_URL is the cluster-internal endpoint (not reachable from browser).
+    external_base = IVIA_EXTERNAL_URL.rstrip("/") if IVIA_EXTERNAL_URL else IVIA_BASE_URL.rstrip("/")
+    consent_url = f"{external_base}/oauth2/ciba_user_authorize/{auth_req_id}"
     logger.info(
         "ciba_consent_url",
         extra={

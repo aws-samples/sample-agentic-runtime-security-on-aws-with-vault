@@ -80,6 +80,7 @@ resource "kubernetes_config_map" "uc3_agent" {
     # IVIA_CLIENT_SECRET: workshop stores in ConfigMap for simplicity.
     # Production deployments should use a Kubernetes Secret with secretKeyRef.
     IVIA_CLIENT_SECRET = var.ivia_client_secret
+    IVIA_EXTERNAL_URL  = var.ivia_external_url
     DB_HOST            = var.db_host
     DB_PORT            = tostring(var.db_port)
     DB_NAME            = var.db_name

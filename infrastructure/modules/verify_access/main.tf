@@ -447,11 +447,7 @@ rules:
     - name: notifyuser
       rule_type: javascript
       content: |
-        // CIBA notify-user handler (polling mode).
-        // In polling mode the client polls the token endpoint.
-        // For the workshop, auto-approve — no external push notification.
-        // Production: send push notification or SMS to the user.
-        true;
+        ciba.setAuthenticator(new InternalAuthenticator());
 
 clients:
   - client_id: workshop_agent

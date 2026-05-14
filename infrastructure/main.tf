@@ -344,6 +344,7 @@ module "uc3_agent" {
   ivia_base_url      = "https://${module.ivia.ivia_service_endpoint}:8436"
   ivia_client_id     = "agent-uc3"
   ivia_client_secret = module.ivia.ivia_client_secret
+  ivia_external_url  = module.ivia.ivia_external_endpoint
   db_host            = module.rds.address
   db_name            = "workshop"
   uc3_agent_image    = var.uc3_agent_image

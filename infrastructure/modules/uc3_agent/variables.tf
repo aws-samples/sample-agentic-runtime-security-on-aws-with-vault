@@ -40,6 +40,12 @@ variable "ivia_client_secret" {
   default     = ""
 }
 
+variable "ivia_external_url" {
+  description = "IVIA ALB hostname URL reachable from the user's browser (for CIBA consent redirect). Distinct from ivia_base_url which is cluster-internal."
+  type        = string
+  default     = ""
+}
+
 variable "db_host" {
   description = "PostgreSQL host (RDS endpoint, no port suffix)."
   type        = string
