@@ -475,6 +475,18 @@ clients:
       - openid
       - profile
       - email
+  - client_id: agent-uc3
+    client_secret: "${random_password.client_secret.result}"
+    client_name: "UC3 Refund Agent (CIBA)"
+    enabled: true
+    grant_types:
+      - urn:openid:params:grant-type:ciba
+      - urn:ietf:params:oauth:grant-type:token-exchange
+    token_endpoint_auth_method: client_secret_post
+    backchannel_token_delivery_mode: poll
+    scopes:
+      - openid
+      - profile
 
 keystore:
   - name: https_keys

@@ -72,7 +72,7 @@ def _initiate_ciba(login_hint: str, authorization_details: list, request_id: str
     """
     import json as _json
 
-    bc_authorize_url = f"{IVIA_BASE_URL}/mga/sps/oauth/oauth20/bc-authorize"
+    bc_authorize_url = f"{IVIA_BASE_URL}/oauth2/ciba"
 
     payload = {
         "client_id": IVIA_CLIENT_ID,
@@ -140,7 +140,7 @@ def _poll_ciba(auth_req_id: str, request_id: str) -> str:
         TimeoutError: If user does not consent within CIBA_TIMEOUT_SECONDS.
         RuntimeError: If IVIA returns an unexpected error.
     """
-    token_url = f"{IVIA_BASE_URL}/mga/sps/oauth/oauth20/token"
+    token_url = f"{IVIA_BASE_URL}/oauth2/token"
     grant_type = "urn:openid:params:grant-type:ciba"
 
     deadline = time.monotonic() + CIBA_TIMEOUT_SECONDS
@@ -240,7 +240,7 @@ def _token_exchange(ciba_token: str, actor_token: str, request_id: str) -> str:
     Raises:
         RuntimeError: If IVIA token exchange fails.
     """
-    token_url = f"{IVIA_BASE_URL}/mga/sps/oauth/oauth20/token"
+    token_url = f"{IVIA_BASE_URL}/oauth2/token"
 
     payload = {
         "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
@@ -315,7 +315,7 @@ def _read_sa_jwt() -> str:
             "sa_jwt_not_found_using_client_credentials_fallback",
             extra={"path": sa_jwt_path},
         )
-        token_url = f"{IVIA_BASE_URL}/mga/sps/oauth/oauth20/token"
+        token_url = f"{IVIA_BASE_URL}/oauth2/token"
         with httpx.Client(verify=False, timeout=30.0) as client:
             resp = client.post(
                 token_url,
