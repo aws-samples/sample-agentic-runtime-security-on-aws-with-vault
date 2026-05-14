@@ -444,6 +444,14 @@ rules:
         userData.preferred_username = username;
         idtokenData.sub = username;
         tokenData.sub = username;
+    - name: notifyuser
+      rule_type: javascript
+      content: |
+        // CIBA notify-user handler (polling mode).
+        // In polling mode the client polls the token endpoint — no push notification.
+        // This script auto-approves the CIBA request for the workshop demo.
+        // Production: integrate with push notification service or SMS gateway.
+        context.setDecision(Decision.allow());
 
 clients:
   - client_id: workshop_agent
