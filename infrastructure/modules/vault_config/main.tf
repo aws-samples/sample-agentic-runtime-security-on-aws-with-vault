@@ -166,6 +166,7 @@ resource "vault_database_secret_backend_role" "uc3_refund_writer" {
   creation_statements = [
     "CREATE ROLE \"{{name}}\" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}';",
     "GRANT USAGE ON SCHEMA banking TO \"{{name}}\";",
+    "GRANT SELECT ON banking.accounts TO \"{{name}}\";",
     "GRANT SELECT ON banking.transactions TO \"{{name}}\";",
     "GRANT SELECT, INSERT, UPDATE ON banking.refunds TO \"{{name}}\";",
     "ALTER ROLE \"{{name}}\" SET search_path TO banking,public;"

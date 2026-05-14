@@ -357,29 +357,33 @@ def list_transactions() -> list:
         extra={"vault_role": "uc3-readonly"},
     )
 
-    with psycopg2.connect(
-        host=creds["host"],
-        port=creds["port"],
-        dbname=creds["dbname"],
-        user=creds["username"],
-        password=creds["password"],
-        cursor_factory=psycopg2.extras.RealDictCursor,
-    ) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT t.id, t.account_id, t.amount::float,
-                       t.description, t.transaction_type, t.merchant,
-                       t.category,
-                       t.created_at AT TIME ZONE 'UTC' AS created_at,
-                       a.account_type
-                FROM banking.transactions t
-                JOIN banking.accounts a ON a.id = t.account_id
-                ORDER BY t.created_at DESC
-                LIMIT 20
-                """
-            )
-            rows = cur.fetchall()
+    try:
+        with psycopg2.connect(
+            host=creds["host"],
+            port=creds["port"],
+            dbname=creds["dbname"],
+            user=creds["username"],
+            password=creds["password"],
+            cursor_factory=psycopg2.extras.RealDictCursor,
+        ) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT t.id, t.account_id, t.amount::float,
+                           t.description, t.transaction_type, t.merchant,
+                           t.category,
+                           t.created_at AT TIME ZONE 'UTC' AS created_at,
+                           a.account_type
+                    FROM banking.transactions t
+                    JOIN banking.accounts a ON a.id = t.account_id
+                    ORDER BY t.created_at DESC
+                    LIMIT 20
+                    """
+                )
+                rows = cur.fetchall()
+    except Exception as exc:
+        logger.error("list_transactions_db_error: %s", str(exc))
+        raise
 
     results = []
     for row in rows:
