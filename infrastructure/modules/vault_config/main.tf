@@ -164,7 +164,7 @@ resource "vault_database_secret_backend_role" "uc3_refund_writer" {
   default_ttl = 300 # 5 minutes
   max_ttl     = 600 # 10 minutes
   creation_statements = [
-    "CREATE ROLE \"{{name}}\" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}';",
+    "CREATE ROLE \"{{name}}\" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}' BYPASSRLS;",
     "GRANT USAGE ON SCHEMA banking TO \"{{name}}\";",
     "GRANT SELECT ON banking.accounts TO \"{{name}}\";",
     "GRANT SELECT ON banking.transactions TO \"{{name}}\";",
