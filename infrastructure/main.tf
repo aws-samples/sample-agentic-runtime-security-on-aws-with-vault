@@ -259,6 +259,7 @@ module "ivia" {
   simple_ad_admin_password   = var.simple_ad_admin_password
   simple_ad_base_dn          = module.simple_ad.base_dn
   uc2_redirect_uri           = var.uc2_redirect_uri
+  ivia_activation_code       = var.ivia_activation_code
   tags                       = var.tags
 
   depends_on = [time_sleep.alb_webhook_ready, module.simple_ad]
@@ -345,14 +346,16 @@ module "uc3_agent" {
   ivia_base_url      = "https://${module.ivia.ivia_service_endpoint}:8436"
   ivia_client_id     = "agent-uc3"
   ivia_client_secret = module.ivia.ivia_client_secret
-  ivia_external_url  = module.ivia.ivia_external_endpoint
-  db_host            = module.rds.address
-  db_name            = "workshop"
-  uc3_agent_image    = var.uc3_agent_image
-  bedrock_model_id   = var.bedrock_model_id
-  region             = var.region
-  rds_cidr           = module.vpc.vpc_cidr
-  tags               = var.tags
+  # WRP ALB endpoint (no junction prefix) — UC3 agent constructs the full consent
+  # URL as: "${ivia_external_url}/isvaop/oauth2/ciba_user_authorize/{auth_req_id}"
+  ivia_external_url = module.ivia.ivia_wrp_external_endpoint
+  db_host           = module.rds.address
+  db_name           = "workshop"
+  uc3_agent_image   = var.uc3_agent_image
+  bedrock_model_id  = var.bedrock_model_id
+  region            = var.region
+  rds_cidr          = module.vpc.vpc_cidr
+  tags              = var.tags
 
   depends_on = [module.vault, module.rds, module.ivia, module.uc2_app]
 }

@@ -58,6 +58,11 @@ banking_app_mcp_image   = "placeholder"
 # Example: http://k8s-bankinga-banking-xxxxx.us-west-2.elb.amazonaws.com/callback
 uc2_redirect_uri = "http://localhost:3000/callback"
 
+# IVIA activation code for Config container module activation (webseal, aac, federation).
+# Obtain from IBM Passport Advantage. Try M11DCML for all three modules.
+# Supplied as a sensitive HCP Terraform workspace variable — not committed in terraform.tfvars.
+ivia_activation_code = "M11DCML"
+
 # UC3 Agent image — set after ECR push (build-uc3-agent.sh).
 # Placeholder is fine for initial deploy; the e2e script updates this automatically.
 uc3_agent_image = "ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/uc3-agent:latest"
