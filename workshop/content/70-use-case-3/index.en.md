@@ -34,11 +34,13 @@ sequenceDiagram
     participant S3 as S3 Log Bucket
     participant Athena as Athena<br/>(audit_correlation VIEW)
 
-    Agent->>IVIA: POST /bc-authorize<br/>binding_message=request_id
+    Agent->>IVIA: POST /bc-authorize<br/>binding_message=request_id<br/>(direct to OIDC Provider ClusterIP)
     IVIA-->>Agent: auth_req_id
-    IVIA->>User: Push notification (binding_message visible)
-    User->>IVIA: Approve in browser
-    Agent->>IVIA: Poll /token (grant_type=ciba)<br/>until approval
+    IVIA->>IVIA: notifyuser rule (InternalAuthenticator)<br/>sets consent URL on WRP
+    Note over IVIA,User: Consent URL: http://wrp-alb/isvaop/oauth2/ciba_user_authorize/{id}<br/>Browser flow goes through WRP — agent shows URL in chat
+    Agent->>User: Display consent URL
+    User->>IVIA: Approve via WRP consent page<br/>(WRP handles login + forwards authenticated session)
+    Agent->>IVIA: Poll /token (grant_type=ciba)<br/>until approval (direct to OIDC Provider ClusterIP)
     IVIA-->>Agent: subject_token (access_token)
     Agent->>TE: POST /token (grant_type=urn:ietf:params:oauth:grant-type:token-exchange)<br/>actor_token=SA JWT, subject_token=user token
     TE-->>Agent: delegated JWT with may_act + authorization_details
