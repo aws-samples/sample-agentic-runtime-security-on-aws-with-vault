@@ -13,7 +13,7 @@ Security architecture (OBJ-1 through OBJ-5):
           and structured agent logs for three-plane audit correlation.
 
 Tools:
-  lookup_transaction   — read-only SELECT from banking.transactions (K8s auth creds)
+  list_transactions    — read-only SELECT recent transactions (K8s auth creds)
   process_refund       — full CIBA + exchange + write flow (delegated jwt auth creds)
   check_refund_status  — read-only SELECT from banking.refunds by refund_id
 """
@@ -336,19 +336,15 @@ def _read_sa_jwt() -> str:
 
 
 @tool
-def lookup_transaction(account_id: str, transaction_id: str) -> dict:
-    """Look up a transaction by account and transaction ID (read-only).
+def list_transactions() -> list:
+    """List recent transactions across all accounts (read-only).
 
-    Uses Vault K8s auth credentials (uc3-readonly role) to SELECT from
-    banking.transactions. No CIBA required — this is a read-only operation.
-
-    Args:
-        account_id: The account ID owning the transaction.
-        transaction_id: The transaction ID to look up.
+    Uses Vault K8s auth credentials to SELECT from banking.transactions.
+    Returns the most recent transactions so the user can select one for a refund.
 
     Returns:
-        Dict with transaction details: id, account_id, amount, currency,
-        description, transaction_type, created_at.
+        List of dicts with transaction details: id, account_id, amount, currency,
+        description, transaction_type, merchant, created_at.
     """
     global _vault_client
     if _vault_client is None:
@@ -357,12 +353,8 @@ def lookup_transaction(account_id: str, transaction_id: str) -> dict:
     creds = _vault_client.get_readonly_credentials()
 
     logger.info(
-        "lookup_transaction_called",
-        extra={
-            "account_id": account_id,
-            "transaction_id": transaction_id,
-            "vault_role": "uc3-readonly",
-        },
+        "list_transactions_called",
+        extra={"vault_role": "uc3-readonly"},
     )
 
     with psycopg2.connect(
@@ -376,23 +368,24 @@ def lookup_transaction(account_id: str, transaction_id: str) -> dict:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, account_id, amount::float, currency,
-                       description, transaction_type,
-                       created_at AT TIME ZONE 'UTC' AS created_at
-                FROM banking.transactions
-                WHERE account_id = %s AND id = %s
-                LIMIT 1
-                """,
-                (account_id, transaction_id),
+                SELECT t.id, t.account_id, t.amount::float, t.currency,
+                       t.description, t.transaction_type, t.merchant,
+                       t.created_at AT TIME ZONE 'UTC' AS created_at,
+                       a.account_type
+                FROM banking.transactions t
+                JOIN banking.accounts a ON a.id = t.account_id
+                ORDER BY t.created_at DESC
+                LIMIT 20
+                """
             )
-            row = cur.fetchone()
+            rows = cur.fetchall()
 
-    if row is None:
-        return {"error": f"Transaction {transaction_id} not found for account {account_id}"}
-
-    result = dict(row)
-    result["created_at"] = str(result.get("created_at", ""))
-    return result
+    results = []
+    for row in rows:
+        r = dict(row)
+        r["created_at"] = str(r.get("created_at", ""))
+        results.append(r)
+    return results
 
 
 @tool
@@ -648,28 +641,17 @@ def build_uc3_agent(vault_client=None) -> Agent:
     system_prompt = (
         "You are the CDL Bank AI Assistant for the Agentic Runtime Security workshop — "
         "Use Case 3: Privileged Action with CIBA Consent.\n\n"
-        "SECURITY MODEL:\n"
-        "- Your workload identity is established via Kubernetes Service Account JWT + Vault (OBJ-1).\n"
-        "- Read operations use short-lived credentials from Vault K8s auth (OBJ-2, read-only).\n"
-        "- Refund write operations require CIBA backchannel consent from the account owner.\n"
-        "  The user MUST approve via their IVIA consent screen before any write occurs (OBJ-3).\n"
-        "- RFC 8693 token exchange produces a delegated JWT with may_act claim.\n"
-        "  Vault validates this claim before issuing write credentials (OBJ-4).\n"
-        "- Every refund is tagged with a request_id UUID for audit correlation across\n"
-        "  IVIA logs, Vault audit, PostgreSQL pgaudit, and CloudWatch (OBJ-5).\n\n"
-        "AVAILABLE TOOLS:\n"
-        "- lookup_transaction: Look up a specific transaction by account and transaction ID.\n"
-        "- process_refund: Initiate a refund (triggers CIBA consent, then writes to DB).\n"
-        "- check_refund_status: Check the status of a refund by refund_id.\n\n"
-        "WORKFLOW:\n"
-        "When asked to process a refund:\n"
-        "1. Use lookup_transaction to verify the transaction exists.\n"
-        "2. Confirm the amount and currency with the user before proceeding.\n"
-        "3. Call process_refund — a CIBA consent URL will be printed for the user.\n"
-        "4. Inform the user they must click the URL and approve in IVIA.\n"
-        "5. The agent will poll for consent and complete the refund automatically.\n"
-        "6. Report the refund_id and request_id for their records.\n\n"
-        "RESPONSE STYLE:\n"
+        "WORKFLOW — follow this exactly when a user asks for a refund:\n"
+        "1. Call list_transactions to fetch recent transactions.\n"
+        "2. Present them as a numbered list with: description, amount, currency, merchant, date.\n"
+        "3. Ask the user which transaction they want to refund (by number).\n"
+        "4. Once the user selects one, confirm the exact amount and details.\n"
+        "5. Call process_refund with the selected transaction's account_id, transaction id, amount, and currency.\n"
+        "6. A CIBA consent URL will appear — tell the user to click it and approve in their browser.\n"
+        "7. The system polls for approval automatically. Once approved, report the refund_id and request_id.\n\n"
+        "RULES:\n"
+        "- Never ask the user for account IDs or transaction IDs — look them up yourself.\n"
+        "- Refund amount comes from the DB lookup, not from the user.\n"
         "- Present financial data clearly with currency symbols.\n"
         "- Always show the request_id when a refund is processed (audit reference).\n"
         "- Do NOT include JWT tokens, Vault credentials, or internal secrets in responses.\n"
@@ -678,7 +660,7 @@ def build_uc3_agent(vault_client=None) -> Agent:
 
     agent = Agent(
         model=bedrock_model,
-        tools=[lookup_transaction, process_refund, check_refund_status],
+        tools=[list_transactions, process_refund, check_refund_status],
         system_prompt=system_prompt,
     )
 
@@ -687,7 +669,7 @@ def build_uc3_agent(vault_client=None) -> Agent:
         extra={
             "model_id": model_id,
             "region": region,
-            "tools": ["lookup_transaction", "process_refund", "check_refund_status"],
+            "tools": ["list_transactions", "process_refund", "check_refund_status"],
         },
     )
     return agent

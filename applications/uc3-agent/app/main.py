@@ -31,6 +31,7 @@ Env vars consumed (set via Kubernetes ConfigMap):
 import json
 import logging
 import os
+import re
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
@@ -115,7 +116,7 @@ async def chat(body: ChatRequest):
             yield f"data: {json.dumps({'role': 'ai', 'content': 'Processing your request...', 'type': 'tool_planning'})}\n\n"
 
             response = _agent(message)
-            content = str(response)
+            content = re.sub(r'<thinking>.*?</thinking>\s*', '', str(response), flags=re.DOTALL)
 
             yield f"data: {json.dumps({'role': 'ai', 'content': content, 'type': 'delta'})}\n\n"
             yield f"data: {json.dumps({'type': 'end'})}\n\n"
