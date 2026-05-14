@@ -128,7 +128,7 @@ This is where agentic security stops looking like service-to-service security. T
 Layer 4 (Envoy/OPA per-call) → **Appendix**
 
 Note:
-Defense in depth is a cliché until you actually wire it. We enforce in three places, on purpose: Vault rejects an SA asking for a role it does not own (Layer 1); the database itself rejects an INSERT on a R/O credential (Layer 2); the pod cannot exfiltrate through a side channel because NetworkPolicy whitelists kube-dns + RDS + Vault + IVIA + Bedrock endpoints only (Layer 3). UC2 demonstrates Layer 2 by attempting an INSERT and watching it fail at Postgres, **not** at the agent. Layer 4 — Envoy + OPA per-API-call enforcement — is in the appendix because it is heavy-weight; the three layers above are the workshop minimum.
+Defense in depth is a cliché until you actually wire it. We enforce in three places, on purpose: Vault rejects an SA asking for a role it does not own (Layer 1); the database itself rejects an INSERT on a R/O credential (Layer 2); the pod cannot exfiltrate through a side channel because NetworkPolicy whitelists kube-dns + RDS + Vault + IVIA (WRP + OIDC Provider) + Bedrock endpoints only (Layer 3). UC2 demonstrates Layer 2 by attempting an INSERT and watching it fail at Postgres, **not** at the agent. Layer 4 — Envoy + OPA per-API-call enforcement — is in the appendix because it is heavy-weight; the three layers above are the workshop minimum.
 
 ---
 
@@ -141,7 +141,7 @@ Defense in depth is a cliché until you actually wire it. We enforce in three pl
 - Single Athena query JOINs all three by `request_id`
 
 Note:
-This slide is the workshop's pedagogical money shot. The diagram has two halves on purpose — top half is the temporal story (User → IVIA → agent → Vault → RDS → CloudTrail), bottom half is the JOIN visualization (three log stores, one query). Auditors will ask "which user authorized this privileged action against this resource at this time, and was access revoked?" — and the only answer that survives scrutiny is the one where you can produce a single query that proves it. We will run that query at the end of Phase 6. The design tax — propagating `request_id` everywhere — is paid in Phase 1, exercised in Phase 6.
+This slide is the workshop's pedagogical money shot. The diagram has two halves on purpose — top half is the temporal story (User → WRP (authentication) → IVIA OIDC Provider (consent + token) → agent → Vault → RDS → CloudTrail), bottom half is the JOIN visualization (three log stores, one query). Auditors will ask "which user authorized this privileged action against this resource at this time, and was access revoked?" — and the only answer that survives scrutiny is the one where you can produce a single query that proves it. We will run that query at the end of Phase 6. The design tax — propagating `request_id` everywhere — is paid in Phase 1, exercised in Phase 6.
 
 ---
 
@@ -159,7 +159,7 @@ Section break. The next slide is the diagram you should keep open in a second wi
 <img src="assets/verify-vault-split.svg" style="max-height: 480px;" />
 
 Note:
-This is a workshop-native redraw of SKO 2026 Slide 13. IBM Verify Identity Access owns the **user-identity plane** — it runs the OAuth Authorization Code + PKCE flow for UC2, the CIBA out-of-band approval flow for UC3, the RAR (RFC 9396) authorization-details enforcement, and the JWT signing key. HashiCorp Vault owns the **workload-identity and secrets plane** — it runs the Kubernetes auth method (validates EKS SA JWTs), the `jwt` auth method (validates IVIA-issued user JWTs), the Postgres database secrets engine (dynamic R/O and R/W roles), the AWS secrets engine (scoped Bedrock STS), and the audit device. They meet at the user JWT — IVIA mints it, Vault validates it. Neither system has to know the other's internals; they share an OIDC discovery URL and an audience claim.
+This is a workshop-native redraw of SKO 2026 Slide 13. IBM Verify Identity Access owns the **user-identity plane** — it runs the OAuth Authorization Code + PKCE flow for Use Case 2, the CIBA out-of-band approval flow for Use Case 3, the RAR (RFC 9396) authorization-details enforcement, and the JWT signing key. The **Web Reverse Proxy (WRP)** is IVIA's browser-facing entry point — it handles user authentication against Simple AD and serves the CIBA consent page via junction. The standalone OIDC Provider only issues tokens; WRP provides the authentication engine that fronts every browser-initiated flow. HashiCorp Vault owns the **workload-identity and secrets plane** — it runs the Kubernetes auth method (validates EKS SA JWTs), the `jwt` auth method (validates IVIA-issued user JWTs), the Postgres database secrets engine (dynamic R/O and R/W roles), the AWS secrets engine (scoped Bedrock STS), and the audit device. They meet at the user JWT — IVIA mints it, Vault validates it. Neither system has to know the other's internals; they share an OIDC discovery URL and an audience claim.
 
 ---
 
@@ -194,7 +194,7 @@ UC1 is the simplest case — an internal retrieval agent that has no notion of "
 **Objectives demonstrated:** OBJ-1, OBJ-2, OBJ-3 (added), OBJ-4 (Layer 2 + 3), OBJ-5
 
 Note:
-UC2 introduces the user. Browser hits IVIA, OAuth Authorization Code + PKCE flow returns a user JWT, the agent presents that JWT to Vault's `jwt` auth method, and Vault issues per-user-scoped Postgres credentials. We will demonstrate Layer 2 enforcement by attempting an INSERT through the R/O credential and watching Postgres reject it — and Layer 3 enforcement by attempting egress to an unapproved endpoint and watching NetworkPolicy block it. End the user session, watch Vault revoke the lease in the audit log. UC2 is where OBJ-3 (actions tied to user intent) actually shows up in the system.
+Use Case 2 introduces the user. Browser hits IVIA's Web Reverse Proxy (WRP), which authenticates the user against Simple AD and fronts the OAuth Authorization Code + PKCE flow — the OIDC Provider receives an already-authenticated session from WRP and returns a user JWT. The agent presents that JWT to Vault's `jwt` auth method, and Vault issues per-user-scoped Postgres credentials. We will demonstrate Layer 2 enforcement by attempting an INSERT through the R/O credential and watching Postgres reject it — and Layer 3 enforcement by attempting egress to an unapproved endpoint and watching NetworkPolicy block it. End the user session, watch Vault revoke the lease in the audit log. UC2 is where OBJ-3 (actions tied to user intent) actually shows up in the system.
 
 ---
 
@@ -207,7 +207,7 @@ UC2 introduces the user. Browser hits IVIA, OAuth Authorization Code + PKCE flow
 **Objectives demonstrated:** **all 5**
 
 Note:
-UC3 is the workshop's pedagogical money shot — it exercises **all five** control objectives in a single flow. A privileged action triggers an out-of-band CIBA approval (browser pops a consent UI on a separate device), the user approves, IVIA mints a JWT carrying `may_act` (RFC 8693 Token Exchange) and `authorization_details` (RFC 9396 RAR) claims, Vault validates those claims via `bound_claims`, and issues a 5-minute write credential. The agent performs the privileged action against RDS. Then we run the bypass test — forge a `may_act` claim and watch Vault reject it; this proves the controls are real, not theater. Finally, the Athena query joins IVIA decision logs + Vault audit + CloudTrail by `request_id` and answers the auditor's question end-to-end.
+Use Case 3 is the workshop's pedagogical money shot — it exercises **all five** control objectives in a single flow. A privileged action triggers an out-of-band CIBA approval — the agent displays a consent URL that routes through the IVIA Web Reverse Proxy (WRP). The user clicks the link, WRP authenticates them against Simple AD, then forwards the authenticated session to the OIDC Provider's consent page. The user approves, IVIA mints a JWT carrying `may_act` (RFC 8693 Token Exchange) and `authorization_details` (RFC 9396 RAR) claims, Vault validates those claims via `bound_claims`, and issues a 5-minute write credential. The agent performs the privileged action against RDS. Then we run the bypass test — forge a `may_act` claim and watch Vault reject it; this proves the controls are real, not theater. Finally, the Athena query joins IVIA decision logs + Vault audit + CloudTrail by `request_id` and answers the auditor's question end-to-end.
 
 ---
 
