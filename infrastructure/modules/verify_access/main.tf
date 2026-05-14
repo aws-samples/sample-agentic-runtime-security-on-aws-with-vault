@@ -1013,6 +1013,8 @@ resource "kubernetes_secret" "ivia_configreader" {
 ################################################################################
 
 resource "kubernetes_persistent_volume_claim" "ivia_config" {
+  wait_until_bound = false
+
   metadata {
     name      = "ivia-config-pvc"
     namespace = kubernetes_namespace.verify_access.metadata[0].name

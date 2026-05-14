@@ -219,6 +219,30 @@ phase_gather() {
     warn "Could not capture IVIA TLS cert — JWT auth backend may fail"
   fi
 
+  # IVIA issuer (Vault jwt auth bound_issuer)
+  info "Reading IVIA issuer from OIDC discovery..."
+  IVIA_ISSUER=$(kubectl run ivia-issuer-check --image=curlimages/curl --rm -i --restart=Never \
+    -n verify-access -- curl -sk \
+    "https://isvaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration" \
+    2>/dev/null | jq -r '.issuer // empty' 2>/dev/null || echo "")
+  if [[ -n "$IVIA_ISSUER" ]]; then
+    ok "IVIA issuer: ${IVIA_ISSUER}"
+  else
+    warn "Could not read IVIA issuer — using fallback from Ingress hostname"
+    local wrp_host
+    wrp_host=$(kubectl get ingress -n verify-access -l app.kubernetes.io/name=ivia-wrp \
+      -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
+    if [[ -n "$wrp_host" ]]; then
+      IVIA_ISSUER="http://${wrp_host}/isvaop"
+    else
+      local oidc_host
+      oidc_host=$(kubectl get ingress -n verify-access \
+        -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
+      IVIA_ISSUER="http://${oidc_host:-PLACEHOLDER}"
+    fi
+    ok "IVIA issuer (fallback): ${IVIA_ISSUER}"
+  fi
+
   # Check pods
   info "Checking Vault pods..."
   VAULT_READY=$(kubectl get pods -n vault -l app.kubernetes.io/name=vault,component=server \
@@ -257,6 +281,7 @@ cluster_oidc_issuer                = "${CLUSTER_OIDC_ISSUER}"
 rds_endpoint                       = "${RDS_ENDPOINT}"
 rds_master_user_secret_arn         = "${RDS_SECRET_ARN}"
 bedrock_role_arn                   = "${BEDROCK_ROLE_ARN}"
+ivia_issuer                        = "${IVIA_ISSUER}"
 ivia_oidc_ca_pem                   = <<-CERTEOF
 ${IVIA_CERT_PEM}
 CERTEOF

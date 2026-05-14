@@ -451,6 +451,13 @@ phase_identity() {
     local ivia_ns="verify-access"
     local oidc_url="https://isvaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration"
 
+    # Ensure ivia_activation_code is in terraform.tfvars (required by verify_access module)
+    local deploy_file="$PROJECT_ROOT/infrastructure/terraform.tfvars"
+    if [ -f "$deploy_file" ] && ! grep -q "ivia_activation_code" "$deploy_file" 2>/dev/null; then
+        echo 'ivia_activation_code = "M11DCML"' >> "$deploy_file"
+        print_info "ivia_activation_code = M11DCML (appended to terraform.tfvars)"
+    fi
+
     # Check 1: OIDC Provider pod running
     local running_isvaop
     running_isvaop=$(kubectl get pods -n "${ivia_ns}" -l app.kubernetes.io/name=isvaop \
