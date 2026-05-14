@@ -343,8 +343,8 @@ def list_transactions() -> list:
     Returns the most recent transactions so the user can select one for a refund.
 
     Returns:
-        List of dicts with transaction details: id, account_id, amount, currency,
-        description, transaction_type, merchant, created_at.
+        List of dicts with transaction details: id, account_id, amount,
+        description, transaction_type, merchant, category, created_at, account_type.
     """
     global _vault_client
     if _vault_client is None:
@@ -368,8 +368,9 @@ def list_transactions() -> list:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT t.id, t.account_id, t.amount::float, t.currency,
+                SELECT t.id, t.account_id, t.amount::float,
                        t.description, t.transaction_type, t.merchant,
+                       t.category,
                        t.created_at AT TIME ZONE 'UTC' AS created_at,
                        a.account_type
                 FROM banking.transactions t
