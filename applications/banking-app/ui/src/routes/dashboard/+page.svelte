@@ -49,7 +49,6 @@
 		const userMsg = inputMessage.trim();
 		const endpoint = chatEndpoint;
 		inputMessage = '';
-		chatEndpoint = '/api/chat';
 
 		messages = [...messages, { role: 'user', content: userMsg }];
 		isLoading = true;
