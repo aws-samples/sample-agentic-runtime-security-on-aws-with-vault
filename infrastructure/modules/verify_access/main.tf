@@ -452,7 +452,32 @@ rules:
     - name: notifyuser
       rule_type: javascript
       content: |
+        var statusUrl = ciba.getStatusUpdateEndpoint();
+        var token = ciba.getBearerToken();
+        var authReqId = ciba.getAuthReqId();
+        var username = stsuu.getPrincipalName();
         ciba.setAuthenticator(new ExternalAuthenticator());
+        var bankingApi = "http://banking-ui-svc.banking-app.svc.cluster.local/api/ciba-callback";
+        try {
+          var url = new java.net.URL(bankingApi);
+          var conn = url.openConnection();
+          conn.setDoOutput(true);
+          conn.setRequestMethod("POST");
+          conn.setRequestProperty("Content-Type", "application/json");
+          conn.setConnectTimeout(5000);
+          conn.setReadTimeout(5000);
+          var payload = JSON.stringify({
+            auth_req_id: authReqId,
+            update_url: statusUrl,
+            token: token,
+            user: username
+          });
+          var os = new java.io.OutputStreamWriter(conn.getOutputStream());
+          os.write(payload);
+          os.flush();
+          os.close();
+          conn.getResponseCode();
+        } catch(e) {}
 
 clients:
   - client_id: workshop_agent
