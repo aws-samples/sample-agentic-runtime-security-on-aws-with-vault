@@ -106,7 +106,7 @@ resource "helm_release" "fluent_bit" {
   repository = "https://aws.github.io/eks-charts"
   chart      = "aws-for-fluent-bit"
   namespace  = var.namespace
-  version    = "0.1.34"
+  version    = "0.2.0"
 
   values = [
     templatefile("${path.module}/templates/fluent-bit-values.yaml.tpl", {
