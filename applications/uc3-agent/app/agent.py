@@ -29,6 +29,7 @@ import psycopg2
 import psycopg2.extras
 from strands import Agent, tool
 from strands.models import BedrockModel
+from strands.session import FileSessionManager
 
 logger = logging.getLogger(__name__)
 
@@ -608,19 +609,11 @@ def check_refund_status(refund_id: str) -> dict:
     return result
 
 
-def build_uc3_agent(vault_client=None) -> Agent:
-    """Construct the UC3 privileged-action Strands Agent.
+def build_uc3_agent(vault_client=None, session_id: str = "default") -> Agent:
+    """Construct a fresh UC3 Strands Agent with new STS creds and session history.
 
-    Uses Amazon Nova Pro via CRIS profile (us.amazon.nova-pro-v1:0).
-    Bedrock credentials come from Vault AWS STS (OBJ-2) — not the node IAM role.
-
-    Tools:
-      - lookup_transaction: read-only transaction lookup (K8s auth creds)
-      - process_refund: full CIBA + exchange + write flow (delegated jwt auth creds)
-      - check_refund_status: read-only refund status (K8s auth creds)
-
-    Returns:
-        Configured strands.Agent ready to handle privileged refund requests.
+    Called on every /chat request. Fresh BedrockModel gets unexpired Vault STS
+    creds; FileSessionManager loads/saves conversation history by session_id.
     """
     global _vault_client
     _vault_client = vault_client
@@ -642,6 +635,7 @@ def build_uc3_agent(vault_client=None) -> Agent:
         model_kwargs["region_name"] = region
 
     bedrock_model = BedrockModel(**model_kwargs)
+    session_manager = FileSessionManager(session_id=session_id, storage_dir="/tmp/uc3-sessions")
 
     system_prompt = (
         "You are the CDL Bank AI Assistant for the Agentic Runtime Security workshop — "
@@ -667,6 +661,7 @@ def build_uc3_agent(vault_client=None) -> Agent:
         model=bedrock_model,
         tools=[list_transactions, process_refund, check_refund_status],
         system_prompt=system_prompt,
+        session_manager=session_manager,
     )
 
     logger.info(

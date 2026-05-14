@@ -1,23 +1,17 @@
 """main.py — FastAPI application for the UC3 privileged-action agent.
 
 Exposes:
-  POST /chat    — Accept user message + session_id, invoke agent, return JSON response
+  POST /chat    — Accept user message + sessionId, invoke agent, return SSE response
   GET  /health  — Liveness probe for Kubernetes
 
-Security flow per request:
-  1. Receive user message.
-  2. Agent generates request_id UUID for the refund flow.
-  3. Agent executes CIBA backchannel auth → user consent → CIBA token poll.
-  4. Agent performs RFC 8693 token exchange → delegated JWT.
-  5. Agent presents delegated JWT to Vault jwt auth → uc3-refund-writer DB creds.
-  6. Agent INSERTs into banking.refunds with request_id threaded through.
-
-The agent pod's workload identity (Vault K8s auth, role "uc3") is established
-at startup. Per-refund Vault jwt auth uses the delegated JWT with may_act claim.
+Session management:
+  Each request builds a fresh Agent with fresh Vault STS creds (no expiry).
+  Conversation history is persisted/loaded automatically via Strands
+  FileSessionManager keyed on sessionId.
 
 Env vars consumed (set via Kubernetes ConfigMap):
-  VAULT_ADDR           — Vault endpoint (e.g. http://vault.vault.svc.cluster.local:8200)
-  VAULT_ROLE           — Vault K8s auth role for agent workload identity (default: uc3)
+  VAULT_ADDR           — Vault endpoint
+  VAULT_ROLE           — Vault K8s auth role (default: uc3)
   IVIA_BASE_URL        — IVIA base URL for OAuth/CIBA endpoints
   IVIA_CLIENT_ID       — OAuth client ID registered in IVIA
   IVIA_CLIENT_SECRET   — OAuth client secret
@@ -32,7 +26,6 @@ import json
 import logging
 import os
 import re
-import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
@@ -50,14 +43,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 _vault_client = None
-_sessions: dict = {}
-SESSION_TTL = 600
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """FastAPI lifespan — authenticate agent workload identity at startup."""
-    global _agent, _vault_client
+    global _vault_client
 
     vault_addr = os.getenv("VAULT_ADDR", "http://vault.vault.svc.cluster.local:8200")
     vault_role = os.getenv("VAULT_ROLE", "uc3")
@@ -96,41 +87,25 @@ class ChatRequest(BaseModel):
     sessionId: str = "default"
 
 
-def _get_or_create_session(session_id: str):
-    """Get an existing agent session or create a new one."""
-    now = time.time()
-    expired = [k for k, v in _sessions.items() if now - v["last_used"] > SESSION_TTL]
-    for k in expired:
-        del _sessions[k]
-
-    if session_id in _sessions:
-        _sessions[session_id]["last_used"] = now
-        return _sessions[session_id]["agent"]
-
-    agent = build_uc3_agent(vault_client=_vault_client)
-    _sessions[session_id] = {"agent": agent, "last_used": now}
-    logger.info("uc3_session_created", extra={"session_id": session_id})
-    return agent
-
-
 @app.post("/chat")
 async def chat(body: ChatRequest):
     """Accept a user message and return an SSE agent response.
 
-    Each session_id gets its own Agent instance with persistent conversation
-    history, enabling multi-turn flows (list transactions → select → refund).
+    Builds a fresh Agent per request with:
+      - Fresh Vault STS creds (never expired)
+      - FileSessionManager loads/saves conversation history by sessionId
     """
     if _vault_client is None or not _vault_client.is_authenticated():
         raise HTTPException(status_code=503, detail="UC3 agent not initialized")
 
-    session_agent = _get_or_create_session(body.sessionId)
+    agent = build_uc3_agent(vault_client=_vault_client, session_id=body.sessionId)
     message = body.message
 
     async def generate():
         try:
             yield f"data: {json.dumps({'role': 'ai', 'content': 'Processing your request...', 'type': 'tool_planning'})}\n\n"
 
-            response = session_agent(message)
+            response = agent(message)
             content = re.sub(r'<thinking>.*?</thinking>\s*', '', str(response), flags=re.DOTALL)
 
             yield f"data: {json.dumps({'role': 'ai', 'content': content, 'type': 'delta'})}\n\n"
@@ -154,10 +129,9 @@ async def chat(body: ChatRequest):
 
 @app.get("/health")
 async def health():
-    """Liveness probe — confirms UC3 agent and Vault client are initialized."""
+    """Liveness probe — confirms Vault client is authenticated."""
     return {
         "status": "ok",
         "service": "uc3-agent",
-        "active_sessions": len(_sessions),
         "vault_authenticated": _vault_client.is_authenticated() if _vault_client else False,
     }
