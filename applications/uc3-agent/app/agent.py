@@ -649,6 +649,8 @@ def build_uc3_agent(vault_client=None, session_id: str = "default") -> Agent:
         "6. A CIBA consent URL will appear — tell the user to click it and approve in their browser.\n"
         "7. The system polls for approval automatically. Once approved, report the refund_id and request_id.\n\n"
         "RULES:\n"
+        "- You MUST call the process_refund tool to initiate a refund. NEVER fabricate consent URLs, request IDs, or refund results.\n"
+        "- You MUST call list_transactions to get transactions. NEVER invent transaction data.\n"
         "- Never ask the user for account IDs or transaction IDs — look them up yourself.\n"
         "- Refund amount comes from the DB lookup, not from the user.\n"
         "- Present financial data clearly with currency symbols.\n"
