@@ -1915,3 +1915,444 @@ resource "kubernetes_ingress_v1" "ivia_wrp" {
 
   depends_on = [kubernetes_service.ivia_wrp]
 }
+
+################################################################################
+# Zero-Trust NetworkPolicies — verify-access namespace
+#
+# Pattern mirrors banking-app and uc3-agent modules:
+#   1. ivia_default_deny    — deny all ingress + egress for every pod
+#   2. ivia_allow_dns       — namespace-wide CoreDNS egress exception
+#   3. ivia_config_allow_inbound   — LMI on 9443 from within verify-access
+#   4. ivia_wrp_allow_ingress      — ALB + banking-app → WRP on 9443
+#   5. ivia_wrp_allow_egress       — WRP → OIDC Provider (8436), Runtime/Config (9443), LDAP (389)
+#   6. ivia_runtime_allow_inbound  — WRP → Runtime on 9443
+#   7. ivia_runtime_allow_egress   — Runtime → Config (9443), LDAP (389), RDS (5432)
+#   8. isvaop_allow_inbound        — WRP junction + cluster namespaces → OIDC Provider on 8436
+#   9. isvaop_allow_egress         — OIDC Provider → RDS (5432), LDAP (389)
+#
+# Threat T-06-13-01 mitigated: empty pod_selector covers ALL pods in namespace.
+################################################################################
+
+################################################################################
+# 1. NetworkPolicy — ivia-default-deny
+#
+# Zero-trust baseline. Denies all ingress and egress for every pod in the
+# verify-access namespace. All subsequent policies carve out required paths.
+################################################################################
+
+resource "kubernetes_network_policy" "ivia_default_deny" {
+  metadata {
+    name      = "ivia-default-deny"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+  }
+
+  spec {
+    pod_selector {}
+
+    policy_types = ["Ingress", "Egress"]
+  }
+}
+
+################################################################################
+# 2. NetworkPolicy — ivia-allow-dns
+#
+# Namespace-wide DNS exception — all IVIA pods need CoreDNS for service name
+# resolution (iviaconfig, iviaruntime, iviawrp, isvaop, RDS hostname).
+################################################################################
+
+resource "kubernetes_network_policy" "ivia_allow_dns" {
+  metadata {
+    name      = "ivia-allow-dns"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+  }
+
+  spec {
+    pod_selector {}
+
+    policy_types = ["Egress"]
+
+    # DNS over UDP
+    egress {
+      ports {
+        port     = "53"
+        protocol = "UDP"
+      }
+    }
+
+    # DNS over TCP (large responses)
+    egress {
+      ports {
+        port     = "53"
+        protocol = "TCP"
+      }
+    }
+  }
+
+  depends_on = [kubernetes_network_policy.ivia_default_deny]
+}
+
+################################################################################
+# 3. NetworkPolicy — ivia-config-allow-inbound
+#
+# Allows LMI access on port 9443 from within the verify-access namespace.
+# Callers: autoconf Job (activation + junction setup), WRP + Runtime (snapshot
+# pull). Threat T-06-08-01: Config LMI has no external Ingress; this policy
+# enforces that only in-namespace pods may reach it.
+################################################################################
+
+resource "kubernetes_network_policy" "ivia_config_allow_inbound" {
+  metadata {
+    name      = "ivia-config-allow-inbound"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+  }
+
+  spec {
+    pod_selector {
+      match_labels = {
+        "app.kubernetes.io/name" = "ivia-config"
+      }
+    }
+
+    policy_types = ["Ingress"]
+
+    ingress {
+      from {
+        namespace_selector {
+          match_labels = {
+            "kubernetes.io/metadata.name" = "verify-access"
+          }
+        }
+      }
+
+      ports {
+        port     = "9443"
+        protocol = "TCP"
+      }
+    }
+  }
+
+  depends_on = [kubernetes_network_policy.ivia_default_deny]
+}
+
+################################################################################
+# 4. NetworkPolicy — ivia-wrp-allow-ingress
+#
+# Allows inbound traffic to the WRP pod on port 9443 from:
+#   - 0.0.0.0/0: ALB ENI IPs (dynamic) + browser CIBA consent traffic
+#   - banking-app namespace: CIBA consent redirect chain
+#
+# Threat T-06-13-02: ALB open CIDR accepted — production adds WAF + IP allowlist.
+################################################################################
+
+resource "kubernetes_network_policy" "ivia_wrp_allow_ingress" {
+  metadata {
+    name      = "ivia-wrp-allow-ingress"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+  }
+
+  spec {
+    pod_selector {
+      match_labels = {
+        "app.kubernetes.io/name" = "ivia-wrp"
+      }
+    }
+
+    policy_types = ["Ingress"]
+
+    # ALB health checks + browser traffic (ENI IPs are dynamic)
+    ingress {
+      from {
+        ip_block {
+          cidr = "0.0.0.0/0"
+        }
+      }
+
+      ports {
+        port     = "9443"
+        protocol = "TCP"
+      }
+    }
+
+    # banking-app namespace (CIBA consent redirect chain)
+    ingress {
+      from {
+        namespace_selector {
+          match_labels = {
+            "kubernetes.io/metadata.name" = "banking-app"
+          }
+        }
+      }
+
+      ports {
+        port     = "9443"
+        protocol = "TCP"
+      }
+    }
+  }
+
+  depends_on = [kubernetes_network_policy.ivia_default_deny]
+}
+
+################################################################################
+# 5. NetworkPolicy — ivia-wrp-allow-egress
+#
+# WRP outbound paths:
+#   - port 8436 TCP: OIDC Provider junction (/isvaop)
+#   - port 9443 TCP: AAC Runtime (authentication delegation) + Config (snapshot)
+#   - port 389  TCP: LDAP Simple AD (if WRP performs direct LDAP lookup)
+################################################################################
+
+resource "kubernetes_network_policy" "ivia_wrp_allow_egress" {
+  metadata {
+    name      = "ivia-wrp-allow-egress"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+  }
+
+  spec {
+    pod_selector {
+      match_labels = {
+        "app.kubernetes.io/name" = "ivia-wrp"
+      }
+    }
+
+    policy_types = ["Egress"]
+
+    # To OIDC Provider via junction (port 8436)
+    egress {
+      ports {
+        port     = "8436"
+        protocol = "TCP"
+      }
+    }
+
+    # To Runtime (AAC delegation) and Config (snapshot pull) on port 9443
+    egress {
+      ports {
+        port     = "9443"
+        protocol = "TCP"
+      }
+    }
+
+    # To LDAP Simple AD on port 389
+    egress {
+      ports {
+        port     = "389"
+        protocol = "TCP"
+      }
+    }
+  }
+
+  depends_on = [kubernetes_network_policy.ivia_default_deny]
+}
+
+################################################################################
+# 6. NetworkPolicy — ivia-runtime-allow-inbound
+#
+# Allows WRP to reach the Runtime AAC engine on port 9443.
+# Only the ivia-wrp pod may initiate this connection.
+################################################################################
+
+resource "kubernetes_network_policy" "ivia_runtime_allow_inbound" {
+  metadata {
+    name      = "ivia-runtime-allow-inbound"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+  }
+
+  spec {
+    pod_selector {
+      match_labels = {
+        "app.kubernetes.io/name" = "ivia-runtime"
+      }
+    }
+
+    policy_types = ["Ingress"]
+
+    ingress {
+      from {
+        pod_selector {
+          match_labels = {
+            "app.kubernetes.io/name" = "ivia-wrp"
+          }
+        }
+      }
+
+      ports {
+        port     = "9443"
+        protocol = "TCP"
+      }
+    }
+  }
+
+  depends_on = [kubernetes_network_policy.ivia_default_deny]
+}
+
+################################################################################
+# 7. NetworkPolicy — ivia-runtime-allow-egress
+#
+# Runtime outbound paths:
+#   - port 9443 TCP: Config container (snapshot pull)
+#   - port 389  TCP: LDAP Simple AD (user authentication)
+#   - port 5432 TCP: PostgreSQL RDS (runtime session/token database)
+################################################################################
+
+resource "kubernetes_network_policy" "ivia_runtime_allow_egress" {
+  metadata {
+    name      = "ivia-runtime-allow-egress"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+  }
+
+  spec {
+    pod_selector {
+      match_labels = {
+        "app.kubernetes.io/name" = "ivia-runtime"
+      }
+    }
+
+    policy_types = ["Egress"]
+
+    # To Config container on port 9443 (snapshot pull)
+    egress {
+      ports {
+        port     = "9443"
+        protocol = "TCP"
+      }
+    }
+
+    # To LDAP Simple AD on port 389 (user authentication)
+    egress {
+      ports {
+        port     = "389"
+        protocol = "TCP"
+      }
+    }
+
+    # To PostgreSQL RDS on port 5432 (runtime database)
+    egress {
+      ports {
+        port     = "5432"
+        protocol = "TCP"
+      }
+    }
+  }
+
+  depends_on = [kubernetes_network_policy.ivia_default_deny]
+}
+
+################################################################################
+# 8. NetworkPolicy — isvaop-allow-inbound
+#
+# Allows inbound traffic to the OIDC Provider (isvaop) on port 8436 from:
+#   - ivia-wrp pod: WRP junction (/isvaop → OIDC Provider backchannel)
+#   - banking-app namespace: ROPC login, CIBA bc-authorize, token polling
+#   - vault namespace: OIDC discovery (jwt auth method uses /.well-known/openid-configuration)
+################################################################################
+
+resource "kubernetes_network_policy" "isvaop_allow_inbound" {
+  metadata {
+    name      = "isvaop-allow-inbound"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+  }
+
+  spec {
+    pod_selector {
+      match_labels = {
+        "app.kubernetes.io/name" = "isvaop"
+      }
+    }
+
+    policy_types = ["Ingress"]
+
+    # WRP junction (in-namespace ivia-wrp pod)
+    ingress {
+      from {
+        pod_selector {
+          match_labels = {
+            "app.kubernetes.io/name" = "ivia-wrp"
+          }
+        }
+      }
+
+      ports {
+        port     = "8436"
+        protocol = "TCP"
+      }
+    }
+
+    # banking-app namespace (ROPC login, CIBA bc-authorize, token poll)
+    ingress {
+      from {
+        namespace_selector {
+          match_labels = {
+            "kubernetes.io/metadata.name" = "banking-app"
+          }
+        }
+      }
+
+      ports {
+        port     = "8436"
+        protocol = "TCP"
+      }
+    }
+
+    # vault namespace (OIDC discovery for jwt auth method)
+    ingress {
+      from {
+        namespace_selector {
+          match_labels = {
+            "kubernetes.io/metadata.name" = "vault"
+          }
+        }
+      }
+
+      ports {
+        port     = "8436"
+        protocol = "TCP"
+      }
+    }
+  }
+
+  depends_on = [kubernetes_network_policy.ivia_default_deny]
+}
+
+################################################################################
+# 9. NetworkPolicy — isvaop-allow-egress
+#
+# OIDC Provider outbound paths:
+#   - port 5432 TCP: PostgreSQL RDS (token cache, session storage)
+#   - port 389  TCP: LDAP Simple AD (attribute sources for JWT claims)
+################################################################################
+
+resource "kubernetes_network_policy" "isvaop_allow_egress" {
+  metadata {
+    name      = "isvaop-allow-egress"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+  }
+
+  spec {
+    pod_selector {
+      match_labels = {
+        "app.kubernetes.io/name" = "isvaop"
+      }
+    }
+
+    policy_types = ["Egress"]
+
+    # To PostgreSQL RDS on port 5432 (token/session storage)
+    egress {
+      ports {
+        port     = "5432"
+        protocol = "TCP"
+      }
+    }
+
+    # To LDAP Simple AD on port 389 (attribute sources)
+    egress {
+      ports {
+        port     = "389"
+        protocol = "TCP"
+      }
+    }
+  }
+
+  depends_on = [kubernetes_network_policy.ivia_default_deny]
+}

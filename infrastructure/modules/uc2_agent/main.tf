@@ -654,8 +654,12 @@ resource "kubernetes_network_policy" "banking_ui_ingress" {
 # 17. NetworkPolicy — banking-ui-egress
 #
 # UI may reach:
-#   - banking-agent-svc:3002  (agent chat API; label match)
-#   - IVIA:443                (OIDC discovery + token endpoints; CIDR via default route)
+#   - banking-agent-svc:3002       (agent chat API; label match)
+#   - uc3-agent-svc:8080           (UC3 CIBA privileged agent; label match)
+#   - IVIA:80                      (WRP ALB HTTP — CIBA consent redirect)
+#   - IVIA:443                     (OIDC discovery + JWKS via internal service)
+#   - IVIA:9443                    (WRP ClusterIP + ISVAOP backchannel on actual container port)
+#   - verify-access namespace:9443 (CIBA bc-authorize, token poll, consent redirect)
 ################################################################################
 
 resource "kubernetes_network_policy" "banking_ui_egress" {
@@ -689,15 +693,110 @@ resource "kubernetes_network_policy" "banking_ui_egress" {
       }
     }
 
-    # To IVIA OIDC endpoints — server-side token exchange via ALB (HTTP:80)
-    # and OIDC discovery/JWKS via internal service (HTTPS:443)
+    # To uc3-agent-svc on port 8080 (UC3 CIBA privileged refund agent)
+    egress {
+      to {
+        pod_selector {
+          match_labels = {
+            app = "uc3-agent"
+          }
+        }
+      }
+
+      ports {
+        port     = "8080"
+        protocol = "TCP"
+      }
+    }
+
+    # To IVIA ALB (HTTP:80) — WRP CIBA consent redirect + token endpoints
     egress {
       ports {
         port     = "80"
         protocol = "TCP"
       }
+    }
+
+    # To IVIA OIDC internal service (HTTPS:443) — OIDC discovery + JWKS
+    egress {
       ports {
         port     = "443"
+        protocol = "TCP"
+      }
+    }
+
+    # To verify-access namespace on port 9443 — WRP + ISVAOP actual container port.
+    # Required for CIBA bc-authorize, token polling, and consent redirect chain.
+    egress {
+      to {
+        namespace_selector {
+          match_labels = {
+            "kubernetes.io/metadata.name" = "verify-access"
+          }
+        }
+      }
+
+      ports {
+        port     = "9443"
+        protocol = "TCP"
+      }
+    }
+
+    # To verify-access namespace on port 8436 — ISVAOP backchannel (ROPC, token exchange)
+    egress {
+      to {
+        namespace_selector {
+          match_labels = {
+            "kubernetes.io/metadata.name" = "verify-access"
+          }
+        }
+      }
+
+      ports {
+        port     = "8436"
+        protocol = "TCP"
+      }
+    }
+  }
+
+  depends_on = [kubernetes_network_policy.default_deny]
+}
+
+################################################################################
+# 17b. NetworkPolicy — banking-ui-from-verify-access-ingress
+#
+# Allows the verify-access namespace (WRP) to initiate connections back to
+# banking-ui on port 5173 during the CIBA consent redirect flow.
+# WRP redirects the authenticated browser session back to the banking app
+# after the user approves the CIBA consent.
+################################################################################
+
+resource "kubernetes_network_policy" "banking_ui_from_verify_access_ingress" {
+  metadata {
+    name      = "banking-ui-from-verify-access-ingress"
+    namespace = kubernetes_namespace.banking_app.metadata[0].name
+  }
+
+  spec {
+    pod_selector {
+      match_labels = {
+        app = "banking-ui"
+      }
+    }
+
+    policy_types = ["Ingress"]
+
+    ingress {
+      from {
+        namespace_selector {
+          match_labels = {
+            "kubernetes.io/metadata.name" = "verify-access"
+          }
+        }
+      }
+
+      ports {
+        port     = "5173"
         protocol = "TCP"
       }
     }
