@@ -100,3 +100,9 @@ variable "tags" {
   description = "Tags to apply to all AWS resources created by this module."
   default     = {}
 }
+
+variable "ivia_activation_code" {
+  type        = string
+  sensitive   = true
+  description = "IBM IVIA activation code for Config container modules (webseal, aac, federation). Obtained from IBM Passport Advantage. Try M11DCML for all three."
+}
