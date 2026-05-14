@@ -95,8 +95,15 @@ async def chat(body: ChatRequest):
       - Fresh Vault STS creds (never expired)
       - FileSessionManager loads/saves conversation history by sessionId
     """
-    if _vault_client is None or not _vault_client.is_authenticated():
+    if _vault_client is None:
         raise HTTPException(status_code=503, detail="UC3 agent not initialized")
+
+    if not _vault_client.is_authenticated():
+        try:
+            _vault_client.login()
+            logger.info("uc3_vault_k8s_reauth_success")
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"Vault re-auth failed: {exc}")
 
     agent = build_uc3_agent(vault_client=_vault_client, session_id=body.sessionId)
     message = body.message
