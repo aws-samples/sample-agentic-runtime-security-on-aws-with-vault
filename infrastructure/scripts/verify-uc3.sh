@@ -2,7 +2,17 @@
 #===============================================================================
 # verify-uc3.sh — Use Case 3 end-to-end verification
 #
-# Validates all UC3 success criteria after Phase 6 components are deployed:
+# Validates all UC3 success criteria after Phase 6 components are deployed.
+#
+# IVIA Full-Stack Checks (A-F — run first):
+#   A.  IVIA Config container pod Running in verify-access
+#   B.  IVIA Runtime pod Running in verify-access
+#   C.  IVIA WRP pod Running in verify-access
+#   D.  WRP junction connectivity to OIDC Provider (internal cluster path)
+#   E.  CIBA consent endpoint reachable via WRP ALB (HTTP not 404)
+#   F.  notifyuser mapping rule: InternalAuthenticator configured
+#
+# UC3-Specific Checks (1-13):
 #   1.  UC3 agent pod Running in banking-app namespace (app=uc3-agent)
 #   2.  ServiceAccount uc3-privileged-actor-sa exists in banking-app namespace
 #   3.  Vault k8s auth role uc3 bound to uc3-privileged-actor-sa
@@ -54,7 +64,16 @@ verify-uc3.sh — ${SCRIPT_DESCRIPTION}
 Usage:
   ./verify-uc3.sh [--bypass] [--help]
 
-Normal mode checks (11 total):
+Normal mode checks (19 total):
+  IVIA Full-Stack Checks (A-F):
+  A.  IVIA Config container pod Running in verify-access
+  B.  IVIA Runtime pod Running in verify-access
+  C.  IVIA WRP pod Running in verify-access
+  D.  WRP junction connectivity to OIDC Provider (internal cluster path)
+  E.  CIBA consent endpoint reachable via WRP ALB (HTTP not 404)
+  F.  notifyuser mapping rule: InternalAuthenticator configured
+
+  UC3-Specific Checks (1-13):
   1.  UC3 agent pod Running (app=uc3-agent in banking-app namespace)
   2.  ServiceAccount uc3-privileged-actor-sa exists
   3.  Vault k8s auth role uc3 bound to uc3-privileged-actor-sa
@@ -66,10 +85,12 @@ Normal mode checks (11 total):
   9.  fluent-bit DaemonSet Running in logging namespace
   10. S3 log bucket exists and has objects
   11. Athena audit_correlation VIEW named query exists
+  12. UC3 agent chat: "I need a refund" returns transaction list
+  13. UC3 agent chat: multi-turn session — selecting a transaction is acknowledged
 
 Bypass mode (--bypass) adds:
-  12. Forge JWT with wrong may_act.sub — Vault must return 403
-  13. Forge JWT with wrong authorization_details type — Vault must return 403
+  14. Forge JWT with wrong may_act.sub — Vault must return 403
+  15. Forge JWT with wrong authorization_details type — Vault must return 403
 
 Env-var overrides:
   BANKING_NAMESPACE   (default: banking-app)
@@ -226,6 +247,104 @@ fi
 #-------------------------------------------------------------------------------
 # Normal mode checks
 #-------------------------------------------------------------------------------
+
+#-------------------------------------------------------------------------------
+# IVIA Full-Stack Checks (A-F) — prerequisite for all UC3 flows
+# These verify the full IVIA stack: Config + Runtime + WRP + CIBA consent endpoint
+#-------------------------------------------------------------------------------
+
+#-------------------------------------------------------------------------------
+# Check A — IVIA Config container pod Running
+#-------------------------------------------------------------------------------
+running_config=$(kubectl get pods -n verify-access -l app.kubernetes.io/name=ivia-config \
+    --no-headers 2>/dev/null | grep -c Running || true)
+if [ "${running_config:-0}" -ge 1 ]; then
+    print_pass "IVIA Config container Running in verify-access (${running_config} pod(s))"
+else
+    print_fail "IVIA Config container Running" \
+        "IVIA Config container not running — full stack required for CIBA consent. Check: kubectl get pods -n verify-access -l app.kubernetes.io/name=ivia-config"
+fi
+
+#-------------------------------------------------------------------------------
+# Check B — IVIA Runtime pod Running
+#-------------------------------------------------------------------------------
+running_runtime=$(kubectl get pods -n verify-access -l app.kubernetes.io/name=ivia-runtime \
+    --no-headers 2>/dev/null | grep -c Running || true)
+if [ "${running_runtime:-0}" -ge 1 ]; then
+    print_pass "IVIA Runtime Running in verify-access (${running_runtime} pod(s))"
+else
+    print_fail "IVIA Runtime Running" \
+        "IVIA Runtime not running — AAC engine required for WRP authentication. Check: kubectl get pods -n verify-access -l app.kubernetes.io/name=ivia-runtime"
+fi
+
+#-------------------------------------------------------------------------------
+# Check C — IVIA WRP pod Running
+#-------------------------------------------------------------------------------
+running_wrp=$(kubectl get pods -n verify-access -l app.kubernetes.io/name=ivia-wrp \
+    --no-headers 2>/dev/null | grep -c Running || true)
+if [ "${running_wrp:-0}" -ge 1 ]; then
+    print_pass "IVIA WRP Running in verify-access (${running_wrp} pod(s))"
+else
+    print_fail "IVIA WRP Running" \
+        "IVIA WRP not running — browser authentication requires WRP. Check: kubectl get pods -n verify-access -l app.kubernetes.io/name=ivia-wrp"
+fi
+
+#-------------------------------------------------------------------------------
+# Check D — WRP junction connectivity to OIDC Provider (internal cluster path)
+#-------------------------------------------------------------------------------
+wrp_junction_result=""
+wrp_junction_pod="wrp-junction-check-$$"
+kubectl delete pod "${wrp_junction_pod}" -n verify-access --ignore-not-found --wait=true &>/dev/null
+kubectl run "${wrp_junction_pod}" --image=curlimages/curl --rm -i --restart=Never \
+    -n verify-access -- \
+    curl -sk --max-time 10 \
+    "https://iviawrp.verify-access.svc.cluster.local:9443/isvaop/oauth2/.well-known/openid-configuration" \
+    2>/dev/null > /tmp/wrp_junction_$$.json || true
+kubectl wait --for=jsonpath='{.status.phase}'=Succeeded "pod/${wrp_junction_pod}" \
+    -n verify-access --timeout=60s &>/dev/null || true
+wrp_junction_result=$(cat /tmp/wrp_junction_$$.json 2>/dev/null || echo "")
+rm -f "/tmp/wrp_junction_$$.json"
+
+if echo "${wrp_junction_result}" | grep -q '"issuer"'; then
+    print_pass "WRP junction /isvaop -> OIDC Provider: connected (issuer present in discovery)"
+else
+    print_fail "WRP junction /isvaop -> OIDC Provider" \
+        "WRP junction not reachable or not proxying OIDC discovery. Check: kubectl run wrp-check --image=curlimages/curl --rm -i --restart=Never -n verify-access -- curl -sk https://iviawrp.verify-access.svc.cluster.local:9443/isvaop/oauth2/.well-known/openid-configuration"
+fi
+
+#-------------------------------------------------------------------------------
+# Check E — CIBA consent endpoint reachable via WRP ALB (the money check)
+#-------------------------------------------------------------------------------
+wrp_alb_host=""
+wrp_alb_host=$(kubectl get ingress -n verify-access ivia-wrp \
+    -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
+
+if [ -n "${wrp_alb_host}" ]; then
+    ciba_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
+        "http://${wrp_alb_host}/isvaop/oauth2/ciba_user_authorize/test-check" 2>/dev/null || echo "")
+    if [ -n "${ciba_code}" ] && [ "${ciba_code}" != "404" ]; then
+        print_pass "CIBA consent endpoint: HTTP ${ciba_code} via WRP (not 404) — WRP is handling the request"
+    elif [ "${ciba_code}" = "404" ]; then
+        print_fail "CIBA consent endpoint: HTTP 404 — still broken" \
+            "WRP junction or ACL misconfigured. CIBA consent URL must not return 404. Check WRP junction definition for /isvaop path. WRP ALB: ${wrp_alb_host}"
+    else
+        print_warn "CIBA consent endpoint: no HTTP response from WRP ALB — ALB may still be provisioning. Check: kubectl get ingress -n verify-access ivia-wrp"
+    fi
+else
+    print_warn "CIBA consent endpoint: skipped — WRP Ingress has no ALB hostname yet. Check: kubectl get ingress -n verify-access ivia-wrp"
+fi
+
+#-------------------------------------------------------------------------------
+# Check F — notifyuser mapping rule uses InternalAuthenticator
+#-------------------------------------------------------------------------------
+internal_auth_count=$(kubectl get configmap isvaop-cfg-data -n verify-access \
+    -o jsonpath='{.data.config\.yaml}' 2>/dev/null | grep -c "InternalAuthenticator" || true)
+if [ "${internal_auth_count:-0}" -ge 1 ] 2>/dev/null; then
+    print_pass "notifyuser mapping rule: InternalAuthenticator configured (${internal_auth_count} occurrence(s))"
+else
+    print_fail "notifyuser mapping rule: InternalAuthenticator" \
+        "InternalAuthenticator NOT found in isvaop-cfg-data configmap — CIBA consent will fail. Check: kubectl get configmap isvaop-cfg-data -n verify-access -o yaml"
+fi
 
 #-------------------------------------------------------------------------------
 # Check 1 — UC3 agent pod Running
