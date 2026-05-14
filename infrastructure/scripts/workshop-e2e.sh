@@ -437,41 +437,122 @@ phase_verify_foundation() {
 }
 
 #===============================================================================
-# PHASE 5: Identity (IVIA) — verify IVIA pods + OIDC discovery
+# PHASE 5: Identity (IVIA) — verify full IVIA stack (OIDC Provider + Config + Runtime + WRP)
 #===============================================================================
 phase_identity() {
     phase_header "Phase 5: Identity (IVIA)"
 
     if [ "$DRY_RUN" = true ]; then
-        print_info "[DRY-RUN] Would check IVIA pods running and OIDC discovery endpoint"
+        print_info "[DRY-RUN] Would check all four IVIA containers (OIDC Provider, Config, Runtime, WRP)"
+        print_info "[DRY-RUN] Would check WRP ALB Ingress, WRP junction OIDC discovery, CIBA consent endpoint"
         return 0
     fi
 
     local ivia_ns="verify-access"
-    local vault_ns="vault"
     local oidc_url="https://isvaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration"
 
-    # Check IVIA pods
-    local running_ivia
-    running_ivia=$(kubectl get pods -n "${ivia_ns}" --no-headers 2>/dev/null | grep -c Running || true)
-    if [ "${running_ivia:-0}" -ge 1 ]; then
-        print_success "IVIA: ${running_ivia} pod(s) Running in ${ivia_ns}"
+    # Check 1: OIDC Provider pod running
+    local running_isvaop
+    running_isvaop=$(kubectl get pods -n "${ivia_ns}" -l app.kubernetes.io/name=isvaop \
+        --no-headers 2>/dev/null | grep -c Running || true)
+    if [ "${running_isvaop:-0}" -ge 1 ]; then
+        print_success "IVIA OIDC Provider (isvaop): pod Running in ${ivia_ns}"
     else
-        print_warn "IVIA: no pods Running in ${ivia_ns} — IVIA may still be starting"
+        print_warn "IVIA OIDC Provider (isvaop): no pod Running — may still be starting"
     fi
 
-    # Check OIDC discovery via a temporary curl pod (vault-0 may not be ready yet)
+    # Check 2: Config container pod running
+    local running_config
+    running_config=$(kubectl get pods -n "${ivia_ns}" -l app.kubernetes.io/name=ivia-config \
+        --no-headers 2>/dev/null | grep -c Running || true)
+    if [ "${running_config:-0}" -ge 1 ]; then
+        print_success "IVIA Config: pod Running in ${ivia_ns}"
+    else
+        print_warn "IVIA Config: no pod Running — Config container may still be starting"
+    fi
+
+    # Check 3: Runtime pod running
+    local running_runtime
+    running_runtime=$(kubectl get pods -n "${ivia_ns}" -l app.kubernetes.io/name=ivia-runtime \
+        --no-headers 2>/dev/null | grep -c Running || true)
+    if [ "${running_runtime:-0}" -ge 1 ]; then
+        print_success "IVIA Runtime: pod Running in ${ivia_ns}"
+    else
+        print_warn "IVIA Runtime: no pod Running — may be waiting for Config snapshot"
+    fi
+
+    # Check 4: WRP pod running
+    local running_wrp
+    running_wrp=$(kubectl get pods -n "${ivia_ns}" -l app.kubernetes.io/name=ivia-wrp \
+        --no-headers 2>/dev/null | grep -c Running || true)
+    if [ "${running_wrp:-0}" -ge 1 ]; then
+        print_success "IVIA WRP: pod Running in ${ivia_ns}"
+    else
+        print_warn "IVIA WRP: no pod Running — may be waiting for Config snapshot"
+    fi
+
+    # Check 5: OIDC discovery via ClusterIP (internal consumers)
     local ivia_issuer=""
-    ivia_issuer=$(kubectl run ivia-check --image=curlimages/curl --rm -i --restart=Never \
+    ivia_issuer=$(kubectl run ivia-check-$$ --image=curlimages/curl --rm -i --restart=Never \
         -n "${ivia_ns}" -- curl -sk "${oidc_url}" 2>/dev/null \
         | jq -r '.issuer // empty' 2>/dev/null || echo "")
     if [ -n "${ivia_issuer}" ]; then
-        print_success "IVIA OIDC discovery: issuer = ${ivia_issuer}"
+        print_success "IVIA OIDC discovery (ClusterIP): issuer = ${ivia_issuer}"
     else
-        print_warn "IVIA OIDC discovery: issuer not reachable (IVIA may still be initializing)"
+        print_warn "IVIA OIDC discovery (ClusterIP): issuer not reachable — IVIA may still be initializing"
     fi
 
-    pause_if_interactive "IVIA verification complete."
+    # Check 6: WRP ALB Ingress exists and has a hostname
+    local wrp_host=""
+    wrp_host=$(kubectl get ingress -n "${ivia_ns}" ivia-wrp \
+        -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
+    if [ -n "${wrp_host}" ]; then
+        print_success "IVIA WRP Ingress: ALB hostname = ${wrp_host}"
+    else
+        print_warn "IVIA WRP Ingress: no hostname yet — ALB may still be provisioning"
+    fi
+
+    # Check 7: OIDC discovery via WRP junction (external path)
+    if [ -n "${wrp_host}" ]; then
+        local wrp_discovery=""
+        wrp_discovery=$(curl -s --max-time 10 \
+            "http://${wrp_host}/isvaop/oauth2/.well-known/openid-configuration" \
+            2>/dev/null | jq -r '.issuer // empty' 2>/dev/null || echo "")
+        if [ -n "${wrp_discovery}" ]; then
+            print_success "WRP junction /isvaop: OIDC discovery reachable (issuer=${wrp_discovery})"
+        else
+            print_warn "WRP junction /isvaop: OIDC discovery not reachable — check WRP junction configuration"
+        fi
+    else
+        print_warn "WRP junction /isvaop: skipped — WRP ALB hostname not yet available"
+    fi
+
+    # Check 8: CIBA consent endpoint availability via WRP (must NOT be 404)
+    if [ -n "${wrp_host}" ]; then
+        local ciba_code=""
+        ciba_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
+            "http://${wrp_host}/isvaop/oauth2/ciba_user_authorize/test" 2>/dev/null || echo "")
+        if [ -n "${ciba_code}" ] && [ "${ciba_code}" != "404" ]; then
+            print_success "CIBA consent endpoint: reachable via WRP (HTTP ${ciba_code} — not 404)"
+        elif [ "${ciba_code}" = "404" ]; then
+            print_error "CIBA consent endpoint: still returns 404 — WRP junction or ACL misconfigured"
+        else
+            print_warn "CIBA consent endpoint: no response from WRP — ALB or WRP not ready"
+        fi
+    else
+        print_warn "CIBA consent endpoint: skipped — WRP ALB hostname not yet available"
+    fi
+
+    # Check 9: Old OIDC Provider Ingress should be gone (replaced by WRP Ingress)
+    local old_ingress=""
+    old_ingress=$(kubectl get ingress -n "${ivia_ns}" isvaop -o name 2>/dev/null || echo "")
+    if [ -z "${old_ingress}" ]; then
+        print_success "Old OIDC Provider Ingress (isvaop): removed — WRP is the sole ingress"
+    else
+        print_warn "Old OIDC Provider Ingress (isvaop): still exists — should have been removed when WRP replaced it"
+    fi
+
+    pause_if_interactive "IVIA full-stack verification complete."
 }
 
 #===============================================================================
