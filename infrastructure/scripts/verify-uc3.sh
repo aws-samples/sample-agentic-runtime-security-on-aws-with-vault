@@ -14,10 +14,12 @@
 #   9.  fluent-bit DaemonSet pods Running in logging namespace
 #   10. S3 log bucket exists and has objects
 #   11. Athena audit_correlation VIEW named query exists
+#   12. UC3 agent chat: "I need a refund" returns transaction list
+#   13. UC3 agent chat: multi-turn session — selecting a transaction is acknowledged
 #
 # Bypass mode (--bypass):
-#   12. Forge JWT with wrong may_act.sub — Vault must reject (403)
-#   13. Forge JWT with wrong authorization_details type — Vault must reject (403)
+#   14. Forge JWT with wrong may_act.sub — Vault must reject (403)
+#   15. Forge JWT with wrong authorization_details type — Vault must reject (403)
 #
 # Usage:
 #   ./verify-uc3.sh [--bypass] [--help]
@@ -442,6 +444,47 @@ if [ -n "${AWS_REGION:-}" ]; then
     fi
 else
     print_warn "Check 11 skipped — AWS_REGION not resolved"
+fi
+
+#-------------------------------------------------------------------------------
+# Check 12 — UC3 agent chat: list_transactions returns transaction data
+#
+# POST to UC3 agent /chat with "I need a refund" and verify the response
+# contains transaction details (proves the full flow: Vault creds → DB query).
+#-------------------------------------------------------------------------------
+chat_session="verify-$$-$(date +%s)"
+chat_response=$(kubectl run uc3-chat-test-$$ --rm -i --restart=Never -n "${BANKING_NAMESPACE}" \
+    --image=curlimages/curl -- \
+    curl -s --max-time 30 -X POST http://uc3-agent-svc:8080/chat \
+    -H 'Content-Type: application/json' \
+    -d "{\"message\":\"I need a refund\",\"sessionId\":\"${chat_session}\"}" \
+    2>/dev/null || echo "")
+
+if echo "${chat_response}" | grep -qi "transaction\|amount\|merchant"; then
+    print_pass "UC3 agent chat: list_transactions returns transaction data"
+else
+    print_fail "UC3 agent chat: list_transactions did not return transaction data" \
+        "Expected response containing transaction details. Got: ${chat_response:0:200}. Check: kubectl logs deployment/uc3-agent -n ${BANKING_NAMESPACE}"
+fi
+
+#-------------------------------------------------------------------------------
+# Check 13 — UC3 agent chat: multi-turn session (select transaction)
+#
+# Send a follow-up message selecting transaction #1 on the same sessionId.
+# The agent should acknowledge the selection (proves session state works).
+#-------------------------------------------------------------------------------
+select_response=$(kubectl run uc3-chat-sel-$$ --rm -i --restart=Never -n "${BANKING_NAMESPACE}" \
+    --image=curlimages/curl -- \
+    curl -s --max-time 30 -X POST http://uc3-agent-svc:8080/chat \
+    -H 'Content-Type: application/json' \
+    -d "{\"message\":\"Refund transaction 1\",\"sessionId\":\"${chat_session}\"}" \
+    2>/dev/null || echo "")
+
+if echo "${select_response}" | grep -qi "refund\|confirm\|approve\|CIBA\|consent\|process"; then
+    print_pass "UC3 agent chat: multi-turn session — agent acknowledged transaction selection"
+else
+    print_fail "UC3 agent chat: multi-turn session did not acknowledge selection" \
+        "Expected response referencing refund/confirm/CIBA. Got: ${select_response:0:200}. Check: kubectl logs deployment/uc3-agent -n ${BANKING_NAMESPACE}"
 fi
 
 # Summary is printed automatically by the common-checks.sh EXIT trap
