@@ -448,10 +448,10 @@ rules:
       rule_type: javascript
       content: |
         // CIBA notify-user handler (polling mode).
-        // In polling mode the client polls the token endpoint — no push notification.
-        // This script auto-approves the CIBA request for the workshop demo.
-        // Production: integrate with push notification service or SMS gateway.
-        context.setDecision(Decision.allow());
+        // In polling mode the client polls the token endpoint.
+        // For the workshop, auto-approve — no external push notification.
+        // Production: send push notification or SMS to the user.
+        true;
 
 clients:
   - client_id: workshop_agent
