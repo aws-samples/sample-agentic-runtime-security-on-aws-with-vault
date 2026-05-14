@@ -84,6 +84,21 @@ resource "random_password" "client_secret" {
   special = false
 }
 
+# IVIA Config container admin password. Set as ADMIN_PWD env var on the Config
+# container (port 9443 LMI). Also injected into the autoconf job.
+resource "random_password" "ivia_admin_pwd" {
+  length  = 24
+  special = false
+}
+
+# cfgsvc password used by worker containers (WRP, Runtime) to pull snapshots
+# from the Config container via CONFIG_SERVICE_URL. Must match the password
+# set in the Config container LMI for the cfgsvc user.
+resource "random_password" "configreader_pwd" {
+  length  = 24
+  special = false
+}
+
 ################################################################################
 # TLS — Self-signed certificate for IVIA OIDC provider (workshop only)
 # Production would use cert-manager with a real CA.
@@ -981,4 +996,976 @@ resource "kubernetes_ingress_v1" "isvaop" {
   }
 
   depends_on = [kubernetes_service.isvaop]
+}
+
+################################################################################
+# IVIA Full Stack — Config + WRP + Runtime
+#
+# The standalone ivia-oidc-provider cannot complete CIBA consent because it has
+# no authentication engine. The full IVIA stack adds:
+#   ivia-config   — Config container (LMI on port 9443, snapshot publishing)
+#   ivia-autoconf — K8s Job that automates Config container setup via REST API
+#   ivia-runtime  — AAC Runtime (authentication engine, CIBA auth)
+#   ivia-wrp      — Web Reverse Proxy (user-facing entry point, junction routing)
+#
+# Deployment order (enforced via depends_on):
+#   1. Config container starts + PVC + secrets
+#   2. autoconf Job configures Config container (activation, WRP junction, ACL)
+#   3. Runtime + WRP pull published snapshot from Config container
+#
+# Reference: IBM-Security/verify-access-container-deployment
+#            icr.io/ivia/ivia-config:11.0.2.0 (ivia-minikube.yaml reference)
+################################################################################
+
+################################################################################
+# IVIA Stack Secrets
+################################################################################
+
+# Config container admin password — env ADMIN_PWD on the Config container.
+# Also injected into the autoconf job as ISVA_MGMT_PWD.
+resource "kubernetes_secret" "ivia_admin" {
+  metadata {
+    name      = "ivia-admin"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels = {
+      "app.kubernetes.io/name"       = "ivia-config"
+      "app.kubernetes.io/managed-by" = "terraform"
+    }
+  }
+
+  type = "Opaque"
+
+  data = {
+    password = random_password.ivia_admin_pwd.result
+  }
+}
+
+# cfgsvc password — CONFIG_SERVICE_USER_PWD on all worker containers.
+# Stored in K8s Secret and referenced via secret_key_ref (not plaintext env).
+# Threat T-06-08-03: stored in K8s Secret, not plaintext.
+resource "kubernetes_secret" "ivia_configreader" {
+  metadata {
+    name      = "ivia-configreader"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels = {
+      "app.kubernetes.io/name"       = "ivia-config"
+      "app.kubernetes.io/managed-by" = "terraform"
+    }
+  }
+
+  type = "Opaque"
+
+  data = {
+    password = random_password.configreader_pwd.result
+  }
+}
+
+################################################################################
+# Config Container PVC
+# 50Mi ReadWriteOnce — persists Config container state across pod restarts.
+# storageClassName gp2 matches the EKS cluster's default StorageClass.
+################################################################################
+
+resource "kubernetes_persistent_volume_claim" "ivia_config" {
+  metadata {
+    name      = "ivia-config-pvc"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels = {
+      "app.kubernetes.io/name"       = "ivia-config"
+      "app.kubernetes.io/managed-by" = "terraform"
+    }
+  }
+
+  spec {
+    access_modes = ["ReadWriteOnce"]
+
+    resources {
+      requests = {
+        storage = "50Mi"
+      }
+    }
+
+    storage_class_name = "gp2"
+  }
+}
+
+################################################################################
+# Config Container Deployment
+# Port 9443 — LMI (Local Management Interface). ClusterIP only (no Ingress).
+# Admin password from K8s Secret (Threat T-06-08-01 mitigation).
+# Readiness probe on HTTPS /core/login — must pass before autoconf Job runs.
+################################################################################
+
+resource "kubernetes_deployment" "ivia_config" {
+  metadata {
+    name      = "ivia-config"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels = {
+      "app.kubernetes.io/name"       = "ivia-config"
+      "app.kubernetes.io/version"    = "11.0.2.0"
+      "app.kubernetes.io/managed-by" = "terraform"
+      "workshop/component"           = "ivia"
+    }
+  }
+
+  spec {
+    replicas = 1
+
+    selector {
+      match_labels = {
+        "app.kubernetes.io/name" = "ivia-config"
+      }
+    }
+
+    template {
+      metadata {
+        labels = {
+          "app.kubernetes.io/name"    = "ivia-config"
+          "app.kubernetes.io/version" = "11.0.2.0"
+          "workshop/component"        = "ivia"
+        }
+      }
+
+      spec {
+        service_account_name = kubernetes_service_account.isvaop.metadata[0].name
+
+        image_pull_secrets {
+          name = kubernetes_secret.icr_pull.metadata[0].name
+        }
+
+        container {
+          name  = "ivia-config"
+          image = "icr.io/ivia/ivia-config:11.0.2.0"
+
+          port {
+            container_port = 9443
+            name           = "lmi"
+            protocol       = "TCP"
+          }
+
+          env {
+            name  = "CONTAINER_TIMEZONE"
+            value = "UTC"
+          }
+
+          env {
+            name = "ADMIN_PWD"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret.ivia_admin.metadata[0].name
+                key  = "password"
+              }
+            }
+          }
+
+          volume_mount {
+            name       = "shared"
+            mount_path = "/var/shared"
+          }
+
+          volume_mount {
+            name       = "logs"
+            mount_path = "/var/application.logs"
+          }
+
+          readiness_probe {
+            http_get {
+              path   = "/core/login"
+              port   = 9443
+              scheme = "HTTPS"
+            }
+            initial_delay_seconds = 30
+            period_seconds        = 10
+            failure_threshold     = 6
+          }
+
+          liveness_probe {
+            exec {
+              command = ["/sbin/health_check.sh", "livenessProbe"]
+            }
+            initial_delay_seconds = 30
+            period_seconds        = 10
+            failure_threshold     = 6
+          }
+
+          resources {
+            requests = {
+              cpu    = "250m"
+              memory = "512Mi"
+            }
+            limits = {
+              cpu    = "1"
+              memory = "1Gi"
+            }
+          }
+        }
+
+        volume {
+          name = "shared"
+          persistent_volume_claim {
+            claim_name = kubernetes_persistent_volume_claim.ivia_config.metadata[0].name
+          }
+        }
+
+        volume {
+          name = "logs"
+          empty_dir {}
+        }
+      }
+    }
+  }
+
+  depends_on = [
+    kubernetes_secret.icr_pull,
+    kubernetes_secret.ivia_admin,
+    kubernetes_secret.ivia_configreader,
+    kubernetes_persistent_volume_claim.ivia_config,
+  ]
+}
+
+################################################################################
+# Config Container Service — ClusterIP
+# Name "iviaconfig" — used by worker containers as CONFIG_SERVICE_URL hostname.
+# Admin LMI REST API also consumed by the autoconf Job on port 9443.
+# Threat T-06-08-01: ClusterIP only; no Ingress; admin password in K8s Secret.
+################################################################################
+
+resource "kubernetes_service" "ivia_config" {
+  metadata {
+    name      = "iviaconfig"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels = {
+      "app.kubernetes.io/name"       = "ivia-config"
+      "app.kubernetes.io/managed-by" = "terraform"
+    }
+  }
+
+  spec {
+    selector = {
+      "app.kubernetes.io/name" = "ivia-config"
+    }
+
+    type = "ClusterIP"
+
+    port {
+      name        = "lmi"
+      port        = 9443
+      target_port = 9443
+      protocol    = "TCP"
+    }
+  }
+}
+
+################################################################################
+# Autoconf ConfigMap
+# Contains the ibmvia_autoconf YAML config for activation, cluster setup, and
+# WRP instance creation. Shell script handles junction + ACL + snapshot publish
+# via ISVA REST API (more reliable than ibmvia_autoconf junction YAML for
+# complex junction types).
+#
+# IMPORTANT: ibmvia_autoconf is experimental for junction configuration.
+# Fallback: replace the pip/python command with a pure REST API shell script
+# that runs the same steps via curl -k against the LMI API directly.
+# See https://lachlan-ibm.github.io/ibmvia_autoconf/ for YAML reference.
+################################################################################
+
+resource "kubernetes_config_map" "ivia_autoconf_config" {
+  metadata {
+    name      = "ivia-autoconf-config"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels = {
+      "app.kubernetes.io/name"       = "ivia-autoconf"
+      "app.kubernetes.io/managed-by" = "terraform"
+    }
+  }
+
+  data = {
+    # ibmvia_autoconf YAML — handles activation, cluster config, and WRP instance.
+    # Junction and ACL configuration is done via the shell script (more reliable).
+    "config.yaml" = <<-EOT
+      activation:
+        webseal: !environment IVIA_BASE_CODE
+        access_control: !environment IVIA_AAC_CODE
+        federation: !environment IVIA_FED_CODE
+      cluster:
+        configuration_database:
+          embedded: true
+        runtime_database:
+          host: !environment PGHOST
+          port: !environment PGPORT
+          type: postgresql
+          user: !environment PGUSER
+          password: !environment PGPASSWORD
+          ssl: false
+          db_name: !environment PGDATABASE
+      webseal:
+        reverse_proxy:
+          - inst_name: default
+            host: iviawrp
+            admin_id: sec_master
+            admin_pwd: !environment ISVA_MGMT_PWD
+            domain: Default
+            http_port: 80
+            https_port: 443
+            ip_address: 0.0.0.0
+            listening_port: 7234
+            ssl: "no"
+    EOT
+
+    # Shell script: waits for Config LMI, creates junction /isvaop -> OIDC Provider,
+    # sets anyauth ACL on CIBA consent path, then publishes the config snapshot.
+    # Runs AFTER ibmvia_autoconf completes activation + WRP instance creation.
+    #
+    # REST API reference: https://docs.verify.ibm.com/ibm-security-verify-access/docs/api-lmi
+    # NOTE: Dollar signs in shell vars are escaped ($$) because this is inside an
+    # HCL heredoc that Terraform interpolates. $${VAR} renders as ${VAR} in the file.
+    "post-config.sh" = <<-EOT
+      #!/bin/sh
+      set -e
+      BASE_URL="https://iviaconfig.verify-access.svc.cluster.local:9443"
+
+      echo "[post-config] Waiting for LMI to be ready..."
+      until curl -sk -o /dev/null -w "%%{http_code}" -u "admin:$${ADMIN_PWD}" "$${BASE_URL}/core/login" 2>/dev/null | grep -q "200"; do
+        echo "[post-config] LMI not ready, retrying in 5s..."
+        sleep 5
+      done
+      echo "[post-config] LMI is ready."
+
+      echo "[post-config] Creating junction /isvaop -> isvaop.verify-access.svc.cluster.local:8436 (ssl)..."
+      curl -sk -X POST -u "admin:$${ADMIN_PWD}" \
+        -H "Accept: application/json" -H "Content-Type: application/json" \
+        "$${BASE_URL}/isam/wga/reverseproxy/default/junctions" \
+        -d "{\"junction_point\":\"/isvaop\",\"junction_type\":\"ssl\",\"server_hostname\":\"isvaop.verify-access.svc.cluster.local\",\"server_port\":\"8436\",\"stateful_junction\":\"no\",\"insert_session_cookies\":\"yes\"}" \
+        || echo "[post-config] Junction may already exist - continuing"
+
+      echo "[post-config] Setting anyauth ACL on CIBA consent path..."
+      curl -sk -X PUT -u "admin:$${ADMIN_PWD}" \
+        -H "Accept: application/json" -H "Content-Type: application/json" \
+        "$${BASE_URL}/isam/wga/reverseproxy/default/acl/attachments" \
+        -d "{\"acl_name\":\"anyauth_for_WebSEAL\",\"object_name\":\"/isvaop/oauth2/ciba_user_authorize\"}" \
+        || echo "[post-config] ACL attachment may already exist - continuing"
+
+      echo "[post-config] Publishing configuration snapshot..."
+      curl -sk -X POST -u "admin:$${ADMIN_PWD}" \
+        -H "Accept: application/json" -H "Content-Type: application/json" \
+        "$${BASE_URL}/isam/pending_changes/deploy" -d "{}" \
+        || echo "[post-config] Snapshot publish warning - check LMI logs"
+
+      echo "[post-config] Configuration complete."
+    EOT
+  }
+}
+
+################################################################################
+# Autoconf Job
+# Python K8s Job that installs ibmvia_autoconf and runs it against the Config
+# container LMI to perform activation, WRP instance creation, junction setup,
+# ACL configuration, and snapshot publishing.
+#
+# Threat T-06-08-05: Uses existing isvaop SA (minimal RBAC) — no cluster-admin.
+# Runs after Config container is ready (depends_on ensures ordering).
+#
+# Note: ibmvia_autoconf is experimental for junction/ACL config. If the tool
+# proves problematic, replace with pure curl REST API calls (post-config.sh
+# provides the reference implementation for that fallback path).
+################################################################################
+
+resource "kubernetes_job" "ivia_autoconf" {
+  metadata {
+    name      = "ivia-autoconf"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels = {
+      "app.kubernetes.io/name"       = "ivia-autoconf"
+      "app.kubernetes.io/managed-by" = "terraform"
+    }
+  }
+
+  spec {
+    backoff_limit = 3
+
+    template {
+      metadata {
+        labels = {
+          "app.kubernetes.io/name" = "ivia-autoconf"
+        }
+      }
+
+      spec {
+        restart_policy       = "OnFailure"
+        service_account_name = kubernetes_service_account.isvaop.metadata[0].name
+
+        container {
+          name  = "autoconf"
+          image = "python:3.12-slim"
+
+          command = ["/bin/sh", "-c"]
+          args = [
+            "pip install --quiet ibmvia_autoconf && python -m ibmvia_autoconf --config /etc/autoconf/config.yaml && sh /etc/autoconf/post-config.sh"
+          ]
+
+          env {
+            name  = "IVIA_BASE_CODE"
+            value = var.ivia_activation_code
+          }
+
+          env {
+            name  = "IVIA_AAC_CODE"
+            value = var.ivia_activation_code
+          }
+
+          env {
+            name  = "IVIA_FED_CODE"
+            value = var.ivia_activation_code
+          }
+
+          env {
+            name  = "ISVA_MGMT_BASE_URL"
+            value = "https://iviaconfig.verify-access.svc.cluster.local:9443"
+          }
+
+          env {
+            name  = "ISVA_MGMT_USER"
+            value = "admin"
+          }
+
+          env {
+            name = "ISVA_MGMT_PWD"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret.ivia_admin.metadata[0].name
+                key  = "password"
+              }
+            }
+          }
+
+          env {
+            name = "ADMIN_PWD"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret.ivia_admin.metadata[0].name
+                key  = "password"
+              }
+            }
+          }
+
+          env {
+            name = "PGHOST"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret.isvaop_server.metadata[0].name
+                key  = "host"
+              }
+            }
+          }
+
+          env {
+            name = "PGPORT"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret.isvaop_server.metadata[0].name
+                key  = "port"
+              }
+            }
+          }
+
+          env {
+            name = "PGUSER"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret.isvaop_server.metadata[0].name
+                key  = "username"
+              }
+            }
+          }
+
+          env {
+            name = "PGPASSWORD"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret.isvaop_server.metadata[0].name
+                key  = "password"
+              }
+            }
+          }
+
+          env {
+            name = "PGDATABASE"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret.isvaop_server.metadata[0].name
+                key  = "database"
+              }
+            }
+          }
+
+          volume_mount {
+            name       = "autoconf-config"
+            mount_path = "/etc/autoconf"
+          }
+
+          resources {
+            requests = {
+              cpu    = "100m"
+              memory = "256Mi"
+            }
+            limits = {
+              cpu    = "500m"
+              memory = "512Mi"
+            }
+          }
+        }
+
+        volume {
+          name = "autoconf-config"
+          config_map {
+            name         = kubernetes_config_map.ivia_autoconf_config.metadata[0].name
+            default_mode = "0755"
+          }
+        }
+      }
+    }
+  }
+
+  wait_for_completion = true
+
+  timeouts {
+    create = "10m"
+  }
+
+  depends_on = [
+    kubernetes_deployment.ivia_config,
+    kubernetes_service.ivia_config,
+  ]
+}
+
+################################################################################
+# AAC Runtime Deployment
+# The Runtime provides the authentication engine that WRP delegates to.
+# Workers pull configuration snapshots from Config via CONFIG_SERVICE_URL.
+# Depends on autoconf Job — Runtime needs the published snapshot with the
+# AAC Runtime database connection configured.
+#
+# Pitfall 1 (Research): Runtime MUST start after Config container is ready
+# and the autoconf Job has published the snapshot.
+# Threat T-06-08-02: CONFIG_SERVICE_TLS_CACERT=disabled (workshop self-signed).
+################################################################################
+
+resource "kubernetes_deployment" "ivia_runtime" {
+  metadata {
+    name      = "ivia-runtime"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels = {
+      "app.kubernetes.io/name"       = "ivia-runtime"
+      "app.kubernetes.io/version"    = "11.0.2.0"
+      "app.kubernetes.io/managed-by" = "terraform"
+      "workshop/component"           = "ivia"
+    }
+  }
+
+  spec {
+    replicas = 1
+
+    selector {
+      match_labels = {
+        "app.kubernetes.io/name" = "ivia-runtime"
+      }
+    }
+
+    template {
+      metadata {
+        labels = {
+          "app.kubernetes.io/name"    = "ivia-runtime"
+          "app.kubernetes.io/version" = "11.0.2.0"
+          "workshop/component"        = "ivia"
+        }
+      }
+
+      spec {
+        service_account_name = kubernetes_service_account.isvaop.metadata[0].name
+
+        image_pull_secrets {
+          name = kubernetes_secret.icr_pull.metadata[0].name
+        }
+
+        container {
+          name  = "ivia-runtime"
+          image = "icr.io/ivia/ivia-runtime:11.0.2.0"
+
+          port {
+            container_port = 9443
+            name           = "runtime"
+            protocol       = "TCP"
+          }
+
+          env {
+            name  = "CONFIG_SERVICE_URL"
+            value = "https://iviaconfig.verify-access.svc.cluster.local:9443/shared_volume"
+          }
+
+          env {
+            name  = "CONFIG_SERVICE_USER_NAME"
+            value = "cfgsvc"
+          }
+
+          env {
+            name = "CONFIG_SERVICE_USER_PWD"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret.ivia_configreader.metadata[0].name
+                key  = "password"
+              }
+            }
+          }
+
+          env {
+            name  = "CONFIG_SERVICE_TLS_CACERT"
+            value = "disabled"
+          }
+
+          env {
+            name  = "CONTAINER_TIMEZONE"
+            value = "UTC"
+          }
+
+          volume_mount {
+            name       = "shared"
+            mount_path = "/var/shared"
+          }
+
+          volume_mount {
+            name       = "logs"
+            mount_path = "/var/application.logs"
+          }
+
+          readiness_probe {
+            http_get {
+              path   = "/sps/static/ibm-logo.png"
+              port   = 9443
+              scheme = "HTTPS"
+            }
+            initial_delay_seconds = 60
+            period_seconds        = 10
+            failure_threshold     = 6
+          }
+
+          liveness_probe {
+            exec {
+              command = ["/sbin/health_check.sh", "livenessProbe"]
+            }
+            initial_delay_seconds = 60
+            period_seconds        = 10
+            failure_threshold     = 6
+          }
+
+          startup_probe {
+            exec {
+              command = ["/sbin/health_check.sh"]
+            }
+            period_seconds    = 10
+            failure_threshold = 30
+          }
+
+          resources {
+            requests = {
+              cpu    = "250m"
+              memory = "512Mi"
+            }
+            limits = {
+              cpu    = "1"
+              memory = "1Gi"
+            }
+          }
+        }
+
+        volume {
+          name = "shared"
+          empty_dir {}
+        }
+
+        volume {
+          name = "logs"
+          empty_dir {}
+        }
+      }
+    }
+  }
+
+  depends_on = [
+    kubernetes_job.ivia_autoconf,
+  ]
+}
+
+################################################################################
+# Runtime Service — ClusterIP
+# Name "iviaruntime" — used by WRP for AAC engine delegation.
+################################################################################
+
+resource "kubernetes_service" "ivia_runtime" {
+  metadata {
+    name      = "iviaruntime"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels = {
+      "app.kubernetes.io/name"       = "ivia-runtime"
+      "app.kubernetes.io/managed-by" = "terraform"
+    }
+  }
+
+  spec {
+    selector = {
+      "app.kubernetes.io/name" = "ivia-runtime"
+    }
+
+    type = "ClusterIP"
+
+    port {
+      name        = "runtime"
+      port        = 9443
+      target_port = 9443
+      protocol    = "TCP"
+    }
+  }
+}
+
+################################################################################
+# WRP Deployment
+# Web Reverse Proxy — the public-facing entry point for browser flows.
+# Handles user authentication and forwards authenticated sessions to OIDC
+# Provider via junction /isvaop. Routes CIBA consent through /isvaop/oauth2/
+# ciba_user_authorize. Requires published Config snapshot from autoconf Job.
+#
+# Resources: requests 500m/1Gi, limits 2/2Gi — WRP handles all browser traffic.
+# Pitfall 6 (Research): WRP ALB replaces existing OIDC Provider ALB for browser
+# flows. Machine-to-machine flows (ROPC, token exchange) continue via ClusterIP.
+################################################################################
+
+resource "kubernetes_deployment" "ivia_wrp" {
+  metadata {
+    name      = "ivia-wrp"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels = {
+      "app.kubernetes.io/name"       = "ivia-wrp"
+      "app.kubernetes.io/version"    = "11.0.2.0"
+      "app.kubernetes.io/managed-by" = "terraform"
+      "workshop/component"           = "ivia"
+    }
+  }
+
+  spec {
+    replicas = 1
+
+    selector {
+      match_labels = {
+        "app.kubernetes.io/name" = "ivia-wrp"
+      }
+    }
+
+    template {
+      metadata {
+        labels = {
+          "app.kubernetes.io/name"    = "ivia-wrp"
+          "app.kubernetes.io/version" = "11.0.2.0"
+          "workshop/component"        = "ivia"
+        }
+      }
+
+      spec {
+        service_account_name = kubernetes_service_account.isvaop.metadata[0].name
+
+        image_pull_secrets {
+          name = kubernetes_secret.icr_pull.metadata[0].name
+        }
+
+        container {
+          name  = "ivia-wrp"
+          image = "icr.io/ivia/ivia-wrp:11.0.2.0"
+
+          port {
+            container_port = 9443
+            name           = "wrp"
+            protocol       = "TCP"
+          }
+
+          env {
+            name  = "CONFIG_SERVICE_URL"
+            value = "https://iviaconfig.verify-access.svc.cluster.local:9443/shared_volume"
+          }
+
+          env {
+            name  = "CONFIG_SERVICE_USER_NAME"
+            value = "cfgsvc"
+          }
+
+          env {
+            name = "CONFIG_SERVICE_USER_PWD"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret.ivia_configreader.metadata[0].name
+                key  = "password"
+              }
+            }
+          }
+
+          env {
+            name  = "CONFIG_SERVICE_TLS_CACERT"
+            value = "disabled"
+          }
+
+          env {
+            name  = "INSTANCE"
+            value = "default"
+          }
+
+          env {
+            name  = "CONTAINER_TIMEZONE"
+            value = "UTC"
+          }
+
+          volume_mount {
+            name       = "shared"
+            mount_path = "/var/shared"
+          }
+
+          volume_mount {
+            name       = "logs"
+            mount_path = "/var/application.logs"
+          }
+
+          readiness_probe {
+            exec {
+              command = ["/sbin/health_check.sh"]
+            }
+            initial_delay_seconds = 60
+            period_seconds        = 10
+            failure_threshold     = 6
+          }
+
+          liveness_probe {
+            exec {
+              command = ["/sbin/health_check.sh", "livenessProbe"]
+            }
+            initial_delay_seconds = 60
+            period_seconds        = 10
+            failure_threshold     = 6
+          }
+
+          startup_probe {
+            exec {
+              command = ["/sbin/health_check.sh"]
+            }
+            period_seconds    = 10
+            failure_threshold = 30
+          }
+
+          resources {
+            requests = {
+              cpu    = "500m"
+              memory = "1Gi"
+            }
+            limits = {
+              cpu    = "2"
+              memory = "2Gi"
+            }
+          }
+        }
+
+        volume {
+          name = "shared"
+          empty_dir {}
+        }
+
+        volume {
+          name = "logs"
+          empty_dir {}
+        }
+      }
+    }
+  }
+
+  depends_on = [
+    kubernetes_job.ivia_autoconf,
+  ]
+}
+
+################################################################################
+# WRP Service — ClusterIP
+# Name "iviawrp" — referenced in junction config (autoconf WRP instance host).
+################################################################################
+
+resource "kubernetes_service" "ivia_wrp" {
+  metadata {
+    name      = "iviawrp"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels = {
+      "app.kubernetes.io/name"       = "ivia-wrp"
+      "app.kubernetes.io/managed-by" = "terraform"
+    }
+  }
+
+  spec {
+    selector = {
+      "app.kubernetes.io/name" = "ivia-wrp"
+    }
+
+    type = "ClusterIP"
+
+    port {
+      name        = "wrp"
+      port        = 9443
+      target_port = 9443
+      protocol    = "TCP"
+    }
+  }
+}
+
+################################################################################
+# WRP Ingress — ALB (internet-facing)
+# Backend: WRP on port 9443 (HTTPS). ALB listens on HTTP:80 for workshop
+# simplicity (CIBA consent URL in the browser chat message uses HTTP).
+# Pitfall 6 (Research): This ALB becomes the sole browser-facing entry point.
+# Old OIDC Provider ALB (kubernetes_ingress_v1.isvaop) will be removed in
+# Plan 06-09 when OIDC Provider config.yaml is updated with WRP ALB base_url.
+################################################################################
+
+resource "kubernetes_ingress_v1" "ivia_wrp" {
+  wait_for_load_balancer = true
+
+  metadata {
+    name      = "ivia-wrp"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    annotations = {
+      "alb.ingress.kubernetes.io/scheme"               = "internet-facing"
+      "alb.ingress.kubernetes.io/target-type"          = "ip"
+      "alb.ingress.kubernetes.io/listen-ports"         = "[{\"HTTP\":80}]"
+      "alb.ingress.kubernetes.io/backend-protocol"     = "HTTPS"
+      "alb.ingress.kubernetes.io/healthcheck-protocol" = "HTTPS"
+      "alb.ingress.kubernetes.io/healthcheck-port"     = "9443"
+    }
+    labels = {
+      "app.kubernetes.io/name"       = "ivia-wrp"
+      "app.kubernetes.io/managed-by" = "terraform"
+    }
+  }
+
+  spec {
+    ingress_class_name = "alb"
+
+    rule {
+      http {
+        path {
+          path      = "/"
+          path_type = "Prefix"
+          backend {
+            service {
+              name = kubernetes_service.ivia_wrp.metadata[0].name
+              port {
+                number = 9443
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  depends_on = [kubernetes_service.ivia_wrp]
 }

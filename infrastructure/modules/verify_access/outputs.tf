@@ -50,3 +50,19 @@ output "ivia_client_secret" {
   value       = random_password.client_secret.result
   sensitive   = true
 }
+
+################################################################################
+# WRP Outputs — new public-facing entry point for browser flows (CIBA consent)
+# Added in Plan 06-08. Plan 06-09 will update OIDC Provider config.yaml to
+# use these URLs as base_url / issuer.
+################################################################################
+
+output "ivia_wrp_ingress_hostname" {
+  description = "WRP ALB hostname — new public entry point for browser flows (CIBA consent, auth)."
+  value       = try(kubernetes_ingress_v1.ivia_wrp.status[0].load_balancer[0].ingress[0].hostname, "")
+}
+
+output "ivia_wrp_external_endpoint" {
+  description = "WRP external endpoint (scheme + host). Browser-facing URL for CIBA consent."
+  value       = "http://${try(kubernetes_ingress_v1.ivia_wrp.status[0].load_balancer[0].ingress[0].hostname, "")}"
+}
