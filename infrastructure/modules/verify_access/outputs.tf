@@ -15,8 +15,8 @@ output "ivia_jwks_url" {
 }
 
 output "ivia_issuer" {
-  description = "IVIA token issuer URL. Matches the iss claim in IVIA-issued JWTs (external ALB, HTTP)."
-  value       = "http://${try(kubernetes_ingress_v1.isvaop.status[0].load_balancer[0].ingress[0].hostname, "")}"
+  description = "IVIA token issuer URL. Matches the iss claim in IVIA-issued JWTs (WRP ALB + /isvaop junction prefix, HTTP)."
+  value       = "http://${try(kubernetes_ingress_v1.ivia_wrp.status[0].load_balancer[0].ingress[0].hostname, "")}/isvaop"
 }
 
 output "ivia_namespace" {
@@ -30,13 +30,13 @@ output "ivia_service_endpoint" {
 }
 
 output "ivia_ingress_hostname" {
-  description = "ALB hostname provisioned by AWS Load Balancer Controller for external OIDC discovery. May be empty until the LBC reconciles the Ingress resource."
-  value       = try(kubernetes_ingress_v1.isvaop.status[0].load_balancer[0].ingress[0].hostname, "")
+  description = "WRP ALB hostname (replaces former OIDC Provider ALB). Provisioned by AWS Load Balancer Controller. May be empty until the LBC reconciles the Ingress resource."
+  value       = try(kubernetes_ingress_v1.ivia_wrp.status[0].load_balancer[0].ingress[0].hostname, "")
 }
 
 output "ivia_external_endpoint" {
-  description = "IVIA external endpoint via ALB (scheme + host). Used by the restapi provider in isva_config since HCP Terraform cannot reach cluster-internal DNS."
-  value       = "http://${try(kubernetes_ingress_v1.isvaop.status[0].load_balancer[0].ingress[0].hostname, "")}"
+  description = "WRP external endpoint (replaces former OIDC Provider ALB). Scheme + host only — no junction prefix. Used by UC3 agent for browser-facing CIBA consent URL construction."
+  value       = "http://${try(kubernetes_ingress_v1.ivia_wrp.status[0].load_balancer[0].ingress[0].hostname, "")}"
 }
 
 output "ivia_tls_cert_pem" {

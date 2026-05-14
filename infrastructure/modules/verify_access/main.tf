@@ -334,9 +334,9 @@ definition:
   access_policy_id: allow_all
   pre_mappingrule_id: pretoken
   post_mappingrule_id: posttoken
-  base_url: "http://${kubernetes_ingress_v1.isvaop.status[0].load_balancer[0].ingress[0].hostname}"
+  base_url: "http://${try(kubernetes_ingress_v1.ivia_wrp.status[0].load_balancer[0].ingress[0].hostname, "")}/isvaop"
   token_settings:
-    issuer: "http://${kubernetes_ingress_v1.isvaop.status[0].load_balancer[0].ingress[0].hostname}"
+    issuer: "http://${try(kubernetes_ingress_v1.ivia_wrp.status[0].load_balancer[0].ingress[0].hostname, "")}/isvaop"
     signing_alg: RS256
     signing_keystore: https_keys
     signing_keylabel: serverkey
@@ -348,7 +348,11 @@ definition:
     name: ldap_name
 
 authentication:
-  endpoint: "http://${kubernetes_ingress_v1.isvaop.status[0].load_balancer[0].ingress[0].hostname}/oauth2/auth"
+  # WRP internal ClusterIP auth endpoint — OIDC Provider calls WRP server-side
+  # to initiate authentication before redirecting the browser. WRP then serves
+  # the login page and forwards the authenticated session back through /isvaop.
+  # TODO: Validate this path against IVIA WRP junction config on live deployment.
+  endpoint: "https://iviawrp.verify-access.svc.cluster.local:9443/mga/sps/oauth/oauth20/authorize"
   callback_param_name: Target
   subject_attribute_name: sAMAccountName
 
@@ -467,20 +471,10 @@ rules:
     - name: notifyuser
       rule_type: javascript
       content: |
-        var statusUrl = ciba.getStatusUpdateEndpoint();
-        var token = ciba.getBearerToken();
-        var authReqId = ciba.getAuthRequestID();
-        var username = stsuu.getPrincipalName();
-        ciba.setAuthenticator(new ExternalAuthenticator());
-        var header = new Headers();
-        header.addHeader("Content-Type", "application/json");
-        var payload = JSON.stringify({
-          auth_req_id: authReqId,
-          update_url: statusUrl,
-          token: token,
-          user: username
-        });
-        HttpClientV2.httpPost("http://banking-ui-svc.banking-app.svc.cluster.local/api/ciba-callback", header, payload, null, null, null, null, null, null, null, null, true, null);
+        // InternalAuthenticator: OIDC Provider delegates consent to WRP.
+        // WRP serves the login page + /isvaop/oauth2/ciba_user_authorize/{id} consent page.
+        // No HTTP call needed — WRP handles everything via junction.
+        ciba.setAuthenticator(new InternalAuthenticator());
 
 clients:
   - client_id: workshop_agent
@@ -948,54 +942,6 @@ resource "kubernetes_service" "isvaop" {
       protocol    = "TCP"
     }
   }
-}
-
-################################################################################
-# Ingress — ALB via AWS Load Balancer Controller (external OIDC discovery)
-################################################################################
-
-resource "kubernetes_ingress_v1" "isvaop" {
-  wait_for_load_balancer = true
-
-  metadata {
-    name      = "isvaop"
-    namespace = kubernetes_namespace.verify_access.metadata[0].name
-    annotations = {
-      "alb.ingress.kubernetes.io/scheme"               = "internet-facing"
-      "alb.ingress.kubernetes.io/target-type"          = "ip"
-      "alb.ingress.kubernetes.io/listen-ports"         = "[{\"HTTP\":80}]"
-      "alb.ingress.kubernetes.io/backend-protocol"     = "HTTPS"
-      "alb.ingress.kubernetes.io/healthcheck-protocol" = "HTTPS"
-      "alb.ingress.kubernetes.io/healthcheck-port"     = "8436"
-    }
-    labels = {
-      "app.kubernetes.io/name"       = "isvaop"
-      "app.kubernetes.io/managed-by" = "terraform"
-    }
-  }
-
-  spec {
-    ingress_class_name = "alb"
-
-    rule {
-      http {
-        path {
-          path      = "/"
-          path_type = "Prefix"
-          backend {
-            service {
-              name = kubernetes_service.isvaop.metadata[0].name
-              port {
-                number = 8436
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-
-  depends_on = [kubernetes_service.isvaop]
 }
 
 ################################################################################
