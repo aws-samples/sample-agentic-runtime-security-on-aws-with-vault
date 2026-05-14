@@ -769,6 +769,37 @@ phase_uc3() {
     print_success "UC3 agent and observability deployed via terraform apply"
     pause_if_interactive "Terraform apply complete. Verify uc3 + observability resources before continuing."
 
+    # Step 3b: Ensure banking.refunds table exists in RDS
+    step_header "Ensuring banking.refunds table exists..."
+    local rds_secret_arn
+    rds_secret_arn=$(aws rds describe-db-instances --region "$WORKSHOP_REGION" \
+        --query "DBInstances[?DBInstanceIdentifier=='${CLUSTER_NAME}-pg'].MasterUserSecret.SecretArn | [0]" \
+        --output text 2>/dev/null)
+    if [ -n "$rds_secret_arn" ] && [ "$rds_secret_arn" != "None" ]; then
+        local rds_pass rds_host
+        rds_pass=$(aws secretsmanager get-secret-value --secret-id "$rds_secret_arn" \
+            --region "$WORKSHOP_REGION" --query 'SecretString' --output text 2>/dev/null | jq -r '.password')
+        rds_host=$(aws rds describe-db-instances --region "$WORKSHOP_REGION" \
+            --query "DBInstances[?DBInstanceIdentifier=='${CLUSTER_NAME}-pg'].Endpoint.Address | [0]" \
+            --output text 2>/dev/null)
+        kubectl run psql-refunds-$$ --rm -i --restart=Never -n banking-app \
+            --image=postgres:16-alpine \
+            --env="PGPASSWORD=$rds_pass" \
+            -- psql "postgresql://vault_root@${rds_host}:5432/workshop?sslmode=require" \
+            -c "CREATE TABLE IF NOT EXISTS banking.refunds (
+                refund_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                account_id UUID NOT NULL REFERENCES banking.accounts(id),
+                amount DECIMAL(12,2) NOT NULL,
+                currency VARCHAR(3) NOT NULL DEFAULT 'USD',
+                approved_by VARCHAR(255) NOT NULL,
+                request_id UUID NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );" &>/dev/null && print_success "banking.refunds table ready" \
+            || print_warn "Could not create banking.refunds table — may already exist"
+    else
+        print_warn "Could not find RDS secret ARN — skipping refunds table creation"
+    fi
+
     # Step 4: Wait for UC3 agent deployment rollout
     step_header "Waiting for UC3 agent deployment rollout..."
     kubectl rollout status deployment/uc3-agent -n banking-app --timeout=300s 2>/dev/null || {
