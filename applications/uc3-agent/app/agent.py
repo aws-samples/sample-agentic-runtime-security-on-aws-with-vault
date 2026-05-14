@@ -396,23 +396,21 @@ def list_transactions() -> list:
 
 
 @tool
-def process_refund(
+def initiate_refund(
     account_id: str,
     transaction_id: str,
     amount: float,
     currency: str,
     login_hint: str = "oscar",
 ) -> dict:
-    """Initiate and complete a privileged refund with CIBA user consent.
+    """Initiate a CIBA consent request for a privileged refund (step 1 of 2).
 
-    Full CIBA + RFC 8693 token exchange flow:
-      1. Generate request_id UUID (audit anchor).
-      2. POST bc-authorize to IVIA — user receives consent push notification.
-      3. Print consent URL for the attendee to click (workshop only).
-      4. Poll IVIA token endpoint every 5s (max 120s) until consent granted.
-      5. RFC 8693 token exchange — produce delegated JWT with may_act claim.
-      6. Present delegated JWT to Vault jwt auth (uc3-jwt) → write DB creds.
-      7. INSERT into banking.refunds with request_id threaded through.
+    Sends bc-authorize to IVIA with Rich Authorization Request (RFC 9396)
+    details. Returns immediately with auth_req_id and consent marker so the
+    banking UI can show the Approve/Deny button to the user.
+
+    After the user approves, call complete_refund with the same parameters
+    plus auth_req_id and request_id to finish the flow.
 
     Args:
         account_id: Account to credit the refund to.
@@ -422,17 +420,12 @@ def process_refund(
         login_hint: Username/email for CIBA targeting (default: "oscar").
 
     Returns:
-        Dict with refund_id, request_id, status, and audit fields.
+        Dict with auth_req_id, request_id, and consent status.
     """
-    global _vault_client
-    if _vault_client is None:
-        raise RuntimeError("UC3 vault client not initialized")
-
-    # OBJ-5: Generate request_id — threaded through all three audit planes
     request_id = str(uuid.uuid4())
 
     logger.info(
-        "process_refund_started",
+        "initiate_refund_started",
         extra={
             "request_id": request_id,
             "account_id": account_id,
@@ -442,7 +435,6 @@ def process_refund(
         },
     )
 
-    # Step 1: Build Rich Authorization Request (RAR) for refund_approval
     authorization_details = [
         {
             "type": "refund_approval",
@@ -454,43 +446,76 @@ def process_refund(
         }
     ]
 
-    # Step 2: Initiate CIBA — sends consent request to user's IVIA app
     auth_req_id = _initiate_ciba(login_hint, authorization_details, request_id)
 
-    # Step 3: Emit structured consent marker for the banking UI.
-    # The UI detects CIBA_CONSENT: in the SSE stream and renders an inline
-    # Approve/Deny button. ExternalAuthenticator pattern — the banking app
-    # calls IVIA's /oauth2/ciba_status_update/{auth_req_id} on approval.
     rar_desc = f"refund_approval ${amount} {currency} for transaction {transaction_id}"
-    consent_marker = (
-        f"CIBA_CONSENT:auth_req_id={auth_req_id}"
-        f"|request_id={request_id}"
-        f"|details={rar_desc}"
-    )
+
     logger.info(
         "ciba_consent_requested",
         extra={
             "request_id": request_id,
             "auth_req_id": auth_req_id,
             "authorization_details": authorization_details,
-            "instruction": "Waiting for user consent via ExternalAuthenticator",
         },
     )
-    print(f"\n{consent_marker}\n")
 
-    # Step 4: Poll IVIA until user approves (or timeout)
+    return {
+        "status": "consent_required",
+        "auth_req_id": auth_req_id,
+        "request_id": request_id,
+        "account_id": account_id,
+        "transaction_id": transaction_id,
+        "amount": amount,
+        "currency": currency,
+        "login_hint": login_hint,
+        "consent_marker": f"CIBA_CONSENT:auth_req_id={auth_req_id}|request_id={request_id}|details={rar_desc}",
+    }
+
+
+@tool
+def complete_refund(
+    auth_req_id: str,
+    request_id: str,
+    account_id: str,
+    transaction_id: str,
+    amount: float,
+    currency: str,
+    login_hint: str = "oscar",
+) -> dict:
+    """Complete a refund after CIBA consent is granted (step 2 of 2).
+
+    Polls IVIA for consent approval, then executes:
+      1. CIBA token poll (user already approved via banking UI)
+      2. RFC 8693 token exchange → delegated JWT with may_act claim
+      3. Vault jwt auth (uc3-jwt) → uc3-refund-writer DB credentials
+      4. INSERT into banking.refunds
+
+    Args:
+        auth_req_id: CIBA auth_req_id from initiate_refund.
+        request_id: Audit correlation UUID from initiate_refund.
+        account_id: Account to credit the refund to.
+        transaction_id: Original transaction being refunded.
+        amount: Refund amount (positive float).
+        currency: ISO 4217 currency code (e.g. "USD").
+        login_hint: Username/email who approved (default: "oscar").
+
+    Returns:
+        Dict with refund_id, request_id, status, and audit fields.
+    """
+    global _vault_client
+    if _vault_client is None:
+        raise RuntimeError("UC3 vault client not initialized")
+
+    logger.info(
+        "complete_refund_started",
+        extra={"request_id": request_id, "auth_req_id": auth_req_id},
+    )
+
     ciba_token = _poll_ciba(auth_req_id, request_id)
-
-    # Step 5: Read agent SA JWT as actor_token for RFC 8693 exchange
     actor_token = _read_sa_jwt()
-
-    # Step 6: RFC 8693 token exchange → delegated JWT with may_act claim
     delegated_jwt = _token_exchange(ciba_token, actor_token, request_id)
-
-    # Step 7: Vault jwt auth with delegated JWT → uc3-refund-writer DB creds
     write_creds = _vault_client.get_refund_credentials(delegated_jwt, request_id)
 
-    # Step 8: INSERT into banking.refunds
     refund_id = str(uuid.uuid4())
     approved_by = login_hint
     created_at = datetime.now(timezone.utc)
@@ -650,13 +675,16 @@ def build_uc3_agent(vault_client=None, session_id: str = "default") -> Agent:
         "2. Present results as a numbered list: description, amount, merchant, date.\n"
         "3. Ask the user which number they want to refund.\n"
         "4. When the user selects a number, confirm the transaction details and ask 'Shall I proceed?'\n"
-        "5. When the user confirms, you MUST call the process_refund tool with these parameters from the transaction data:\n"
+        "5. When the user confirms, call the initiate_refund tool with:\n"
         "   - account_id: the account_id from the selected transaction\n"
         "   - transaction_id: the id from the selected transaction\n"
         "   - amount: the absolute value of the amount (positive number)\n"
         "   - currency: 'USD'\n"
-        "   DO NOT skip this step. DO NOT generate a URL yourself. The tool handles everything.\n"
-        "6. Report exactly what the tool returns to the user.\n\n"
+        "6. initiate_refund returns a consent_marker string. You MUST include it EXACTLY as-is in your response.\n"
+        "   Tell the user: 'CIBA consent is required. Please approve the refund in the consent banner below.'\n"
+        "7. When the user says they approved (or sends any follow-up), call complete_refund with:\n"
+        "   auth_req_id, request_id, account_id, transaction_id, amount, currency from the initiate_refund result.\n"
+        "8. Report exactly what the complete_refund tool returns to the user.\n\n"
         "CRITICAL RULES:\n"
         "- NEVER generate URLs, consent links, request_ids, or refund_ids yourself.\n"
         "- NEVER simulate or role-play what a tool would do. ALWAYS call the actual tool.\n"
@@ -667,7 +695,7 @@ def build_uc3_agent(vault_client=None, session_id: str = "default") -> Agent:
 
     agent = Agent(
         model=bedrock_model,
-        tools=[list_transactions, process_refund, check_refund_status],
+        tools=[list_transactions, initiate_refund, complete_refund, check_refund_status],
         system_prompt=system_prompt,
         session_manager=session_manager,
     )
