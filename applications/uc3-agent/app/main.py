@@ -32,6 +32,7 @@ import json
 import logging
 import os
 import re
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
@@ -48,8 +49,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-_agent = None
 _vault_client = None
+_sessions: dict = {}
+SESSION_TTL = 600
 
 
 @asynccontextmanager
@@ -66,10 +68,7 @@ async def lifespan(app: FastAPI):
         _vault_client.login()
         logger.info("uc3_vault_k8s_auth_success")
     except Exception as exc:
-        # Non-fatal outside cluster (no SA token mount in local dev)
         logger.warning("uc3_vault_k8s_auth_skipped: %s", str(exc))
-
-    _agent = build_uc3_agent(vault_client=_vault_client)
 
     yield
 
@@ -94,28 +93,44 @@ app.add_middleware(
 
 class ChatRequest(BaseModel):
     message: str
-    session_id: str = "default"
+    sessionId: str = "default"
+
+
+def _get_or_create_session(session_id: str):
+    """Get an existing agent session or create a new one."""
+    now = time.time()
+    expired = [k for k, v in _sessions.items() if now - v["last_used"] > SESSION_TTL]
+    for k in expired:
+        del _sessions[k]
+
+    if session_id in _sessions:
+        _sessions[session_id]["last_used"] = now
+        return _sessions[session_id]["agent"]
+
+    agent = build_uc3_agent(vault_client=_vault_client)
+    _sessions[session_id] = {"agent": agent, "last_used": now}
+    logger.info("uc3_session_created", extra={"session_id": session_id})
+    return agent
 
 
 @app.post("/chat")
 async def chat(body: ChatRequest):
-    """Accept a user message and return a JSON agent response.
+    """Accept a user message and return an SSE agent response.
 
-    The agent handles CIBA consent flow, token exchange, and privileged DB write
-    internally. The response includes the agent output and the request_id for
-    audit correlation.
+    Each session_id gets its own Agent instance with persistent conversation
+    history, enabling multi-turn flows (list transactions → select → refund).
     """
-    global _agent
-    if _agent is None:
+    if _vault_client is None or not _vault_client.is_authenticated():
         raise HTTPException(status_code=503, detail="UC3 agent not initialized")
 
+    session_agent = _get_or_create_session(body.sessionId)
     message = body.message
 
     async def generate():
         try:
             yield f"data: {json.dumps({'role': 'ai', 'content': 'Processing your request...', 'type': 'tool_planning'})}\n\n"
 
-            response = _agent(message)
+            response = session_agent(message)
             content = re.sub(r'<thinking>.*?</thinking>\s*', '', str(response), flags=re.DOTALL)
 
             yield f"data: {json.dumps({'role': 'ai', 'content': content, 'type': 'delta'})}\n\n"
@@ -143,6 +158,6 @@ async def health():
     return {
         "status": "ok",
         "service": "uc3-agent",
-        "agent_ready": _agent is not None,
+        "active_sessions": len(_sessions),
         "vault_authenticated": _vault_client.is_authenticated() if _vault_client else False,
     }
