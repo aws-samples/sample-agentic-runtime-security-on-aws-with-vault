@@ -1260,9 +1260,9 @@ resource "kubernetes_config_map" "ivia_autoconf_config" {
             ssl: "no"
     EOT
 
-    # Shell script: waits for Config LMI, creates junction /isvaop -> OIDC Provider,
-    # sets anyauth ACL on CIBA consent path, then publishes the config snapshot.
-    # Runs AFTER ibmvia_autoconf completes activation + WRP instance creation.
+    # Shell script: waits for Config LMI, activates modules, creates WRP instance,
+    # creates junction /isvaop -> OIDC Provider, sets anyauth ACL on CIBA consent
+    # path, then publishes the config snapshot.
     #
     # REST API reference: https://docs.verify.ibm.com/ibm-security-verify-access/docs/api-lmi
     # NOTE: Dollar signs in shell vars are escaped ($$) because this is inside an
@@ -1271,35 +1271,73 @@ resource "kubernetes_config_map" "ivia_autoconf_config" {
       #!/bin/sh
       set -e
       BASE_URL="https://iviaconfig.verify-access.svc.cluster.local:9443"
+      AUTH="admin:$${ADMIN_PWD}"
 
-      echo "[post-config] Waiting for LMI to be ready..."
-      until curl -sk -o /dev/null -w "%%{http_code}" -u "admin:$${ADMIN_PWD}" "$${BASE_URL}/core/login" 2>/dev/null | grep -q "200"; do
-        echo "[post-config] LMI not ready, retrying in 5s..."
+      echo "[autoconf] Waiting for LMI to be ready..."
+      until curl -sk -o /dev/null -w "%%{http_code}" -u "$${AUTH}" "$${BASE_URL}/core/login" 2>/dev/null | grep -q "200"; do
+        echo "[autoconf] LMI not ready, retrying in 5s..."
         sleep 5
       done
-      echo "[post-config] LMI is ready."
+      echo "[autoconf] LMI is ready."
 
-      echo "[post-config] Creating junction /isvaop -> isvaop.verify-access.svc.cluster.local:8436 (ssl)..."
-      curl -sk -X POST -u "admin:$${ADMIN_PWD}" \
+      echo "[autoconf] Activating modules (webseal, aac, federation)..."
+      for MODULE in wga aac federation; do
+        CODE="$${IVIA_BASE_CODE}"
+        echo "[autoconf]   Activating $${MODULE}..."
+        RESP=$(curl -sk -X POST -u "$${AUTH}" \
+          -H "Accept: application/json" -H "Content-Type: application/json" \
+          "$${BASE_URL}/isam/activation" \
+          -d "{\"id\":\"$${MODULE}\",\"code\":\"$${CODE}\"}" 2>&1) || true
+        echo "[autoconf]   $${MODULE}: $${RESP}"
+      done
+
+      echo "[autoconf] Accepting service agreements..."
+      curl -sk -X PUT -u "$${AUTH}" \
+        -H "Accept: application/json" -H "Content-Type: application/json" \
+        "$${BASE_URL}/isam/service_agreements/accepted" \
+        -d "{\"accepted\":true}" || true
+
+      echo "[autoconf] Deploying pending changes after activation..."
+      curl -sk -X POST -u "$${AUTH}" \
+        -H "Accept: application/json" -H "Content-Type: application/json" \
+        "$${BASE_URL}/isam/pending_changes/deploy" -d "{}" || true
+
+      echo "[autoconf] Waiting for activation to take effect (30s)..."
+      sleep 30
+
+      echo "[autoconf] Creating WRP instance 'default'..."
+      RESP=$(curl -sk -X POST -u "$${AUTH}" \
+        -H "Accept: application/json" -H "Content-Type: application/json" \
+        "$${BASE_URL}/isam/wga/reverseproxy" \
+        -d "{\"inst_name\":\"default\",\"host\":\"iviawrp\",\"admin_id\":\"sec_master\",\"admin_pwd\":\"$${ADMIN_PWD}\",\"domain\":\"Default\",\"http_port\":\"80\",\"https_port\":\"443\",\"ip_address\":\"0.0.0.0\",\"listening_port\":\"7234\",\"ssl\":\"no\"}" 2>&1) || true
+      echo "[autoconf] WRP instance: $${RESP}"
+
+      echo "[autoconf] Deploying pending changes after WRP instance..."
+      curl -sk -X POST -u "$${AUTH}" \
+        -H "Accept: application/json" -H "Content-Type: application/json" \
+        "$${BASE_URL}/isam/pending_changes/deploy" -d "{}" || true
+
+      echo "[autoconf] Creating junction /isvaop -> isvaop:8436 (ssl)..."
+      curl -sk -X POST -u "$${AUTH}" \
         -H "Accept: application/json" -H "Content-Type: application/json" \
         "$${BASE_URL}/isam/wga/reverseproxy/default/junctions" \
         -d "{\"junction_point\":\"/isvaop\",\"junction_type\":\"ssl\",\"server_hostname\":\"isvaop.verify-access.svc.cluster.local\",\"server_port\":\"8436\",\"stateful_junction\":\"no\",\"insert_session_cookies\":\"yes\"}" \
-        || echo "[post-config] Junction may already exist - continuing"
+        || echo "[autoconf] Junction may already exist - continuing"
 
-      echo "[post-config] Setting anyauth ACL on CIBA consent path..."
-      curl -sk -X PUT -u "admin:$${ADMIN_PWD}" \
+      echo "[autoconf] Setting anyauth ACL on CIBA consent path..."
+      curl -sk -X PUT -u "$${AUTH}" \
         -H "Accept: application/json" -H "Content-Type: application/json" \
         "$${BASE_URL}/isam/wga/reverseproxy/default/acl/attachments" \
         -d "{\"acl_name\":\"anyauth_for_WebSEAL\",\"object_name\":\"/isvaop/oauth2/ciba_user_authorize\"}" \
-        || echo "[post-config] ACL attachment may already exist - continuing"
+        || echo "[autoconf] ACL attachment may already exist - continuing"
 
-      echo "[post-config] Publishing configuration snapshot..."
-      curl -sk -X POST -u "admin:$${ADMIN_PWD}" \
+      echo "[autoconf] Publishing final configuration snapshot..."
+      curl -sk -X POST -u "$${AUTH}" \
         -H "Accept: application/json" -H "Content-Type: application/json" \
         "$${BASE_URL}/isam/pending_changes/deploy" -d "{}" \
-        || echo "[post-config] Snapshot publish warning - check LMI logs"
+        || echo "[autoconf] Snapshot publish warning - check LMI logs"
 
-      echo "[post-config] Configuration complete."
+      echo "[autoconf] Configuration complete."
     EOT
   }
 }
@@ -1344,12 +1382,9 @@ resource "kubernetes_job" "ivia_autoconf" {
 
         container {
           name  = "autoconf"
-          image = "python:3.12-slim"
+          image = "curlimages/curl:latest"
 
-          command = ["/bin/sh", "-c"]
-          args = [
-            "pip install --quiet ibmvia_autoconf && python -m ibmvia_autoconf --config /etc/autoconf/config.yaml && sh /etc/autoconf/post-config.sh"
-          ]
+          command = ["/bin/sh", "/etc/autoconf/post-config.sh"]
 
           env {
             name  = "IVIA_BASE_CODE"
