@@ -86,6 +86,12 @@ variable "icr_entitlement_key" {
   description = "IBM Container Registry entitlement key for pulling IVIA images (icr.io/ivia/ivia-oidc-provider). Attendees obtain from IBM."
 }
 
+variable "ivia_activation_code" {
+  type        = string
+  sensitive   = true
+  description = "IVIA activation code for Config container module activation (webseal, aac, federation). Obtain from IBM Passport Advantage — try M11DCML for all three modules."
+}
+
 #-------------------------------------------------------------------------------
 # UC1 Agent Configuration
 # uc1_agent_image: set by attendees after ECR push (Phase 4 lab step).
