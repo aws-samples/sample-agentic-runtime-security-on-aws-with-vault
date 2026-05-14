@@ -42,6 +42,39 @@
 	});
 
 	let chatEndpoint = $state('/api/chat');
+	let pendingConsent: { auth_req_id: string; request_id: string; details: string } | null = $state(null);
+	let consentStatus = $state('');
+
+	function extractConsent(text: string) {
+		const match = text.match(/CIBA_CONSENT:auth_req_id=([^|]+)\|request_id=([^|]+)\|details=(.+)/);
+		if (match) {
+			pendingConsent = { auth_req_id: match[1], request_id: match[2], details: match[3] };
+		}
+	}
+
+	async function approveConsent() {
+		if (!pendingConsent) return;
+		consentStatus = 'approving';
+		try {
+			const res = await fetch('/api/ciba-approve', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ auth_req_id: pendingConsent.auth_req_id }),
+			});
+			const data = await res.json();
+			if (data.approved) {
+				consentStatus = 'approved';
+				messages = [...messages, { role: 'ai', content: `Consent approved for request ${pendingConsent.request_id}. Processing refund...` }];
+			} else {
+				consentStatus = 'error';
+				messages = [...messages, { role: 'error', content: `Consent approval failed: ${data.error ?? 'unknown'}` }];
+			}
+		} catch (err) {
+			consentStatus = 'error';
+			messages = [...messages, { role: 'error', content: `Consent approval error: ${err}` }];
+		}
+		pendingConsent = null;
+	}
 
 	async function sendMessage() {
 		if (!inputMessage.trim() || isLoading) return;
@@ -68,6 +101,7 @@
 					return;
 				}
 				if (chunk.content) {
+					extractConsent(chunk.content);
 					messages = [...messages, { role: chunk.role ?? 'ai', content: chunk.content, type: chunk.type }];
 				}
 			},
@@ -165,6 +199,26 @@
 				{/if}
 			{/if}
 		</div>
+
+		{#if pendingConsent}
+			<div class="consent-banner">
+				<div class="consent-icon">🔐</div>
+				<div class="consent-body">
+					<strong>CIBA Consent Required (RFC 9126)</strong>
+					<p>The agent is requesting approval for a privileged action:</p>
+					<p class="consent-details">{pendingConsent.details}</p>
+					<p class="consent-rid">Request ID: <code>{pendingConsent.request_id}</code></p>
+					<div class="consent-actions">
+						<button class="btn btn-approve" onclick={approveConsent} disabled={consentStatus === 'approving'}>
+							{consentStatus === 'approving' ? 'Approving...' : 'Approve Refund'}
+						</button>
+						<button class="btn btn-deny" onclick={() => { pendingConsent = null; messages = [...messages, { role: 'ai', content: 'Consent denied by user.' }]; }}>
+							Deny
+						</button>
+					</div>
+				</div>
+			</div>
+		{/if}
 
 		<div class="chat-input-area">
 			<textarea
@@ -375,4 +429,80 @@
 		opacity: 0.5;
 		cursor: not-allowed;
 	}
+
+	.consent-banner {
+		display: flex;
+		gap: 1rem;
+		background: #fff8e1;
+		border: 2px solid #f9a825;
+		border-radius: 8px;
+		padding: 1rem;
+		margin: 0.75rem 0;
+	}
+
+	.consent-icon {
+		font-size: 1.8rem;
+		flex-shrink: 0;
+	}
+
+	.consent-body {
+		flex: 1;
+	}
+
+	.consent-body strong {
+		display: block;
+		margin-bottom: 0.25rem;
+	}
+
+	.consent-body p {
+		margin: 0.25rem 0;
+		font-size: 0.85rem;
+	}
+
+	.consent-details {
+		background: #fff;
+		border: 1px solid #e0e0e0;
+		padding: 0.5rem;
+		border-radius: 4px;
+		font-family: monospace;
+		font-size: 0.8rem;
+	}
+
+	.consent-rid code {
+		background: #e8e8e8;
+		padding: 0.1rem 0.3rem;
+		border-radius: 3px;
+		font-size: 0.75rem;
+	}
+
+	.consent-actions {
+		display: flex;
+		gap: 0.5rem;
+		margin-top: 0.75rem;
+	}
+
+	.btn-approve {
+		background: #198038;
+		color: #fff;
+		border: none;
+		padding: 0.5rem 1.2rem;
+		border-radius: 4px;
+		font-weight: 600;
+		cursor: pointer;
+	}
+
+	.btn-approve:hover { background: #0e6027; }
+	.btn-approve:disabled { opacity: 0.6; cursor: not-allowed; }
+
+	.btn-deny {
+		background: #fff;
+		color: #da1e28;
+		border: 1px solid #da1e28;
+		padding: 0.5rem 1.2rem;
+		border-radius: 4px;
+		font-weight: 600;
+		cursor: pointer;
+	}
+
+	.btn-deny:hover { background: #ffd7d9; }
 </style>

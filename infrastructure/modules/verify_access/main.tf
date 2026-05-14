@@ -452,7 +452,7 @@ rules:
     - name: notifyuser
       rule_type: javascript
       content: |
-        ciba.setAuthenticator(new InternalAuthenticator());
+        ciba.setAuthenticator(new ExternalAuthenticator());
 
 clients:
   - client_id: workshop_agent

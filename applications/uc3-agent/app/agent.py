@@ -457,22 +457,26 @@ def process_refund(
     # Step 2: Initiate CIBA — sends consent request to user's IVIA app
     auth_req_id = _initiate_ciba(login_hint, authorization_details, request_id)
 
-    # Step 3: Build browser consent URL for the workshop attendee.
-    # IVIA_EXTERNAL_URL is the ALB hostname reachable from the user's browser.
-    # IVIA_BASE_URL is the cluster-internal endpoint (not reachable from browser).
-    external_base = IVIA_EXTERNAL_URL.rstrip("/") if IVIA_EXTERNAL_URL else IVIA_BASE_URL.rstrip("/")
-    consent_url = f"{external_base}/oauth2/ciba_user_authorize/{auth_req_id}"
+    # Step 3: Emit structured consent marker for the banking UI.
+    # The UI detects CIBA_CONSENT: in the SSE stream and renders an inline
+    # Approve/Deny button. ExternalAuthenticator pattern — the banking app
+    # calls IVIA's /oauth2/ciba_status_update/{auth_req_id} on approval.
+    rar_desc = f"refund_approval ${amount} {currency} for transaction {transaction_id}"
+    consent_marker = (
+        f"CIBA_CONSENT:auth_req_id={auth_req_id}"
+        f"|request_id={request_id}"
+        f"|details={rar_desc}"
+    )
     logger.info(
-        "ciba_consent_url",
+        "ciba_consent_requested",
         extra={
             "request_id": request_id,
-            "consent_url": consent_url,
-            "instruction": "Click this URL to approve the refund in IVIA",
+            "auth_req_id": auth_req_id,
+            "authorization_details": authorization_details,
+            "instruction": "Waiting for user consent via ExternalAuthenticator",
         },
     )
-    print(f"\n[UC3] CIBA Consent Required — request_id: {request_id}")
-    print(f"[UC3] Open this URL in your browser to approve the refund:")
-    print(f"[UC3] {consent_url}\n")
+    print(f"\n{consent_marker}\n")
 
     # Step 4: Poll IVIA until user approves (or timeout)
     ciba_token = _poll_ciba(auth_req_id, request_id)

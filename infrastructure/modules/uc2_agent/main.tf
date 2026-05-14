@@ -116,17 +116,20 @@ locals {
     IVIA_CLIENT_ID = var.ivia_client_id
     # IVIA_CLIENT_SECRET: workshop stores in ConfigMap for simplicity.
     # Production deployments should use a Kubernetes Secret with secretKeyRef.
-    IVIA_CLIENT_SECRET = var.ivia_client_secret
-    REDIRECT_URI       = "${local.banking_ui_external_url}/callback"
+    IVIA_CLIENT_SECRET     = var.ivia_client_secret
+    IVIA_BASE_URL          = "https://${var.ivia_service_endpoint}:8436"
+    UC3_IVIA_CLIENT_ID     = "agent-uc3"
+    UC3_IVIA_CLIENT_SECRET = var.ivia_client_secret
+    REDIRECT_URI           = "${local.banking_ui_external_url}/callback"
     # Client-side vars (SvelteKit PUBLIC_ prefix — auth.ts PKCE upgrade path)
     PUBLIC_IVIA_ISSUER    = local.ivia_external_url
     PUBLIC_IVIA_CLIENT_ID = var.ivia_client_id
     PUBLIC_REDIRECT_URI   = "${local.banking_ui_external_url}/callback"
     # Server-side proxy (SvelteKit $env/dynamic/private) — /api/chat + /api/uc3-chat routes
-    AGENT_URL             = "http://banking-agent-svc:3002"
-    UC3_AGENT_URL         = "http://uc3-agent-svc:8080"
+    AGENT_URL     = "http://banking-agent-svc:3002"
+    UC3_AGENT_URL = "http://uc3-agent-svc:8080"
     # SvelteKit CSRF protection: ORIGIN must match the browser's Origin header
-    ORIGIN                = local.banking_ui_external_url
+    ORIGIN = local.banking_ui_external_url
   }
 }
 
