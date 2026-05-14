@@ -5,106 +5,158 @@ weight: 42
 
 ## Overview
 
-In this step you deploy IBM Verify Identity Access (IVIA) 11.0.2 as a self-hosted OIDC provider and CIBA authorization server on the EKS cluster. IVIA runs as raw Kubernetes workloads (Deployment, Service, Ingress) rather than a Helm chart — raw manifests as Terraform resources make the full configuration visible and reviewable.
+IBM Verify Identity Access (IVIA) runs as a **four-container architecture** on EKS:
 
-IVIA authenticates users against **AWS Simple AD** — a lightweight managed Active Directory deployed in the same VPC as EKS. In a real enterprise, this would be your organization's existing Active Directory or LDAP directory. The workshop pre-provisions two employees (Oscar and Adriana) so you can test the OAuth and CIBA flows end-to-end.
+| Container | Image | Role |
+|-----------|-------|------|
+| Config (`ivia-config`) | `icr.io/ivia/ivia-config:11.0.2.0` | Local Management Interface (LMI), publishes configuration snapshots |
+| Web Reverse Proxy (`ivia-wrp`) | `icr.io/ivia/ivia-wrp:11.0.2.0` | Browser entry point, junction routing, session management |
+| AAC Runtime (`ivia-runtime`) | `icr.io/ivia/ivia-runtime:11.0.2.0` | Advanced Access Control authentication engine |
+| OIDC Provider (`ivia-oidc-provider`) | `icr.io/ivia/ivia-oidc-provider:25.10` | OAuth 2.0 token issuance, JWKS, CIBA, mapping rules |
 
-The IVIA deployment is exposed externally via an AWS Application Load Balancer managed by AWS Load Balancer Controller.
+**Traffic routing:** The WRP is the single internet-facing entry point for all browser-based flows (CIBA consent, authorization_code login). Machine-to-machine flows (CIBA bc-authorize, token exchange, ROPC) bypass WRP and hit the OIDC Provider directly via its internal ClusterIP service.
 
-## Prerequisites
+## Architecture
 
-:::alert{header="IBM entitlement key required" type="warning"}
-The IVIA container image is pulled from IBM Container Registry (`icr.io`). You must have a valid IBM entitlement key. The `icr_entitlement_key` was set in the HCP Terraform variable set during bootstrap. If the IVIA pod shows `ImagePullBackOff`, verify the key is correct in the HCP Terraform UI under your variable set.
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {'primaryColor': '#0f62fe', 'primaryTextColor': '#161616', 'lineColor': '#525252', 'noteBkgColor': '#d4bbff', 'noteTextColor': '#161616'}}}%%
+graph LR
+    Internet((Internet)) -->|HTTPS| ALB[ALB\nivia-wrp ingress]
+    ALB --> WRP[WRP\nport 9443]
+    WRP -->|junction /isvaop| OP[OIDC Provider\nport 8436]
+    WRP -->|junction /mga| RT[AAC Runtime\nport 9443]
+    CFG[Config\nLMI port 9443] -->|snapshot| WRP
+    CFG -->|snapshot| RT
+    OP --> PG[(RDS PostgreSQL)]
+    RT -->|LDAP| AD[(Simple AD)]
+    Agent((Agent\nMachine-to-Machine)) -->|direct ClusterIP| OP
+```
+
+## Why the Full Stack?
+
+:::collapsible{header="Why the standalone OIDC Provider was insufficient"}
+The standalone `ivia-oidc-provider` is a token factory. It issues OAuth tokens, hosts JWKS endpoints, and executes JavaScript mapping rules. But it has **no authentication engine**.
+
+When a flow requires user interaction — CIBA consent or authorization_code login — the OIDC Provider returns `404` because it expects the Web Reverse Proxy to handle those browser sessions. The WRP is IVIA's point-of-contact for all browser-based flows.
+
+Specifically, the standalone OIDC Provider cannot:
+- Serve the `/oauth2/ciba_user_authorize/{id}` consent page (returns 404 without WRP)
+- Display a login page (no HTML renderer)
+- Validate credentials against Simple AD (no AAC engine)
+
+This means Use Case 3's CIBA consent flow **cannot complete** without the full IVIA stack.
 :::
 
-## Step 1 — Review the verify_access module
+:::alert{header="IBM activation code required" type="info"}
+The Config container requires activation codes to enable the WRP (webseal), Advanced Access Control (aac), and Federation (federation) modules. The activation code is sourced from **IBM Passport Advantage** (part number `M11DCML`) — not the trial `.cer` file, which applies only to the ISAM hardware appliance. The `ivia_activation_code` Terraform variable is set as a sensitive workspace variable in HCP Terraform.
+:::
 
-Open `infrastructure/main.tf` and locate the `verify_access` module block. It depends on `module.addons` (same `time_sleep.alb_webhook_ready` gate) which ensures cert-manager and AWS Load Balancer Controller are available.
+## Deployment Sequence
 
-The `verify_access` module calls `infrastructure/modules/verify_access/` which provisions:
+The `depends_on` chain enforces this exact startup order:
 
-- A `verify-access` Kubernetes namespace.
-- An ICR pull secret (`icr-pull-secret`) for `icr.io` authentication, wired into both the ServiceAccount's `imagePullSecrets` and the Deployment's pod template.
-- The IVIA Deployment (image `icr.io/ibmid/verify-access:26.03`), ConfigMap, and Service.
-- An `Ingress` resource annotated for AWS Load Balancer Controller, which provisions an ALB.
-- A `wait_for_rollout` resource that ensures the deployment is healthy before the module reports success.
+1. **Config container (`ivia-config`) starts** — LMI available on ClusterIP port 9443. All other containers depend on Config being ready before they can pull configuration snapshots.
 
-## Step 2 — Already deployed
+2. **Autoconf Job runs** (`kubernetes_job.ivia_autoconf` — image `python:3.12-slim`):
+   - Installs and runs `ibmvia_autoconf`
+   - Activates webseal + aac + federation modules using the activation code
+   - Creates a WRP instance named `default`
+   - Creates the `/isvaop` junction pointing to the OIDC Provider ClusterIP (`isvaop.verify-access.svc.cluster.local:8436`)
+   - Sets `anyauth` ACL on `/isvaop/oauth2/ciba_user_authorize` (requires login before consent)
+   - Publishes the configuration snapshot
 
-The `verify_access` module was deployed as part of the foundation `terraform apply` in the previous module. It deploys in the same wave as `vault` — after the `addons` wave completes, both `vault` and `verify_access` apply. No separate apply step is needed.
+3. **Runtime (`ivia-runtime`) and WRP (`ivia-wrp`) start in parallel** — both download the published snapshot from Config via `CONFIG_SERVICE_URL`. WRP's ALB Ingress replaces the old OIDC Provider ALB as the external entry point.
 
-## Step 3 — What happens during apply
+## What Terraform Deploys
 
-When the `verify_access` module applies:
+The `verify_access` module creates:
 
-1. The `verify-access` namespace is created.
-2. An `icr-pull-secret` Kubernetes Secret of type `kubernetes.io/dockerconfigjson` is created with the IBM entitlement key as the password for `icr.io`.
-3. The IVIA Deployment, ConfigMap, and Service are created. The Deployment uses the `26.03` image tag (IVIA 11.0.2 release).
-4. The `Ingress` resource triggers AWS Load Balancer Controller to provision an ALB. The ALB hostname is output as `ivia_alb_hostname`.
-5. IVIA bootstraps a PostgreSQL schema in the workshop RDS instance (connection string configured via Terraform variables).
-6. IVIA starts the OIDC provider on port `443` internally and the management interface on port `9443`.
+- Config container (`ivia-config:11.0.2.0`) — Deployment, ClusterIP Service, PersistentVolumeClaim
+- Autoconf Kubernetes Job (`python:3.12-slim`) — activates modules, creates WRP instance and junctions
+- AAC Runtime (`ivia-runtime:11.0.2.0`) — Deployment, ClusterIP Service
+- Web Reverse Proxy (`ivia-wrp:11.0.2.0`) — Deployment, ClusterIP Service, ALB Ingress (internet-facing)
+- OIDC Provider (`ivia-oidc-provider:25.10`) — existing deployment, now accessible via WRP `/isvaop` junction and directly at ClusterIP for machine-to-machine flows
+- ICR pull secret (`icr-pull-secret`) for all four containers
+- RDS PostgreSQL schema (OIDC Provider bootstrap)
 
-## Step 4 — Verify pods are running
+## Step 1 — Verify all pods are running
+
+The `verify_access` module was deployed as part of the foundation `terraform apply` in the previous module. No separate apply step is needed. Verify the four pods are healthy:
 
 ```bash
 kubectl get pods -n verify-access
 ```
 
-Expected output:
+Expected output — four pods Running:
 
 ```
-NAME                            READY   STATUS    RESTARTS   AGE
-ivia-deployment-<hash>          1/1     Running   0          5m
+NAME                             READY   STATUS    RESTARTS   AGE
+ivia-config-<hash>               1/1     Running   0          10m
+ivia-runtime-<hash>              1/1     Running   0          8m
+ivia-wrp-<hash>                  1/1     Running   0          8m
+isvaop-deployment-<hash>         1/1     Running   0          12m
 ```
 
-Check the Ingress and ALB hostname:
+:::alert{header="Config must start first" type="warning"}
+If `ivia-runtime` or `ivia-wrp` pods fail to start with `CrashLoopBackOff`, check whether `ivia-config` is Running. Runtime and WRP cannot download their configuration snapshot until Config's LMI is available. The autoconf Job also requires Config to be ready before it can publish the initial snapshot.
+:::
+
+## Step 2 — Check the WRP ALB Ingress
 
 ```bash
 kubectl get ingress -n verify-access
 ```
 
+Expected output:
+
 ```
-NAME            CLASS   HOSTS   ADDRESS                                                  PORTS   AGE
-ivia-ingress    alb     *       k8s-verifyac-ivia-xxxx.elb.amazonaws.com   80,443  5m
+NAME       CLASS   HOSTS   ADDRESS                                        PORTS   AGE
+ivia-wrp   alb     *       k8s-verifyac-ivia-xxxx.elb.amazonaws.com      80      8m
 ```
 
-## Step 5 — Verify OIDC discovery endpoint
+The WRP ALB hostname is the external entry point for all browser flows. Save it:
 
-IVIA exposes its OIDC discovery document at `/oauth2/.well-known/openid-configuration`. Test the in-cluster endpoint (used by Vault `jwt` auth):
+```bash
+WRP_HOST=$(kubectl get ingress -n verify-access ivia-wrp \
+  -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+echo "WRP host: $WRP_HOST"
+```
+
+## Step 3 — Verify OIDC discovery via WRP junction
+
+The OIDC Provider is accessible externally via the WRP `/isvaop` junction:
+
+```bash
+curl -s "http://$WRP_HOST/isvaop/oauth2/.well-known/openid-configuration" | jq .issuer
+```
+
+Expected:
+
+```
+"http://<wrp-alb-hostname>/isvaop"
+```
+
+Vault's JWT auth method uses the **internal ClusterIP** URL (not the WRP ALB) as `bound_issuer`:
 
 ```bash
 kubectl run oidc-check --image=curlimages/curl --rm -i --restart=Never \
   -n verify-access -- \
   curl -sk https://isvaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration \
-  | jq .
+  | jq .issuer
 ```
 
-Expected output includes:
+Expected:
 
-```json
-{
-  "issuer": "https://isvaop.verify-access.svc.cluster.local:8436/oauth2",
-  "authorization_endpoint": "https://isvaop.verify-access.svc.cluster.local:8436/oauth2/authorize",
-  "token_endpoint": "https://isvaop.verify-access.svc.cluster.local:8436/oauth2/token",
-  "jwks_uri": "https://isvaop.verify-access.svc.cluster.local:8436/oauth2/jwks",
-  ...
-}
+```
+"https://isvaop.verify-access.svc.cluster.local:8436/oauth2"
 ```
 
-The `issuer` value is the URL Vault will use as `bound_issuer` in the `jwt` auth configuration. Save it:
-
-```bash
-IVIA_ISSUER=$(kubectl run oidc-issuer --image=curlimages/curl --rm -i --restart=Never \
-  -n verify-access -- \
-  curl -sk https://isvaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration \
-  | jq -r .issuer)
-echo "IVIA issuer: $IVIA_ISSUER"
-```
-
-:::collapsible{header="IVIA architecture — why raw Kubernetes manifests?"}
+:::collapsible{header="Why raw Kubernetes manifests instead of Helm?"}
 IBM Verify Identity Access does not publish a Helm chart. The `verify_access` Terraform module uses the `kubernetes` provider to manage each Kubernetes resource as a Terraform resource (`kubernetes_namespace`, `kubernetes_secret`, `kubernetes_deployment`, `kubernetes_service`, `kubernetes_ingress_v1`).
 
-Using the `kubernetes` provider (rather than `kubectl_manifest` with raw YAML) keeps the full configuration visible as Terraform HCL and avoids introducing a second provider dependency. Attendees can read the exact Deployment spec, resource requests, environment variables, and volume mounts directly in `infrastructure/modules/verify_access/main.tf`.
-
-The image tag `26.03` corresponds to IVIA release 11.0.2 — IBM tags IVIA images by release date rather than semantic version.
+Using the `kubernetes` provider (rather than `kubectl_manifest` with raw YAML) keeps the full configuration visible as Terraform HCL. Attendees can read the exact Deployment spec, resource requests, environment variables, and volume mounts directly in `infrastructure/modules/verify_access/main.tf`. The four image tags in use are:
+- `icr.io/ivia/ivia-config:11.0.2.0`
+- `icr.io/ivia/ivia-runtime:11.0.2.0`
+- `icr.io/ivia/ivia-wrp:11.0.2.0`
+- `icr.io/ivia/ivia-oidc-provider:25.10`
 :::
