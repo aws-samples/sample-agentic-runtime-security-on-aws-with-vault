@@ -466,6 +466,14 @@ resource "kubernetes_network_policy" "uc3_allow_inbound" {
         }
       }
 
+      from {
+        pod_selector {
+          match_labels = {
+            app = "banking-ui"
+          }
+        }
+      }
+
       ports {
         port     = "8080"
         protocol = "TCP"

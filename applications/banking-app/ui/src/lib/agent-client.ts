@@ -18,10 +18,11 @@ export async function sendChatMessage(
   _jwt: string,
   sessionId: string,
   onMessage: (chunk: ChatResponse) => void,
-  onError: (error: string) => void
+  onError: (error: string) => void,
+  endpoint: string = '/api/chat'
 ): Promise<void> {
   try {
-    const res = await fetch('/api/chat', {
+    const res = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message, sessionId }),

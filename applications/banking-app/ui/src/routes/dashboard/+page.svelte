@@ -41,11 +41,15 @@
 		}
 	});
 
+	let chatEndpoint = $state('/api/chat');
+
 	async function sendMessage() {
 		if (!inputMessage.trim() || isLoading) return;
 
 		const userMsg = inputMessage.trim();
+		const endpoint = chatEndpoint;
 		inputMessage = '';
+		chatEndpoint = '/api/chat';
 
 		messages = [...messages, { role: 'user', content: userMsg }];
 		isLoading = true;
@@ -71,7 +75,8 @@
 			(err) => {
 				messages = [...messages, { role: 'error', content: `Error: ${err}` }];
 				isLoading = false;
-			}
+			},
+			endpoint
 		);
 	}
 
@@ -128,6 +133,12 @@
 							onclick={() => { inputMessage = 'Show transactions for my checking account'; }}
 						>
 							Checking account transactions
+						</button>
+						<button
+							class="suggestion-btn suggestion-btn-refund"
+							onclick={() => { inputMessage = 'I need a refund for a recent transaction'; chatEndpoint = '/api/uc3-chat'; }}
+						>
+							I need a refund
 						</button>
 					</div>
 				</div>
@@ -259,6 +270,16 @@
 	.suggestion-btn:hover {
 		background: #d0e2ff;
 		border-color: #0f62fe;
+	}
+
+	.suggestion-btn-refund {
+		color: #da1e28;
+		border-color: #da1e28;
+	}
+
+	.suggestion-btn-refund:hover {
+		background: #ffd7d9;
+		border-color: #da1e28;
 	}
 
 	.message {

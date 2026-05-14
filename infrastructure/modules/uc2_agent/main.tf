@@ -122,8 +122,9 @@ locals {
     PUBLIC_IVIA_ISSUER    = local.ivia_external_url
     PUBLIC_IVIA_CLIENT_ID = var.ivia_client_id
     PUBLIC_REDIRECT_URI   = "${local.banking_ui_external_url}/callback"
-    # Server-side proxy (SvelteKit $env/dynamic/private) — /api/chat route
+    # Server-side proxy (SvelteKit $env/dynamic/private) — /api/chat + /api/uc3-chat routes
     AGENT_URL             = "http://banking-agent-svc:3002"
+    UC3_AGENT_URL         = "http://uc3-agent-svc:8080"
     # SvelteKit CSRF protection: ORIGIN must match the browser's Origin header
     ORIGIN                = local.banking_ui_external_url
   }
