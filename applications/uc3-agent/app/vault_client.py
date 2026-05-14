@@ -71,20 +71,21 @@ class UC3VaultClient:
         )
 
     def get_readonly_credentials(self) -> dict:
-        """Fetch read-only DB credentials from Vault (lookup_transaction tool).
+        """Fetch DB credentials from Vault for transaction lookups.
 
         Uses the agent's K8s auth workload identity token.
-        Role: uc3-readonly — scoped to SELECT on banking.transactions only.
+        Role: uc3-refund-writer — single role with SELECT on transactions
+        + INSERT/UPDATE on refunds (per spec: no separate read/write roles).
 
         Returns:
             Dict with keys: username, password, host, port, dbname
         """
-        vault_db_path = os.getenv("VAULT_DB_READONLY_PATH", "database/creds/uc3-readonly")
+        vault_db_path = os.getenv("VAULT_DB_READONLY_PATH", "database/creds/uc3-refund-writer")
         response = self._client.read(vault_db_path)
         data = response["data"]
 
         logger.info(
-            "uc3_readonly_creds_issued",
+            "uc3_db_creds_issued",
             extra={
                 "vault_db_path": vault_db_path,
                 "lease_id": response.get("lease_id", "n/a"),
