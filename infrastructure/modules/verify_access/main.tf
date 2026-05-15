@@ -1038,6 +1038,55 @@ resource "kubernetes_persistent_volume_claim" "ivia_config" {
 }
 
 ################################################################################
+# Config Container — jdbc/config datasource overlay
+# The RBA management backend requires a JNDI datasource named jdbc/config.
+# The baked-in server.xml ships with an empty <dataSource>; this ConfigMap
+# provides a Liberty include snippet that wires jdbc/config to our RDS
+# PostgreSQL instance.  An init container injects the include into server.xml
+# before Liberty starts.
+################################################################################
+
+resource "kubernetes_config_map" "ivia_config_ds" {
+  metadata {
+    name      = "ivia-config-ds"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+  }
+
+  data = {
+    "datasource-override.xml" = <<-XML
+      <server description="jdbc/config datasource for RBA persistence">
+        <library id="pgLib">
+          <fileset dir="/usr/share/java" includes="postgresql-jdbc.jar"/>
+        </library>
+        <dataSource id="configDS" jndiName="jdbc/config" statementCacheSize="10">
+          <connectionManager maxPoolSize="100" minPoolSize="5"/>
+          <jdbcDriver libraryRef="pgLib"/>
+          <properties.postgresql
+            serverName="${var.rds_address}"
+            portNumber="${var.rds_port}"
+            databaseName="${var.rds_db_name}"
+            user="${local.rds_creds["username"]}"
+            password="${local.rds_creds["password"]}"/>
+        </dataSource>
+      </server>
+    XML
+
+    "inject-datasource.sh" = <<-SCRIPT
+      #!/bin/sh
+      set -e
+      SRV="/opt/ibm/wlp/usr/servers/default/server.xml"
+      INCLUDE='<include optional="false" location="/etc/ivia-ds/datasource-override.xml"/>'
+      sed -i "s|<dataSource><connectionManager maxPoolSize=\"100\"/></dataSource>||" "$$SRV"
+      sed -i "s|<dataSource>.*<connectionManager maxPoolSize=\"100\"/>.*</dataSource>||" "$$SRV"
+      if ! grep -q datasource-override "$$SRV"; then
+        sed -i "s|</server>|$$INCLUDE\n</server>|" "$$SRV"
+      fi
+      echo "datasource-override injected into server.xml"
+    SCRIPT
+  }
+}
+
+################################################################################
 # Config Container Deployment
 # Port 9443 — LMI (Local Management Interface). ClusterIP only (no Ingress).
 # Admin password from K8s Secret (Threat T-06-08-01 mitigation).
@@ -1077,13 +1126,32 @@ resource "kubernetes_deployment" "ivia_config" {
       spec {
         service_account_name = kubernetes_service_account.isvaop.metadata[0].name
 
+        security_context {
+          run_as_non_root = true
+          run_as_user     = 6000
+          fs_group        = 6000
+        }
+
         image_pull_secrets {
           name = kubernetes_secret.icr_pull.metadata[0].name
         }
 
         container {
-          name  = "ivia-config"
-          image = "icr.io/ivia/ivia-config:11.0.2.0"
+          name    = "ivia-config"
+          image   = "icr.io/ivia/ivia-config:11.0.2.0"
+          command = ["/bin/sh", "-c", "/etc/ivia-ds/inject-datasource.sh && exec /sbin/bootstrap.sh"]
+
+          security_context {
+            privileged                 = false
+            read_only_root_filesystem  = false
+            allow_privilege_escalation = true
+            run_as_non_root            = true
+            run_as_user                = 6000
+            capabilities {
+              drop = ["ALL"]
+              add  = ["CHOWN", "DAC_OVERRIDE", "FOWNER", "KILL", "NET_BIND_SERVICE", "SETFCAP", "SETGID", "SETUID"]
+            }
+          }
 
           port {
             container_port = 9443
@@ -1114,6 +1182,12 @@ resource "kubernetes_deployment" "ivia_config" {
           volume_mount {
             name       = "logs"
             mount_path = "/var/application.logs"
+          }
+
+          volume_mount {
+            name       = "ds-override"
+            mount_path = "/etc/ivia-ds"
+            read_only  = true
           }
 
           readiness_probe {
@@ -1159,6 +1233,14 @@ resource "kubernetes_deployment" "ivia_config" {
           name = "logs"
           empty_dir {}
         }
+
+        volume {
+          name = "ds-override"
+          config_map {
+            name         = kubernetes_config_map.ivia_config_ds.metadata[0].name
+            default_mode = "0755"
+          }
+        }
       }
     }
   }
@@ -1168,6 +1250,7 @@ resource "kubernetes_deployment" "ivia_config" {
     kubernetes_secret.ivia_admin,
     kubernetes_secret.ivia_configreader,
     kubernetes_persistent_volume_claim.ivia_config,
+    kubernetes_config_map.ivia_config_ds,
   ]
 }
 
@@ -1566,6 +1649,11 @@ resource "kubernetes_deployment" "ivia_runtime" {
       spec {
         service_account_name = kubernetes_service_account.isvaop.metadata[0].name
 
+        security_context {
+          run_as_non_root = true
+          run_as_user     = 6000
+        }
+
         image_pull_secrets {
           name = kubernetes_secret.icr_pull.metadata[0].name
         }
@@ -1573,6 +1661,18 @@ resource "kubernetes_deployment" "ivia_runtime" {
         container {
           name  = "ivia-runtime"
           image = "icr.io/ivia/ivia-runtime:11.0.2.0"
+
+          security_context {
+            privileged                 = false
+            read_only_root_filesystem  = false
+            allow_privilege_escalation = true
+            run_as_non_root            = true
+            run_as_user                = 6000
+            capabilities {
+              drop = ["ALL"]
+              add  = ["CHOWN", "DAC_OVERRIDE", "FOWNER", "KILL", "NET_BIND_SERVICE", "SETFCAP", "SETGID", "SETUID"]
+            }
+          }
 
           port {
             container_port = 9443
@@ -1754,6 +1854,11 @@ resource "kubernetes_deployment" "ivia_wrp" {
       spec {
         service_account_name = kubernetes_service_account.isvaop.metadata[0].name
 
+        security_context {
+          run_as_non_root = true
+          run_as_user     = 6000
+        }
+
         image_pull_secrets {
           name = kubernetes_secret.icr_pull.metadata[0].name
         }
@@ -1761,6 +1866,18 @@ resource "kubernetes_deployment" "ivia_wrp" {
         container {
           name  = "ivia-wrp"
           image = "icr.io/ivia/ivia-wrp:11.0.2.0"
+
+          security_context {
+            privileged                 = false
+            read_only_root_filesystem  = false
+            allow_privilege_escalation = true
+            run_as_non_root            = true
+            run_as_user                = 6000
+            capabilities {
+              drop = ["ALL"]
+              add  = ["CHOWN", "DAC_OVERRIDE", "FOWNER", "KILL", "NET_BIND_SERVICE", "SETFCAP", "SETGID", "SETUID"]
+            }
+          }
 
           port {
             container_port = 9443
