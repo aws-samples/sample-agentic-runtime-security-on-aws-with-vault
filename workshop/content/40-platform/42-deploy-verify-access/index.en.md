@@ -47,23 +47,13 @@ Specifically, the standalone OIDC Provider cannot:
 This means Use Case 3's CIBA consent flow **cannot complete** without the full IVIA stack.
 :::
 
-:::alert{header="IBM activation code required" type="info"}
-The Config container requires activation codes to enable the WRP (webseal), Advanced Access Control (aac), and Federation (federation) modules. The activation code is sourced from **IBM Passport Advantage** (part number `M11DCML`) — not the trial `.cer` file, which applies only to the ISAM hardware appliance. The `ivia_activation_code` Terraform variable is set as a sensitive workspace variable in HCP Terraform.
-:::
-
 ## Deployment Sequence
 
 The `depends_on` chain enforces this exact startup order:
 
 1. **Config container (`ivia-config`) starts** — LMI available on ClusterIP port 9443. All other containers depend on Config being ready before they can pull configuration snapshots.
 
-2. **Autoconf Job runs** (`kubernetes_job.ivia_autoconf` — image `python:3.12-slim`):
-   - Installs and runs `ibmvia_autoconf`
-   - Activates webseal + aac + federation modules using the activation code
-   - Creates a WRP instance named `default`
-   - Creates the `/isvaop` junction pointing to the OIDC Provider ClusterIP (`isvaop.verify-access.svc.cluster.local:8436`)
-   - Sets `anyauth` ACL on `/isvaop/oauth2/ciba_user_authorize` (requires login before consent)
-   - Publishes the configuration snapshot
+2. **Autoconf Job runs** — uploads the trial certificate to activate all modules (wga, mga, federation), creates a WRP instance, configures the `/isvaop` junction to the OIDC Provider, sets the `anyauth` ACL on the CIBA consent path, and publishes the configuration snapshot.
 
 3. **Runtime (`ivia-runtime`) and WRP (`ivia-wrp`) start in parallel** — both download the published snapshot from Config via `CONFIG_SERVICE_URL`. WRP's ALB Ingress replaces the old OIDC Provider ALB as the external entry point.
 

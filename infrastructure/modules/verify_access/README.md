@@ -57,9 +57,8 @@ The `depends_on` chain in this module enforces this exact order:
    └─ All other containers depend on Config being ready
 
 2. Autoconf Job (kubernetes_job.ivia_autoconf)
-   └─ Image: python:3.12-slim
-   └─ pip install ibmvia_autoconf
-   └─ Activates modules: webseal + aac + federation (using ivia_activation_code)
+   └─ Image: curlimages/curl
+   └─ Uploads trial cert via POST /trial (activates wga, mga, federation)
    └─ Creates WRP instance "default"
    └─ Creates junction /isvaop -> isvaop.verify-access.svc.cluster.local:8436 (SSL)
    └─ Sets anyauth ACL on /isvaop/oauth2/ciba_user_authorize/*
@@ -80,20 +79,21 @@ The WRP `/isvaop` junction proxies to the OIDC Provider. The `anyauth` ACL on `/
 
 These flows do not require user authentication and bypass WRP entirely for lower latency and simpler routing.
 
-## Activation Codes
+## Module Activation
 
-The Config container requires activation codes to unlock the following modules:
+The Config container requires activation to unlock the following modules:
 
-| Module | Purpose |
-|--------|---------|
-| `webseal` | Enables the Web Reverse Proxy (WRP) functionality |
-| `aac` | Enables Advanced Access Control (AAC) — the authentication engine |
+| Module ID | Purpose |
+|-----------|---------|
+| `wga` | Enables the Web Reverse Proxy (WRP) functionality |
+| `mga` | Enables Advanced Access Control (AAC) — the authentication engine |
 | `federation` | Enables federation and OIDC capabilities |
 
-- **Source:** IBM Passport Advantage, part number `M11DCML` — NOT the trial `.cer` file (that applies to the ISAM hardware appliance only)
-- **Terraform variable:** `var.ivia_activation_code` (sensitive = true)
-- **HCP Terraform:** Set as a sensitive workspace variable — never commit in `terraform.tfvars`
-- **How used:** The autoconf Job sets `IVIA_BASE_CODE`, `IVIA_AAC_CODE`, and `IVIA_FED_CODE` env vars all to this value
+- **Method:** Trial certificate uploaded via `POST /trial` to the Config LMI — activates all three modules at once
+- **Source:** https://isva-trial.verify.ibm.com/ (IBMid required)
+- **File:** `infrastructure/ISAM-Trial-HashiCorp.cer` (committed to the repo)
+- **Terraform variable:** `var.ivia_trial_cert` (filename, default: `ISAM-Trial-HashiCorp.cer`)
+- **If expired:** Download a new trial cert from the URL above and replace the `.cer` file in the `infrastructure/` directory
 
 ## CIBA Consent Flow
 
@@ -123,7 +123,7 @@ The Config container requires activation codes to unlock the following modules:
 
 1. **IBM entitlement key** — Required for the ICR pull secret (Pitfall 3). Without this, all four pods enter `ImagePullBackOff`. Set `icr_entitlement_key` as a sensitive workspace variable in HCP Terraform.
 
-2. **IBM activation code** — Required for Config container module activation. See Activation Codes section above.
+2. **IBM trial certificate** — Required for Config container module activation. See Module Activation section above.
 
 3. **AWS Load Balancer Controller** — Must be deployed (`module.addons`) before this module for the WRP ALB Ingress to be provisioned.
 
@@ -144,7 +144,7 @@ The Config container requires activation codes to unlock the following modules:
 | `vault_endpoint` | `string` | no | Vault ClusterIP URL from `module.vault.vault_endpoint`. |
 | `audit_log_group_names` | `map(string)` | no | Audit log group names from `module.audit.audit_log_group_names`. |
 | `icr_entitlement_key` | `string` | yes | IBM Container Registry entitlement key for image pull auth (all four containers). |
-| `ivia_activation_code` | `string` | yes | IBM activation code (M11DCML) for webseal + aac + federation modules. |
+| `ivia_trial_cert` | `string` | no | Filename of the IVIA trial certificate (`.cer`) in the `infrastructure/` directory. Default: `ISAM-Trial-HashiCorp.cer`. |
 | `tags` | `map(string)` | no | Tags applied to all AWS resources. Default: `{}`. |
 
 ## Outputs
@@ -178,7 +178,7 @@ module "ivia" {
   vault_endpoint             = module.vault.vault_endpoint
   audit_log_group_names      = module.audit.audit_log_group_names
   icr_entitlement_key        = var.icr_entitlement_key
-  ivia_activation_code       = var.ivia_activation_code
+  ivia_trial_cert            = var.ivia_trial_cert
   tags                       = var.tags
 }
 ```
@@ -230,7 +230,7 @@ The discovery response must contain `"issuer"`, `"grant_types_supported"`, and `
 
 **Pitfall 1 — Config must start before Runtime and WRP.** If `ivia-runtime` or `ivia-wrp` pods crash with `CrashLoopBackOff`, check whether `ivia-config` is Running first. Runtime and WRP download their configuration snapshot from Config's LMI on startup — if Config is not ready, they cannot start. The `depends_on` ordering in this module enforces the sequence.
 
-**Pitfall 2 — Activation codes are mandatory.** Without a valid activation code, the autoconf Job cannot enable the webseal, aac, or federation modules. The WRP and AAC Runtime will start but will not be properly configured. Obtain `M11DCML` from IBM Passport Advantage — the trial `.cer` file is for the ISAM hardware appliance only.
+**Pitfall 2 — Trial certificate is required.** Without the trial cert, the autoconf Job cannot activate the wga, mga, or federation modules. The WRP and AAC Runtime will start but will not be properly configured. Ensure `infrastructure/ISAM-Trial-HashiCorp.cer` exists — if expired, download a new one from https://isva-trial.verify.ibm.com/.
 
 **Pitfall 3 — cfgsvc password mismatch.** The Config container sets a random `cfgsvc` service account password at first boot. The autoconf Job and all workers must use the same password. This module manages password consistency via a Kubernetes Secret — do not manually change the cfgsvc password in the LMI UI.
 

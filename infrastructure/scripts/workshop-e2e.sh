@@ -451,11 +451,16 @@ phase_identity() {
     local ivia_ns="verify-access"
     local oidc_url="https://isvaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration"
 
-    # Ensure ivia_activation_code is in terraform.tfvars (required by verify_access module)
+    # Ensure ivia_trial_cert is in terraform.tfvars (required by verify_access module)
     local deploy_file="$PROJECT_ROOT/infrastructure/terraform.tfvars"
-    if [ -f "$deploy_file" ] && ! grep -q "ivia_activation_code" "$deploy_file" 2>/dev/null; then
-        echo 'ivia_activation_code = "M11DCML"' >> "$deploy_file"
-        print_info "ivia_activation_code = M11DCML (appended to terraform.tfvars)"
+    if [ -f "$deploy_file" ] && ! grep -q "ivia_trial_cert" "$deploy_file" 2>/dev/null; then
+        echo 'ivia_trial_cert = "ISAM-Trial-HashiCorp.cer"' >> "$deploy_file"
+        print_info "ivia_trial_cert = ISAM-Trial-HashiCorp.cer (appended to terraform.tfvars)"
+    fi
+
+    # Verify trial cert file exists
+    if [ ! -f "$PROJECT_ROOT/infrastructure/ISAM-Trial-HashiCorp.cer" ]; then
+        print_warn "IVIA trial cert not found at infrastructure/ISAM-Trial-HashiCorp.cer — obtain from https://isva-trial.verify.ibm.com/"
     fi
 
     # Check 1: OIDC Provider pod running

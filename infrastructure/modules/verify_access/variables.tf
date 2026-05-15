@@ -101,8 +101,8 @@ variable "tags" {
   default     = {}
 }
 
-variable "ivia_activation_code" {
+variable "ivia_trial_cert" {
   type        = string
-  sensitive   = true
-  description = "IBM IVIA activation code for Config container modules (webseal, aac, federation). Obtained from IBM Passport Advantage. Try M11DCML for all three."
+  description = "Filename of the IVIA trial certificate (.cer) in the infrastructure/ directory. Uploaded to Config container via POST /trial to activate wga, mga, and federation modules. Obtain from https://isva-trial.verify.ibm.com/ if expired."
+  default     = "ISAM-Trial-HashiCorp.cer"
 }

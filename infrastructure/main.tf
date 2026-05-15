@@ -259,7 +259,7 @@ module "ivia" {
   simple_ad_admin_password   = var.simple_ad_admin_password
   simple_ad_base_dn          = module.simple_ad.base_dn
   uc2_redirect_uri           = var.uc2_redirect_uri
-  ivia_activation_code       = var.ivia_activation_code
+  ivia_trial_cert            = var.ivia_trial_cert
   tags                       = var.tags
 
   depends_on = [time_sleep.alb_webhook_ready, module.simple_ad]

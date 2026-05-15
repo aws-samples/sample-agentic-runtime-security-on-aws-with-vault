@@ -1029,11 +1029,15 @@ resource "kubernetes_persistent_volume_claim" "ivia_config" {
 
     resources {
       requests = {
-        storage = "50Mi"
+        storage = "1Gi"
       }
     }
 
     storage_class_name = "gp2"
+  }
+
+  lifecycle {
+    ignore_changes = [spec[0].resources]
   }
 }
 
@@ -1055,6 +1059,9 @@ resource "kubernetes_config_map" "ivia_config_ds" {
   data = {
     "datasource-override.xml" = <<-XML
       <server description="jdbc/config datasource for RBA persistence">
+        <featureManager>
+          <feature>jdbc-4.1</feature>
+        </featureManager>
         <library id="pgLib">
           <fileset dir="/usr/share/java" includes="postgresql-jdbc.jar"/>
         </library>
@@ -1076,12 +1083,32 @@ resource "kubernetes_config_map" "ivia_config_ds" {
       set -e
       SRV="/opt/ibm/wlp/usr/servers/default/server.xml"
       INCLUDE='<include optional="false" location="/etc/ivia-ds/datasource-override.xml"/>'
-      sed -i "s|<dataSource><connectionManager maxPoolSize=\"100\"/></dataSource>||" "$$SRV"
-      sed -i "s|<dataSource>.*<connectionManager maxPoolSize=\"100\"/>.*</dataSource>||" "$$SRV"
-      if ! grep -q datasource-override "$$SRV"; then
-        sed -i "s|</server>|$$INCLUDE\n</server>|" "$$SRV"
+      # Remove the built-in H2-based jdbc/config dataSource (multi-line block)
+      # so our PostgreSQL override is the only jdbc/config definition.
+      python3 -c "
+import re, sys
+with open('$SRV') as f: t = f.read()
+t = re.sub(r'<dataSource\s+id=\"config\"[^>]*>.*?</dataSource>', '', t, flags=re.DOTALL)
+with open('$SRV','w') as f: f.write(t)
+      " 2>/dev/null || {
+        # Fallback if python3 not available: use perl
+        perl -0777 -i -pe 's/<dataSource\s+id="config"[^>]*>.*?<\/dataSource>//gs' "$SRV"
+      }
+      if ! grep -q datasource-override "$SRV"; then
+        sed -i "s|</server>|$INCLUDE\n</server>|" "$SRV"
       fi
       echo "datasource-override injected into server.xml"
+    SCRIPT
+
+    "start-slapd.sh" = <<-SCRIPT
+      #!/bin/sh
+      mkdir -p /var/openldap/data/dc-iswga
+      HASH=$(/usr/sbin/slappasswd -s "$LDAP_ADMIN_PWD")
+      echo "rootpw \"$HASH\"" > /etc/openldap/dynamic/passwd.conf
+      if ! pgrep -x slapd > /dev/null 2>&1; then
+        /usr/sbin/slapd -f /etc/openldap/slapd.conf -h "ldap://0.0.0.0:389 ldaps://0.0.0.0:636"
+        echo "slapd started"
+      fi
     SCRIPT
   }
 }
@@ -1141,6 +1168,14 @@ resource "kubernetes_deployment" "ivia_config" {
           image   = "icr.io/ivia/ivia-config:11.0.2.0"
           command = ["/bin/sh", "-c", "/etc/ivia-ds/inject-datasource.sh && exec /sbin/bootstrap.sh"]
 
+          lifecycle {
+            post_start {
+              exec {
+                command = ["/bin/sh", "/etc/ivia-ds/start-slapd.sh"]
+              }
+            }
+          }
+
           security_context {
             privileged                 = false
             read_only_root_filesystem  = false
@@ -1159,6 +1194,12 @@ resource "kubernetes_deployment" "ivia_config" {
             protocol       = "TCP"
           }
 
+          port {
+            container_port = 389
+            name           = "ldap"
+            protocol       = "TCP"
+          }
+
           env {
             name  = "CONTAINER_TIMEZONE"
             value = "UTC"
@@ -1166,6 +1207,16 @@ resource "kubernetes_deployment" "ivia_config" {
 
           env {
             name = "ADMIN_PWD"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret.ivia_admin.metadata[0].name
+                key  = "password"
+              }
+            }
+          }
+
+          env {
+            name = "LDAP_ADMIN_PWD"
             value_from {
               secret_key_ref {
                 name = kubernetes_secret.ivia_admin.metadata[0].name
@@ -1191,13 +1242,12 @@ resource "kubernetes_deployment" "ivia_config" {
           }
 
           readiness_probe {
-            http_get {
-              path   = "/core/login"
-              port   = 9443
-              scheme = "HTTPS"
+            exec {
+              command = ["/bin/sh", "-c", "curl -sk -o /dev/null https://localhost:9443/core/login && ldapsearch -x -H ldap://localhost:389 -b '' -s base '(objectclass=*)' > /dev/null 2>&1"]
             }
             initial_delay_seconds = 30
             period_seconds        = 10
+            timeout_seconds       = 5
             failure_threshold     = 6
           }
 
@@ -1289,15 +1339,8 @@ resource "kubernetes_service" "ivia_config" {
 
 ################################################################################
 # Autoconf ConfigMap
-# Contains the ibmvia_autoconf YAML config for activation, cluster setup, and
-# WRP instance creation. Shell script handles junction + ACL + snapshot publish
-# via ISVA REST API (more reliable than ibmvia_autoconf junction YAML for
-# complex junction types).
-#
-# IMPORTANT: ibmvia_autoconf is experimental for junction configuration.
-# Fallback: replace the pip/python command with a pure REST API shell script
-# that runs the same steps via curl -k against the LMI API directly.
-# See https://lachlan-ibm.github.io/ibmvia_autoconf/ for YAML reference.
+# Contains the trial certificate and the shell script that configures the
+# Config container via LMI REST API (activation, WRP, junction, ACL, snapshot).
 ################################################################################
 
 resource "kubernetes_config_map" "ivia_autoconf_config" {
@@ -1311,109 +1354,184 @@ resource "kubernetes_config_map" "ivia_autoconf_config" {
   }
 
   data = {
-    # ibmvia_autoconf YAML — handles activation, cluster config, and WRP instance.
-    # Junction and ACL configuration is done via the shell script (more reliable).
-    "config.yaml" = <<-EOT
-      activation:
-        webseal: !environment IVIA_BASE_CODE
-        access_control: !environment IVIA_AAC_CODE
-        federation: !environment IVIA_FED_CODE
-      cluster:
-        configuration_database:
-          embedded: true
-        runtime_database:
-          host: !environment PGHOST
-          port: !environment PGPORT
-          type: postgresql
-          user: !environment PGUSER
-          password: !environment PGPASSWORD
-          ssl: false
-          db_name: !environment PGDATABASE
-      webseal:
-        reverse_proxy:
-          - inst_name: default
-            host: iviawrp
-            admin_id: sec_master
-            admin_pwd: !environment ISVA_MGMT_PWD
-            domain: Default
-            http_port: 80
-            https_port: 443
-            ip_address: 0.0.0.0
-            listening_port: 7234
-            ssl: "no"
-    EOT
+    "trial.cer" = file("${path.root}/${var.ivia_trial_cert}")
 
-    # Shell script: waits for Config LMI, activates modules, creates WRP instance,
-    # creates junction /isvaop -> OIDC Provider, sets anyauth ACL on CIBA consent
-    # path, then publishes the config snapshot.
+    # Shell script: waits for Config LMI, uploads trial cert to activate all
+    # modules (wga, mga, federation), creates WRP instance, creates junction
+    # /isvaop -> OIDC Provider, sets anyauth ACL on CIBA consent path, then
+    # publishes the config snapshot.
     #
-    # REST API reference: https://docs.verify.ibm.com/ibm-security-verify-access/docs/api-lmi
-    # NOTE: Dollar signs in shell vars are escaped ($$) because this is inside an
-    # HCL heredoc that Terraform interpolates. $${VAR} renders as ${VAR} in the file.
+    # Activation API: POST /trial (multipart cert upload) activates all modules.
+    # Verify API: GET /isam/capabilities/v1 returns activated module list.
+    # REST API ref: https://docs.verify.ibm.com/ibm-security-verify-access/docs/api-lmi
+    # NOTE: $$ in HCL heredoc renders as $ in the output file.
     "post-config.sh" = <<-EOT
       #!/bin/sh
       set -e
       BASE_URL="https://iviaconfig.verify-access.svc.cluster.local:9443"
       AUTH="admin:$${ADMIN_PWD}"
+      TRIAL_CERT="/etc/autoconf/trial.cer"
 
-      echo "[autoconf] Waiting for LMI to be ready..."
-      until curl -sk -o /dev/null -w "%%{http_code}" -u "$${AUTH}" "$${BASE_URL}/core/login" 2>/dev/null | grep -q "200"; do
-        echo "[autoconf] LMI not ready, retrying in 5s..."
-        sleep 5
-      done
-      echo "[autoconf] LMI is ready."
+      wait_for_lmi() {
+        echo "[autoconf] Waiting for LMI to be ready..."
+        until curl -sk -o /dev/null -w "%%{http_code}" -u "$${AUTH}" "$${BASE_URL}/core/login" 2>/dev/null | grep -q "200"; do
+          sleep 5
+        done
+        echo "[autoconf] LMI is ready."
+      }
 
-      echo "[autoconf] Activating modules (webseal, aac, federation)..."
-      for MODULE in wga aac federation; do
-        CODE="$${IVIA_BASE_CODE}"
-        echo "[autoconf]   Activating $${MODULE}..."
-        RESP=$(curl -sk -X POST -u "$${AUTH}" \
+      accept_sla() {
+        echo "[autoconf] Accepting service agreements (setup_service_agreements)..."
+        RESP=$(curl -sk -w "\n%%{http_code}" -X PUT -u "$${AUTH}" \
           -H "Accept: application/json" -H "Content-Type: application/json" \
-          "$${BASE_URL}/isam/activation" \
-          -d "{\"id\":\"$${MODULE}\",\"code\":\"$${CODE}\"}" 2>&1) || true
-        echo "[autoconf]   $${MODULE}: $${RESP}"
-      done
+          "$${BASE_URL}/setup_service_agreements/accepted" \
+          -d "{\"accepted\":true}" 2>&1)
+        echo "[autoconf] SLA response: $${RESP}"
+      }
 
-      echo "[autoconf] Accepting service agreements..."
-      curl -sk -X PUT -u "$${AUTH}" \
+      wait_for_lmi
+
+      # Step 1: Accept SLA — the setup wizard gates ALL /isam/* endpoints
+      # behind a 302 redirect to /setup_service_agreements until accepted.
+      accept_sla
+
+      # Step 2: Check if modules are already activated
+      echo "[autoconf] Checking current activation status..."
+      CAPS=$(curl -sk -u "$${AUTH}" -H "Accept: application/json" \
+        "$${BASE_URL}/isam/capabilities/v1" 2>&1) || true
+      echo "[autoconf] Current capabilities: $${CAPS}"
+
+      NEED_ACTIVATION=true
+      if echo "$${CAPS}" | grep -q '"wga"' && echo "$${CAPS}" | grep -q '"mga"' && echo "$${CAPS}" | grep -q '"federation"'; then
+        echo "[autoconf] All modules already activated — skipping trial cert upload."
+        NEED_ACTIVATION=false
+      fi
+
+      # Step 3: Upload trial cert — triggers LMI restart (302 response)
+      if [ "$${NEED_ACTIVATION}" = "true" ]; then
+        echo "[autoconf] Uploading trial certificate to activate all modules..."
+        RESP=$(curl -sk -X POST -u "$${AUTH}" \
+          -H "Accept: application/json" \
+          -F "trial=@$${TRIAL_CERT};type=application/octet-stream" \
+          "$${BASE_URL}/trial" 2>&1)
+        echo "[autoconf] Trial upload response: $${RESP}"
+
+        echo "[autoconf] Waiting 45s for LMI to restart after trial cert..."
+        sleep 45
+        wait_for_lmi
+
+        # Step 4: Re-accept SLA after restart (restart resets SLA state)
+        accept_sla
+
+        # Step 5: Deploy pending changes to commit activation
+        echo "[autoconf] Deploying pending changes after activation..."
+        curl -sk -X POST -u "$${AUTH}" \
+          -H "Accept: application/json" -H "Content-Type: application/json" \
+          "$${BASE_URL}/isam/pending_changes/deploy" -d "{}" || true
+
+        sleep 10
+
+        # Step 6: Verify activation
+        echo "[autoconf] Verifying activation..."
+        CAPS=$(curl -sk -u "$${AUTH}" -H "Accept: application/json" \
+          "$${BASE_URL}/isam/capabilities/v1" 2>&1)
+        echo "[autoconf] Post-activation capabilities: $${CAPS}"
+
+        for MOD in wga mga federation; do
+          if echo "$${CAPS}" | grep -q "\"$${MOD}\""; then
+            echo "[autoconf]   $${MOD}: ACTIVATED"
+          else
+            echo "[autoconf]   $${MOD}: NOT ACTIVATED — check LMI logs"
+          fi
+        done
+      fi
+
+      # Step 7: Configure runtime environment (embedded LDAP registry)
+      echo "[autoconf] Checking runtime configuration status..."
+      RTE=$(curl -sk -u "$${AUTH}" -H "Accept: application/json" \
+        "$${BASE_URL}/isam/runtime_components" 2>&1)
+      echo "[autoconf] Runtime status: $${RTE}"
+
+      if echo "$${RTE}" | grep -q '"Unconfigured"'; then
+        echo "[autoconf] Configuring runtime with embedded LDAP registry..."
+        RESP=$(curl -sk --max-time 180 -X POST -u "$${AUTH}" \
+          -H "Accept: application/json" -H "Content-Type: application/json" \
+          "$${BASE_URL}/isam/runtime_components" \
+          -d "{\"ps_mode\":\"local\",\"user_registry\":\"local\",\"ldap_host\":\"localhost\",\"ldap_port\":389,\"ldap_dn\":\"cn=root,secAuthority=Default\",\"ldap_pwd\":\"$${ADMIN_PWD}\",\"ldap_suffix\":\"dc=iswga\",\"clean_ldap\":true,\"domain\":\"Default\",\"admin_pwd\":\"$${ADMIN_PWD}\",\"admin_cert_lifetime\":\"1460\"}" 2>&1) || true
+        echo "[autoconf] Runtime config response: $${RESP}"
+
+        echo "[autoconf] Waiting 60s for LMI restart after runtime configuration..."
+        sleep 60
+        wait_for_lmi
+        accept_sla
+
+        echo "[autoconf] Deploying pending changes after runtime config..."
+        curl -sk -X POST -u "$${AUTH}" \
+          -H "Accept: application/json" -H "Content-Type: application/json" \
+          "$${BASE_URL}/isam/pending_changes/deploy" -d "{}" || true
+        sleep 15
+
+        echo "[autoconf] Verifying runtime status..."
+        RTE=$(curl -sk -u "$${AUTH}" -H "Accept: application/json" \
+          "$${BASE_URL}/isam/runtime_components" 2>&1)
+        echo "[autoconf] Runtime status after config: $${RTE}"
+      else
+        echo "[autoconf] Runtime already configured — skipping."
+      fi
+
+      # Step 8: Add Simple AD as federated directory
+      echo "[autoconf] Adding Simple AD federated directory..."
+      curl -sk -X POST -u "$${AUTH}" \
         -H "Accept: application/json" -H "Content-Type: application/json" \
-        "$${BASE_URL}/isam/service_agreements/accepted" \
-        -d "{\"accepted\":true}" || true
+        "$${BASE_URL}/isam/runtime_components/federated_directories/v1" \
+        -d "{\"id\":\"simple-ad\",\"hostname\":\"${var.simple_ad_dns_ips[0]}\",\"port\":389,\"bind_dn\":\"${var.simple_ad_bind_dn}\",\"bind_pwd\":\"${var.simple_ad_admin_password}\",\"use_ssl\":false,\"suffix\":[{\"id\":\"${var.simple_ad_base_dn}\"}]}" \
+        || echo "[autoconf] Federated directory may already exist - continuing"
 
-      echo "[autoconf] Deploying pending changes after activation..."
+      echo "[autoconf] Deploying pending changes after federated directory..."
       curl -sk -X POST -u "$${AUTH}" \
         -H "Accept: application/json" -H "Content-Type: application/json" \
         "$${BASE_URL}/isam/pending_changes/deploy" -d "{}" || true
+      sleep 10
 
-      echo "[autoconf] Waiting for activation to take effect (30s)..."
-      sleep 30
-
+      # Step 9: Create WRP instance
       echo "[autoconf] Creating WRP instance 'default'..."
       RESP=$(curl -sk -X POST -u "$${AUTH}" \
         -H "Accept: application/json" -H "Content-Type: application/json" \
-        "$${BASE_URL}/isam/wga/reverseproxy" \
-        -d "{\"inst_name\":\"default\",\"host\":\"iviawrp\",\"admin_id\":\"sec_master\",\"admin_pwd\":\"$${ADMIN_PWD}\",\"domain\":\"Default\",\"http_port\":\"80\",\"https_port\":\"443\",\"ip_address\":\"0.0.0.0\",\"listening_port\":\"7234\",\"ssl\":\"no\"}" 2>&1) || true
+        "$${BASE_URL}/wga/reverseproxy" \
+        -d "{\"inst_name\":\"default\",\"host\":\"iviawrp\",\"admin_id\":\"sec_master\",\"admin_pwd\":\"$${ADMIN_PWD}\",\"domain\":\"Default\",\"http_port\":\"80\",\"https_port\":\"443\",\"ip_address\":\"0.0.0.0\",\"listening_port\":\"7234\",\"ssl_yn\":\"no\",\"key_file\":\"\",\"cert_label\":\"\",\"ssl_port\":\"\",\"http_yn\":\"yes\",\"https_yn\":\"yes\",\"nw_interface_yn\":\"yes\"}" 2>&1) || true
       echo "[autoconf] WRP instance: $${RESP}"
 
       echo "[autoconf] Deploying pending changes after WRP instance..."
       curl -sk -X POST -u "$${AUTH}" \
         -H "Accept: application/json" -H "Content-Type: application/json" \
         "$${BASE_URL}/isam/pending_changes/deploy" -d "{}" || true
+      sleep 10
 
+      # Step 10: Create junction /isvaop -> OIDC Provider
       echo "[autoconf] Creating junction /isvaop -> isvaop:8436 (ssl)..."
       curl -sk -X POST -u "$${AUTH}" \
         -H "Accept: application/json" -H "Content-Type: application/json" \
-        "$${BASE_URL}/isam/wga/reverseproxy/default/junctions" \
+        "$${BASE_URL}/wga/reverseproxy/default/junctions" \
         -d "{\"junction_point\":\"/isvaop\",\"junction_type\":\"ssl\",\"server_hostname\":\"isvaop.verify-access.svc.cluster.local\",\"server_port\":\"8436\",\"stateful_junction\":\"no\",\"insert_session_cookies\":\"yes\"}" \
         || echo "[autoconf] Junction may already exist - continuing"
 
+      # Step 11: Set anyauth ACL on CIBA consent path
       echo "[autoconf] Setting anyauth ACL on CIBA consent path..."
       curl -sk -X PUT -u "$${AUTH}" \
         -H "Accept: application/json" -H "Content-Type: application/json" \
-        "$${BASE_URL}/isam/wga/reverseproxy/default/acl/attachments" \
+        "$${BASE_URL}/wga/reverseproxy/default/acl/attachments" \
         -d "{\"acl_name\":\"anyauth_for_WebSEAL\",\"object_name\":\"/isvaop/oauth2/ciba_user_authorize\"}" \
         || echo "[autoconf] ACL attachment may already exist - continuing"
 
+      # Step 12: Set cfgsvc password so WRP/Runtime can pull snapshots
+      echo "[autoconf] Setting cfgsvc user password for snapshot service..."
+      curl -sk -X PUT -u "$${AUTH}" \
+        -H "Accept: application/json" -H "Content-Type: application/json" \
+        "$${BASE_URL}/core/admin_cfg" \
+        -d "{\"oldPassword\":\"$${ADMIN_PWD}\",\"newPassword\":\"$${ADMIN_PWD}\",\"configServiceUser\":\"cfgsvc\",\"configServicePassword\":\"$${CFGSVC_PWD}\"}" \
+        || echo "[autoconf] cfgsvc password set may have failed - check LMI docs for correct endpoint"
+
+      # Step 13: Publish final configuration snapshot
       echo "[autoconf] Publishing final configuration snapshot..."
       curl -sk -X POST -u "$${AUTH}" \
         -H "Accept: application/json" -H "Content-Type: application/json" \
@@ -1427,16 +1545,13 @@ resource "kubernetes_config_map" "ivia_autoconf_config" {
 
 ################################################################################
 # Autoconf Job
-# Python K8s Job that installs ibmvia_autoconf and runs it against the Config
-# container LMI to perform activation, WRP instance creation, junction setup,
-# ACL configuration, and snapshot publishing.
+# curl-based K8s Job that configures the Config container via LMI REST API:
+# 1. Upload trial cert (POST /trial) to activate wga, mga, federation
+# 2. Create WRP instance, junction, ACL
+# 3. Publish configuration snapshot
 #
 # Threat T-06-08-05: Uses existing isvaop SA (minimal RBAC) — no cluster-admin.
 # Runs after Config container is ready (depends_on ensures ordering).
-#
-# Note: ibmvia_autoconf is experimental for junction/ACL config. If the tool
-# proves problematic, replace with pure curl REST API calls (post-config.sh
-# provides the reference implementation for that fallback path).
 ################################################################################
 
 resource "kubernetes_job" "ivia_autoconf" {
@@ -1470,41 +1585,6 @@ resource "kubernetes_job" "ivia_autoconf" {
           command = ["/bin/sh", "/etc/autoconf/post-config.sh"]
 
           env {
-            name  = "IVIA_BASE_CODE"
-            value = var.ivia_activation_code
-          }
-
-          env {
-            name  = "IVIA_AAC_CODE"
-            value = var.ivia_activation_code
-          }
-
-          env {
-            name  = "IVIA_FED_CODE"
-            value = var.ivia_activation_code
-          }
-
-          env {
-            name  = "ISVA_MGMT_BASE_URL"
-            value = "https://iviaconfig.verify-access.svc.cluster.local:9443"
-          }
-
-          env {
-            name  = "ISVA_MGMT_USER"
-            value = "admin"
-          }
-
-          env {
-            name = "ISVA_MGMT_PWD"
-            value_from {
-              secret_key_ref {
-                name = kubernetes_secret.ivia_admin.metadata[0].name
-                key  = "password"
-              }
-            }
-          }
-
-          env {
             name = "ADMIN_PWD"
             value_from {
               secret_key_ref {
@@ -1515,51 +1595,11 @@ resource "kubernetes_job" "ivia_autoconf" {
           }
 
           env {
-            name = "PGHOST"
+            name = "CFGSVC_PWD"
             value_from {
               secret_key_ref {
-                name = kubernetes_secret.isvaop_server.metadata[0].name
-                key  = "host"
-              }
-            }
-          }
-
-          env {
-            name = "PGPORT"
-            value_from {
-              secret_key_ref {
-                name = kubernetes_secret.isvaop_server.metadata[0].name
-                key  = "port"
-              }
-            }
-          }
-
-          env {
-            name = "PGUSER"
-            value_from {
-              secret_key_ref {
-                name = kubernetes_secret.isvaop_server.metadata[0].name
-                key  = "username"
-              }
-            }
-          }
-
-          env {
-            name = "PGPASSWORD"
-            value_from {
-              secret_key_ref {
-                name = kubernetes_secret.isvaop_server.metadata[0].name
+                name = kubernetes_secret.ivia_configreader.metadata[0].name
                 key  = "password"
-              }
-            }
-          }
-
-          env {
-            name = "PGDATABASE"
-            value_from {
-              secret_key_ref {
-                name = kubernetes_secret.isvaop_server.metadata[0].name
-                key  = "database"
               }
             }
           }

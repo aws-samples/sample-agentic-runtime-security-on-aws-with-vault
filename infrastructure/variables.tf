@@ -86,10 +86,10 @@ variable "icr_entitlement_key" {
   description = "IBM Container Registry entitlement key for pulling IVIA images (icr.io/ivia/ivia-oidc-provider). Attendees obtain from IBM."
 }
 
-variable "ivia_activation_code" {
+variable "ivia_trial_cert" {
   type        = string
-  sensitive   = true
-  description = "IVIA activation code for Config container module activation (webseal, aac, federation). Obtain from IBM Passport Advantage — try M11DCML for all three modules."
+  description = "Filename of the IVIA trial certificate (.cer) in the infrastructure/ directory. Uploaded to Config container to activate wga, mga, and federation modules. Obtain from https://isva-trial.verify.ibm.com/ if expired."
+  default     = "ISAM-Trial-HashiCorp.cer"
 }
 
 #-------------------------------------------------------------------------------
