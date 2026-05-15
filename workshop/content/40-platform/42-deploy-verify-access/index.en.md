@@ -53,16 +53,18 @@ The `depends_on` chain enforces this exact startup order:
 
 1. **Config container (`ivia-config`) starts** — LMI available on ClusterIP port 9443. All other containers depend on Config being ready before they can pull configuration snapshots.
 
-2. **Autoconf Job runs** — uploads the trial certificate to activate all modules (wga, mga, federation), creates a WRP instance, configures the `/isvaop` junction to the OIDC Provider, sets the `anyauth` ACL on the CIBA consent path, and publishes the configuration snapshot.
+2. **Manual trial activation** — IVIA locks all `/isam/*` API endpoints until the trial license is activated via the LMI web UI. This step cannot be automated via the REST API.
 
-3. **Runtime (`ivia-runtime`) and WRP (`ivia-wrp`) start in parallel** — both download the published snapshot from Config via `CONFIG_SERVICE_URL`. WRP's ALB Ingress replaces the old OIDC Provider ALB as the external entry point.
+3. **Autoconf Job runs** — configures HVDB, runtime environment, Simple AD federated directory, WRP instance, `/isvaop` junction, CIBA consent ACL, and cfgsvc credentials. Publishes the configuration snapshot after each phase.
+
+4. **Runtime (`ivia-runtime`) and WRP (`ivia-wrp`) start in parallel** — both download the published snapshot from Config via `CONFIG_SERVICE_URL`. WRP's ALB Ingress replaces the old OIDC Provider ALB as the external entry point.
 
 ## What Terraform Deploys
 
 The `verify_access` module creates:
 
 - Config container (`ivia-config:11.0.2.0`) — Deployment, ClusterIP Service, PersistentVolumeClaim
-- Autoconf Kubernetes Job (`python:3.12-slim`) — activates modules, creates WRP instance and junctions
+- Autoconf Kubernetes Job (`curlimages/curl`) — configures HVDB, runtime, federated directory, WRP instance, junctions, and ACLs
 - AAC Runtime (`ivia-runtime:11.0.2.0`) — Deployment, ClusterIP Service
 - Web Reverse Proxy (`ivia-wrp:11.0.2.0`) — Deployment, ClusterIP Service, ALB Ingress (internet-facing)
 - OIDC Provider (`ivia-oidc-provider:25.10`) — existing deployment, now accessible via WRP `/isvaop` junction and directly at ClusterIP for machine-to-machine flows
@@ -91,7 +93,52 @@ isvaop-deployment-<hash>         1/1     Running   0          12m
 If `ivia-runtime` or `ivia-wrp` pods fail to start with `CrashLoopBackOff`, check whether `ivia-config` is Running. Runtime and WRP cannot download their configuration snapshot until Config's LMI is available. The autoconf Job also requires Config to be ready before it can publish the initial snapshot.
 :::
 
-## Step 2 — Check the WRP ALB Ingress
+## Step 2 — Activate the IVIA trial license
+
+IVIA locks all management API endpoints until the trial license is activated through the LMI web UI. This is a one-time manual step that cannot be automated via the REST API.
+
+Port-forward to the Config container's LMI:
+
+```bash
+kubectl port-forward -n verify-access svc/iviaconfig 9443:9443
+```
+
+Open `https://localhost:9443` in your browser and accept the self-signed certificate warning.
+
+Log in with the admin credentials:
+
+```bash
+kubectl get secret ivia-admin -n verify-access \
+  -o jsonpath='{.data.password}' | base64 -d; echo
+```
+
+- **Username:** `admin`
+- **Password:** (output from the command above)
+
+Complete these steps in the LMI:
+
+1. **Accept the Service Level Agreement** when prompted
+2. Navigate to **System > Trial > Import**
+3. Import your `.cer` trial license file
+4. Click **Save Configuration**
+
+After activation, the Autoconf Job will detect the activated modules and proceed with the remaining 15 configuration steps (HVDB, runtime, federated directory, WRP, junctions, ACLs). Monitor its progress:
+
+```bash
+kubectl logs -n verify-access -l app.kubernetes.io/name=ivia-autoconf -f
+```
+
+Wait for the final line:
+
+```
+[autoconf] Configuration complete (18 steps)
+```
+
+:::alert{header="Autoconf retries automatically" type="info"}
+The Autoconf Job has a backoff limit of 10 retries. If you activate the trial while the job is in `CrashLoopBackOff`, it will pick up the activation on its next retry and complete successfully. No need to manually restart the job.
+:::
+
+## Step 3 — Check the WRP ALB Ingress
 
 ```bash
 kubectl get ingress -n verify-access
@@ -112,7 +159,7 @@ WRP_HOST=$(kubectl get ingress -n verify-access ivia-wrp \
 echo "WRP host: $WRP_HOST"
 ```
 
-## Step 3 — Verify OIDC discovery via WRP junction
+## Step 4 — Verify OIDC discovery via WRP junction
 
 The OIDC Provider is accessible externally via the WRP `/isvaop` junction:
 

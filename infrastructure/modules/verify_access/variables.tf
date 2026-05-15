@@ -106,3 +106,15 @@ variable "ivia_trial_cert" {
   description = "Filename of the IVIA trial certificate (.cer) in the infrastructure/ directory. Uploaded to Config container via POST /trial to activate wga, mga, and federation modules. Obtain from https://isva-trial.verify.ibm.com/ if expired."
   default     = "ISAM-Trial-HashiCorp.cer"
 }
+
+variable "ivia_activation_code" {
+  type        = string
+  description = "IVIA trial activation code (CN from trial .cer). Extract with: openssl x509 -in <cert> -noout -subject | sed 's/.*CN=//'"
+  default     = ""
+}
+
+variable "ivia_activated" {
+  type        = bool
+  description = "Set to true AFTER manually activating the IVIA trial via the LMI UI (System > Trial > Import). Gates the autoconf job, WRP, and Runtime deployments — these resources only deploy when activation is confirmed."
+  default     = false
+}

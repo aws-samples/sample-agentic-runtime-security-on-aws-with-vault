@@ -92,6 +92,18 @@ variable "ivia_trial_cert" {
   default     = "ISAM-Trial-HashiCorp.cer"
 }
 
+variable "ivia_activation_code" {
+  type        = string
+  description = "IVIA trial activation code (CN from trial .cer). Extract with: openssl x509 -in <cert> -noout -subject | sed 's/.*CN=//'"
+  default     = ""
+}
+
+variable "ivia_activated" {
+  type        = bool
+  description = "Set to true after activating the IVIA trial via the LMI UI (System > Trial > Import > Save Configuration). Phase 2 deploy creates Config + slapd sidecar; after manual activation, set this to true and re-apply to deploy autoconf, WRP, and Runtime."
+  default     = false
+}
+
 #-------------------------------------------------------------------------------
 # UC1 Agent Configuration
 # uc1_agent_image: set by attendees after ECR push (Phase 4 lab step).
