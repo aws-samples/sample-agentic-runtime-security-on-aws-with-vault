@@ -143,27 +143,69 @@ If any check fails, the script prints a `Fix hint:` line indicating the remediat
 
 When you POST to `/query`, the following call chain executes:
 
-```
-FastAPI (app.py)
-  └── POST /query
-        └── agent_handler(query)            ← app.py
-              └── VaultClient.get_db_creds() ← vault_client.py
-              │     └── client.secrets.database.generate_credentials("uc1-readonly")
-              │           └── Vault API: GET /v1/database/creds/uc1-readonly
-              │                 └── Returns: username, password, lease_id, lease_duration=900
-              │
-              └── VaultClient.get_sts_creds() ← vault_client.py
-              │     └── client.secrets.aws.generate_credentials(name="bedrock-reader")
-              │           └── Vault API: GET /v1/aws/sts/bedrock-reader
-              │                 └── Returns: access_key, secret_key, security_token
-              │
-              └── build_agent(sts_creds)      ← agent.py
-              │     └── boto3.Session(aws_access_key_id=..., aws_session_token=...)
-              │           └── BedrockModel(model_id="us.amazon.nova-pro-v1:0", boto_session=session)
-              │
-              └── agent.invoke_with_tools(query) ← agent.py (Strands)
-                    └── retrieve_from_kb(session, KB_ID, query)
-                          └── bedrock-agent-runtime.retrieve(knowledgeBaseId=KB_ID, ...)
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#d0e2ff',
+  'primaryTextColor': '#161616',
+  'primaryBorderColor': '#0f62fe',
+  'lineColor': '#0f62fe',
+  'secondaryColor': '#bae6ff',
+  'tertiaryColor': '#f4f4f4',
+  'noteBkgColor': '#e8daff',
+  'noteTextColor': '#161616',
+  'noteBorderColor': '#8a3ffc',
+  'actorBkg': '#d0e2ff',
+  'actorBorder': '#0f62fe',
+  'actorTextColor': '#161616',
+  'signalColor': '#161616',
+  'signalTextColor': '#161616',
+  'labelBoxBkgColor': '#d0e2ff',
+  'labelBoxBorderColor': '#0f62fe',
+  'labelTextColor': '#161616',
+  'loopTextColor': '#161616',
+  'activationBorderColor': '#0f62fe',
+  'activationBkgColor': '#edf5ff',
+  'sequenceNumberColor': '#ffffff'
+}}}%%
+sequenceDiagram
+    autonumber
+    participant FastAPI as FastAPI (app.py)
+    participant Handler as agent_handler
+    participant VC as VaultClient<br/>(vault_client.py)
+    participant Vault as Vault API
+    participant Builder as build_agent<br/>(agent.py)
+    participant Strands as Strands Agent
+    participant Bedrock as Bedrock KB
+
+    rect rgba(208, 226, 255, 0.3)
+    Note over FastAPI,Handler: Incoming request
+    FastAPI->>Handler: POST /query
+    end
+
+    rect rgba(186, 230, 255, 0.3)
+    Note over Handler,Vault: JIT database credentials
+    Handler->>VC: get_db_creds()
+    VC->>Vault: GET /v1/database/creds/uc1-readonly
+    Vault-->>VC: username, password,<br/>lease_id, lease_duration=900
+    end
+
+    rect rgba(232, 218, 255, 0.3)
+    Note over Handler,Vault: Ephemeral STS credentials
+    Handler->>VC: get_sts_creds()
+    VC->>Vault: GET /v1/aws/sts/bedrock-reader
+    Vault-->>VC: access_key, secret_key,<br/>security_token
+    end
+
+    rect rgba(167, 240, 186, 0.3)
+    Note over Handler,Bedrock: Agent construction + query execution
+    Handler->>Builder: build_agent(sts_creds)
+    Builder->>Builder: boto3.Session(...)<br/>BedrockModel("us.amazon.nova-pro-v1:0")
+    Builder-->>Handler: Strands agent ready
+    Handler->>Strands: invoke_with_tools(query)
+    Strands->>Bedrock: retrieve(knowledgeBaseId=KB_ID, ...)<br/>using ephemeral STS creds
+    Bedrock-->>Strands: Ranked text passages
+    Strands-->>Handler: Combined answer
+    end
 ```
 
 The Postgres connection (via `psycopg2.connect(host=RDS_ADDR, user=pg_user, password=pg_pass)`) opens a fresh connection on each request using the JIT credential. When the 15-minute TTL expires, Vault revokes the Postgres role and any open connection using those credentials will receive an authentication error on its next query — a natural forcing function for connection pool refresh.

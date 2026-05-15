@@ -165,38 +165,54 @@ The agent refreshes JIT credentials on each incoming HTTP request — not when t
 
 The Kubernetes auth trust chain has four participants:
 
-```
-┌─────────────────────┐    1. POST /v1/auth/kubernetes/login     ┌─────────────────────┐
-│   UC1 Agent Pod     │  ──────────────────────────────────────► │   Vault (vault-0)   │
-│  (uc1-retriever-sa) │    jwt = SA token from                   │                     │
-└─────────────────────┘    /var/run/secrets/kubernetes.io/       │  2. TokenReview API │
-                           serviceaccount/token                   │     call to EKS     │
-                                                                  └──────────┬──────────┘
-                                                                             │
-                                                                             ▼
-                                                                  ┌─────────────────────┐
-                                                                  │   EKS TokenReview   │
-                                                                  │   API               │
-                                                                  │                     │
-                                                                  │  Validates JWT sig  │
-                                                                  │  against OIDC keys  │
-                                                                  └──────────┬──────────┘
-                                                                             │
-                                              3. TokenReview response:      │
-                                              authenticated=true            │
-                                              user=system:serviceaccount:   │
-                                                    uc1:uc1-retriever-sa    │
-                                                                             ▼
-                                                                  ┌─────────────────────┐
-                                                                  │  Vault role lookup  │
-                                                                  │                     │
-                                                                  │  bound_sa_names =   │
-                                                                  │   [uc1-retriever-sa]│
-                                                                  │  bound_namespaces = │
-                                                                  │   [uc1]             │
-                                                                  │  → grant token with │
-                                                                  │    uc1-readonly     │
-                                                                  └─────────────────────┘
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#d0e2ff',
+  'primaryTextColor': '#161616',
+  'primaryBorderColor': '#0f62fe',
+  'lineColor': '#0f62fe',
+  'secondaryColor': '#bae6ff',
+  'tertiaryColor': '#f4f4f4',
+  'noteBkgColor': '#e8daff',
+  'noteTextColor': '#161616',
+  'noteBorderColor': '#8a3ffc',
+  'actorBkg': '#d0e2ff',
+  'actorBorder': '#0f62fe',
+  'actorTextColor': '#161616',
+  'signalColor': '#161616',
+  'signalTextColor': '#161616',
+  'labelBoxBkgColor': '#d0e2ff',
+  'labelBoxBorderColor': '#0f62fe',
+  'labelTextColor': '#161616',
+  'loopTextColor': '#161616',
+  'activationBorderColor': '#0f62fe',
+  'activationBkgColor': '#edf5ff',
+  'sequenceNumberColor': '#ffffff'
+}}}%%
+sequenceDiagram
+    autonumber
+    participant Pod as UC1 Agent Pod<br/>(uc1-retriever-sa)
+    participant Vault as Vault (vault-0)
+    participant EKS as EKS TokenReview API
+    participant Role as Vault Role Lookup
+
+    rect rgba(208, 226, 255, 0.3)
+    Note over Pod,Vault: Step 1 — Agent authenticates with SA JWT
+    Pod->>Vault: POST /v1/auth/kubernetes/login<br/>jwt = SA token from<br/>/var/run/secrets/kubernetes.io/<br/>serviceaccount/token
+    end
+
+    rect rgba(186, 230, 255, 0.3)
+    Note over Vault,EKS: Step 2 — Vault validates JWT via EKS
+    Vault->>EKS: POST /apis/authentication.k8s.io/v1/tokenreviews<br/>validate SA JWT signature against OIDC keys
+    EKS-->>Vault: authenticated=true<br/>user=system:serviceaccount:<br/>uc1:uc1-retriever-sa
+    end
+
+    rect rgba(232, 218, 255, 0.3)
+    Note over Vault,Role: Step 3 — Vault evaluates role bindings
+    Vault->>Role: Match against role "uc1"<br/>bound_sa_names = [uc1-retriever-sa]<br/>bound_namespaces = [uc1]
+    Role-->>Vault: Policy match → uc1-readonly
+    Vault-->>Pod: Vault client token<br/>(policies: [uc1-readonly], TTL 1h)
+    end
 ```
 
 Steps 1–3 happen inside the cluster. The EKS TokenReview API endpoint is the **trust anchor** — Vault trusts whatever EKS says about the SA JWT. This is why:

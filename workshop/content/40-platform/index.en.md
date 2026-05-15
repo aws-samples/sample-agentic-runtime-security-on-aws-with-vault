@@ -21,24 +21,76 @@ After deployment and configuration, the Vault `jwt` auth method trusts IVIA's OI
 
 ## Architecture reference
 
-```
-  AWS Simple AD (workshop.internal)
-       │
-       │ LDAP (port 389)
-       ▼
-  IVIA OIDC provider (isvaop) ◄── Attendee browser ──► IVIA ALB
-       │
-       │ authenticates user via LDAP, issues JWT (sub=user@cdlbank.com)
-       │
-       ▼
-  Agent workload ──────────────────────► Vault jwt auth
-                                          │
-                                    verifies JWT against IVIA JWKS
-                                    evaluates policy → vends dynamic credential
-                                          │
-                              ┌───────────┴────────────┐
-                         RDS credential            AWS STS token
-                         (database/workshop-pg)    (aws/sts/<role>)
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#d0e2ff',
+  'primaryTextColor': '#161616',
+  'primaryBorderColor': '#0f62fe',
+  'lineColor': '#0f62fe',
+  'secondaryColor': '#bae6ff',
+  'tertiaryColor': '#f4f4f4',
+  'noteBkgColor': '#e8daff',
+  'noteTextColor': '#161616',
+  'noteBorderColor': '#8a3ffc',
+  'actorBkg': '#d0e2ff',
+  'actorBorder': '#0f62fe',
+  'actorTextColor': '#161616',
+  'signalColor': '#161616',
+  'signalTextColor': '#161616',
+  'labelBoxBkgColor': '#d0e2ff',
+  'labelBoxBorderColor': '#0f62fe',
+  'labelTextColor': '#161616',
+  'loopTextColor': '#161616',
+  'activationBorderColor': '#0f62fe',
+  'activationBkgColor': '#edf5ff',
+  'sequenceNumberColor': '#ffffff'
+}}}%%
+sequenceDiagram
+    autonumber
+    actor Attendee
+    participant Browser as Attendee Browser
+    participant ALB as IVIA ALB
+    participant IVIA as IVIA OIDC Provider<br/>(isvaop)
+    participant AD as AWS Simple AD<br/>(workshop.internal)
+    participant Agent as Agent Workload
+    participant Vault as HashiCorp Vault<br/>(jwt auth)
+    participant RDS as PostgreSQL<br/>(RDS)
+    participant AWS as AWS STS
+
+    rect rgba(208, 226, 255, 0.3)
+    Note over Browser,AD: User authentication — LDAP-backed OIDC (OBJ-1, OBJ-3)
+    Attendee->>Browser: Initiate login
+    Browser->>ALB: HTTPS request
+    ALB->>IVIA: Forward to isvaop
+    IVIA->>AD: LDAP bind (port 389)<br/>validate user credentials
+    AD-->>IVIA: Bind success
+    IVIA->>IVIA: Issue JWT<br/>(sub=user@cdlbank.com, act=agent)
+    IVIA-->>Browser: JWT returned
+    end
+
+    rect rgba(186, 230, 255, 0.3)
+    Note over Agent,Vault: OIDC seam — user intent becomes Vault credential (OBJ-3)
+    Agent->>Vault: POST /v1/auth/jwt/login<br/>{jwt: IVIA token, role: "uc2"}
+    Vault->>IVIA: Fetch JWKS from<br/>oidc_discovery_url
+    IVIA-->>Vault: JWKS public keys
+    Vault->>Vault: Verify JWT signature<br/>evaluate bound_claims + policy
+    Vault-->>Agent: Vault client token (TTL 1h)
+    end
+
+    rect rgba(232, 218, 255, 0.3)
+    Note over Agent,AWS: Dynamic credential vending — no standing privileges (OBJ-2)
+    Agent->>Vault: GET /v1/database/creds/workshop-pg
+    Vault->>RDS: CREATE ROLE (TTL 15 min)
+    Vault-->>Agent: JIT credentials<br/>{username, password} + lease_id
+    Agent->>Vault: GET /v1/aws/sts/<role>
+    Vault-->>Agent: Scoped STS session<br/>{access_key, secret_key, session_token}
+    end
+
+    rect rgba(167, 240, 186, 0.3)
+    Note over Vault,AWS: Credential lifecycle — automatic revocation
+    Vault->>RDS: 15-min TTL expires → DROP ROLE
+    Note over Agent,AWS: STS session expires (1h default)
+    end
 ```
 
 The Vault `jwt` auth method is configured with IVIA's OIDC discovery URL as the `oidc_discovery_url`. Every JWT Vault receives from an agent is verified against IVIA's JWKS endpoint, making IVIA the authoritative identity plane for all user-delegated operations. IVIA authenticates users against AWS Simple AD via LDAP — in a real enterprise, this would be your organization's existing Active Directory.

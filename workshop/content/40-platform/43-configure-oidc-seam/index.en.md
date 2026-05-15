@@ -153,21 +153,60 @@ Expected output includes:
 
 ## The OIDC seam — how it works at runtime
 
-```
-  Employee (Oscar) ──► IVIA ALB ──► IVIA authenticates via LDAP ──► Simple AD
-                                          │
-                                    issues JWT (sub=oscar@cdlbank.com, aud=agent-uc2)
-                                          │
-  Agent workload ──────────────────────► Vault jwt auth
-                                          │
-                                    verifies JWT signature against IVIA JWKS
-                                    checks bound_claims: { aud=agent-uc2 }
-                                          │
-                                    evaluates uc2-agent-policy
-                                          │
-                                          ▼
-                                    vends dynamic PostgreSQL credential (TTL 1h)
-                                    + sets app.current_user_sub = oscar@cdlbank.com
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#d0e2ff',
+  'primaryTextColor': '#161616',
+  'primaryBorderColor': '#0f62fe',
+  'lineColor': '#0f62fe',
+  'secondaryColor': '#bae6ff',
+  'tertiaryColor': '#f4f4f4',
+  'noteBkgColor': '#e8daff',
+  'noteTextColor': '#161616',
+  'noteBorderColor': '#8a3ffc',
+  'actorBkg': '#d0e2ff',
+  'actorBorder': '#0f62fe',
+  'actorTextColor': '#161616',
+  'signalColor': '#161616',
+  'signalTextColor': '#161616',
+  'labelBoxBkgColor': '#d0e2ff',
+  'labelBoxBorderColor': '#0f62fe',
+  'labelTextColor': '#161616',
+  'loopTextColor': '#161616',
+  'activationBorderColor': '#0f62fe',
+  'activationBkgColor': '#edf5ff',
+  'sequenceNumberColor': '#ffffff'
+}}}%%
+sequenceDiagram
+    autonumber
+    actor Oscar as Employee (Oscar)
+    participant ALB as IVIA ALB
+    participant IVIA as IVIA OIDC Provider
+    participant AD as Simple AD
+    participant Agent as Agent Workload
+    participant Vault as Vault jwt auth
+
+    rect rgba(208, 226, 255, 0.3)
+    Note over Oscar,AD: User authentication via LDAP
+    Oscar->>ALB: Login request
+    ALB->>IVIA: Forward
+    IVIA->>AD: LDAP bind — authenticate Oscar
+    AD-->>IVIA: Bind success
+    IVIA-->>Oscar: JWT issued<br/>(sub=oscar@cdlbank.com, aud=agent-uc2)
+    end
+
+    rect rgba(186, 230, 255, 0.3)
+    Note over Agent,Vault: OIDC seam — JWT becomes Vault credential (OBJ-3)
+    Agent->>Vault: POST /v1/auth/jwt/login<br/>{jwt: IVIA token, role: "uc2"}
+    Vault->>IVIA: Verify JWT signature against JWKS
+    IVIA-->>Vault: Signature valid
+    Vault->>Vault: Check bound_claims: {aud=agent-uc2}<br/>Evaluate uc2-agent-policy
+    end
+
+    rect rgba(232, 218, 255, 0.3)
+    Note over Vault,Vault: Dynamic credential vend
+    Vault-->>Agent: Dynamic PostgreSQL credential (TTL 1h)<br/>+ sets app.current_user_sub = oscar@cdlbank.com
+    end
 ```
 
 The `sub` claim from the JWT flows through Vault into the Postgres session variable that activates Row-Level Security — each user sees only their own data, enforced at the database layer.
