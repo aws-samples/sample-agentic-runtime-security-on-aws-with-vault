@@ -1166,15 +1166,7 @@ resource "kubernetes_deployment" "ivia_config" {
         container {
           name    = "ivia-config"
           image   = "icr.io/ivia/ivia-config:11.0.2.0"
-          command = ["/bin/sh", "-c", "/etc/ivia-ds/inject-datasource.sh && exec /sbin/bootstrap.sh"]
-
-          lifecycle {
-            post_start {
-              exec {
-                command = ["/bin/sh", "/etc/ivia-ds/start-slapd.sh"]
-              }
-            }
-          }
+          command = ["/bin/sh", "-c", "/etc/ivia-ds/start-slapd.sh && /etc/ivia-ds/inject-datasource.sh && exec /sbin/bootstrap.sh"]
 
           security_context {
             privileged                 = false
@@ -1243,20 +1235,20 @@ resource "kubernetes_deployment" "ivia_config" {
 
           readiness_probe {
             exec {
-              command = ["/bin/sh", "-c", "curl -sk -o /dev/null https://localhost:9443/core/login && ldapsearch -x -H ldap://localhost:389 -b '' -s base '(objectclass=*)' > /dev/null 2>&1"]
+              command = ["/bin/sh", "-c", "curl -sk -o /dev/null -m 5 https://localhost:9443/core/login && ldapsearch -x -H ldap://localhost:389 -b '' -s base '(objectclass=*)' > /dev/null 2>&1"]
             }
-            initial_delay_seconds = 30
-            period_seconds        = 10
-            timeout_seconds       = 5
-            failure_threshold     = 6
+            initial_delay_seconds = 60
+            period_seconds        = 15
+            timeout_seconds       = 10
+            failure_threshold     = 12
           }
 
           liveness_probe {
             exec {
               command = ["/sbin/health_check.sh", "livenessProbe"]
             }
-            initial_delay_seconds = 30
-            period_seconds        = 10
+            initial_delay_seconds = 90
+            period_seconds        = 15
             failure_threshold     = 6
           }
 
