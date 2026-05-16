@@ -1478,15 +1478,16 @@ resource "kubernetes_config_map" "ivia_autoconf_config" {
     # REST API ref: https://docs.verify.ibm.com/ibm-security-verify-access/docs/api-lmi
     "post-config.sh" = <<-EOT
       #!/bin/sh
-      # Autoconf phases (18 steps):
+      # Autoconf phases (19 steps):
       #   1-3:   Wait for LMI, accept SLA, verify trial activation
       #   4-6:   HVDB (runtime database) + deploy
       #   7-8:   Runtime Environment (local policy server, user registry, embedded LDAP) + deploy
-      #   9-11:  Simple AD federated directory + deploy
-      #   12-13: WRP instance 'default' + deploy
-      #   14:    Junction /isvaop -> OIDC Provider
-      #   15:    ACL on CIBA consent path
-      #   16-17: cfgsvc user + final deploy
+      #   9-10:  cfgsvc config service user + deploy (enables runtime pod sync)
+      #   11-13: Simple AD federated directory + deploy
+      #   14-15: WRP instance 'default' + deploy (WGA readiness gate)
+      #   16:    Junction /isvaop -> OIDC Provider
+      #   17:    ACL on CIBA consent path
+      #   18-19: Final deploy
       BASE_URL="https://iviaconfig.verify-access.svc.cluster.local:9443"
       AUTH="admin:$${ADMIN_PWD}"
       COOKIES="/tmp/lmi-cookies"
@@ -1695,6 +1696,25 @@ resource "kubernetes_config_map" "ivia_autoconf_config" {
       deploy
 
       # ---- Phase 5: WRP + Junction + ACL (idempotent) ----
+      # WGA readiness gate: runtime pod must sync config and initialize
+      # WebSEAL framework before LMI permits WRP instance creation.
+      echo "[autoconf] Waiting for WGA framework readiness (up to 300s)..."
+      WGA_READY=false
+      for _wga_poll in $(seq 1 30); do
+        api GET "/wga/reverseproxy"
+        if [ "$${HTTP_CODE}" = "200" ]; then
+          echo "[autoconf] WGA framework ready"
+          WGA_READY=true
+          break
+        fi
+        echo "  poll $${_wga_poll}: WGA not ready (HTTP $${HTTP_CODE}) — waiting 10s..."
+        sleep 10
+      done
+      if [ "$${WGA_READY}" = "false" ]; then
+        echo "[autoconf] ERROR: WGA framework not ready after 300s"
+        exit 1
+      fi
+
       step "Create WRP instance 'default'"
       api GET "/wga/reverseproxy"
       if echo "$${BODY}" | grep -q '"default"'; then
@@ -1722,11 +1742,7 @@ resource "kubernetes_config_map" "ivia_autoconf_config" {
       api PUT "/wga/reverseproxy/default/acl/attachments" \
         -d "{\"acl_name\":\"isam-anyauth\",\"object_name\":\"/WebSEAL/default/isvaop/oauth2/ciba_user_authorize\",\"type\":\"attach\"}"
 
-      # ---- Phase 6: cfgsvc + Final Deploy ----
-      step "Set cfgsvc user password"
-      api PUT "/core/admin_cfg" \
-        -d "{\"oldPassword\":\"$${ADMIN_PWD}\",\"newPassword\":\"$${ADMIN_PWD}\",\"configServiceUser\":\"cfgsvc\",\"configServicePassword\":\"$${CFGSVC_PWD}\"}"
-
+      # ---- Phase 6: Final Deploy ----
       step "Final deploy"
       deploy
 
@@ -2005,14 +2021,14 @@ resource "kubernetes_deployment" "ivia_runtime" {
 
           env {
             name  = "CONFIG_SERVICE_USER_NAME"
-            value = "cfgsvc"
+            value = "admin"
           }
 
           env {
             name = "CONFIG_SERVICE_USER_PWD"
             value_from {
               secret_key_ref {
-                name = kubernetes_secret.ivia_configreader.metadata[0].name
+                name = kubernetes_secret.ivia_admin.metadata[0].name
                 key  = "password"
               }
             }
@@ -2212,14 +2228,14 @@ resource "kubernetes_deployment" "ivia_wrp" {
 
           env {
             name  = "CONFIG_SERVICE_USER_NAME"
-            value = "cfgsvc"
+            value = "admin"
           }
 
           env {
             name = "CONFIG_SERVICE_USER_PWD"
             value_from {
               secret_key_ref {
-                name = kubernetes_secret.ivia_configreader.metadata[0].name
+                name = kubernetes_secret.ivia_admin.metadata[0].name
                 key  = "password"
               }
             }
