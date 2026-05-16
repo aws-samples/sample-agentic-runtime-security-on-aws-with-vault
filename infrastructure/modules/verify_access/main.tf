@@ -1863,9 +1863,9 @@ resource "kubernetes_config_map" "ivia_autoconf_config" {
           -d "{\"junction_point\":\"/isvaop\",\"junction_type\":\"ssl\",\"server_hostname\":\"isvaop.verify-access.svc.cluster.local\",\"server_port\":\"8436\",\"stateful_junction\":\"no\",\"insert_session_cookies\":\"yes\"}"
       fi
 
-      step "Set anyauth ACL on CIBA consent path"
-      api PUT "/wga/reverseproxy/default/acl/attachments" \
-        -d "{\"acl_name\":\"isam-anyauth\",\"object_name\":\"/WebSEAL/default/isvaop/oauth2/ciba_user_authorize\",\"type\":\"attach\"}"
+      step "Set unauthenticated ACL on /isvaop junction"
+      api POST "/isam/pdadmin" \
+        -d "{\"admin_id\":\"sec_master\",\"admin_pwd\":\"$${LDAP_ADMIN_PWD}\",\"commands\":[\"acl create isam-unauth\",\"acl modify isam-unauth set group iv-admin TcmdbvaBR\",\"acl modify isam-unauth set any-other Tr\",\"acl modify isam-unauth set unauthenticated Tr\",\"acl attach /WebSEAL/iviawrp-default/isvaop isam-unauth\"]}"
 
       # ---- Phase 6: Final Deploy + Publish ----
       step "Final deploy and publish snapshot"
