@@ -1853,9 +1853,17 @@ resource "kubernetes_config_map" "ivia_autoconf_config" {
       api PUT "/wga/reverseproxy/default/acl/attachments" \
         -d "{\"acl_name\":\"isam-anyauth\",\"object_name\":\"/WebSEAL/default/isvaop/oauth2/ciba_user_authorize\",\"type\":\"attach\"}"
 
-      # ---- Phase 6: Final Deploy ----
-      step "Final deploy"
+      # ---- Phase 6: Final Deploy + Publish ----
+      step "Final deploy and publish snapshot"
       deploy
+
+      echo "[autoconf] Publishing snapshot for WRP container..."
+      api PUT "/docker/publish" -d "{}"
+      if [ "$${HTTP_CODE}" = "200" ] || [ "$${HTTP_CODE}" = "201" ]; then
+        echo "[autoconf] Snapshot published: $${BODY}"
+      else
+        echo "[autoconf] WARNING: Publish returned HTTP $${HTTP_CODE} — WRP may not pick up config"
+      fi
 
       echo ""
       echo "========================================"
