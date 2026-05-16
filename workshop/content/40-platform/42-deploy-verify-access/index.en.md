@@ -97,6 +97,20 @@ If `ivia-runtime` or `ivia-wrp` pods fail to start with `CrashLoopBackOff`, chec
 
 IVIA locks all management API endpoints until the trial license is activated through the LMI web UI. This is a one-time manual step that cannot be automated via the REST API.
 
+First, wait for the Config container to be fully ready (both containers Running):
+
+```bash
+kubectl wait --for=condition=Ready pod \
+  -l app.kubernetes.io/name=ivia-config \
+  -n verify-access --timeout=300s
+```
+
+Verify both containers are ready (should show `2/2`):
+
+```bash
+kubectl get pods -n verify-access -l app.kubernetes.io/name=ivia-config
+```
+
 Port-forward to the Config container's LMI:
 
 ```bash
@@ -121,6 +135,15 @@ Complete these steps in the LMI:
 2. Navigate to **System > Trial > Import**
 3. Import your `.cer` trial license file
 4. Click **Save Configuration**
+5. Navigate to **System > Account Management**
+6. Set the `cfgsvc` user password — retrieve it with:
+
+```bash
+kubectl get secret ivia-configreader -n verify-access \
+  -o jsonpath='{.data.password}' | base64 -d; echo
+```
+
+7. Click **Publish Configuration** (top banner or System menu)
 
 After activation, the Autoconf Job will detect the activated modules and proceed with the remaining 15 configuration steps (HVDB, runtime, federated directory, WRP, junctions, ACLs). Monitor its progress:
 

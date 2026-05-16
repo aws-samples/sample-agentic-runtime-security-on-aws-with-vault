@@ -1632,12 +1632,25 @@ resource "kubernetes_config_map" "ivia_autoconf_config" {
 
       step "Configure Runtime Environment"
       api GET "/isam/runtime_components/"
-      if echo "$${BODY}" | grep -q '"modecode":-1'; then
-        echo "[autoconf] Runtime not configured — configuring now"
-        api POST "/isam/runtime_components/" \
-          -d "{\"ps_mode\":\"local\",\"user_registry\":\"local\",\"admin_pwd\":\"$${LDAP_ADMIN_PWD}\",\"admin_cert_lifetime\":\"1460\",\"clean_ldap\":true,\"domain\":\"Default\"}"
-      else
+      if echo "$${BODY}" | grep -q '"statuscode":"0"'; then
         echo "[autoconf] Runtime already configured — skipping"
+      else
+        echo "[autoconf] Runtime not configured — configuring now"
+        RTE_OK=false
+        for _rte_try in 1 2 3 4 5; do
+          api POST "/isam/runtime_components/" \
+            -d "{\"ps_mode\":\"local\",\"user_registry\":\"local\",\"admin_pwd\":\"$${LDAP_ADMIN_PWD}\",\"admin_cert_lifetime\":\"1460\",\"domain\":\"Default\"}"
+          if [ "$${HTTP_CODE}" = "200" ] || [ "$${HTTP_CODE}" = "204" ]; then
+            RTE_OK=true
+            break
+          fi
+          echo "[autoconf] Runtime config attempt $${_rte_try} failed (HTTP $${HTTP_CODE}) — retrying in 30s..."
+          sleep 30
+        done
+        if [ "$${RTE_OK}" = "false" ]; then
+          echo "[autoconf] ERROR: Runtime configuration failed after 5 attempts"
+          exit 1
+        fi
       fi
 
       step "Deploy (Runtime Environment)"
@@ -1646,6 +1659,24 @@ resource "kubernetes_config_map" "ivia_autoconf_config" {
       step "Wait for LMI after Runtime deploy"
       wait_for_lmi
       accept_sla
+
+      # Poll until runtime reaches Available state before proceeding
+      echo "[autoconf] Polling runtime state (up to 300s)..."
+      RTE_CONFIGURED=false
+      for _rte_poll in $(seq 1 20); do
+        api GET "/isam/runtime_components/"
+        if echo "$${BODY}" | grep -q '"statuscode":"0"'; then
+          echo "[autoconf] Runtime state: Available (statuscode 0)"
+          RTE_CONFIGURED=true
+          break
+        fi
+        echo "  poll $${_rte_poll}: not yet available — waiting 15s..."
+        sleep 15
+      done
+      if [ "$${RTE_CONFIGURED}" = "false" ]; then
+        echo "[autoconf] ERROR: Runtime did not reach Available state after 300s"
+        exit 1
+      fi
 
       # ---- Phase 4: Federated Directory (idempotent) ----
       step "Add Simple AD federated directory"
