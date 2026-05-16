@@ -1171,9 +1171,10 @@ with open('$SRV','w') as f: f.write(t)
 
 ################################################################################
 # Config Container Deployment
-# Two containers in one pod (shared localhost network namespace):
-#   1. ivia-config — LMI on port 9443, datasource injection, IBM bootstrap
-#   2. slapd       — embedded OpenLDAP on port 389/636 (sidecar)
+# Three containers in one pod (shared localhost network namespace):
+#   1. ivia-config  — LMI on port 9443, datasource injection, IBM bootstrap
+#   2. slapd        — embedded OpenLDAP on port 389/636 (sidecar)
+#   3. ivia-runtime — runtime (pdconfig/webseald), needs localhost LDAP
 #
 # Sidecar design: LMI restart (triggered by POST /isam/runtime_components)
 # kills processes in the Config container's PID namespace but CANNOT reach
@@ -1383,6 +1384,67 @@ resource "kubernetes_deployment" "ivia_config" {
             limits = {
               cpu    = "250m"
               memory = "256Mi"
+            }
+          }
+        }
+
+        # --- Container 3: IVIA Runtime (co-located for localhost LDAP access) ---
+        # Must share localhost with slapd so pdconfig can bind to LDAP on 389.
+        # CONFIG_SERVICE_URL points to localhost:9443 (LMI on same pod).
+        container {
+          name  = "ivia-runtime"
+          image = "icr.io/ivia/ivia-runtime:11.0.2.0"
+
+          security_context {
+            privileged                 = false
+            read_only_root_filesystem  = false
+            allow_privilege_escalation = true
+            run_as_non_root            = true
+            run_as_user                = 6000
+            capabilities {
+              drop = ["ALL"]
+              add  = ["CHOWN", "DAC_OVERRIDE", "FOWNER", "KILL", "NET_BIND_SERVICE", "SETFCAP", "SETGID", "SETUID"]
+            }
+          }
+
+          env {
+            name  = "CONFIG_SERVICE_URL"
+            value = "https://localhost:9443/shared_volume"
+          }
+
+          env {
+            name  = "CONFIG_SERVICE_USER_NAME"
+            value = "admin"
+          }
+
+          env {
+            name = "CONFIG_SERVICE_USER_PWD"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret.ivia_admin.metadata[0].name
+                key  = "password"
+              }
+            }
+          }
+
+          env {
+            name  = "CONFIG_SERVICE_TLS_CACERT"
+            value = "disabled"
+          }
+
+          env {
+            name  = "CONTAINER_TIMEZONE"
+            value = "UTC"
+          }
+
+          resources {
+            requests = {
+              cpu    = "250m"
+              memory = "512Mi"
+            }
+            limits = {
+              cpu    = "1"
+              memory = "2Gi"
             }
           }
         }
@@ -1949,7 +2011,9 @@ resource "kubernetes_job" "ivia_autoconf" {
 ################################################################################
 
 resource "kubernetes_deployment" "ivia_runtime" {
-  count = var.ivia_activated ? 1 : 0
+  # Runtime now co-located in ivia_config pod (Container 3) for localhost LDAP access.
+  # Standalone deployment disabled — pdconfig needs localhost:389 (slapd sidecar).
+  count = 0
 
   metadata {
     name      = "ivia-runtime"
