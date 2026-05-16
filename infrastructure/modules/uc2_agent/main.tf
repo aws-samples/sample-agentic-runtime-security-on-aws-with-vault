@@ -108,7 +108,7 @@ resource "kubernetes_service_account" "uc2_mcp_server_sa" {
 locals {
   banking_ui_alb_hostname = kubernetes_ingress_v1.banking_ui.status[0].load_balancer[0].ingress[0].hostname
   banking_ui_external_url = "http://${local.banking_ui_alb_hostname}"
-  ivia_external_url       = "http://${var.ivia_ingress_hostname}"
+  ivia_external_url       = "http://${var.ivia_ingress_hostname}/isvaop"
 
   banking_ui_config_data = {
     # Server-side vars (SvelteKit $env/dynamic/private — login + callback routes)
