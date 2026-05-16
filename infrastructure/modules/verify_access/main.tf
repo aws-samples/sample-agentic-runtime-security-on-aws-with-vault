@@ -1867,6 +1867,15 @@ resource "kubernetes_config_map" "ivia_autoconf_config" {
       api POST "/isam/pdadmin" \
         -d "{\"admin_id\":\"sec_master\",\"admin_pwd\":\"$${LDAP_ADMIN_PWD}\",\"commands\":[\"acl create isam-unauth\",\"acl modify isam-unauth set group iv-admin TcmdbvaBR\",\"acl modify isam-unauth set any-other Tr\",\"acl modify isam-unauth set unauthenticated Tr\",\"acl attach /WebSEAL/iviawrp-default/isvaop isam-unauth\"]}"
 
+      step "Create workshop test user (oscar)"
+      api POST "/isam/pdadmin" \
+        -d "{\"admin_id\":\"sec_master\",\"admin_pwd\":\"$${LDAP_ADMIN_PWD}\",\"commands\":[\"user create oscar cn=oscar,secAuthority=Default oscar medina WorkshopUser1!\",\"user modify oscar account-valid yes\"]}"
+      if echo "$${BODY}" | grep -q "already exists"; then
+        echo "[autoconf] User oscar already exists �� skipping"
+      else
+        echo "[autoconf] User oscar created"
+      fi
+
       # ---- Phase 6: Final Deploy + Publish ----
       step "Final deploy and publish snapshot"
       deploy
