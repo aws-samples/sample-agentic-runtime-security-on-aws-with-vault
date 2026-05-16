@@ -1844,6 +1844,15 @@ resource "kubernetes_config_map" "ivia_autoconf_config" {
       step "Deploy (WRP instance)"
       deploy
 
+      step "Import isvaop TLS cert into WRP trust store"
+      api POST "/isam/ssl_certificates/pdsrv/signer_cert" \
+        -d "{\"operation\":\"load\",\"label\":\"isvaop-ca\",\"server\":\"isvaop.verify-access.svc.cluster.local\",\"port\":\"8436\"}"
+      if [ "$${HTTP_CODE}" = "200" ] || [ "$${HTTP_CODE}" = "201" ]; then
+        echo "[autoconf] isvaop cert imported into pdsrv keystore"
+      else
+        echo "[autoconf] WARNING: cert import returned HTTP $${HTTP_CODE} (may already exist)"
+      fi
+
       step "Create junction /isvaop -> OIDC Provider"
       api GET "/wga/reverseproxy/default/junctions"
       if echo "$${BODY}" | grep -q '"/isvaop"'; then
