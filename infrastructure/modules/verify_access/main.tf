@@ -1780,13 +1780,18 @@ resource "kubernetes_config_map" "ivia_autoconf_config" {
       step "Add Simple AD federated directory"
       api GET "/isam/runtime_components/federated_directories/v1"
       if echo "$${BODY}" | grep -q '"simple-ad"'; then
-        echo "[autoconf] simple-ad exists — updating"
+        echo "[autoconf] simple-ad exists — updating with suffix"
         api PUT "/isam/runtime_components/federated_directories/simple-ad/v1" \
           -d "{\"hostname\":\"$${SIMPLE_AD_HOST}\",\"port\":389,\"bind_dn\":\"$${SIMPLE_AD_BIND_DN}\",\"bind_pwd\":\"$${SIMPLE_AD_BIND_PWD}\",\"use_ssl\":false,\"suffix\":[{\"id\":\"$${SIMPLE_AD_BASE_DN}\"}]}"
       else
         echo "[autoconf] simple-ad not found — creating"
         api POST "/isam/runtime_components/federated_directories/v1" \
           -d "{\"id\":\"simple-ad\",\"hostname\":\"$${SIMPLE_AD_HOST}\",\"port\":389,\"bind_dn\":\"$${SIMPLE_AD_BIND_DN}\",\"bind_pwd\":\"$${SIMPLE_AD_BIND_PWD}\",\"use_ssl\":false,\"suffix\":[{\"id\":\"$${SIMPLE_AD_BASE_DN}\"}]}"
+        if [ "$${HTTP_CODE}" = "500" ]; then
+          echo "[autoconf] POST returned 500 — retrying as PUT (partial create)"
+          api PUT "/isam/runtime_components/federated_directories/simple-ad/v1" \
+            -d "{\"hostname\":\"$${SIMPLE_AD_HOST}\",\"port\":389,\"bind_dn\":\"$${SIMPLE_AD_BIND_DN}\",\"bind_pwd\":\"$${SIMPLE_AD_BIND_PWD}\",\"use_ssl\":false,\"suffix\":[{\"id\":\"$${SIMPLE_AD_BASE_DN}\"}]}"
+        fi
       fi
 
       step "Deploy (federated directory)"
