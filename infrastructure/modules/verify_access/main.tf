@@ -1180,6 +1180,23 @@ with open('$SRV','w') as f: f.write(t)
 # kills processes in the Config container's PID namespace but CANNOT reach
 # the sidecar's PID namespace. slapd survives LMI restarts by construction.
 #
+# Runtime Liberty port override — avoids port 9443 collision with LMI
+# when runtime container is co-located in the config pod.
+resource "kubernetes_config_map" "ivia_runtime_port_override" {
+  metadata {
+    name      = "ivia-runtime-port-override"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+  }
+
+  data = {
+    "port-override.xml" = <<-XML
+      <server>
+        <httpEndpoint id="defaultHttpEndpoint" httpPort="-1" host="*" httpsPort="9444" protocolVersion="http/1.1"/>
+      </server>
+    XML
+  }
+}
+
 # Admin password from K8s Secret (Threat T-06-08-01 mitigation).
 ################################################################################
 
@@ -1391,6 +1408,8 @@ resource "kubernetes_deployment" "ivia_config" {
         # --- Container 3: IVIA Runtime (co-located for localhost LDAP access) ---
         # Must share localhost with slapd so pdconfig can bind to LDAP on 389.
         # CONFIG_SERVICE_URL points to localhost:9443 (LMI on same pod).
+        # Liberty HTTPS overridden to 9444 via configDropins to avoid port
+        # collision with the LMI container which already binds 9443.
         container {
           name  = "ivia-runtime"
           image = "icr.io/ivia/ivia-runtime:11.0.2.0"
@@ -1437,6 +1456,13 @@ resource "kubernetes_deployment" "ivia_config" {
             value = "UTC"
           }
 
+          volume_mount {
+            name       = "runtime-port-override"
+            mount_path = "/opt/ibm/wlp/usr/servers/runtime/configDropins/overrides/port-override.xml"
+            sub_path   = "port-override.xml"
+            read_only  = true
+          }
+
           resources {
             requests = {
               cpu    = "250m"
@@ -1446,6 +1472,13 @@ resource "kubernetes_deployment" "ivia_config" {
               cpu    = "1"
               memory = "2Gi"
             }
+          }
+        }
+
+        volume {
+          name = "runtime-port-override"
+          config_map {
+            name = kubernetes_config_map.ivia_runtime_port_override.metadata[0].name
           }
         }
 
@@ -1478,6 +1511,7 @@ resource "kubernetes_deployment" "ivia_config" {
     kubernetes_secret.ivia_configreader,
     kubernetes_persistent_volume_claim.ivia_config,
     kubernetes_config_map.ivia_config_ds,
+    kubernetes_config_map.ivia_runtime_port_override,
   ]
 }
 
@@ -1503,7 +1537,8 @@ resource "kubernetes_service" "ivia_config" {
       "app.kubernetes.io/name" = "ivia-config"
     }
 
-    type = "ClusterIP"
+    type                        = "ClusterIP"
+    publish_not_ready_addresses = true
 
     port {
       name        = "lmi"
@@ -1782,9 +1817,23 @@ resource "kubernetes_config_map" "ivia_autoconf_config" {
       if echo "$${BODY}" | grep -q '"default"'; then
         echo "[autoconf] WRP instance 'default' already exists — skipping"
       else
-        echo "[autoconf] Creating WRP instance 'default'"
-        api POST "/wga/reverseproxy" \
-          -d "{\"inst_name\":\"default\",\"host\":\"iviawrp\",\"admin_id\":\"sec_master\",\"admin_pwd\":\"$${ADMIN_PWD}\",\"domain\":\"Default\",\"http_port\":\"80\",\"https_port\":\"443\",\"ip_address\":\"0.0.0.0\",\"listening_port\":\"7234\",\"ssl_yn\":\"no\",\"key_file\":\"\",\"cert_label\":\"\",\"ssl_port\":\"\",\"http_yn\":\"yes\",\"https_yn\":\"yes\",\"nw_interface_yn\":\"yes\"}"
+        echo "[autoconf] Creating WRP instance 'default' (with policy server retry)"
+        WRP_CREATED=false
+        for _wrp_attempt in $(seq 1 10); do
+          api POST "/wga/reverseproxy" \
+            -d "{\"inst_name\":\"default\",\"host\":\"iviawrp\",\"admin_id\":\"sec_master\",\"admin_pwd\":\"$${ADMIN_PWD}\",\"domain\":\"Default\",\"http_port\":\"80\",\"https_port\":\"443\",\"ip_address\":\"0.0.0.0\",\"listening_port\":\"7234\",\"ssl_yn\":\"no\",\"key_file\":\"\",\"cert_label\":\"\",\"ssl_port\":\"\",\"http_yn\":\"yes\",\"https_yn\":\"yes\",\"nw_interface_yn\":\"yes\"}"
+          if [ "$${HTTP_CODE}" = "200" ]; then
+            echo "[autoconf] WRP instance created successfully"
+            WRP_CREATED=true
+            break
+          fi
+          echo "  attempt $${_wrp_attempt}: WRP create failed (HTTP $${HTTP_CODE}) — policy server may be initializing, retrying in 30s..."
+          sleep 30
+        done
+        if [ "$${WRP_CREATED}" = "false" ]; then
+          echo "[autoconf] ERROR: WRP create failed after 10 attempts"
+          exit 1
+        fi
       fi
 
       step "Deploy (WRP instance)"
