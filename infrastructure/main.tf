@@ -139,6 +139,25 @@ module "addons" {
 }
 
 #-------------------------------------------------------------------------------
+# Wave 1.5 — EDR (Uptycs KSPM)
+# DaemonSet (k8sosquery) on every node for host/container telemetry + Protect.
+# Deployment (kubequery) for Kubernetes API telemetry + compliance scanning.
+# Depends ONLY on module.eks (needs cluster + vpc-cni + coredns from
+# cluster_addons — both deploy before nodes ready). Runs in parallel with
+# module.addons so Uptycs enrollment happens BEFORE compliance scanners
+# (e.g. Wiz) detect non-compliant nodes and terminate them.
+#-------------------------------------------------------------------------------
+
+module "edr" {
+  source = "./modules/edr"
+  count  = var.enable_edr ? 1 : 0
+
+  cluster_name = module.eks.cluster_name
+
+  depends_on = [module.eks]
+}
+
+#-------------------------------------------------------------------------------
 # Wave 2 — Bedrock KB Index
 # Owns opensearch_index + KB + 3 data sources. USES the opensearch provider.
 # depends_on bedrock_kb_aoss so the time_sleep IAM-propagation barrier in

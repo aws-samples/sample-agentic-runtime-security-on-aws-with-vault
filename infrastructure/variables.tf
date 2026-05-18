@@ -55,6 +55,12 @@ variable "admin_principal_arn" {
   description = "ARN of IAM user/role for kubectl access to the EKS cluster."
 }
 
+variable "enable_edr" {
+  type        = bool
+  description = "Deploy Uptycs KSPM EDR (k8sosquery DaemonSet + kubequery Deployment). Enable for HC-COMPUTE-011 compliance; disable for environments that don't require EDR."
+  default     = false
+}
+
 #-------------------------------------------------------------------------------
 # Audit Configuration
 #-------------------------------------------------------------------------------

@@ -38,7 +38,7 @@ module "eks" {
   version = "~> 20.37"
 
   cluster_name    = var.cluster_name
-  cluster_version = "1.33"
+  cluster_version = "1.34"
 
   # Endpoint configuration (CONTEXT decision)
   # Public + private: kubectl from attendee laptop works (public);
@@ -74,21 +74,11 @@ module "eks" {
   # EKS Access Entries — replaces legacy aws-auth ConfigMap (CONTEXT decision).
   # Creator admin permissions ensure the HCP-deploy role is admin during apply
   # (Pitfall E3 — persists post-apply; documented in README).
+  # enable_cluster_creator_admin_permissions grants the deploying IAM role
+  # (which is also var.admin_principal_arn in this workshop) cluster-admin via
+  # the auto-created "cluster_creator" access entry. An explicit access_entry
+  # for the same principal would collide (409 ResourceInUseException).
   enable_cluster_creator_admin_permissions = true
-
-  access_entries = {
-    workshop_admin = {
-      principal_arn = var.admin_principal_arn
-      policy_associations = {
-        cluster_admin = {
-          policy_arn = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
-          access_scope = {
-            type = "cluster"
-          }
-        }
-      }
-    }
-  }
 
   # Managed addons with Pod Identity Associations (RESEARCH Pattern 3).
   # before_compute=true on vpc-cni and eks-pod-identity-agent is CRITICAL —
@@ -124,14 +114,15 @@ module "eks" {
   # Managed node group (CONTEXT-locked sizing).
   # 3 m5.xlarge gives comfortable headroom for Vault Raft + IVIA + 3 agents +
   # ALB controller + CoreDNS. AL2023 + on-demand for predictable workshop demos.
+  # EDR compliance via Uptycs Helm DaemonSet (module.edr), not custom AMI.
   eks_managed_node_groups = {
     default = {
       ami_type       = "AL2023_x86_64_STANDARD"
       instance_types = ["m5.xlarge"]
       capacity_type  = "ON_DEMAND"
-      min_size       = 2
-      desired_size   = 3
-      max_size       = 5
+      min_size       = 3
+      desired_size   = 5
+      max_size       = 7
     }
   }
 
