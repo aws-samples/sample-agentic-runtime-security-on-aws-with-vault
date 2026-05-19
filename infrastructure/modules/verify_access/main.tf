@@ -1374,7 +1374,6 @@ resource "kubernetes_deployment" "ivia_config" {
             name       = "passwd-override"
             mount_path = "/etc/openldap/dynamic/passwd.conf"
             sub_path   = "passwd.conf"
-            read_only  = true
           }
 
           readiness_probe {
