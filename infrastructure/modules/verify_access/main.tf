@@ -1283,11 +1283,43 @@ resource "kubernetes_deployment" "ivia_config" {
           name = kubernetes_secret.icr_pull.metadata[0].name
         }
 
+        # --- Init: generate correct passwd.conf from LDAP_ADMIN_PWD ---
+        # mesa_control bootstrap overwrites /etc/openldap/dynamic/passwd.conf
+        # with a baked-in hash. This init container generates the correct hash
+        # into an emptyDir; ivia-config mounts it as a read-only subPath so
+        # mesa_control cannot overwrite it.
+        init_container {
+          name  = "gen-passwd"
+          image = "icr.io/ivia/ivia-config:11.0.2.0"
+
+          command = ["/bin/sh", "-c", "HASH=$(/usr/sbin/slappasswd -s \"$LDAP_ADMIN_PWD\") && printf 'rootpw \"%s\"\\n' \"$HASH\" > /passwd-override/passwd.conf"]
+
+          env {
+            name = "LDAP_ADMIN_PWD"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret.ivia_admin.metadata[0].name
+                key  = "password"
+              }
+            }
+          }
+
+          volume_mount {
+            name       = "passwd-override"
+            mount_path = "/passwd-override"
+          }
+
+          security_context {
+            run_as_non_root = true
+            run_as_user     = 6000
+          }
+        }
+
         # --- Container 1: IVIA Config (LMI) ---
         container {
           name    = "ivia-config"
           image   = "icr.io/ivia/ivia-config:11.0.2.0"
-          command = ["/bin/sh", "-c", "HASH=$(/usr/sbin/slappasswd -s \"$LDAP_ADMIN_PWD\") && printf 'rootpw \"%s\"\\n' \"$HASH\" > /etc/openldap/dynamic/passwd.conf && /etc/ivia-ds/inject-datasource.sh && exec /sbin/bootstrap.sh"]
+          command = ["/bin/sh", "-c", "/etc/ivia-ds/inject-datasource.sh && exec /sbin/bootstrap.sh"]
 
           security_context {
             privileged                 = false
@@ -1322,16 +1354,6 @@ resource "kubernetes_deployment" "ivia_config" {
             }
           }
 
-          env {
-            name = "LDAP_ADMIN_PWD"
-            value_from {
-              secret_key_ref {
-                name = kubernetes_secret.ivia_admin.metadata[0].name
-                key  = "password"
-              }
-            }
-          }
-
           volume_mount {
             name       = "shared"
             mount_path = "/var/shared"
@@ -1345,6 +1367,13 @@ resource "kubernetes_deployment" "ivia_config" {
           volume_mount {
             name       = "ds-override"
             mount_path = "/etc/ivia-ds"
+            read_only  = true
+          }
+
+          volume_mount {
+            name       = "passwd-override"
+            mount_path = "/etc/openldap/dynamic/passwd.conf"
+            sub_path   = "passwd.conf"
             read_only  = true
           }
 
@@ -1550,6 +1579,11 @@ resource "kubernetes_deployment" "ivia_config" {
             name         = kubernetes_config_map.ivia_config_ds.metadata[0].name
             default_mode = "0755"
           }
+        }
+
+        volume {
+          name = "passwd-override"
+          empty_dir {}
         }
       }
     }
