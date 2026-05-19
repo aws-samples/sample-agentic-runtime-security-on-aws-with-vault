@@ -173,24 +173,19 @@ done
 print_pass "All 3 service source directories present"
 
 #-------------------------------------------------------------------------------
-# Create ECR repository (idempotent)
+# Verify ECR repository exists (created by Terraform)
 #-------------------------------------------------------------------------------
-print_info "Ensuring ECR repository ${ECR_REPO_NAME} exists..."
+print_info "Verifying ECR repository ${ECR_REPO_NAME} exists (created by Terraform)..."
 
-if ! run aws ecr describe-repositories \
+if run aws ecr describe-repositories \
     --repository-names "${ECR_REPO_NAME}" \
     --region "${REGION}" \
     --output text &>/dev/null; then
-
-    print_info "Creating ECR repository: ${ECR_REPO_NAME}"
-    run aws ecr create-repository \
-        --repository-name "${ECR_REPO_NAME}" \
-        --region "${REGION}" \
-        --image-scanning-configuration scanOnPush=true \
-        --output text \
-        --query "repository.repositoryUri"
+    print_pass "ECR repository exists: ${ECR_REPO_NAME}"
+else
+    print_fail "ECR repository not found: ${ECR_REPO_NAME}. Run 'terraform apply' first."
+    exit 1
 fi
-print_pass "ECR repository ready: ${ECR_REPO_NAME}"
 
 #-------------------------------------------------------------------------------
 # ECR login

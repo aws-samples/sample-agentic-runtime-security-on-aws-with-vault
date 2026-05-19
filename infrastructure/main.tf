@@ -38,6 +38,19 @@ module "audit" {
 }
 
 #-------------------------------------------------------------------------------
+# Wave 0 — ECR
+# Pre-creates container image repos so build scripts only push (no ad-hoc
+# create-repository). force_delete = true for clean terraform destroy.
+#-------------------------------------------------------------------------------
+
+module "ecr" {
+  source = "./modules/ecr"
+
+  repository_names = ["workshop/uc1-agent", "workshop/uc3-agent", "workshop-banking-app"]
+  tags             = var.tags
+}
+
+#-------------------------------------------------------------------------------
 # Wave 0 — VPC
 #-------------------------------------------------------------------------------
 
