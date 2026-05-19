@@ -1211,7 +1211,7 @@ with open('$SRV','w') as f: f.write(t)
 # Config Container Deployment
 # Three containers in one pod (shared localhost network namespace):
 #   1. ivia-config  — LMI on port 9443, datasource injection, IBM bootstrap
-#   2. slapd        — embedded OpenLDAP on port 389/636 (sidecar)
+#   2. slapd        — embedded OpenLDAP on port 9389/9636 (sidecar)
 #   3. ivia-runtime — runtime (pdconfig/webseald), needs localhost LDAP
 #
 # Sidecar design: LMI restart (triggered by POST /isam/runtime_components)
@@ -1379,15 +1379,17 @@ resource "kubernetes_deployment" "ivia_config" {
           }
         }
 
-        # --- Container 2: slapd sidecar (embedded OpenLDAP) ---
+        # --- Container 2: slapd sidecar (embedded OpenLDAP on port 9389) ---
         # Same IVIA image — ships with /usr/sbin/slapd, slapd.conf, ameb.schema.
         # Runs slapd in foreground (-d 0); Kubernetes restarts on crash.
-        # Shares localhost with ivia-config — LMI reaches LDAP at localhost:389.
+        # Listens on 9389/9636 — the port PDMgr_config and pdmgrd expect.
+        # bootstrap.sh's own slapd occupies 389/636; this sidecar provides the
+        # password-correct registry on 9389 for the policy server handshake.
         container {
           name  = "slapd"
           image = "icr.io/ivia/ivia-config:11.0.2.0"
 
-          command = ["/bin/sh", "-ec", "mkdir -p /var/openldap/data/dc-iswga && HASH=$(/usr/sbin/slappasswd -s \"$LDAP_ADMIN_PWD\") && printf 'rootpw \"%s\"\\n' \"$HASH\" > /etc/openldap/dynamic/passwd.conf && openssl req -x509 -newkey rsa:2048 -keyout /etc/openldap/dynamic/server.key -out /etc/openldap/dynamic/server.pem -days 365 -nodes -subj '/CN=localhost' 2>/dev/null && cp /etc/openldap/dynamic/server.pem /etc/openldap/dynamic/ca.pem && exec /usr/sbin/slapd -d 0 -f /etc/openldap/slapd.conf -h 'ldap://0.0.0.0:389 ldaps://0.0.0.0:636'"]
+          command = ["/bin/sh", "-ec", "mkdir -p /var/openldap/data/dc-iswga && HASH=$(/usr/sbin/slappasswd -s \"$LDAP_ADMIN_PWD\") && printf 'rootpw \"%s\"\\n' \"$HASH\" > /etc/openldap/dynamic/passwd.conf && openssl req -x509 -newkey rsa:2048 -keyout /etc/openldap/dynamic/server.key -out /etc/openldap/dynamic/server.pem -days 365 -nodes -subj '/CN=localhost' 2>/dev/null && cp /etc/openldap/dynamic/server.pem /etc/openldap/dynamic/ca.pem && exec /usr/sbin/slapd -d 0 -f /etc/openldap/slapd.conf -h 'ldap://0.0.0.0:9389 ldaps://0.0.0.0:9636'"]
 
           security_context {
             privileged                 = false
@@ -1402,13 +1404,13 @@ resource "kubernetes_deployment" "ivia_config" {
           }
 
           port {
-            container_port = 389
+            container_port = 9389
             name           = "ldap"
             protocol       = "TCP"
           }
 
           port {
-            container_port = 636
+            container_port = 9636
             name           = "ldaps"
             protocol       = "TCP"
           }
@@ -1425,7 +1427,7 @@ resource "kubernetes_deployment" "ivia_config" {
 
           readiness_probe {
             exec {
-              command = ["/bin/sh", "-c", "ldapsearch -x -H ldap://localhost:389 -b '' -s base '(objectclass=*)' >/dev/null 2>&1"]
+              command = ["/bin/sh", "-c", "ldapsearch -x -H ldap://localhost:9389 -b '' -s base '(objectclass=*)' >/dev/null 2>&1"]
             }
             initial_delay_seconds = 10
             period_seconds        = 10
@@ -1435,7 +1437,7 @@ resource "kubernetes_deployment" "ivia_config" {
 
           liveness_probe {
             exec {
-              command = ["/bin/sh", "-c", "pgrep -x slapd >/dev/null && ldapsearch -x -H ldap://localhost:389 -b '' -s base '(objectclass=*)' >/dev/null 2>&1"]
+              command = ["/bin/sh", "-c", "pgrep -x slapd >/dev/null && ldapsearch -x -H ldap://localhost:9389 -b '' -s base '(objectclass=*)' >/dev/null 2>&1"]
             }
             initial_delay_seconds = 30
             period_seconds        = 15
@@ -1456,7 +1458,7 @@ resource "kubernetes_deployment" "ivia_config" {
         }
 
         # --- Container 3: IVIA Runtime (co-located for localhost LDAP access) ---
-        # Must share localhost with slapd so pdconfig can bind to LDAP on 389.
+        # Must share localhost with slapd so pdconfig can bind to LDAP on 9389.
         # CONFIG_SERVICE_URL points to localhost:9443 (LMI on same pod).
         # Liberty HTTPS overridden to 9444 via configDropins to avoid port
         # collision with the LMI container which already binds 9443.
@@ -2142,7 +2144,7 @@ resource "kubernetes_job" "ivia_autoconf" {
 
 resource "kubernetes_deployment" "ivia_runtime" {
   # Runtime now co-located in ivia_config pod (Container 3) for localhost LDAP access.
-  # Standalone deployment disabled — pdconfig needs localhost:389 (slapd sidecar).
+  # Standalone deployment disabled — pdconfig needs localhost:9389 (slapd sidecar).
   count = 0
 
   metadata {
