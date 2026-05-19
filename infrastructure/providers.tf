@@ -2,22 +2,13 @@
 # Root Module — Provider Configuration
 # Agentic Runtime Security Workshop
 #
-# HCP Terraform Workspace with local execution — state stored in HCP,
-# plans and applies run on the attendee's machine with local AWS credentials.
-#
-# Kubernetes + Helm use exec-based auth via `aws eks get-token`.
+# Local state. Kubernetes + Helm use exec-based auth via `aws eks get-token`.
 #
 # Canonical region contract:
 #   var.region and var.kb_region are the only region references in .tf files.
 ################################################################################
 
 terraform {
-  cloud {
-    workspaces {
-      name = "agentic-runtime-security"
-    }
-  }
-
   required_version = ">= 1.10"
 
   required_providers {

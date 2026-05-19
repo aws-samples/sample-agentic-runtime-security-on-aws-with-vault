@@ -26,3 +26,4 @@
 - Don't add `(with Karpenter)`, `argo-cd`, or `karpenter` references to any module, content, or comment.
 - Don't ask the user to re-confirm the constraints above. They are settled.
 - **Don't speculate or assume.** Never add config keys, YAML parameters, or API values that are not confirmed in official IBM docs, IBM GitHub samples (`IBM-Security/verify-access-oidc-provider-resources`), or verified on the live system. Speculative config has broken working flows (e.g., adding unvalidated `token_exchange` YAML keys broke a working CIBA poll). If unsure, research first — don't guess.
+- **Never modify files the user didn't ask to change.** When committing, only include files related to the current task. If there are unrelated modified files in the working tree, flag them — don't silently commit or "fix" them.
