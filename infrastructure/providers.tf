@@ -12,13 +12,11 @@
 ################################################################################
 
 terraform {
-  # cloud {} block removed — using local state for this run.
-  # To re-enable HCP Terraform, uncomment:
-  # cloud {
-  #   workspaces {
-  #     name = "agentic-runtime-security"
-  #   }
-  # }
+  cloud {
+    workspaces {
+      name = "agentic-runtime-security"
+    }
+  }
 
   required_version = ">= 1.10"
 
