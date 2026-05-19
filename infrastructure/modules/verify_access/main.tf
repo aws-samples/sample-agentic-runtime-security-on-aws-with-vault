@@ -1283,7 +1283,7 @@ resource "kubernetes_deployment" "ivia_config" {
         container {
           name    = "ivia-config"
           image   = "icr.io/ivia/ivia-config:11.0.2.0"
-          command = ["/bin/sh", "-c", "/etc/ivia-ds/inject-datasource.sh && /sbin/bootstrap.sh & BOOT_PID=$! && until [ -f /etc/openldap/dynamic/passwd.conf ]; do sleep 1; done && sleep 5 && HASH=$(/usr/sbin/slappasswd -s \"$LDAP_ADMIN_PWD\") && printf 'rootpw \"%s\"\\n' \"$HASH\" > /etc/openldap/dynamic/passwd.conf && pkill -f 'slapd.*9389' && sleep 2 && wait $BOOT_PID"]
+          command = ["/bin/sh", "-c", "HASH=$(/usr/sbin/slappasswd -s \"$LDAP_ADMIN_PWD\") && printf 'rootpw \"%s\"\\n' \"$HASH\" > /etc/openldap/dynamic/passwd.conf && /etc/ivia-ds/inject-datasource.sh && exec /sbin/bootstrap.sh"]
 
           security_context {
             privileged                 = false
