@@ -116,6 +116,7 @@ SKIP_ADDONS=false
 DRY_RUN=false
 START_FROM=""
 WORKSPACE_NAME="agentic-runtime-security"
+LOCAL_STATE=true
 
 # Resolve canonical region + cluster_name from infrastructure/terraform.tfvars.
 # No string literals here — only the config file is the source of truth.
@@ -203,6 +204,7 @@ while [ $# -gt 0 ]; do
         --nuke)           NUKE=true ;;
         --cleanup-only)   CLEANUP_ONLY=true; NUKE=true ;;
         --skip-addons)    SKIP_ADDONS=true ;;
+        --local)          LOCAL_STATE=true ;;
         --skip-prereq-gate)
             # No-op at this level. workshop-e2e.sh ALWAYS passes
             # --skip-prereq-gate to bootstrap.sh internally because Phase 0
@@ -225,13 +227,13 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-# HCP_ORG is required unless teardown-only (reads from terraform.tfvars)
-if [ -z "$HCP_ORG" ] && [ "$TEARDOWN_ONLY" = false ]; then
+# HCP_ORG is required unless --local or teardown-only
+if [ -z "$HCP_ORG" ] && [ "$TEARDOWN_ONLY" = false ] && [ "$LOCAL_STATE" = false ]; then
     if [ -f "$SCRIPT_DIR/hcp-setup/terraform.tfvars" ]; then
         HCP_ORG=$(grep 'hcp_org' "$SCRIPT_DIR/hcp-setup/terraform.tfvars" 2>/dev/null | awk -F'"' '{print $2}')
     fi
     if [ -z "$HCP_ORG" ]; then
-        echo -e "${RED}Error: HCP_ORG is required${NC}"
+        echo -e "${RED}Error: HCP_ORG is required (or use --local for local state)${NC}"
         echo "Usage: $0 <HCP_ORG> [OPTIONS]"
         exit 1
     fi
@@ -307,9 +309,17 @@ phase_deploy_foundation() {
         return 0
     fi
 
-    export TF_CLOUD_ORGANIZATION="$HCP_ORG"
+    if [ "$LOCAL_STATE" = false ]; then
+        export TF_CLOUD_ORGANIZATION="$HCP_ORG"
+    fi
 
-    step_header "Running terraform apply (local execution, HCP remote state)..."
+    step_header "Running terraform init..."
+    terraform -chdir="$PROJECT_ROOT/infrastructure" init -upgrade || {
+        print_error "Terraform init failed."
+        exit 1
+    }
+
+    step_header "Running terraform apply..."
     terraform -chdir="$PROJECT_ROOT/infrastructure" apply -auto-approve || {
         print_error "Foundation deploy failed. Check terraform output above."
         exit 1
@@ -647,7 +657,7 @@ phase_uc1() {
 
     # Step 3: Terraform apply
     step_header "Running terraform apply for UC1 deployment..."
-    export TF_CLOUD_ORGANIZATION="$HCP_ORG"
+    [ "$LOCAL_STATE" = false ] && export TF_CLOUD_ORGANIZATION="$HCP_ORG"
     terraform -chdir="$PROJECT_ROOT/infrastructure" apply -auto-approve || {
         print_error "UC1 terraform apply failed"
         return 1
@@ -746,7 +756,7 @@ phase_uc2() {
 
     # Step 3: Terraform apply
     step_header "Running terraform apply for UC2 deployment..."
-    export TF_CLOUD_ORGANIZATION="$HCP_ORG"
+    [ "$LOCAL_STATE" = false ] && export TF_CLOUD_ORGANIZATION="$HCP_ORG"
     terraform -chdir="$PROJECT_ROOT/infrastructure" apply -auto-approve || {
         print_error "UC2 terraform apply failed"
         return 1
@@ -848,7 +858,7 @@ phase_uc3() {
 
     # Step 3: Init (new modules) + apply
     step_header "Running terraform init for new UC3 + observability modules..."
-    export TF_CLOUD_ORGANIZATION="$HCP_ORG"
+    [ "$LOCAL_STATE" = false ] && export TF_CLOUD_ORGANIZATION="$HCP_ORG"
     terraform -chdir="$PROJECT_ROOT/infrastructure" init -upgrade || {
         print_error "UC3 terraform init failed"
         return 1
@@ -1206,7 +1216,7 @@ phase_nuke() {
 
     if [ "$cluster_active" = true ]; then
         step_header "Running terraform destroy..."
-        export TF_CLOUD_ORGANIZATION="$HCP_ORG"
+        [ "$LOCAL_STATE" = false ] && export TF_CLOUD_ORGANIZATION="$HCP_ORG"
         terraform -chdir="$PROJECT_ROOT/infrastructure" destroy -auto-approve || {
             print_warn "Terraform destroy did not fully complete — continuing with cleanup"
         }
@@ -1299,7 +1309,11 @@ should_run() {
 }
 
 should_run prerequisites   && phase_prerequisites
-should_run bootstrap       && phase_bootstrap
+if [ "$LOCAL_STATE" = false ]; then
+    should_run bootstrap       && phase_bootstrap
+else
+    print_info "Skipping bootstrap (--local: no HCP Terraform)"
+fi
 should_run foundation      && phase_deploy_foundation
 should_run kubectl         && phase_configure_kubectl
 should_run verify          && phase_verify_foundation

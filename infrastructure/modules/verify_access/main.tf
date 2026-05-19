@@ -475,10 +475,24 @@ rules:
     - name: notifyuser
       rule_type: javascript
       content: |
-        // InternalAuthenticator: OIDC Provider delegates consent to WRP.
-        // WRP serves the login page + /isvaop/oauth2/ciba_user_authorize/{id} consent page.
-        // No HTTP call needed — WRP handles everything via junction.
-        ciba.setAuthenticator(new InternalAuthenticator());
+        importClass(Packages.com.ibm.security.access.httpclient.HttpClient);
+        var authReqId = ciba.getAuthRequestID();
+        var wrpStatusUrl = String(ciba.getStatusUpdateEndpoint());
+        var trxPath = wrpStatusUrl.replace(/.*\/oauth2\//, "/oauth2/");
+        var statusUpdateUrl = "https://isvaop.verify-access.svc.cluster.local:8436" + trxPath;
+        var bearerToken = ciba.getBearerToken();
+        var username = stsuu.getContextAttributes().getAttributeValueByName("login_hint") || stsuu.getAttributeContainer().getAttributeValueByName("sub") || stsuu.getPrincipalName();
+        var targetUrl = "http://banking-ui-svc.banking-app.svc.cluster.local/api/ciba-callback";
+        var hdrs = new Headers();
+        hdrs.addHeader("Content-Type", "application/json");
+        var payload = JSON.stringify({
+          auth_req_id: String(authReqId),
+          update_url: statusUpdateUrl,
+          token: String(bearerToken),
+          user: String(username || "unknown")
+        });
+        var rsp = HttpClientV2.httpPost(targetUrl, hdrs, payload, null, null, null, null, null, null, null, 10, false, null);
+        ciba.setAuthenticator(new ExternalAuthenticator());
 
 clients:
   - client_id: workshop_agent
@@ -512,7 +526,7 @@ clients:
       - email
   - client_id: agent-uc3
     client_secret: "${random_password.client_secret.result}"
-    client_name: "UC3 Refund Agent (CIBA)"
+    client_name: "UC3 Refund Agent (CIBA + Token Exchange)"
     enabled: true
     grant_types:
       - urn:openid:params:grant-type:ciba
@@ -524,6 +538,30 @@ clients:
     scopes:
       - openid
       - profile
+    token_exchange_settings:
+      client_groups:
+        - uc3
+      supported_subject_token_types:
+        - urn:ietf:params:oauth:token-type:access_token
+      supported_actor_token_types:
+        - urn:ietf:params:oauth:token-type:access_token
+  - client_id: uc3-actor
+    client_secret: "${random_password.client_secret.result}"
+    client_name: "UC3 Agent Workload Identity"
+    enabled: true
+    grant_types:
+      - client_credentials
+      - urn:ietf:params:oauth:grant-type:token-exchange
+    token_endpoint_auth_method: client_secret_post
+    scopes:
+      - openid
+    token_exchange_settings:
+      client_groups:
+        - uc3
+      supported_subject_token_types:
+        - urn:ietf:params:oauth:token-type:access_token
+      supported_actor_token_types:
+        - urn:ietf:params:oauth:token-type:access_token
 
 keystore:
   - name: https_keys
@@ -1201,6 +1239,8 @@ resource "kubernetes_config_map" "ivia_runtime_port_override" {
 ################################################################################
 
 resource "kubernetes_deployment" "ivia_config" {
+  wait_for_rollout = false
+
   metadata {
     name      = "ivia-config"
     namespace = kubernetes_namespace.verify_access.metadata[0].name
@@ -2983,6 +3023,26 @@ resource "kubernetes_network_policy" "isvaop_allow_egress" {
     egress {
       ports {
         port     = "389"
+        protocol = "TCP"
+      }
+    }
+
+    # To banking-ui on port 80 (CIBA notifyuser callback)
+    egress {
+      to {
+        namespace_selector {
+          match_labels = {
+            "kubernetes.io/metadata.name" = "banking-app"
+          }
+        }
+        pod_selector {
+          match_labels = {
+            app = "banking-ui"
+          }
+        }
+      }
+      ports {
+        port     = "5173"
         protocol = "TCP"
       }
     }

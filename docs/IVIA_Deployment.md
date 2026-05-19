@@ -274,7 +274,8 @@ kubectl port-forward -n verify-access svc/iviaconfig 9443:9443
 5. Navigate to **System > Trial > Import**
 6. Upload `ISAM-Trial-HashiCorp.cer` (located in `infrastructure/`)
 7. Click **Save Configuration** — wait ~10s for reload
-8. Go back to **System > Trial** — confirm three modules activated:
+8. Click **Publish Configuration** (top banner or System menu) — this publishes the configuration snapshot to `/shared_volume` so the runtime container can download it. Without this step, the runtime gets 404 on snapshot download and pdmgrd never starts.
+9. Go back to **System > Trial** — confirm three modules activated:
    - **wga** (Web Gateway / Reverse Proxy)
    - **mga** (Mobile Gateway / Advanced Access Control)
    - **federation** (OIDC / SAML / Token Exchange)
@@ -338,15 +339,41 @@ Deploys in dependency order: EKS → Addons → RDS → Vault → Simple AD → 
 
 ---
 
-## 7. Common Failures
+## 7. Gradual Startup Behavior (Do NOT Panic)
+
+The IVIA stack comes up **gradually** over 10-15 minutes. Transient errors during this period are normal and self-resolve as components initialize in sequence. Do not intervene manually — let the autoconf retries handle it.
+
+**Expected startup timeline:**
+
+| Time after apply | What's happening | What you'll see |
+|-----------------|-----------------|-----------------|
+| 0-2 min | Config (LMI) starts, slapd starts | `ivia-config` 2/3 Ready (runtime CrashLoopBackOff) |
+| 2-5 min | Autoconf Steps 1-6: SLA, trial check, HVDB, deploy | LMI restarts after HVDB deploy |
+| 5-8 min | Autoconf Steps 7-10: Runtime config, cfgsvc, deploy | Runtime downloads snapshot, pdmgrd initializing |
+| 8-12 min | Autoconf Step 13: WRP create | **DPWAP0010E is expected here** — pdmgrd not ready yet. Autoconf retries every 30s (10 attempts). |
+| 10-15 min | pdmgrd stabilizes, WRP creates, junction + ACL | All steps complete |
+| 15+ min | WRP pod starts, downloads snapshot | Full stack healthy |
+
+**Key insight:** The runtime container may show as Running but pdmgrd (the policy server process inside it) takes additional time to initialize after receiving its configuration snapshot. Step 13 (WRP create) requires pdmgrd to be accepting connections. The `DPWAP0010E` error during this window is **not a failure** — it means pdmgrd hasn't finished starting. The autoconf's 10-attempt retry loop (30s intervals = 5 min window) exists specifically for this reason.
+
+**Cross-cycle convergence:** The autoconf job has a backoff limit of 10 retries. If WRP create exhausts all 10 attempts in one cycle, the job exits with error and Kubernetes restarts it. On the next cycle, the runtime container has had more time with the configuration snapshot from the previous cycle's deploys — pdmgrd gets closer to ready with each pass. The config pod will show 3/3 Running even while the autoconf is retrying. This is normal convergence behavior — the system self-heals across autoconf cycles without intervention.
+
+**When to actually worry:**
+- Autoconf exhausts its backoff limit (10 job restarts, not just 10 WRP attempts) and enters `Failed` state
+- Runtime container keeps CrashLoopBackOff after autoconf Steps 8-9 complete across multiple cycles
+- Config container itself never reaches Ready (LMI not responding)
+
+---
+
+## 8. Common Failures
 
 | Error | Root Cause | Fix |
 |-------|-----------|-----|
 | **WGAWA0260E** "Runtime not configured" | PVC has stale state; pdconfig/ivmgrd not running | Destroy, wipe PVC, redeploy |
-| **DPWAP0010E** "Failed to establish secure connection to policy server" | pdmgrd flapping; port collision or stale LDAP config | Verify runtime on 9444 not 9443; verify `dc=iswga` in LDAP; wipe PVC if flapping |
+| **DPWAP0010E** "Failed to establish secure connection to policy server" | pdmgrd not yet ready OR port collision OR stale LDAP | **During autoconf Step 13: wait for retries.** If persistent after all retries: verify runtime on 9444 not 9443; verify `dc=iswga` in LDAP; wipe PVC if flapping |
 | **HPDCO0192W** "LDAP server 127.0.0.1:9389 has failed" | PVC remembers wrong LDAP port from previous deploy | Wipe PVC, redeploy — slapd must be on 389 |
 | **CrashLoopBackOff** on ivia-runtime | **Expected on fresh PVC** — no snapshot yet | Wait for autoconf Steps 8-9 to complete |
-| **ImagePullBackOff** | Expired or invalid ICR entitlement key | Update `icr_entitlement_key` in HCP variable set |
+| **ImagePullBackOff** | Expired or invalid ICR entitlement key | Update `icr_entitlement_key` in terraform.tfvars |
 | **HTTP 302** on trial activation API | API doesn't work on IVIA 11.0.2.0 | Use LMI UI (Section 5c) |
 | **Unexpected Identity Change** | Kubernetes provider bug — UID changed | `terraform state rm` the resource, then re-apply |
 
@@ -355,9 +382,13 @@ Deploys in dependency order: EKS → Addons → RDS → Vault → Simple AD → 
 ## 8. Diagnostic Cheat Sheet
 
 ```bash
-# Process checks
-kubectl exec -n verify-access deploy/ivia-config -c ivia-config -- ps aux | grep pdmgrd
-kubectl exec -n verify-access deploy/ivia-config -c ivia-config -- ps aux | grep ivmgrd
+# Process checks — pdmgrd does NOT show in `ps aux | grep pdmgrd`.
+# It runs as a native process under a different name. Check port 7135 instead:
+kubectl exec -n verify-access deploy/ivia-config -c ivia-runtime -- netstat -tlnp 2>/dev/null || \
+  kubectl exec -n verify-access deploy/ivia-config -c ivia-runtime -- cat /proc/net/tcp6
+# Port 7135 = pdmgrd (policy server), 9389 = IVIA LDAP proxy, 9636 = IVIA LDAPS proxy
+# Port 9444 = Liberty (runtime), 389 = slapd, 636 = slapd TLS
+
 kubectl exec -n verify-access deploy/ivia-config -c slapd -- ps aux | grep slapd
 
 # LDAP — dc=iswga must exist

@@ -134,18 +134,10 @@ Complete these steps in the LMI:
 1. **Accept the Service Level Agreement** when prompted
 2. Navigate to **System > Trial > Import**
 3. Import your `.cer` trial license file
-4. Click **Save Configuration**
-5. Navigate to **System > Account Management**
-6. Set the `cfgsvc` user password — retrieve it with:
+4. Click **Save Configuration** — wait ~10s for reload
+5. Click **Publish Configuration** (top banner or System menu) — this publishes the configuration snapshot to the `/shared_volume` endpoint that the runtime container polls. Without this step, the runtime cannot download its snapshot and pdmgrd will never start.
 
-```bash
-kubectl get secret ivia-configreader -n verify-access \
-  -o jsonpath='{.data.password}' | base64 -d; echo
-```
-
-7. Click **Publish Configuration** (top banner or System menu)
-
-After activation, the Autoconf Job will detect the activated modules and proceed with the remaining 15 configuration steps (HVDB, runtime, federated directory, WRP, junctions, ACLs). Monitor its progress:
+After activation, the Autoconf Job will detect the activated modules and proceed with the remaining configuration steps (HVDB, runtime, federated directory, WRP, junctions, ACLs). Monitor its progress:
 
 ```bash
 kubectl logs -n verify-access -l app.kubernetes.io/name=ivia-autoconf -f

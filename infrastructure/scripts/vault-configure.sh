@@ -134,7 +134,11 @@ phase_gather() {
   if [[ -z "$CLUSTER_NAME" ]]; then
     CLUSTER_NAME=$(kubectl config current-context 2>/dev/null \
       | sed -n 's/.*:cluster\/\([^:]*\).*/\1/p' || true)
-    [[ -z "$CLUSTER_NAME" ]] && CLUSTER_NAME="agentic-runtime-usw2"
+    if [[ -z "$CLUSTER_NAME" ]]; then
+      local _tfvars="${SCRIPT_DIR}/../../infrastructure/terraform.tfvars"
+      [[ -f "$_tfvars" ]] && CLUSTER_NAME=$(grep -E '^\s*cluster_name\s*=' "$_tfvars" | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+    fi
+    [[ -z "$CLUSTER_NAME" ]] && CLUSTER_NAME="agenticlife"
   fi
   ok "Cluster: ${CLUSTER_NAME}"
 

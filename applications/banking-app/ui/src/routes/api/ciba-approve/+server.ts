@@ -31,8 +31,12 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
 			Authorization: `Bearer ${consent.token}`,
 		},
 		body: JSON.stringify({
-			auth_req_id,
-			status: 'SUCCEEDED',
+			status: 'success',
+			metadata: {
+				sAMAccountName: consent.user,
+				uid: consent.user,
+				sub: consent.user,
+			},
 		}),
 	});
 
