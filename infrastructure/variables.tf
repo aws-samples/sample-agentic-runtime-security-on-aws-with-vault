@@ -92,24 +92,6 @@ variable "icr_entitlement_key" {
   description = "IBM Container Registry entitlement key for pulling IVIA images (icr.io/ivia/ivia-oidc-provider). Attendees obtain from IBM."
 }
 
-variable "ivia_trial_cert" {
-  type        = string
-  description = "Filename of the IVIA trial certificate (.cer) in the infrastructure/ directory. Uploaded to Config container to activate wga, mga, and federation modules. Obtain from https://isva-trial.verify.ibm.com/ if expired."
-  default     = "ISAM-Trial-HashiCorp.cer"
-}
-
-variable "ivia_activation_code" {
-  type        = string
-  description = "IVIA trial activation code (CN from trial .cer). Extract with: openssl x509 -in <cert> -noout -subject | sed 's/.*CN=//'"
-  default     = ""
-}
-
-variable "ivia_activated" {
-  type        = bool
-  description = "Set to true after activating the IVIA trial via the LMI UI (System > Trial > Import > Save Configuration). Phase 2 deploy creates Config + slapd sidecar; after manual activation, set this to true and re-apply to deploy autoconf, WRP, and Runtime."
-  default     = false
-}
-
 #-------------------------------------------------------------------------------
 # UC1 Agent Configuration
 # uc1_agent_image: set by attendees after ECR push (Phase 4 lab step).
@@ -152,13 +134,6 @@ variable "banking_app_mcp_image" {
 # Simple AD (LDAP identity source for IVIA)
 #-------------------------------------------------------------------------------
 
-variable "simple_ad_admin_password" {
-  type        = string
-  sensitive   = true
-  default     = "WorkshopAdmin1!"
-  description = "Administrator password for AWS Simple AD. Used for LDAP bind and user provisioning."
-}
-
 variable "uc2_redirect_uri" {
   type        = string
   default     = "http://localhost:3000/callback"
@@ -183,4 +158,14 @@ variable "tags" {
   type        = map(string)
   description = "Tags to apply to all resources."
   default     = {}
+}
+
+#-------------------------------------------------------------------------------
+# IVIA LMI NLB CIDR Allowlist
+#-------------------------------------------------------------------------------
+
+variable "lmi_allowed_cidrs" {
+  type        = list(string)
+  default     = ["0.0.0.0/0"]
+  description = "CIDR allowlist for inbound NLB on TCP/9443 (LMI). Passed to module.ivia. Default open for workshop; attendees may lock to their public IP via terraform.tfvars override."
 }

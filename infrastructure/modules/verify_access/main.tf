@@ -1478,3 +1478,17 @@ resource "kubernetes_job_v1" "ivia_autoconf" {
     kubernetes_secret.base_layer_p12,
   ]
 }
+
+#-------------------------------------------------------------------------------
+# NLB hostname race mitigation. kubernetes_service does not support
+# wait_for_load_balancer (only kubernetes_ingress_v1 does). Give the AWS LBC
+# ~90s to provision the listener and propagate the hostname before any
+# downstream consumer (isva_config) tries to construct a URL against it.
+# RESEARCH Pitfall 8.
+#-------------------------------------------------------------------------------
+
+resource "time_sleep" "ivia_nlb_ready" {
+  depends_on      = [kubernetes_service.iviaconfig_nlb]
+  create_duration = "90s"
+}
+

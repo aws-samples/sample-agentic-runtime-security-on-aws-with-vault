@@ -271,33 +271,18 @@ resource "time_sleep" "alb_webhook_ready" {
 # COMMENTED OUT — architecture under review (3-container pod vs standard).
 #-------------------------------------------------------------------------------
 
-# module "ivia" {
-#   source = "./modules/verify_access"
-#
-#   region                     = var.region
-#   cluster_name               = module.eks.cluster_name
-#   rds_endpoint               = module.rds.endpoint
-#   rds_address                = module.rds.address
-#   rds_port                   = module.rds.port
-#   rds_master_username        = module.rds.master_username
-#   rds_master_user_secret_arn = module.rds.master_user_secret_arn
-#   rds_db_name                = module.rds.db_name
-#   vault_endpoint             = module.vault.vault_endpoint
-#   audit_log_group_names      = module.audit.audit_log_group_names
-#   addons_ready               = module.addons.aws_load_balancer_controller_release
-#   icr_entitlement_key        = var.icr_entitlement_key
-#   simple_ad_dns_ips          = module.simple_ad.dns_ip_addresses
-#   simple_ad_bind_dn          = module.simple_ad.bind_dn
-#   simple_ad_admin_password   = var.simple_ad_admin_password
-#   simple_ad_base_dn          = module.simple_ad.base_dn
-#   uc2_redirect_uri           = var.uc2_redirect_uri
-#   ivia_trial_cert            = var.ivia_trial_cert
-#   ivia_activation_code       = var.ivia_activation_code
-#   ivia_activated             = var.ivia_activated
-#   tags                       = var.tags
-#
-#   depends_on = [time_sleep.alb_webhook_ready, module.simple_ad]
-# }
+module "ivia" {
+  source = "./modules/verify_access"
+
+  region                 = var.region
+  cluster_name           = module.eks.cluster_name
+  icr_entitlement_key    = var.icr_entitlement_key
+  node_security_group_id = module.eks.node_security_group_id
+  lmi_allowed_cidrs      = var.lmi_allowed_cidrs
+  tags                   = var.tags
+
+  depends_on = [time_sleep.alb_webhook_ready]
+}
 
 #-------------------------------------------------------------------------------
 # Wave 6 — Use Case 1 Agent
