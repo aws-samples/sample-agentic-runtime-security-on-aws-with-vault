@@ -1271,3 +1271,47 @@ resource "kubernetes_ingress_v1" "ivia_wrp" {
   }
   depends_on = [kubernetes_service.iviawrprp1]
 }
+
+#-------------------------------------------------------------------------------
+# base_layer ConfigMap — autoconf input. 7 text files (YAML + PEMs + lua).
+# Mounted at /yaml in the Job's initContainer; copied to /merged then mounted
+# at /base_layer in the autoconf container (RESEARCH §3.6 Approach C).
+# Excludes the binary isvawrp.p12 — see kubernetes_secret.base_layer_p12 below.
+#-------------------------------------------------------------------------------
+
+resource "kubernetes_config_map" "base_layer" {
+  metadata {
+    name      = "ivia-base-layer"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels    = local.common_labels
+  }
+  data = {
+    "base_layer.yaml"          = file("${path.module}/base_layer/base_layer.yaml")
+    "ISAM-Trial-HashiCorp.cer" = file("${path.module}/base_layer/ISAM-Trial-HashiCorp.cer")
+    "isvaop.pem"               = file("${path.module}/base_layer/isvaop.pem")
+    "ldap.crt"                 = file("${path.module}/base_layer/ldap.crt")
+    "postgres.crt"             = file("${path.module}/base_layer/postgres.crt")
+    "req_openid_config.lua"    = file("${path.module}/base_layer/req_openid_config.lua")
+    "rsp_openid_config.lua"    = file("${path.module}/base_layer/rsp_openid_config.lua")
+  }
+}
+
+#-------------------------------------------------------------------------------
+# base_layer P12 Secret — isvawrp.p12 is binary PKCS#12 with a private key.
+# Separated from the ConfigMap to keep binary bytes via binary_data and
+# private-key material in a Secret rather than a ConfigMap. The initContainer
+# in the autoconf Job copies both volumes into the merged emptyDir so the
+# Python tool sees one flat /base_layer directory.
+#-------------------------------------------------------------------------------
+
+resource "kubernetes_secret" "base_layer_p12" {
+  metadata {
+    name      = "ivia-base-layer-p12"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels    = local.common_labels
+  }
+  type = "Opaque"
+  binary_data = {
+    "isvawrp.p12" = filebase64("${path.module}/base_layer/isvawrp.p12")
+  }
+}
