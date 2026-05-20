@@ -1,241 +1,110 @@
-# Verify Access Module
+# verify_access — IBM Verify Identity Access (IVIA) Module
 
-Deploys IBM Verify Identity Access (IVIA) 11.0.2 full stack on EKS using raw Kubernetes manifests via the `kubernetes_*` Terraform provider. There is no official Helm chart for IVIA — this module produces every required Kubernetes object directly so attendees can read the full configuration as Terraform code.
+Phase 7 (May 2026) replacement of the legacy 3241-line single-pod-sidecar
+module. Implements the sibling-repo `verify-access-container-deployment`
+proven happy path against EKS:
 
-IVIA serves as the identity provider for user-context delegation (OAuth 2.0, CIBA, and Rich Authorization Requests). Use Cases 2 and 3 depend on IVIA for user authentication flows. The Vault jwt auth method configured in Plan 03-03 consumes the OIDC discovery URL output from this module.
+- 7 deployments in single `verify-access` namespace.
+- Pinned image tags — see Pinned Versions below.
+- In-cluster `kubernetes_job_v1` running `python -m ibmvia_autoconf 0.3.34`
+  against a MINIMAL `webseal.runtime` base_layer.yaml.
+- LMI external exposure via NLB Service (TCP passthrough on 9443) for
+  `isva_config` Mastercard/restapi provider consumption.
+- WRP browser exposure via existing ALB Ingress.
+- HVDB hosted in a dedicated `postgresql` pod (NOT shared RDS).
 
-## Why the Full Stack?
+## Pinned versions (do not change without re-validating against sibling)
 
-The standalone `ivia-oidc-provider` is a token factory — it issues OAuth tokens, hosts JWKS endpoints, and executes JavaScript mapping rules. But it has **no authentication engine**. Without the full IVIA stack, CIBA consent flows (Use Case 3) cannot complete: the standalone OIDC Provider returns `404` for `/oauth2/ciba_user_authorize/{id}` because it expects the Web Reverse Proxy to handle all browser sessions.
-
-The full stack adds Config, AAC Runtime, and WRP alongside the OIDC Provider to provide a complete authentication and authorization platform.
+| Component | Image | Tag |
+|---|---|---|
+| LMI / DSC / Runtime / WRP / Postgres | `icr.io/ivia/ivia-{config,dsc,runtime,wrp,postgresql}` | `11.0.2.0` |
+| OIDC Provider | `icr.io/ivia/ivia-oidc-provider` | `25.10` |
+| OpenLDAP | `icr.io/isva/verify-access-openldap` | `10.0.6.0` |
+| autoconf SDK | `ibmvia_autoconf` (pip) | `0.3.34` |
+| autoconf SDK dep | `pyivia` (pip) | `0.2.44` |
+| Job init container | `busybox` | `1.36` |
+| Job main container | `python` | `3.11-slim` |
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│  verify-access namespace                                              │
-│                                                                       │
-│  ┌──────────────┐   ┌──────────────┐   ┌──────────────────────────┐ │
-│  │  Config       │   │  AAC Runtime  │   │  WRP                     │ │
-│  │  (LMI 9443)  │──▶│  (AAC 9443)  │   │  (Proxy 9443)            │ │
-│  │  Publishes    │──▶│  Downloads   │   │  Downloads snapshot       │ │
-│  │  snapshots    │   │  snapshot    │   │  from Config              │ │
-│  └──────────────┘   └──────────────┘   └──────────┬───────────────┘ │
-│                            │                        │ ALB Ingress     │
-│                            │ LDAP validate          │ (internet-facing)│
-│                            ▼                        │                 │
-│                       Simple AD              ┌──────▼──────────────┐ │
-│                                              │  OIDC Provider       │ │
-│  ┌─────────────────────────────────────────▶│  (Token 8436)        │ │
-│  │  Machine-to-machine                       │  ClusterIP only      │ │
-│  │  (agent, Vault jwt auth)                  │  junction /isvaop    │ │
-│  └─────────────────────────────────────────  └──────────────────────┘ │
-│                                                        │               │
-└──────────────────────────────────────────────────────────────────────┘
-                                                         │
-                                                         ▼ RDS PostgreSQL backend
-                                             (module.rds — workshop database)
-```
+Pods:
+- `openldap` — LDAP backend for `secAuthority=Default` + `dc=ibm,dc=com`.
+- `postgresql` — HVDB (runtime DB, sessions, cluster DB). UID 26/26
+  (upstream's 70/85 is wrong for the 11.0.2.0 image).
+- `iviaconfig` — LMI on :9443.
+- `iviadsc` — Distributed Session Cache. Service selector LOCKED to
+  `app: iviadsc` (upstream typo `isvadsc` carried as sibling fix).
+- `iviaop` — OAuth/OIDC token endpoint on :8436. Behind WRP `/isvaop`.
+- `iviaruntime` — AAC runtime.
+- `iviawrprp1` — Web Reverse Proxy `rp1`, browser-facing on :9443.
 
-## Container Roles
+PVCs (5, all gp2 RWO 50M):
+`ldaplib`, `ldapslapd`, `ldapsecauthority` (openldap), `postgresqldata`
+(postgresql), `iviaconfig` (LMI).
 
-| Container | Image | Port | Purpose |
-|-----------|-------|------|---------|
-| `ivia-config` | `icr.io/ivia/ivia-config:11.0.2.0` | 9443 | Local Management Interface (LMI). Stores configuration and publishes snapshots to WRP and Runtime. |
-| `ivia-runtime` | `icr.io/ivia/ivia-runtime:11.0.2.0` | 9443 | Advanced Access Control (AAC) authentication engine. Validates credentials against Simple AD (LDAP). |
-| `ivia-wrp` | `icr.io/ivia/ivia-wrp:11.0.2.0` | 9443 | Web Reverse Proxy. Browser-facing entry point. Handles login pages, session management, and junction routing to OIDC Provider. |
-| `ivia-oidc-provider` | `icr.io/ivia/ivia-oidc-provider:25.10` | 8436 | OAuth 2.0 / OIDC token factory. Issues tokens, hosts JWKS, runs CIBA bc-authorize and token poll, executes JavaScript mapping rules. |
-
-## Deployment Sequence
-
-The `depends_on` chain in this module enforces this exact order:
-
-```
-1. Config container (ivia-config) starts
-   └─ LMI available on ClusterIP :9443
-   └─ All other containers depend on Config being ready
-
-2. Autoconf Job (kubernetes_job.ivia_autoconf)
-   └─ Image: curlimages/curl
-   └─ Uploads trial cert via POST /trial (activates wga, mga, federation)
-   └─ Creates WRP instance "default"
-   └─ Creates junction /isvaop -> isvaop.verify-access.svc.cluster.local:8436 (SSL)
-   └─ Sets anyauth ACL on /isvaop/oauth2/ciba_user_authorize/*
-   └─ Publishes configuration snapshot
-
-3. Runtime (ivia-runtime) + WRP (ivia-wrp) start in parallel
-   └─ Both download published snapshot from Config via CONFIG_SERVICE_URL
-   └─ WRP ALB Ingress becomes the external browser entry point
-```
-
-## Traffic Routing
-
-**Browser flows** (CIBA consent, authorization_code) → `Internet → ALB → WRP → OIDC Provider`
-
-The WRP `/isvaop` junction proxies to the OIDC Provider. The `anyauth` ACL on `/isvaop/oauth2/ciba_user_authorize/*` forces login before the consent page renders. WRP delegates credential validation to AAC Runtime, which performs an LDAP bind against Simple AD.
-
-**Machine-to-machine flows** (bc-authorize, CIBA token poll, ROPC, client_credentials, token exchange, Vault jwt auth) → `Agent/Vault → OIDC Provider ClusterIP (isvaop.verify-access.svc.cluster.local:8436)`
-
-These flows do not require user authentication and bypass WRP entirely for lower latency and simpler routing.
-
-## Module Activation
-
-The Config container requires activation to unlock the following modules:
-
-| Module ID | Purpose |
-|-----------|---------|
-| `wga` | Enables the Web Reverse Proxy (WRP) functionality |
-| `mga` | Enables Advanced Access Control (AAC) — the authentication engine |
-| `federation` | Enables federation and OIDC capabilities |
-
-- **Method:** Trial certificate uploaded via `POST /trial` to the Config LMI — activates all three modules at once
-- **Source:** https://isva-trial.verify.ibm.com/ (IBMid required)
-- **File:** `infrastructure/ISAM-Trial-HashiCorp.cer` (committed to the repo)
-- **Terraform variable:** `var.ivia_trial_cert` (filename, default: `ISAM-Trial-HashiCorp.cer`)
-- **If expired:** Download a new trial cert from the URL above and replace the `.cer` file in the `infrastructure/` directory
-
-## CIBA Consent Flow
-
-```
-1. Use Case 3 agent -> POST /oauth2/ciba (direct to OIDC Provider ClusterIP)
-   OIDC Provider returns auth_req_id
-
-2. OIDC Provider executes notifyuser mapping rule:
-   ciba.setAuthenticator(new InternalAuthenticator())
-   -> OIDC Provider tells WRP to serve consent at:
-      http://<wrp-alb>/isvaop/oauth2/ciba_user_authorize/{auth_req_id}
-
-3. Agent displays consent URL in chat -> user opens URL in browser -> hits WRP ALB
-   WRP enforces anyauth ACL (requires authenticated session)
-   WRP shows login page (username/password)
-   WRP validates credentials via AAC Runtime -> Simple AD LDAP
-
-4. User authenticates -> WRP forwards authenticated session to OIDC Provider
-   OIDC Provider renders ciba_user_authorize_success.html
-   User approves consent
-
-5. Use Case 3 agent polls POST /oauth2/token (direct to OIDC Provider ClusterIP)
-   OIDC Provider returns access_token (CIBA approved)
-```
-
-## Prerequisites
-
-1. **IBM entitlement key** — Required for the ICR pull secret (Pitfall 3). Without this, all four pods enter `ImagePullBackOff`. Set `icr_entitlement_key` as a sensitive workspace variable in HCP Terraform.
-
-2. **IBM trial certificate** — Required for Config container module activation. See Module Activation section above.
-
-3. **AWS Load Balancer Controller** — Must be deployed (`module.addons`) before this module for the WRP ALB Ingress to be provisioned.
-
-4. **Vault endpoint** — `module.vault.vault_endpoint` must exist before IVIA deploys, as it is referenced in the OIDC Provider configuration.
+Services:
+- ClusterIP per pod (in-cluster traffic).
+- `iviaconfig-nlb` LoadBalancer (NLB, internet-facing, TCP passthrough
+  on 9443 — for `isva_config` REST API reachability).
+- `ivia-wrp` Ingress (ALB, HTTP listener → HTTPS:9443 backend — for
+  browser-facing CIBA flows).
 
 ## Inputs
 
-| Name | Type | Sensitive | Description |
-|------|------|-----------|-------------|
-| `region` | `string` | no | AWS region. No literals — interpolated from `var.region`. |
-| `cluster_name` | `string` | no | EKS cluster name for tagging. |
-| `rds_endpoint` | `string` | no | Full RDS endpoint `<address>:<port>` from `module.rds.endpoint`. |
-| `rds_address` | `string` | no | RDS hostname without port from `module.rds.address`. |
-| `rds_port` | `number` | no | RDS port from `module.rds.port` (5432). |
-| `rds_master_username` | `string` | no | RDS master username from `module.rds.master_username`. |
-| `rds_master_user_secret_arn` | `string` | yes | Secrets Manager ARN for RDS master password (JSON: `username`/`password` keys). |
-| `rds_db_name` | `string` | no | Database name from `module.rds.db_name` (`workshop`). |
-| `vault_endpoint` | `string` | no | Vault ClusterIP URL from `module.vault.vault_endpoint`. |
-| `audit_log_group_names` | `map(string)` | no | Audit log group names from `module.audit.audit_log_group_names`. |
-| `icr_entitlement_key` | `string` | yes | IBM Container Registry entitlement key for image pull auth (all four containers). |
-| `ivia_trial_cert` | `string` | no | Filename of the IVIA trial certificate (`.cer`) in the `infrastructure/` directory. Default: `ISAM-Trial-HashiCorp.cer`. |
-| `tags` | `map(string)` | no | Tags applied to all AWS resources. Default: `{}`. |
+| Variable | Purpose |
+|---|---|
+| `region` | AWS region (tagging) |
+| `cluster_name` | EKS cluster name (tagging) |
+| `icr_entitlement_key` | ICR pull credential (builds `dockerlogin` Secret) |
+| `node_security_group_id` | EKS node SG (target for cross-node TCP/636 rule) |
+| `lmi_allowed_cidrs` | CIDR allowlist for inbound NLB :9443. Default `["0.0.0.0/0"]`. |
+| `tags` | AWS resource tags |
 
 ## Outputs
 
-| Name | Description |
-|------|-------------|
-| `ivia_oidc_discovery_url` | Internal OIDC discovery URL (ClusterIP path). Vault jwt auth method consumes this. Format: `https://isvaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration` |
-| `ivia_namespace` | Kubernetes namespace (`verify-access`). |
-| `ivia_service_endpoint` | ClusterIP service DNS without scheme. Format: `isvaop.verify-access.svc.cluster.local` |
-| `ivia_wrp_hostname` | WRP ALB hostname from LBC. The external entry point for browser flows. May be empty until LBC reconciles the Ingress. |
-| `ivia_ingress_hostname` | Legacy output alias for `ivia_wrp_hostname`. |
+| Output | Purpose |
+|---|---|
+| `namespace` | `verify-access` |
+| `ivia_lmi_nlb_hostname` | NLB hostname for `isva_config.ivia_service_endpoint` |
+| `ivia_wrp_alb_hostname` | ALB hostname for browser flows |
+| `ivia_admin_password` | Generated LMI admin password (sensitive) |
+| `ivia_nlb_ready` | 90s `time_sleep` gate to mitigate empty-hostname race |
 
-## Root Module Wiring
-
-`infrastructure/main.tf` calls this module as `module.ivia`:
-
-```hcl
-module "ivia" {
-  source = "./modules/verify_access"
-
-  depends_on = [module.addons, time_sleep.alb_webhook_ready]
-
-  region                     = var.region
-  cluster_name               = module.eks.cluster_name
-  rds_endpoint               = module.rds.endpoint           # Pitfall 8: no rds_ prefix
-  rds_address                = module.rds.address
-  rds_port                   = module.rds.port
-  rds_master_username        = module.rds.master_username
-  rds_master_user_secret_arn = module.rds.master_user_secret_arn
-  rds_db_name                = module.rds.db_name
-  vault_endpoint             = module.vault.vault_endpoint
-  audit_log_group_names      = module.audit.audit_log_group_names
-  icr_entitlement_key        = var.icr_entitlement_key
-  ivia_trial_cert            = var.ivia_trial_cert
-  tags                       = var.tags
-}
-```
-
-## Post-Deploy Verification
+## Apply
 
 ```bash
-# Check all four IVIA pods are running
-kubectl get pods -n verify-access
-
-# Expected: ivia-config, ivia-runtime, ivia-wrp, isvaop all Running
-
-# Check WRP ALB Ingress (may take 2-3 minutes for LBC to provision)
-kubectl get ingress -n verify-access
-
-# Verify OIDC discovery via WRP junction (external path)
-WRP_HOST=$(kubectl get ingress -n verify-access ivia-wrp \
-  -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
-curl -s "http://$WRP_HOST/isvaop/oauth2/.well-known/openid-configuration" | jq .issuer
-
-# Verify OIDC discovery via ClusterIP (in-cluster path used by Vault jwt auth)
-kubectl run oidc-check --image=curlimages/curl --rm -i --restart=Never \
-  -n verify-access -- \
-  curl -sk https://isvaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration \
-  | jq '{issuer, grant_types_supported, backchannel_authentication_endpoint}'
+cd infrastructure
+terraform apply -target=module.ivia
+# ~12-15 min for image pulls + ~5-10 min for autoconf Job
+kubectl rollout restart deploy/iviawrprp1 -n verify-access  # required post-step
+bash scripts/ivia-configure.sh  # exit gate
 ```
 
-The discovery response must contain `"issuer"`, `"grant_types_supported"`, and `"backchannel_authentication_endpoint"` fields.
+The exit gate verifies the OIDC discovery endpoint via the WRP:
 
-## Known Issue — IVIA 25.10 ROPC + `scope=openid` (id_token generation crash)
+```bash
+kubectl exec -n verify-access deploy/iviawrprp1 -- \
+  curl -sk https://localhost:9443/isvaop/oauth2/.well-known/openid-configuration \
+  | jq '{issuer, backchannel_authentication_endpoint, pushed_authorization_request_endpoint, registration_endpoint}'
+```
 
-**Affected version:** `icr.io/ivia/ivia-oidc-provider:25.10` (Go binary: `/app/ristretto`, Goja JS runtime)
+All four fields MUST be non-null.
 
-**Symptom:** `grant_type=password` with `scope=openid` returns HTTP 500 (`FBTAQ5102E`). Without `openid`, the same request succeeds. Stack trace: `flow_resource_owner.go:51 → access_response_writer.go:28`.
+## Troubleshooting
 
-**Root cause:** The ROPC flow authenticates the user against LDAP successfully, but does **not propagate the authenticated identity** (principalName, sub, AZN_CRED_PRINCIPAL_NAME) to the `pretoken` mapping rule. The pretoken context is completely empty — `stsuu.principalName` is `""`, `userData.uid` is `undefined`, `stsuu.ctxAttrs` is `{"ntmap":{}}`. When `scope=openid` triggers id_token (JWT) assembly, the response writer nil-dereferences on the missing `sub` claim.
+| Symptom | Cause | Fix |
+|---|---|---|
+| 8× `HPDRG0201E "Already exists"`, no rp1 | `suffix:` or `override_config:` in `webseal.runtime` | Keep `webseal.runtime` MINIMAL. NEVER add these keys. (RESEARCH Pitfall 2) |
+| `RuntimeError: Namespace file ... not found` | Autoconf running outside a pod | Should not happen — Job is in-cluster. If it does, check ServiceAccount mount. (RESEARCH Pitfall 1) |
+| `iviadsc Service has no endpoints` | Selector typo `app: isvadsc` vs pod label `app: iviadsc` | Verify `kubernetes_service.iviadsc` selector is `{ app = "iviadsc" }`. (RESEARCH Pitfall 5) |
+| `postgresql CrashLoopBackOff: cannot find name for user ID 70` | securityContext mis-set | `runAsUser=26 fsGroup=26` (NOT upstream's 70/85). (RESEARCH Pitfall 4) |
+| WRP returns 502 / `WGAWA0963E` for minutes after autoconf | Stale snapshot backoff | `kubectl rollout restart deploy/iviawrprp1 -n verify-access`. (RESEARCH Pitfall 6) |
+| cert/lua `Failed to upload … already exists` in Job logs | Cert imports + lua transforms are not idempotent | Expected on re-runs. Non-fatal; cross-cycle convergence. (RESEARCH Pitfall 3) |
+| First `terraform apply` fails because `isva_config` can't resolve NLB | NLB hostname empty on first apply | Re-run apply; the `time_sleep.ivia_nlb_ready` (90s) usually clears it. |
 
-**Key discovery:** Values set in the `ropc` mapping rule (via `userData.uid`, `stsuu.setPrincipalName()`, `stsuu.addAttribute()`) are **discarded** between the ropc and pretoken execution contexts. The two rules do NOT share state.
+## Phase 7 plan references
 
-**Workaround (applied in this module):** The `pretoken` rule parses the `mappingrule_context` JSON string (a global available in the Goja runtime). This JSON contains the original ROPC body parameters including `username`. The pretoken rule extracts it and explicitly populates `stsuu.setPrincipalName()`, `stsuu.addAttribute()` for `sub` and `AZN_CRED_PRINCIPAL_NAME`, and `idtokenData.sub`/`tokenData.sub`.
-
-**IVIA Goja JS runtime API (confirmed by runtime probing):**
-- Available globals: `stsuu`, `userData`, `tokenData`, `idtokenData`, `claims`, `oauth_client`, `oauth_definition`, `Attribute` (constructor), `paramsOverride`, `headersOverride`, `cfgOverride`, `mappingrule_context` (JSON string)
-- **NOT available** (despite IBM docs targeting traditional ISAM): `UserLookupHelper`, `OAuthMappingExtUtils`, `IDMappingExtUtils`, `importClass`, `Packages.com.tivoli.*`
-
-**If upgrading IVIA:** Re-test ROPC + `scope=openid` without the pretoken workaround. If IBM fixes the identity propagation, the workaround can be removed — the pretoken rule guards with `if (!stsuu.principalName || stsuu.principalName === "")` so it's safe to leave in place.
-
-## Pitfalls
-
-**Pitfall 1 — Config must start before Runtime and WRP.** If `ivia-runtime` or `ivia-wrp` pods crash with `CrashLoopBackOff`, check whether `ivia-config` is Running first. Runtime and WRP download their configuration snapshot from Config's LMI on startup — if Config is not ready, they cannot start. The `depends_on` ordering in this module enforces the sequence.
-
-**Pitfall 2 — Trial certificate is required.** Without the trial cert, the autoconf Job cannot activate the wga, mga, or federation modules. The WRP and AAC Runtime will start but will not be properly configured. Ensure `infrastructure/ISAM-Trial-HashiCorp.cer` exists — if expired, download a new one from https://isva-trial.verify.ibm.com/.
-
-**Pitfall 3 — cfgsvc password mismatch.** The Config container sets a random `cfgsvc` service account password at first boot. The autoconf Job and all workers must use the same password. This module manages password consistency via a Kubernetes Secret — do not manually change the cfgsvc password in the LMI UI.
-
-**Pitfall 4 — ICR pull secret missing.** All four IVIA images are hosted at `icr.io/ivia/`. Without the `icr-pull-secret` Kubernetes secret, all pods enter `ImagePullBackOff`. This module creates the secret using `var.icr_entitlement_key` — the secret must be created before any Deployment reconciles. The `depends_on` block ensures ordering.
-
-**Pitfall 5 — Use `kubernetes_*` resources, not `kubectl_manifest`.** The `kubernetes` provider (hashicorp/kubernetes ~> 2.25) is already declared in `providers.tf`. Adding a separate `gavinbunney/kubectl` provider would introduce an extra provider dependency. All manifests in this module use `kubernetes_namespace`, `kubernetes_deployment`, `kubernetes_service`, `kubernetes_ingress_v1`, etc.
-
-**Pitfall 6 — RDS output names have no `rds_` prefix.** The RDS module outputs are `endpoint`, `address`, `port`, `master_username`, `master_user_secret_arn`, `db_name` — NOT `rds_endpoint`, `rds_address`, etc. Use `module.rds.endpoint` (not `module.rds.rds_endpoint`) when wiring the ivia module in `main.tf`.
+- `.planning/phases/07-ivia-deployment-refactor/07-CONTEXT.md` — 21 locked decisions.
+- `.planning/phases/07-ivia-deployment-refactor/07-RESEARCH.md` — ~1700-line technical reference.
+- `.planning/phases/07-ivia-deployment-refactor/07-10-VERIFICATION.md` — this plan's smoke-test runbook.
+- Sibling working artifacts: `~/git-repos/verify-access-container-deployment/`.
