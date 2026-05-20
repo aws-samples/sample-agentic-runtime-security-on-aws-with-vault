@@ -613,3 +613,166 @@ resource "kubernetes_service" "postgresql" {
     }
   }
 }
+
+#-------------------------------------------------------------------------------
+# iviaconfig — LMI (Local Management Interface) on :9443. Source of truth for
+# IVIA configuration snapshots. Consumed by autoconf Job, iviadsc, iviaop,
+# iviaruntime, iviawrprp1 (all of them config-pull at startup).
+# Sibling source: phase-a/ivia-eks.yaml:239-317.
+#-------------------------------------------------------------------------------
+
+resource "kubernetes_deployment" "iviaconfig" {
+  metadata {
+    name      = "iviaconfig"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels    = merge(local.common_labels, { app = "iviaconfig" })
+  }
+  spec {
+    replicas = 1
+    selector { match_labels = { app = "iviaconfig" } }
+    template {
+      metadata { labels = { app = "iviaconfig" } }
+      spec {
+        image_pull_secrets { name = kubernetes_secret.dockerlogin.metadata[0].name }
+
+        security_context {
+          run_as_non_root = true
+          run_as_user     = 6000
+          fs_group        = 6000
+        }
+
+        volume {
+          name = "iviaconfig"
+          persistent_volume_claim {
+            claim_name = kubernetes_persistent_volume_claim.ivia["iviaconfig"].metadata[0].name
+          }
+        }
+        volume {
+          name = "iviaconfig-logs"
+          empty_dir {}
+        }
+
+        container {
+          name  = "iviaconfig"
+          image = "icr.io/ivia/ivia-config:11.0.2.0"
+
+          port { container_port = 9443 }
+
+          env {
+            name  = "CONTAINER_TIMEZONE"
+            value = "Europe/London"
+          }
+          env {
+            name = "ADMIN_PWD"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret.ivia_admin.metadata[0].name
+                key  = "adminpw"
+              }
+            }
+          }
+
+          volume_mount {
+            name       = "iviaconfig"
+            mount_path = "/var/shared"
+          }
+          volume_mount {
+            name       = "iviaconfig-logs"
+            mount_path = "/var/application.logs"
+          }
+
+          readiness_probe {
+            http_get {
+              path   = "/core/login"
+              port   = 9443
+              scheme = "HTTPS"
+            }
+            period_seconds    = 10
+            timeout_seconds   = 2
+            failure_threshold = 2
+          }
+          liveness_probe {
+            exec {
+              command = ["/sbin/health_check.sh", "livenessProbe"]
+            }
+            period_seconds    = 10
+            timeout_seconds   = 2
+            failure_threshold = 6
+          }
+          startup_probe {
+            exec {
+              command = ["/sbin/health_check.sh"]
+            }
+            period_seconds    = 10
+            timeout_seconds   = 2
+            failure_threshold = 30
+          }
+        }
+      }
+    }
+  }
+}
+
+resource "kubernetes_service" "iviaconfig" {
+  metadata {
+    name      = "iviaconfig"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels    = merge(local.common_labels, { app = "iviaconfig" })
+  }
+  spec {
+    selector = { app = "iviaconfig" }
+    port {
+      port        = 9443
+      target_port = 9443
+      name        = "iviaconfig"
+      protocol    = "TCP"
+    }
+  }
+}
+
+#-------------------------------------------------------------------------------
+# iviaconfig-nlb — external NLB on TCP/9443 for the LMI. TLS passthrough; the
+# pod serves its own self-signed cert. Provisioned by the AWS Load Balancer
+# Controller (already installed via modules/addons). isva_config's restapi
+# provider hits this hostname; that provider keeps insecure = true.
+#
+# Sibling reference: phase-a/iviaconfig-nlb.yaml. The autoconf tool restarts
+# LMI mid-run (license upload, FIPS, cert keystore changes); NLB service-level
+# routing survives those restarts where `kubectl port-forward` does not.
+#
+# load_balancer_source_ranges defaults to ["0.0.0.0/0"] (workshop); attendees
+# may lock to their public IP via terraform.tfvars: lmi_allowed_cidrs = ["x.x.x.x/32"].
+#-------------------------------------------------------------------------------
+
+resource "kubernetes_service" "iviaconfig_nlb" {
+  metadata {
+    name      = "iviaconfig-nlb"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels    = merge(local.common_labels, { app = "iviaconfig" })
+    annotations = {
+      "service.beta.kubernetes.io/aws-load-balancer-type"                 = "external"
+      "service.beta.kubernetes.io/aws-load-balancer-nlb-target-type"      = "ip"
+      "service.beta.kubernetes.io/aws-load-balancer-scheme"               = "internet-facing"
+      "service.beta.kubernetes.io/aws-load-balancer-attributes"           = "load_balancing.cross_zone.enabled=true"
+      "service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol" = "tcp"
+    }
+  }
+  spec {
+    type     = "LoadBalancer"
+    selector = { app = "iviaconfig" }
+
+    port {
+      name        = "lmi"
+      port        = 9443
+      target_port = 9443
+      protocol    = "TCP"
+    }
+
+    load_balancer_source_ranges = var.lmi_allowed_cidrs
+  }
+
+  # Wait for the NLB to provision so downstream consumers (isva_config) get a
+  # non-empty hostname. The Service resource lacks `wait_for_load_balancer`
+  # (only Ingress has it); accept eventual consistency. Plan 07-08 wires
+  # module.isva_config to depend on a time_sleep gate if needed.
+}
