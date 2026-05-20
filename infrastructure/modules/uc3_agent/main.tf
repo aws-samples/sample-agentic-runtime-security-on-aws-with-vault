@@ -79,14 +79,14 @@ resource "kubernetes_config_map" "uc3_agent" {
     IVIA_CLIENT_ID = var.ivia_client_id
     # IVIA_CLIENT_SECRET: workshop stores in ConfigMap for simplicity.
     # Production deployments should use a Kubernetes Secret with secretKeyRef.
-    IVIA_CLIENT_SECRET = var.ivia_client_secret
-    IVIA_EXTERNAL_URL      = var.ivia_external_url
-    IVIA_ACTOR_CLIENT_ID   = "uc3-actor"
-    DB_HOST            = var.db_host
-    DB_PORT            = tostring(var.db_port)
-    DB_NAME            = var.db_name
-    BEDROCK_MODEL_ID   = var.bedrock_model_id
-    AWS_REGION         = var.region
+    IVIA_CLIENT_SECRET   = var.ivia_client_secret
+    IVIA_EXTERNAL_URL    = var.ivia_external_url
+    IVIA_ACTOR_CLIENT_ID = "uc3-actor"
+    DB_HOST              = var.db_host
+    DB_PORT              = tostring(var.db_port)
+    DB_NAME              = var.db_name
+    BEDROCK_MODEL_ID     = var.bedrock_model_id
+    AWS_REGION           = var.region
   }
 }
 
