@@ -6,13 +6,15 @@ Definitive playbook for tearing down and redeploying the IBM Verify Identity Acc
 
 ## Quick Reference
 
-| Component | Deployment | Image | Port | Gated by `ivia_activated` |
-|-----------|-----------|-------|------|---------------------------|
-| OIDC Provider | `isvaop` | `icr.io/ivia/ivia-oidc-provider:25.10` | 8436 | No |
-| Config + slapd + Runtime | `ivia-config` | `ivia-config:11.0.2.0` + `slapd` + `ivia-runtime:11.0.2.0` | 9443, 389, 9444 | No |
-| Web Reverse Proxy | `ivia-wrp` | `icr.io/ivia/ivia-wrp:11.0.2.0` | 9443 | **Yes** |
-| DB Init Job | `ivia-db-init` | `postgres:17-alpine` | — | No |
-| Autoconf Job | `ivia-autoconf` | `curlimages/curl:latest` | — | **Yes** |
+| Component | Terraform Resource | Image | Port | Gated by `ivia_activated` |
+|-----------|-------------------|-------|------|---------------------------|
+| OIDC Provider | `kubernetes_deployment.isvaop` | `icr.io/ivia/ivia-oidc-provider:25.10` | 8436 | No |
+| Config + slapd + Runtime | `kubernetes_deployment.ivia_config` | `ivia-config:11.0.2.0` + `slapd` + `ivia-runtime:11.0.2.0` | 9443, 389, 9444 | No |
+| Web Reverse Proxy | `kubernetes_deployment.ivia_wrp` | `icr.io/ivia/ivia-wrp:11.0.2.0` | 9443 | **Yes** |
+| WRP Service | `kubernetes_service.ivia_wrp` | — | 9443 (ClusterIP) | No |
+| WRP Ingress (ALB) | `kubernetes_ingress_v1.ivia_wrp` | — | 80 (HTTP) → 9443 (HTTPS) | No |
+| DB Init Job | `kubernetes_job.ivia_db_init` | `postgres:17-alpine` | — | No |
+| Autoconf Job | `kubernetes_job.ivia_autoconf` | `curlimages/curl:latest` | — | **Yes** |
 
 **Namespace:** `verify-access`
 **Terraform module:** `module.ivia` (source: `./modules/verify_access`)
@@ -199,6 +201,8 @@ The redeploy is a **two-phase terraform apply** with a manual UI step in between
 | **Phase 2** | `true` | WRP deployment, autoconf job, WRP ingress (ALB) | — |
 
 > **Why two phases?** The WRP and autoconf job require the trial license to be active (wga, mga, federation modules). On a fresh PVC, all three API methods for trial activation fail (HTTP 302). The only proven path is the LMI browser UI. Phase 1 brings the LMI up so you can activate the trial; Phase 2 deploys everything that depends on it.
+
+> **Why `-target=module.ivia`?** All IVIA applies MUST use `-target=module.ivia`. A full `terraform apply` fails with "Kubernetes cluster unreachable" because the Kubernetes and Helm providers depend on `data.aws_eks_cluster.this`, which has `depends_on = [module.eks]` (providers.tf line 84). Terraform defers reading that data source until apply time — even when the cluster already exists — so the providers get empty config during the plan phase. Targeting `module.ivia` avoids re-evaluating `module.eks`, letting the data source resolve immediately from state. If you need a full apply (all modules), do it in two steps: `terraform apply -target=module.eks` first, then `terraform apply`.
 
 ---
 
@@ -425,5 +429,7 @@ kubectl run oidc-check --image=curlimages/curl --rm -i --restart=Never -n verify
 **3-Container Pod:** Config deployment runs `ivia-config` (LMI, 9443) + `slapd` (embedded OpenLDAP, 389) + `ivia-runtime` (AAC, 9444) in one pod. Required because AWS Simple AD lacks IBM schema extensions (`secAuthority=Default`); the embedded slapd provides them. pdconfig binds to `localhost:389` so slapd must be co-located. Runtime overridden to 9444 to avoid LMI port collision.
 
 **Autoconf ordering:** Trial (Step 3) gates everything → HVDB (4) before Runtime (8) → Runtime (8) before WRP (13). Each deploy step restarts LMI, requiring re-wait + re-accept SLA.
+
+**`var.ivia_activated` gating mechanism:** The variable uses `count = var.ivia_activated ? 1 : 0` on exactly two resources: `kubernetes_job.ivia_autoconf` (main.tf ~line 1951) and `kubernetes_deployment.ivia_wrp` (main.tf ~line 2344). All other IVIA resources — including the WRP Service (`kubernetes_service.ivia_wrp`) and WRP Ingress/ALB (`kubernetes_ingress_v1.ivia_wrp`) — deploy unconditionally in Phase 1. The ALB exists during Phase 1 but returns HTTP 502 (no healthy targets) until Phase 2 brings up the WRP pods. This is harmless; the ALB is pre-provisioned so Phase 2 only needs to start the WRP deployment and autoconf job. The variable is set in `infrastructure/terraform.tfvars` and passed through `infrastructure/main.tf` → `module.ivia` → `modules/verify_access/variables.tf`.
 
 **Dependent modules:** `module.uc2_agent` and `module.uc3_agent` consume IVIA outputs (ingress hostname, service endpoint, client secret). Vault jwt auth consumes OIDC discovery URL + JWKS + TLS cert.
