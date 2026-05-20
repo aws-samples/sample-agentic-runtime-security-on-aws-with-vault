@@ -200,18 +200,19 @@ module "bedrock_kb_index" {
 # Wave 2 — Simple AD (LDAP identity source for IVIA user authentication)
 # Oscar + Adriana test users provisioned post-deploy by create-simple-ad-users.sh.
 # Same VPC as EKS. SG rule allows LDAP from EKS nodes.
+# COMMENTED OUT — may not be needed; IVIA architecture under review.
 #-------------------------------------------------------------------------------
 
-module "simple_ad" {
-  source = "./modules/simple_ad"
-
-  region                     = var.region
-  vpc_id                     = module.vpc.vpc_id
-  private_subnet_ids         = module.vpc.private_subnet_ids
-  eks_node_security_group_id = module.eks.node_security_group_id
-  admin_password             = var.simple_ad_admin_password
-  tags                       = var.tags
-}
+# module "simple_ad" {
+#   source = "./modules/simple_ad"
+#
+#   region                     = var.region
+#   vpc_id                     = module.vpc.vpc_id
+#   private_subnet_ids         = module.vpc.private_subnet_ids
+#   eks_node_security_group_id = module.eks.node_security_group_id
+#   admin_password             = var.simple_ad_admin_password
+#   tags                       = var.tags
+# }
 
 #-------------------------------------------------------------------------------
 # Wave 3 — Vault
@@ -267,37 +268,36 @@ resource "time_sleep" "alb_webhook_ready" {
 # Depends on eks, audit, addons (LBC for ALB), rds, vault (OIDC seam target).
 # Deploys IVIA OIDC provider via raw kubernetes_* manifests.
 # Gated by time_sleep.alb_webhook_ready (needs LBC webhook ready for Ingress).
+# COMMENTED OUT — architecture under review (3-container pod vs standard).
 #-------------------------------------------------------------------------------
 
-module "ivia" {
-  source = "./modules/verify_access"
-
-  # No explicit providers block needed — only default (non-aliased) providers used.
-
-  region                     = var.region
-  cluster_name               = module.eks.cluster_name
-  rds_endpoint               = module.rds.endpoint
-  rds_address                = module.rds.address
-  rds_port                   = module.rds.port
-  rds_master_username        = module.rds.master_username
-  rds_master_user_secret_arn = module.rds.master_user_secret_arn
-  rds_db_name                = module.rds.db_name
-  vault_endpoint             = module.vault.vault_endpoint
-  audit_log_group_names      = module.audit.audit_log_group_names
-  addons_ready               = module.addons.aws_load_balancer_controller_release
-  icr_entitlement_key        = var.icr_entitlement_key
-  simple_ad_dns_ips          = module.simple_ad.dns_ip_addresses
-  simple_ad_bind_dn          = module.simple_ad.bind_dn
-  simple_ad_admin_password   = var.simple_ad_admin_password
-  simple_ad_base_dn          = module.simple_ad.base_dn
-  uc2_redirect_uri           = var.uc2_redirect_uri
-  ivia_trial_cert            = var.ivia_trial_cert
-  ivia_activation_code       = var.ivia_activation_code
-  ivia_activated             = var.ivia_activated
-  tags                       = var.tags
-
-  depends_on = [time_sleep.alb_webhook_ready, module.simple_ad]
-}
+# module "ivia" {
+#   source = "./modules/verify_access"
+#
+#   region                     = var.region
+#   cluster_name               = module.eks.cluster_name
+#   rds_endpoint               = module.rds.endpoint
+#   rds_address                = module.rds.address
+#   rds_port                   = module.rds.port
+#   rds_master_username        = module.rds.master_username
+#   rds_master_user_secret_arn = module.rds.master_user_secret_arn
+#   rds_db_name                = module.rds.db_name
+#   vault_endpoint             = module.vault.vault_endpoint
+#   audit_log_group_names      = module.audit.audit_log_group_names
+#   addons_ready               = module.addons.aws_load_balancer_controller_release
+#   icr_entitlement_key        = var.icr_entitlement_key
+#   simple_ad_dns_ips          = module.simple_ad.dns_ip_addresses
+#   simple_ad_bind_dn          = module.simple_ad.bind_dn
+#   simple_ad_admin_password   = var.simple_ad_admin_password
+#   simple_ad_base_dn          = module.simple_ad.base_dn
+#   uc2_redirect_uri           = var.uc2_redirect_uri
+#   ivia_trial_cert            = var.ivia_trial_cert
+#   ivia_activation_code       = var.ivia_activation_code
+#   ivia_activated             = var.ivia_activated
+#   tags                       = var.tags
+#
+#   depends_on = [time_sleep.alb_webhook_ready, module.simple_ad]
+# }
 
 #-------------------------------------------------------------------------------
 # Wave 6 — Use Case 1 Agent
@@ -336,34 +336,32 @@ module "uc1_agent" {
 # Gated by time_sleep.alb_webhook_ready (has ALB Ingress resources).
 #-------------------------------------------------------------------------------
 
-module "uc2_app" {
-  source = "./modules/uc2_agent"
-
-  # No explicit providers block needed — only default (non-aliased) providers used.
-
-  vault_addr            = "http://vault.vault.svc.cluster.local:8200"
-  vault_k8s_role        = "uc2-agent"
-  vault_jwt_role        = "uc2-jwt"
-  vault_db_role         = "uc2-personal-readonly"
-  rds_address           = module.rds.address
-  rds_port              = module.rds.port
-  rds_db_name           = module.rds.db_name
-  rds_cidr              = module.vpc.vpc_cidr
-  knowledge_base_id     = module.bedrock_kb_index.knowledge_base_id
-  region                = var.region
-  kb_region             = var.kb_region
-  ui_image              = var.banking_app_ui_image
-  agent_image           = var.banking_app_agent_image
-  mcp_image             = var.banking_app_mcp_image
-  bedrock_model_id      = var.bedrock_model_id
-  ivia_ingress_hostname = module.ivia.ivia_ingress_hostname
-  ivia_service_endpoint = module.ivia.ivia_service_endpoint
-  ivia_client_id        = "agent-uc2"
-  ivia_client_secret    = module.ivia.ivia_client_secret
-  tags                  = var.tags
-
-  depends_on = [time_sleep.alb_webhook_ready]
-}
+# module "uc2_app" {
+#   source = "./modules/uc2_agent"
+#
+#   vault_addr            = "http://vault.vault.svc.cluster.local:8200"
+#   vault_k8s_role        = "uc2-agent"
+#   vault_jwt_role        = "uc2-jwt"
+#   vault_db_role         = "uc2-personal-readonly"
+#   rds_address           = module.rds.address
+#   rds_port              = module.rds.port
+#   rds_db_name           = module.rds.db_name
+#   rds_cidr              = module.vpc.vpc_cidr
+#   knowledge_base_id     = module.bedrock_kb_index.knowledge_base_id
+#   region                = var.region
+#   kb_region             = var.kb_region
+#   ui_image              = var.banking_app_ui_image
+#   agent_image           = var.banking_app_agent_image
+#   mcp_image             = var.banking_app_mcp_image
+#   bedrock_model_id      = var.bedrock_model_id
+#   ivia_ingress_hostname = module.ivia.ivia_ingress_hostname
+#   ivia_service_endpoint = module.ivia.ivia_service_endpoint
+#   ivia_client_id        = "agent-uc2"
+#   ivia_client_secret    = module.ivia.ivia_client_secret
+#   tags                  = var.tags
+#
+#   depends_on = [time_sleep.alb_webhook_ready]
+# }
 
 #-------------------------------------------------------------------------------
 # Wave 8 — Use Case 3 Agent (privileged refund writer)
@@ -372,27 +370,25 @@ module "uc2_app" {
 # authorization endpoint), and uc2_app (banking-app namespace must exist first).
 #-------------------------------------------------------------------------------
 
-module "uc3_agent" {
-  source = "./modules/uc3_agent"
-
-  namespace          = "banking-app"
-  vault_endpoint     = "http://vault.vault.svc.cluster.local:8200"
-  ivia_base_url      = "https://${module.ivia.ivia_service_endpoint}:8436"
-  ivia_client_id     = "agent-uc3"
-  ivia_client_secret = module.ivia.ivia_client_secret
-  # WRP ALB endpoint (no junction prefix) — UC3 agent constructs the full consent
-  # URL as: "${ivia_external_url}/isvaop/oauth2/ciba_user_authorize/{auth_req_id}"
-  ivia_external_url = module.ivia.ivia_wrp_external_endpoint
-  db_host           = module.rds.address
-  db_name           = "workshop"
-  uc3_agent_image   = var.uc3_agent_image
-  bedrock_model_id  = var.bedrock_model_id
-  region            = var.region
-  rds_cidr          = module.vpc.vpc_cidr
-  tags              = var.tags
-
-  depends_on = [module.vault, module.rds, module.ivia, module.uc2_app]
-}
+# module "uc3_agent" {
+#   source = "./modules/uc3_agent"
+#
+#   namespace          = "banking-app"
+#   vault_endpoint     = "http://vault.vault.svc.cluster.local:8200"
+#   ivia_base_url      = "https://${module.ivia.ivia_service_endpoint}:8436"
+#   ivia_client_id     = "agent-uc3"
+#   ivia_client_secret = module.ivia.ivia_client_secret
+#   ivia_external_url  = module.ivia.ivia_wrp_external_endpoint
+#   db_host            = module.rds.address
+#   db_name            = "workshop"
+#   uc3_agent_image    = var.uc3_agent_image
+#   bedrock_model_id   = var.bedrock_model_id
+#   region             = var.region
+#   rds_cidr           = module.vpc.vpc_cidr
+#   tags               = var.tags
+#
+#   depends_on = [module.vault, module.rds, module.ivia, module.uc2_app]
+# }
 
 #-------------------------------------------------------------------------------
 # Wave 9 — Observability (fluent-bit DaemonSet + Firehose + Glue tables)

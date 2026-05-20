@@ -82,12 +82,12 @@ output "glue_database_name" {
 # Simple AD Outputs (consumed by configure-workshop.sh for user provisioning)
 #-------------------------------------------------------------------------------
 
-output "simple_ad_dns_ips" {
-  description = "DNS IP addresses of the Simple AD directory. Used by IVIA for LDAP and by create-simple-ad-users.sh."
-  value       = module.simple_ad.dns_ip_addresses
-}
-
-output "simple_ad_base_dn" {
-  description = "LDAP base DN for Simple AD user lookups (e.g. CN=Users,DC=workshop,DC=internal)."
-  value       = module.simple_ad.base_dn
-}
+# output "simple_ad_dns_ips" {
+#   description = "DNS IP addresses of the Simple AD directory. Used by IVIA for LDAP and by create-simple-ad-users.sh."
+#   value       = module.simple_ad.dns_ip_addresses
+# }
+#
+# output "simple_ad_base_dn" {
+#   description = "LDAP base DN for Simple AD user lookups (e.g. CN=Users,DC=workshop,DC=internal)."
+#   value       = module.simple_ad.base_dn
+# }
