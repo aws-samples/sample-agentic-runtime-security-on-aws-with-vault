@@ -453,126 +453,53 @@ phase_identity() {
     phase_header "Phase 5: Identity (IVIA)"
 
     if [ "$DRY_RUN" = true ]; then
-        print_info "[DRY-RUN] Would check all four IVIA containers (OIDC Provider, Config, Runtime, WRP)"
-        print_info "[DRY-RUN] Would check WRP ALB Ingress, WRP junction OIDC discovery, CIBA consent endpoint"
+        print_info "[DRY-RUN] Would terraform apply -target=module.ivia, then kubectl rollout restart deploy/iviawrprp1, then ivia-configure.sh"
         return 0
     fi
 
     local ivia_ns="verify-access"
-    local oidc_url="https://isvaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration"
 
-    # Ensure ivia_trial_cert is in terraform.tfvars (required by verify_access module)
-    local deploy_file="$PROJECT_ROOT/infrastructure/terraform.tfvars"
-    if [ -f "$deploy_file" ] && ! grep -q "ivia_trial_cert" "$deploy_file" 2>/dev/null; then
-        echo 'ivia_trial_cert = "ISAM-Trial-HashiCorp.cer"' >> "$deploy_file"
-        print_info "ivia_trial_cert = ISAM-Trial-HashiCorp.cer (appended to terraform.tfvars)"
+    # Verify trial cert is in its Phase 7 location
+    local trial_cert="$PROJECT_ROOT/infrastructure/modules/verify_access/base_layer/ISAM-Trial-HashiCorp.cer"
+    if [ ! -f "${trial_cert}" ]; then
+        print_error "IVIA trial cert not found at ${trial_cert} — obtain from https://isva-trial.verify.ibm.com/ and place at that path"
+        return 1
     fi
 
-    # Verify trial cert file exists
-    if [ ! -f "$PROJECT_ROOT/infrastructure/ISAM-Trial-HashiCorp.cer" ]; then
-        print_warn "IVIA trial cert not found at infrastructure/ISAM-Trial-HashiCorp.cer — obtain from https://isva-trial.verify.ibm.com/"
-    fi
+    # Apply only the verify_access module (and its transitive deps).
+    step_header "terraform apply -target=module.ivia"
+    (
+        cd "$PROJECT_ROOT/infrastructure"
+        terraform apply -target=module.ivia -auto-approve
+    ) || { print_error "terraform apply -target=module.ivia failed"; return 1; }
 
-    # Check 1: OIDC Provider pod running
-    local running_isvaop
-    running_isvaop=$(kubectl get pods -n "${ivia_ns}" -l app.kubernetes.io/name=isvaop \
-        --no-headers 2>/dev/null | grep -c Running || true)
-    if [ "${running_isvaop:-0}" -ge 1 ]; then
-        print_success "IVIA OIDC Provider (isvaop): pod Running in ${ivia_ns}"
-    else
-        print_warn "IVIA OIDC Provider (isvaop): no pod Running — may still be starting"
-    fi
+    # The kubernetes_job_v1.ivia_autoconf inside module.ivia uses
+    # wait_for_completion=true, so the apply above already blocked until
+    # autoconf finished. Now restart WRP to clear stale snapshot backoff
+    # (RESEARCH Pitfall 6, sibling-locked post-step).
+    step_header "kubectl rollout restart deploy/iviawrprp1 (post-autoconf snapshot reload)"
+    kubectl rollout restart deploy/iviawrprp1 -n "${ivia_ns}" \
+        || { print_error "rollout restart deploy/iviawrprp1 failed"; return 1; }
+    kubectl rollout status deploy/iviawrprp1 -n "${ivia_ns}" --timeout=300s \
+        || { print_error "WRP did not become Ready within 5min post-restart"; return 1; }
 
-    # Check 2: Config container pod running
-    local running_config
-    running_config=$(kubectl get pods -n "${ivia_ns}" -l app.kubernetes.io/name=ivia-config \
-        --no-headers 2>/dev/null | grep -c Running || true)
-    if [ "${running_config:-0}" -ge 1 ]; then
-        print_success "IVIA Config: pod Running in ${ivia_ns}"
-    else
-        print_warn "IVIA Config: no pod Running — Config container may still be starting"
-    fi
-
-    # Check 3: Runtime pod running
-    local running_runtime
-    running_runtime=$(kubectl get pods -n "${ivia_ns}" -l app.kubernetes.io/name=ivia-runtime \
-        --no-headers 2>/dev/null | grep -c Running || true)
-    if [ "${running_runtime:-0}" -ge 1 ]; then
-        print_success "IVIA Runtime: pod Running in ${ivia_ns}"
-    else
-        print_warn "IVIA Runtime: no pod Running — may be waiting for Config snapshot"
-    fi
-
-    # Check 4: WRP pod running
-    local running_wrp
-    running_wrp=$(kubectl get pods -n "${ivia_ns}" -l app.kubernetes.io/name=ivia-wrp \
-        --no-headers 2>/dev/null | grep -c Running || true)
-    if [ "${running_wrp:-0}" -ge 1 ]; then
-        print_success "IVIA WRP: pod Running in ${ivia_ns}"
-    else
-        print_warn "IVIA WRP: no pod Running — may be waiting for Config snapshot"
-    fi
-
-    # Check 5: OIDC discovery via ClusterIP (internal consumers)
-    local ivia_issuer=""
-    ivia_issuer=$(kubectl run ivia-check-$$ --image=curlimages/curl --rm -i --restart=Never \
-        -n "${ivia_ns}" -- curl -sk "${oidc_url}" 2>/dev/null \
-        | jq -r '.issuer // empty' 2>/dev/null || echo "")
-    if [ -n "${ivia_issuer}" ]; then
-        print_success "IVIA OIDC discovery (ClusterIP): issuer = ${ivia_issuer}"
-    else
-        print_warn "IVIA OIDC discovery (ClusterIP): issuer not reachable — IVIA may still be initializing"
-    fi
-
-    # Check 6: WRP ALB Ingress exists and has a hostname
-    local wrp_host=""
-    wrp_host=$(kubectl get ingress -n "${ivia_ns}" ivia-wrp \
-        -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
-    if [ -n "${wrp_host}" ]; then
-        print_success "IVIA WRP Ingress: ALB hostname = ${wrp_host}"
-    else
-        print_warn "IVIA WRP Ingress: no hostname yet — ALB may still be provisioning"
-    fi
-
-    # Check 7: OIDC discovery via WRP junction (external path)
-    if [ -n "${wrp_host}" ]; then
-        local wrp_discovery=""
-        wrp_discovery=$(curl -s --max-time 10 \
-            "http://${wrp_host}/isvaop/oauth2/.well-known/openid-configuration" \
-            2>/dev/null | jq -r '.issuer // empty' 2>/dev/null || echo "")
-        if [ -n "${wrp_discovery}" ]; then
-            print_success "WRP junction /isvaop: OIDC discovery reachable (issuer=${wrp_discovery})"
+    # Verify the 7 deployments by app label (Phase 7 uses `app:` keys, not
+    # `app.kubernetes.io/name:`).
+    local ready
+    for app in openldap postgresql iviaconfig iviadsc iviaop iviaruntime iviawrprp1; do
+        ready=$(kubectl get deploy -n "${ivia_ns}" -l "app=${app}" \
+            -o jsonpath='{.items[0].status.readyReplicas}' 2>/dev/null || echo 0)
+        if [ "${ready:-0}" -ge 1 ]; then
+            print_success "Deployment ${app}: Ready"
         else
-            print_warn "WRP junction /isvaop: OIDC discovery not reachable — check WRP junction configuration"
+            print_warn "Deployment ${app}: not Ready (readyReplicas=${ready:-0})"
         fi
-    else
-        print_warn "WRP junction /isvaop: skipped — WRP ALB hostname not yet available"
-    fi
+    done
 
-    # Check 8: CIBA consent endpoint availability via WRP (must NOT be 404)
-    if [ -n "${wrp_host}" ]; then
-        local ciba_code=""
-        ciba_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
-            "http://${wrp_host}/isvaop/oauth2/ciba_user_authorize/test" 2>/dev/null || echo "")
-        if [ -n "${ciba_code}" ] && [ "${ciba_code}" != "404" ]; then
-            print_success "CIBA consent endpoint: reachable via WRP (HTTP ${ciba_code} — not 404)"
-        elif [ "${ciba_code}" = "404" ]; then
-            print_error "CIBA consent endpoint: still returns 404 — WRP junction or ACL misconfigured"
-        else
-            print_warn "CIBA consent endpoint: no response from WRP — ALB or WRP not ready"
-        fi
-    else
-        print_warn "CIBA consent endpoint: skipped — WRP ALB hostname not yet available"
-    fi
-
-    # Check 9: Old OIDC Provider Ingress should be gone (replaced by WRP Ingress)
-    local old_ingress=""
-    old_ingress=$(kubectl get ingress -n "${ivia_ns}" isvaop -o name 2>/dev/null || echo "")
-    if [ -z "${old_ingress}" ]; then
-        print_success "Old OIDC Provider Ingress (isvaop): removed — WRP is the sole ingress"
-    else
-        print_warn "Old OIDC Provider Ingress (isvaop): still exists — should have been removed when WRP replaced it"
-    fi
+    # Exit gate — OIDC discovery via WRP exec.
+    step_header "OIDC discovery exit gate"
+    bash "$SCRIPT_DIR/ivia-configure.sh" \
+        || { print_error "ivia-configure.sh failed — exit gate not met"; return 1; }
 
     pause_if_interactive "IVIA full-stack verification complete."
 }

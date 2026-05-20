@@ -205,6 +205,42 @@ phase_k8s_cleanup() {
     kubectl config use-context "$DEFAULT_CLUSTER" >/dev/null 2>&1 || true
     print_success "Kubeconfig set to $DEFAULT_CLUSTER"
 
+    # === Phase 7 cleanup: drop ivia_hvdb PostgreSQL role + schema from shared RDS ===
+    # CONTEXT R3: the legacy verify_access module bootstrap Job created an ivia_hvdb
+    # role+schema on the shared RDS instance. Phase 7 moves HVDB into the postgresql
+    # pod, so this RDS state is orphaned on destroy. Drop it idempotently before
+    # tearing down module.ivia.
+    local INFRA_DIR="${REPO_ROOT}/infrastructure"
+    print_info "Dropping ivia_hvdb role+schema from shared RDS (idempotent)..."
+    RDS_ENDPOINT=$(cd "${INFRA_DIR}" && terraform output -raw rds_endpoint 2>/dev/null || echo "")
+    RDS_ADMIN=$(cd "${INFRA_DIR}" && terraform output -raw rds_master_username 2>/dev/null || echo "")
+    RDS_SECRET_ARN=$(cd "${INFRA_DIR}" && terraform output -raw rds_master_user_secret_arn 2>/dev/null || echo "")
+    if [ -n "${RDS_ENDPOINT}" ] && [ -n "${RDS_ADMIN}" ] && [ -n "${RDS_SECRET_ARN}" ]; then
+        RDS_PWD=$(aws secretsmanager get-secret-value --secret-id "${RDS_SECRET_ARN}" \
+            --query SecretString --output text 2>/dev/null \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin).get("password",""))')
+        if [ -n "${RDS_PWD}" ]; then
+            PGPASSWORD="${RDS_PWD}" psql -h "${RDS_ENDPOINT%:*}" -U "${RDS_ADMIN}" -d postgres \
+                -c 'DROP SCHEMA IF EXISTS ivia_hvdb CASCADE; DROP ROLE IF EXISTS ivia_hvdb;' \
+                >/dev/null 2>&1 \
+              && print_success "ivia_hvdb role+schema dropped" \
+              || print_warn "ivia_hvdb drop returned non-zero (likely already absent — safe)"
+        else
+            print_warn "RDS master password could not be retrieved; skipping ivia_hvdb drop"
+        fi
+    else
+        print_info "Shared RDS not present in terraform output — skipping ivia_hvdb drop (already torn down?)"
+    fi
+
+    # === Phase 7 cleanup: explicit verify-access object sweep ===
+    # Delete LBC-managed Services (NLB) and Ingresses (ALB) FIRST so the AWS LBC
+    # can reconcile their target groups before we yank the namespace.
+    print_info "Sweeping verify-access namespace objects (LB-managed first)..."
+    kubectl delete -n verify-access --ignore-not-found service iviaconfig-nlb 2>/dev/null || true
+    kubectl delete -n verify-access --ignore-not-found ingress ivia-wrp 2>/dev/null || true
+    # Give LBC ~30s to release the NLB/ALB before namespace delete
+    sleep 30
+
     # Delete workshop namespaces (vault, verify-access, uc1, etc.) so any LB
     # Services in them get torn down by the LB controller.
     for ns in vault verify-access uc1 banking-app; do

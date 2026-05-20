@@ -256,37 +256,37 @@ fi
 #-------------------------------------------------------------------------------
 # Check A — IVIA Config container pod Running
 #-------------------------------------------------------------------------------
-running_config=$(kubectl get pods -n verify-access -l app.kubernetes.io/name=ivia-config \
+running_config=$(kubectl get pods -n verify-access -l app=iviaconfig \
     --no-headers 2>/dev/null | grep -c Running || true)
 if [ "${running_config:-0}" -ge 1 ]; then
     print_pass "IVIA Config container Running in verify-access (${running_config} pod(s))"
 else
     print_fail "IVIA Config container Running" \
-        "IVIA Config container not running — full stack required for CIBA consent. Check: kubectl get pods -n verify-access -l app.kubernetes.io/name=ivia-config"
+        "IVIA Config container not running — full stack required for CIBA consent. Check: kubectl get pods -n verify-access -l app=iviaconfig"
 fi
 
 #-------------------------------------------------------------------------------
 # Check B — IVIA Runtime pod Running
 #-------------------------------------------------------------------------------
-running_runtime=$(kubectl get pods -n verify-access -l app.kubernetes.io/name=ivia-runtime \
+running_runtime=$(kubectl get pods -n verify-access -l app=iviaruntime \
     --no-headers 2>/dev/null | grep -c Running || true)
 if [ "${running_runtime:-0}" -ge 1 ]; then
     print_pass "IVIA Runtime Running in verify-access (${running_runtime} pod(s))"
 else
     print_fail "IVIA Runtime Running" \
-        "IVIA Runtime not running — AAC engine required for WRP authentication. Check: kubectl get pods -n verify-access -l app.kubernetes.io/name=ivia-runtime"
+        "IVIA Runtime not running — AAC engine required for WRP authentication. Check: kubectl get pods -n verify-access -l app=iviaruntime"
 fi
 
 #-------------------------------------------------------------------------------
 # Check C — IVIA WRP pod Running
 #-------------------------------------------------------------------------------
-running_wrp=$(kubectl get pods -n verify-access -l app.kubernetes.io/name=ivia-wrp \
+running_wrp=$(kubectl get pods -n verify-access -l app=iviawrprp1 \
     --no-headers 2>/dev/null | grep -c Running || true)
 if [ "${running_wrp:-0}" -ge 1 ]; then
     print_pass "IVIA WRP Running in verify-access (${running_wrp} pod(s))"
 else
     print_fail "IVIA WRP Running" \
-        "IVIA WRP not running — browser authentication requires WRP. Check: kubectl get pods -n verify-access -l app.kubernetes.io/name=ivia-wrp"
+        "IVIA WRP not running — browser authentication requires WRP. Check: kubectl get pods -n verify-access -l app=iviawrprp1"
 fi
 
 #-------------------------------------------------------------------------------

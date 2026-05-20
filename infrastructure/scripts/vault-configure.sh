@@ -204,7 +204,7 @@ phase_gather() {
   # IVIA self-signed TLS cert (Vault needs it to trust OIDC discovery)
   info "Reading IVIA TLS certificate..."
   IVIA_CERT_PEM=$(kubectl get secret -n verify-access \
-    $(kubectl get pods -n verify-access -l app.kubernetes.io/name=isvaop -o jsonpath='{.items[0].metadata.name}' 2>/dev/null) \
+    $(kubectl get pods -n verify-access -l app=iviaop -o jsonpath='{.items[0].metadata.name}' 2>/dev/null) \
     -o jsonpath='{.data.tls\.crt}' 2>/dev/null | base64 -d 2>/dev/null || true)
   if [[ -z "$IVIA_CERT_PEM" ]]; then
     # Fallback: extract from the configmap config.yaml B64 cert
@@ -234,7 +234,7 @@ phase_gather() {
   else
     warn "Could not read IVIA issuer — using fallback from Ingress hostname"
     local wrp_host
-    wrp_host=$(kubectl get ingress -n verify-access -l app.kubernetes.io/name=ivia-wrp \
+    wrp_host=$(kubectl get ingress -n verify-access -l app=iviawrprp1 \
       -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
     if [[ -n "$wrp_host" ]]; then
       IVIA_ISSUER="http://${wrp_host}/isvaop"
@@ -400,11 +400,34 @@ phase_ivia_verify() {
   fi
   ok "${running} IVIA pod(s) Running"
 
+  # Discover NLB hostname from root state (CONTEXT D3 + R/D3) — used by
+  # isva-config sub-apply as ivia_service_endpoint.
+  info "Reading ivia_lmi_nlb_hostname from root terraform output..."
+  local IVIA_LMI_NLB_HOSTNAME
+  IVIA_LMI_NLB_HOSTNAME=$(cd "${REPO_ROOT}/infrastructure" \
+    && terraform output -raw ivia_lmi_nlb_hostname 2>/dev/null || echo "")
+  if [[ -z "${IVIA_LMI_NLB_HOSTNAME}" ]]; then
+    fail "Could not read ivia_lmi_nlb_hostname from root terraform output. Has module.ivia applied successfully?"
+    record "ivia_verify" "FAIL"
+    return 1
+  fi
+  ok "IVIA LMI NLB hostname: ${IVIA_LMI_NLB_HOSTNAME}"
+
+  # Write isva-config/terraform.tfvars (scaffolded to match VAULT_CONFIG_DIR pattern).
+  info "Writing isva-config/terraform.tfvars..."
+  mkdir -p "${ISVA_CONFIG_DIR}"
+  cat > "${ISVA_CONFIG_DIR}/terraform.tfvars" <<TFVARS
+region                = "${REGION}"
+ivia_service_endpoint = "${IVIA_LMI_NLB_HOSTNAME}"
+TFVARS
+  chmod 600 "${ISVA_CONFIG_DIR}/terraform.tfvars"
+  ok "isva-config/terraform.tfvars written (mode 600)"
+
   info "Verifying OIDC discovery..."
   local issuer
-  issuer=$(kubectl run ivia-cfg-check --image=curlimages/curl --rm -i --restart=Never \
-    -n verify-access -- curl -sk \
-    "https://isvaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration" \
+  issuer=$(kubectl exec -n verify-access deploy/iviawrprp1 -- \
+    curl -sk --max-time 15 \
+    https://localhost:9443/isvaop/oauth2/.well-known/openid-configuration \
     2>/dev/null | jq -r '.issuer // empty' 2>/dev/null || echo "")
 
   if [[ -n "$issuer" ]]; then
