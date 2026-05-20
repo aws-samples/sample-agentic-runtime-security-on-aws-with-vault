@@ -375,3 +375,241 @@ resource "kubernetes_secret" "ivia_secauthority_creds" {
     sec_master_password = random_password.sec_master_pwd.result
   }
 }
+
+#-------------------------------------------------------------------------------
+# openldap — LDAP backend for secAuthority=Default + dc=ibm,dc=com.
+# Sibling source: phase-a/ivia-eks.yaml:84-160.
+# Args LOCKED: --loglevel trace --copy-service (CONTEXT, sibling).
+#-------------------------------------------------------------------------------
+
+resource "kubernetes_deployment" "openldap" {
+  metadata {
+    name      = "openldap"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels    = merge(local.common_labels, { app = "openldap" })
+  }
+  spec {
+    replicas = 1
+    selector { match_labels = { app = "openldap" } }
+    template {
+      metadata { labels = { app = "openldap" } }
+      spec {
+        image_pull_secrets { name = kubernetes_secret.dockerlogin.metadata[0].name }
+
+        volume {
+          name = "ldaplib"
+          persistent_volume_claim {
+            claim_name = kubernetes_persistent_volume_claim.ivia["ldaplib"].metadata[0].name
+          }
+        }
+        volume {
+          name = "ldapslapd"
+          persistent_volume_claim {
+            claim_name = kubernetes_persistent_volume_claim.ivia["ldapslapd"].metadata[0].name
+          }
+        }
+        volume {
+          name = "ldapsecauthority"
+          persistent_volume_claim {
+            claim_name = kubernetes_persistent_volume_claim.ivia["ldapsecauthority"].metadata[0].name
+          }
+        }
+        volume {
+          name = "openldap-keys"
+          secret {
+            secret_name = kubernetes_secret.openldap_keys.metadata[0].name
+          }
+        }
+
+        container {
+          name  = "openldap"
+          image = "icr.io/isva/verify-access-openldap:10.0.6.0"
+          args  = ["--loglevel", "trace", "--copy-service"]
+
+          port { container_port = 636 }
+
+          env {
+            name  = "LDAP_DOMAIN"
+            value = "ibm.com"
+          }
+          env {
+            name = "LDAP_ADMIN_PASSWORD"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret.openldap_creds.metadata[0].name
+                key  = "admin_password"
+              }
+            }
+          }
+          env {
+            name = "LDAP_CONFIG_PASSWORD"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret.openldap_creds.metadata[0].name
+                key  = "config_password"
+              }
+            }
+          }
+
+          volume_mount {
+            name       = "ldaplib"
+            mount_path = "/var/lib/ldap"
+          }
+          volume_mount {
+            name       = "ldapslapd"
+            mount_path = "/etc/ldap/slapd.d"
+          }
+          volume_mount {
+            name       = "ldapsecauthority"
+            mount_path = "/var/lib/ldap.secAuthority"
+          }
+          volume_mount {
+            name       = "openldap-keys"
+            mount_path = "/container/service/slapd/assets/certs"
+          }
+
+          readiness_probe {
+            tcp_socket { port = 636 }
+            initial_delay_seconds = 5
+            period_seconds        = 10
+          }
+          liveness_probe {
+            tcp_socket { port = 636 }
+            initial_delay_seconds = 15
+            period_seconds        = 20
+          }
+        }
+      }
+    }
+  }
+}
+
+resource "kubernetes_service" "openldap" {
+  metadata {
+    name      = "openldap"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels    = merge(local.common_labels, { app = "openldap" })
+  }
+  spec {
+    selector = { app = "openldap" }
+    port {
+      port     = 636
+      name     = "ldaps"
+      protocol = "TCP"
+    }
+  }
+}
+
+#-------------------------------------------------------------------------------
+# postgresql — HVDB (runtime DB, sessions, cluster DB). Pod-local; NOT shared RDS.
+# Sibling source: phase-a/ivia-eks.yaml:162-237.
+# securityContext LOCKED runAsUser=26 fsGroup=26 — upstream's 70/85 crashes
+# (RESEARCH Pitfall 4).
+# NO container args — only openldap carries --loglevel/--copy-service.
+#-------------------------------------------------------------------------------
+
+resource "kubernetes_deployment" "postgresql" {
+  metadata {
+    name      = "postgresql"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels    = merge(local.common_labels, { app = "postgresql" })
+  }
+  spec {
+    replicas = 1
+    selector { match_labels = { app = "postgresql" } }
+    template {
+      metadata { labels = { app = "postgresql" } }
+      spec {
+        image_pull_secrets { name = kubernetes_secret.dockerlogin.metadata[0].name }
+
+        security_context {
+          run_as_non_root = true
+          run_as_user     = 26
+          fs_group        = 26
+        }
+
+        volume {
+          name = "postgresqldata"
+          persistent_volume_claim {
+            claim_name = kubernetes_persistent_volume_claim.ivia["postgresqldata"].metadata[0].name
+          }
+        }
+        volume {
+          name = "postgresql-keys"
+          secret {
+            secret_name = kubernetes_secret.postgresql_keys.metadata[0].name
+          }
+        }
+
+        container {
+          name  = "postgresql"
+          image = "icr.io/ivia/ivia-postgresql:11.0.2.0"
+
+          port { container_port = 5432 }
+
+          env {
+            name  = "POSTGRES_USER"
+            value = "postgres"
+          }
+          env {
+            name = "POSTGRES_PASSWORD"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret.postgresql_creds.metadata[0].name
+                key  = "password"
+              }
+            }
+          }
+          env {
+            name  = "POSTGRES_DB"
+            value = "ivia"
+          }
+          env {
+            name  = "POSTGRES_SSL_KEYDB"
+            value = "/var/local/server.pem"
+          }
+          env {
+            name  = "PGDATA"
+            value = "/var/lib/postgresql/data/db-files/"
+          }
+
+          volume_mount {
+            name       = "postgresqldata"
+            mount_path = "/var/lib/postgresql/data"
+          }
+          volume_mount {
+            name       = "postgresql-keys"
+            mount_path = "/var/local"
+          }
+
+          readiness_probe {
+            tcp_socket { port = 5432 }
+            initial_delay_seconds = 5
+            period_seconds        = 10
+          }
+          liveness_probe {
+            tcp_socket { port = 5432 }
+            initial_delay_seconds = 15
+            period_seconds        = 20
+          }
+        }
+      }
+    }
+  }
+}
+
+resource "kubernetes_service" "postgresql" {
+  metadata {
+    name      = "postgresql"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels    = merge(local.common_labels, { app = "postgresql" })
+  }
+  spec {
+    selector = { app = "postgresql" }
+    port {
+      port     = 5432
+      name     = "postgresql"
+      protocol = "TCP"
+    }
+  }
+}
