@@ -776,3 +776,498 @@ resource "kubernetes_service" "iviaconfig_nlb" {
   # (only Ingress has it); accept eventual consistency. Plan 07-08 wires
   # module.isva_config to depend on a time_sleep gate if needed.
 }
+
+#-------------------------------------------------------------------------------
+# iviaop-config ConfigMap. 8 files mounted at /var/isvaop/config in the iviaop
+# pod. storage.yml is templated to substitute the postgresql password (CONTEXT R2
+# — sidesteps the chicken-and-egg "iviaop boots before autoconf publishes the
+# Liberty config" race).
+# Sibling source: common/isvaop-config/.
+#-------------------------------------------------------------------------------
+
+resource "kubernetes_config_map" "iviaop_config" {
+  metadata {
+    name      = "iviaop-config"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels    = local.common_labels
+  }
+  data = {
+    "provider.yml" = file("${path.module}/iviaop-config/provider.yml")
+    "rules.yaml"   = file("${path.module}/iviaop-config/rules.yaml")
+    "storage.yml" = templatefile("${path.module}/iviaop-config/storage.yml", {
+      postgres_password = random_password.postgresql_pwd.result
+    })
+    "isvaop.key"   = file("${path.module}/iviaop-config/isvaop.key")
+    "isvaop.pem"   = file("${path.module}/iviaop-config/isvaop.pem")
+    "isvawrp.pem"  = file("${path.module}/iviaop-config/isvawrp.pem")
+    "postgres.crt" = file("${path.module}/iviaop-config/postgres.crt")
+  }
+  binary_data = {
+    "templates.zip" = filebase64("${path.module}/iviaop-config/templates.zip")
+  }
+}
+
+#-------------------------------------------------------------------------------
+# iviadsc — Distributed Session Cache.
+# Sibling source: phase-a/ivia-eks.yaml:482-561.
+# LOCKED bug fix: Service selector is `app: iviadsc` (NOT upstream's `app: isvadsc`).
+#-------------------------------------------------------------------------------
+
+resource "kubernetes_deployment" "iviadsc" {
+  metadata {
+    name      = "iviadsc"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels    = merge(local.common_labels, { app = "iviadsc" })
+  }
+  spec {
+    replicas = 1
+    selector { match_labels = { app = "iviadsc" } }
+    template {
+      metadata { labels = { app = "iviadsc" } }
+      spec {
+        image_pull_secrets { name = kubernetes_secret.dockerlogin.metadata[0].name }
+
+        volume {
+          name = "iviaconfig"
+          empty_dir {}
+        }
+        volume {
+          name = "iviadsc-logs"
+          empty_dir {}
+        }
+
+        container {
+          name  = "iviadsc"
+          image = "icr.io/ivia/ivia-dsc:11.0.2.0"
+
+          port { container_port = 9443 }
+          port { container_port = 9444 }
+
+          env {
+            name  = "INSTANCE"
+            value = "1"
+          }
+          env {
+            name  = "CONTAINER_TIMEZONE"
+            value = "Europe/London"
+          }
+          env {
+            name  = "CONFIG_SERVICE_URL"
+            value = "https://iviaconfig:9443/shared_volume"
+          }
+          env {
+            name  = "CONFIG_SERVICE_USER_NAME"
+            value = "cfgsvc"
+          }
+          env {
+            name = "CONFIG_SERVICE_USER_PWD"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret.configreader.metadata[0].name
+                key  = "cfgsvcpw"
+              }
+            }
+          }
+          env {
+            name  = "CONFIG_SERVICE_TLS_CACERT"
+            value = "disabled"
+          }
+
+          volume_mount {
+            name       = "iviaconfig"
+            mount_path = "/var/shared"
+          }
+          volume_mount {
+            name       = "iviadsc-logs"
+            mount_path = "/var/application.logs"
+          }
+
+          readiness_probe {
+            exec { command = ["/sbin/health_check.sh"] }
+            period_seconds    = 10
+            timeout_seconds   = 2
+            failure_threshold = 2
+          }
+          liveness_probe {
+            exec { command = ["/sbin/health_check.sh", "livenessProbe"] }
+            period_seconds    = 10
+            timeout_seconds   = 2
+            failure_threshold = 6
+          }
+        }
+      }
+    }
+  }
+}
+
+resource "kubernetes_service" "iviadsc" {
+  metadata {
+    name      = "iviadsc"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels    = merge(local.common_labels, { app = "iviadsc" })
+  }
+  spec {
+    selector = { app = "iviadsc" } # LOCKED: NOT 'isvadsc' (upstream bug)
+    port {
+      port        = 9443
+      target_port = 9443
+      name        = "iviadsc-svc"
+      protocol    = "TCP"
+    }
+    port {
+      port        = 9444
+      target_port = 9444
+      name        = "iviadsc-rep"
+      protocol    = "TCP"
+    }
+  }
+}
+
+#-------------------------------------------------------------------------------
+# iviaop — OAuth/OIDC token endpoint on :8436. Behind WRP junction /isvaop.
+# Sibling source: phase-a/ivia-eks.yaml:563-628.
+# Image tag 25.10 is DISTINCT from the 11.0.2.0 family — do NOT substitute.
+#-------------------------------------------------------------------------------
+
+resource "kubernetes_deployment" "iviaop" {
+  metadata {
+    name      = "iviaop"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels    = merge(local.common_labels, { app = "iviaop" })
+    annotations = {
+      version = "2.0"
+    }
+  }
+  spec {
+    replicas = 1
+    selector { match_labels = { app = "iviaop" } }
+    template {
+      metadata { labels = { app = "iviaop" } }
+      spec {
+        image_pull_secrets { name = kubernetes_secret.dockerlogin.metadata[0].name }
+
+        volume {
+          name = "iviaop-config"
+          config_map {
+            name = kubernetes_config_map.iviaop_config.metadata[0].name
+          }
+        }
+
+        container {
+          name              = "iviaop"
+          image             = "icr.io/ivia/ivia-oidc-provider:25.10"
+          image_pull_policy = "Always"
+
+          volume_mount {
+            name       = "iviaop-config"
+            mount_path = "/var/isvaop/config"
+          }
+
+          readiness_probe {
+            http_get {
+              path   = "/healthcheck/ready"
+              port   = 8436
+              scheme = "HTTPS"
+            }
+            initial_delay_seconds = 30
+            timeout_seconds       = 30
+            period_seconds        = 30
+            success_threshold     = 1
+            failure_threshold     = 2
+          }
+          liveness_probe {
+            http_get {
+              path   = "/healthcheck/alive"
+              port   = 8436
+              scheme = "HTTPS"
+            }
+            initial_delay_seconds = 30
+            timeout_seconds       = 30
+            period_seconds        = 30
+            success_threshold     = 1
+            failure_threshold     = 10
+          }
+        }
+      }
+    }
+  }
+}
+
+resource "kubernetes_service" "iviaop" {
+  metadata {
+    name      = "iviaop"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels    = merge(local.common_labels, { app = "iviaop" })
+  }
+  spec {
+    selector = { app = "iviaop" }
+    port {
+      port        = 8436
+      target_port = 8436
+      name        = "iviaop"
+      protocol    = "TCP"
+    }
+  }
+}
+
+#-------------------------------------------------------------------------------
+# iviaruntime — AAC runtime. Sibling source: phase-a/ivia-eks.yaml:399-480.
+#-------------------------------------------------------------------------------
+
+resource "kubernetes_deployment" "iviaruntime" {
+  metadata {
+    name      = "iviaruntime"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels    = merge(local.common_labels, { app = "iviaruntime" })
+  }
+  spec {
+    replicas = 1
+    selector { match_labels = { app = "iviaruntime" } }
+    template {
+      metadata { labels = { app = "iviaruntime" } }
+      spec {
+        image_pull_secrets { name = kubernetes_secret.dockerlogin.metadata[0].name }
+
+        volume {
+          name = "iviaconfig"
+          empty_dir {}
+        }
+        volume {
+          name = "iviaruntime-logs"
+          empty_dir {}
+        }
+
+        container {
+          name  = "iviaruntime"
+          image = "icr.io/ivia/ivia-runtime:11.0.2.0"
+
+          port { container_port = 9443 }
+
+          env {
+            name  = "CONTAINER_TIMEZONE"
+            value = "Europe/London"
+          }
+          env {
+            name  = "CONFIG_SERVICE_URL"
+            value = "https://iviaconfig:9443/shared_volume"
+          }
+          env {
+            name  = "CONFIG_SERVICE_USER_NAME"
+            value = "cfgsvc"
+          }
+          env {
+            name = "CONFIG_SERVICE_USER_PWD"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret.configreader.metadata[0].name
+                key  = "cfgsvcpw"
+              }
+            }
+          }
+          env {
+            name  = "CONFIG_SERVICE_TLS_CACERT"
+            value = "disabled"
+          }
+
+          volume_mount {
+            name       = "iviaconfig"
+            mount_path = "/var/shared"
+          }
+          volume_mount {
+            name       = "iviaruntime-logs"
+            mount_path = "/var/application.logs"
+          }
+
+          readiness_probe {
+            http_get {
+              path   = "/sps/static/ibm-logo.png"
+              port   = 9443
+              scheme = "HTTPS"
+            }
+            period_seconds    = 10
+            timeout_seconds   = 2
+            failure_threshold = 2
+          }
+          liveness_probe {
+            exec { command = ["/sbin/health_check.sh", "livenessProbe"] }
+            period_seconds    = 10
+            timeout_seconds   = 2
+            failure_threshold = 6
+          }
+          startup_probe {
+            exec { command = ["/sbin/health_check.sh"] }
+            period_seconds    = 10
+            timeout_seconds   = 2
+            failure_threshold = 30
+          }
+        }
+      }
+    }
+  }
+}
+
+resource "kubernetes_service" "iviaruntime" {
+  metadata {
+    name      = "iviaruntime"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels    = merge(local.common_labels, { app = "iviaruntime" })
+  }
+  spec {
+    selector = { app = "iviaruntime" }
+    port {
+      port        = 9443
+      target_port = 9443
+      name        = "iviaruntime"
+      protocol    = "TCP"
+    }
+  }
+}
+
+#-------------------------------------------------------------------------------
+# iviawrprp1 — Web Reverse Proxy rp1, browser-facing. ClusterIP + ALB Ingress.
+# Sibling source: phase-a/ivia-eks.yaml:319-397.
+#-------------------------------------------------------------------------------
+
+resource "kubernetes_deployment" "iviawrprp1" {
+  metadata {
+    name      = "iviawrprp1"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels    = merge(local.common_labels, { app = "iviawrprp1" })
+  }
+  spec {
+    replicas = 1
+    selector { match_labels = { app = "iviawrprp1" } }
+    template {
+      metadata { labels = { app = "iviawrprp1" } }
+      spec {
+        image_pull_secrets { name = kubernetes_secret.dockerlogin.metadata[0].name }
+
+        volume {
+          name = "iviaconfig"
+          empty_dir {}
+        }
+        volume {
+          name = "iviawrprp1-logs"
+          empty_dir {}
+        }
+
+        container {
+          name  = "iviawrprp1"
+          image = "icr.io/ivia/ivia-wrp:11.0.2.0"
+
+          port { container_port = 9443 }
+
+          env {
+            name  = "INSTANCE"
+            value = "rp1"
+          }
+          env {
+            name  = "CONTAINER_TIMEZONE"
+            value = "Europe/London"
+          }
+          env {
+            name  = "CONFIG_SERVICE_URL"
+            value = "https://iviaconfig:9443/shared_volume"
+          }
+          env {
+            name  = "CONFIG_SERVICE_USER_NAME"
+            value = "cfgsvc"
+          }
+          env {
+            name = "CONFIG_SERVICE_USER_PWD"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret.configreader.metadata[0].name
+                key  = "cfgsvcpw"
+              }
+            }
+          }
+          env {
+            name  = "CONFIG_SERVICE_TLS_CACERT"
+            value = "disabled"
+          }
+
+          volume_mount {
+            name       = "iviaconfig"
+            mount_path = "/var/shared"
+          }
+          volume_mount {
+            name       = "iviawrprp1-logs"
+            mount_path = "/var/application.logs"
+          }
+
+          readiness_probe {
+            exec { command = ["/sbin/health_check.sh"] }
+            period_seconds    = 10
+            timeout_seconds   = 2
+            failure_threshold = 2
+          }
+          liveness_probe {
+            exec { command = ["/sbin/health_check.sh", "livenessProbe"] }
+            period_seconds    = 10
+            timeout_seconds   = 2
+            failure_threshold = 6
+          }
+        }
+      }
+    }
+  }
+}
+
+resource "kubernetes_service" "iviawrprp1" {
+  metadata {
+    name      = "iviawrprp1"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels    = merge(local.common_labels, { app = "iviawrprp1" })
+  }
+  spec {
+    selector = { app = "iviawrprp1" }
+    port {
+      port        = 9443
+      target_port = 9443
+      name        = "iviawrprp1"
+      protocol    = "TCP"
+    }
+  }
+}
+
+#-------------------------------------------------------------------------------
+# WRP ALB Ingress — browser-facing entry point for attendees. HTTP listener;
+# backend protocol HTTPS (WRP serves 9443). Reuses target's annotation set.
+# RESEARCH §2.11 reference.
+#-------------------------------------------------------------------------------
+
+resource "kubernetes_ingress_v1" "ivia_wrp" {
+  wait_for_load_balancer = true
+  metadata {
+    name      = "ivia-wrp"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels    = merge(local.common_labels, { app = "iviawrprp1" })
+    annotations = {
+      "alb.ingress.kubernetes.io/scheme"               = "internet-facing"
+      "alb.ingress.kubernetes.io/target-type"          = "ip"
+      "alb.ingress.kubernetes.io/listen-ports"         = "[{\"HTTP\":80}]"
+      "alb.ingress.kubernetes.io/backend-protocol"     = "HTTPS"
+      "alb.ingress.kubernetes.io/healthcheck-protocol" = "HTTPS"
+      "alb.ingress.kubernetes.io/healthcheck-port"     = "9443"
+    }
+  }
+  spec {
+    ingress_class_name = "alb"
+    rule {
+      http {
+        path {
+          path      = "/"
+          path_type = "Prefix"
+          backend {
+            service {
+              name = kubernetes_service.iviawrprp1.metadata[0].name
+              port { number = 9443 }
+            }
+          }
+        }
+      }
+    }
+  }
+  depends_on = [kubernetes_service.iviawrprp1]
+}

@@ -1,0 +1,18 @@
+# Copyright contributors to the IBM Security Verify Access OIDC Provider Resources project
+runtime_db: hvdb                                # Configuration of runtime database. Points to the database server connection
+session_cache:
+  type: db                                      # Specifies the type of session cache: in-memory, redis, or db
+server_connections:
+  - name: hvdb                                  # Connection name
+    type: postgresql                            # Connection type: `redis`, `ldap`, `postgresql`, `oracle` (to be supported in future releases), `db2` (to be supported in future releases)
+    database_name: ivia                     # Specifies the database name. For database types only
+    hosts:                                      # List of host information (IP and port).
+      - hostname: postgresql                 # Server's hostname.
+        hostport: 5432                          # Server's host port.
+    credential:                                 # Credential information to connect to the server.
+      username: postgres                        # Specifies the username to access the server.
+      password: "${postgres_password}"                        # Specifies the password to access the server. It is recommended to obfuscate this.
+    ssl:
+      certificate:
+        - '@postgres.crt'
+      disable_hostname_verification: false
