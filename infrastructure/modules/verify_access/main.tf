@@ -1315,3 +1315,166 @@ resource "kubernetes_secret" "base_layer_p12" {
     "isvawrp.p12" = filebase64("${path.module}/base_layer/isvawrp.p12")
   }
 }
+
+#-------------------------------------------------------------------------------
+# autoconf Job — locals
+# sha256 over the sorted file set of base_layer/. Used as a name suffix on the
+# Job; any change to a base_layer/ file forces destroy+recreate of the Job
+# (CONTEXT D2 — name-driven force-recreate). Combined with ttl=300 below,
+# old Jobs auto-clean within 5 min of completion.
+#-------------------------------------------------------------------------------
+
+locals {
+  base_layer_files = sort(tolist(fileset("${path.module}/base_layer", "*")))
+  base_layer_hash = sha256(join("", [
+    for f in local.base_layer_files : filesha256("${path.module}/base_layer/${f}")
+  ]))
+}
+
+#-------------------------------------------------------------------------------
+# ibmvia_autoconf Job — drives base_layer.yaml against the LMI REST API.
+#
+# Why in-cluster (NOT operator-side): ibmvia_autoconf 0.3.34's
+# _restart_k8s_deployments handler reads the K8s downward-API namespace file
+# at /var/run/secrets/kubernetes.io/serviceaccount/namespace. Outside a pod
+# this raises RuntimeError (RESEARCH Pitfall 1, sibling base_layer.log:62-68).
+# The Job must therefore run as a Pod with a ServiceAccount whose RBAC
+# permits `_restart_k8s_deployments` (get/list/patch deployments).
+#
+# initContainer (busybox) merges the ConfigMap (text files) and Secret
+# (binary P12) into a single emptyDir at /merged. Main container (python:3.11-slim)
+# mounts /merged at /base_layer and runs `python -m ibmvia_autoconf`.
+#
+# RESEARCH §3 reference; LOCKED spec values from CONTEXT D2.
+#-------------------------------------------------------------------------------
+
+resource "kubernetes_job_v1" "ivia_autoconf" {
+  metadata {
+    name      = "ivia-autoconf-${substr(local.base_layer_hash, 0, 8)}"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels    = merge(local.common_labels, { "app.kubernetes.io/name" = "ivia-autoconf" })
+  }
+
+  spec {
+    backoff_limit              = 2
+    active_deadline_seconds    = 1800
+    ttl_seconds_after_finished = "300"
+
+    template {
+      metadata {
+        labels = { "app.kubernetes.io/name" = "ivia-autoconf" }
+      }
+      spec {
+        restart_policy       = "OnFailure"
+        service_account_name = kubernetes_service_account.ivia_autoconf.metadata[0].name
+
+        image_pull_secrets {
+          name = kubernetes_secret.dockerlogin.metadata[0].name
+        }
+
+        volume {
+          name = "config-merged"
+          empty_dir {}
+        }
+        volume {
+          name = "config-yaml"
+          config_map {
+            name = kubernetes_config_map.base_layer.metadata[0].name
+          }
+        }
+        volume {
+          name = "config-certs"
+          secret {
+            secret_name = kubernetes_secret.base_layer_p12.metadata[0].name
+          }
+        }
+
+        init_container {
+          name    = "merge-config"
+          image   = "busybox:1.36"
+          command = ["/bin/sh", "-c"]
+          args    = ["cp /yaml/* /merged/ && cp /certs/* /merged/ && chmod -R 644 /merged/"]
+
+          volume_mount {
+            name       = "config-yaml"
+            mount_path = "/yaml"
+          }
+          volume_mount {
+            name       = "config-certs"
+            mount_path = "/certs"
+          }
+          volume_mount {
+            name       = "config-merged"
+            mount_path = "/merged"
+          }
+        }
+
+        container {
+          name    = "autoconf"
+          image   = "python:3.11-slim"
+          command = ["/bin/sh", "-c"]
+          args = [<<-EOSH
+            set -e
+            pip install --quiet ibmvia_autoconf==0.3.34 pyivia==0.2.44
+            cd /base_layer
+            IVIA_CONFIG_YAML=base_layer.yaml \
+            IVIA_CONFIG_BASE=/base_layer \
+            IVIA_MGMT_BASE_URL=https://iviaconfig.verify-access.svc.cluster.local:9443 \
+            IVIA_MGMT_USER=admin \
+            IVIA_MGMT_OLD_PWD="$ADMIN_PWD" \
+            IVIA_MGMT_PWD="$ADMIN_PWD" \
+            python -m ibmvia_autoconf
+          EOSH
+          ]
+
+          env {
+            name = "ADMIN_PWD"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret.ivia_admin.metadata[0].name
+                key  = "adminpw"
+              }
+            }
+          }
+
+          volume_mount {
+            name       = "config-merged"
+            mount_path = "/base_layer"
+            read_only  = true
+          }
+        }
+      }
+    }
+  }
+
+  wait_for_completion = true
+
+  timeouts {
+    create = "30m"
+  }
+
+  depends_on = [
+    kubernetes_deployment.iviaconfig,
+    kubernetes_service.iviaconfig,
+    kubernetes_deployment.openldap,
+    kubernetes_service.openldap,
+    kubernetes_deployment.postgresql,
+    kubernetes_service.postgresql,
+    kubernetes_deployment.iviadsc,
+    kubernetes_service.iviadsc,
+    kubernetes_deployment.iviaop,
+    kubernetes_service.iviaop,
+    kubernetes_deployment.iviaruntime,
+    kubernetes_service.iviaruntime,
+    kubernetes_deployment.iviawrprp1,
+    kubernetes_service.iviawrprp1,
+    kubernetes_role_binding.ivia_autoconf,
+    kubernetes_secret.configreader,
+    kubernetes_secret.wrp_p12_creds,
+    kubernetes_secret.postgresql_creds,
+    kubernetes_secret.openldap_creds,
+    kubernetes_secret.ivia_secauthority_creds,
+    kubernetes_config_map.base_layer,
+    kubernetes_secret.base_layer_p12,
+  ]
+}
