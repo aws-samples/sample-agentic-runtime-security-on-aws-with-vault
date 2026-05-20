@@ -145,3 +145,233 @@ resource "kubernetes_role_binding" "ivia_autoconf" {
     namespace = kubernetes_namespace.verify_access.metadata[0].name
   }
 }
+
+#-------------------------------------------------------------------------------
+# Persistent Volume Claims — 5 PVCs, gp2 RWO 50M each.
+# Sibling source: phase-a/ivia-eks.yaml:24-82.
+# `wait_until_bound = false` matches target idiom (verify_access legacy
+# module used same pattern); EBS gp2 is bound when the consumer pod schedules.
+#-------------------------------------------------------------------------------
+
+locals {
+  ivia_pvcs = {
+    ldaplib          = "/var/lib/ldap"              # consumed by openldap
+    ldapslapd        = "/etc/ldap/slapd.d"          # consumed by openldap
+    ldapsecauthority = "/var/lib/ldap.secAuthority" # consumed by openldap
+    postgresqldata   = "/var/lib/postgresql/data"   # consumed by postgresql
+    iviaconfig       = "/var/shared"                # consumed by iviaconfig
+  }
+}
+
+resource "kubernetes_persistent_volume_claim" "ivia" {
+  for_each         = local.ivia_pvcs
+  wait_until_bound = false
+  metadata {
+    name      = each.key
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels    = local.common_labels
+  }
+  spec {
+    access_modes       = ["ReadWriteOnce"]
+    storage_class_name = "gp2"
+    resources {
+      requests = {
+        storage = "50M"
+      }
+    }
+  }
+}
+
+#-------------------------------------------------------------------------------
+# Application credentials — random_password resources. 24 chars, no special
+# chars (matches target's legacy module style; some IVIA fields choke on
+# quotes/backslashes; safest to avoid). One resource per credential.
+#-------------------------------------------------------------------------------
+
+resource "random_password" "ivia_admin_pwd" {
+  length  = 24
+  special = false
+}
+
+resource "random_password" "cfgsvc_pwd" {
+  length  = 24
+  special = false
+}
+
+resource "random_password" "openldap_admin_pwd" {
+  length  = 24
+  special = false
+}
+
+resource "random_password" "openldap_config_pwd" {
+  length  = 24
+  special = false
+}
+
+resource "random_password" "postgresql_pwd" {
+  length  = 24
+  special = false
+}
+
+resource "random_password" "wrp_p12_secret" {
+  length  = 24
+  special = false
+}
+
+resource "random_password" "sec_master_pwd" {
+  length  = 24
+  special = false
+}
+
+#-------------------------------------------------------------------------------
+# postgresql TLS material. Sibling: kubernetes/create-secrets.sh:25-27 creates a
+# Secret with a single key 'server.pem'. POSTGRES_SSL_KEYDB env var on the
+# postgresql container points to /var/local/server.pem.
+#
+# The PEM must contain both the private key AND the cert (PostgreSQL's
+# combined keydb format). We concatenate cert_pem + private_key_pem.
+#-------------------------------------------------------------------------------
+
+resource "tls_private_key" "postgresql" {
+  algorithm = "RSA"
+  rsa_bits  = 4096
+}
+
+resource "tls_self_signed_cert" "postgresql" {
+  private_key_pem = tls_private_key.postgresql.private_key_pem
+
+  subject {
+    common_name  = "postgresql"
+    organization = "ibm"
+    country      = "US"
+  }
+
+  validity_period_hours = 87600 # 10 years
+  early_renewal_hours   = 720
+
+  allowed_uses = [
+    "key_encipherment",
+    "digital_signature",
+    "server_auth",
+  ]
+
+  dns_names = ["postgresql", "postgresql.verify-access.svc.cluster.local"]
+}
+
+#-------------------------------------------------------------------------------
+# kubernetes_secret bundle. All names match sibling's pod-manifest references
+# and base_layer.yaml `!secret verify-access/<name>:<key>` lookups
+# (RESEARCH §8.5 + §8.6).
+#
+# Target idiom: data = { key = plain_string }. The Kubernetes provider
+# base64-encodes on submit. DO NOT pre-encode (RESEARCH §2.8).
+#-------------------------------------------------------------------------------
+
+resource "kubernetes_secret" "ivia_admin" {
+  metadata {
+    name      = "iviaadmin"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels    = local.common_labels
+  }
+  type = "Opaque"
+  data = {
+    adminpw = random_password.ivia_admin_pwd.result
+  }
+}
+
+resource "kubernetes_secret" "configreader" {
+  metadata {
+    name      = "configreader"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels    = local.common_labels
+  }
+  type = "Opaque"
+  data = {
+    cfgsvcpw = random_password.cfgsvc_pwd.result
+  }
+}
+
+resource "kubernetes_secret" "openldap_creds" {
+  metadata {
+    name      = "openldap-creds"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels    = local.common_labels
+  }
+  type = "Opaque"
+  data = {
+    admin_password  = random_password.openldap_admin_pwd.result
+    config_password = random_password.openldap_config_pwd.result
+  }
+}
+
+resource "kubernetes_secret" "openldap_keys" {
+  metadata {
+    name      = "openldap-keys"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels    = local.common_labels
+  }
+  type = "Opaque"
+  # Use binary_data — dhparam.pem and the certs are PEM ASCII but we treat
+  # the bundle as a binary blob to avoid any newline/encoding surprises.
+  binary_data = {
+    "ldap.crt"    = filebase64("${path.module}/base_layer/openldap-keys/ldap.crt")
+    "ldap.key"    = filebase64("${path.module}/base_layer/openldap-keys/ldap.key")
+    "ca.crt"      = filebase64("${path.module}/base_layer/openldap-keys/ca.crt")
+    "dhparam.pem" = filebase64("${path.module}/base_layer/openldap-keys/dhparam.pem")
+  }
+}
+
+resource "kubernetes_secret" "postgresql_keys" {
+  metadata {
+    name      = "postgresql-keys"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels    = local.common_labels
+  }
+  type = "Opaque"
+  data = {
+    # Combined cert + key — postgresql expects both in the SSL_KEYDB file.
+    "server.pem" = "${tls_self_signed_cert.postgresql.cert_pem}${tls_private_key.postgresql.private_key_pem}"
+  }
+}
+
+resource "kubernetes_secret" "postgresql_creds" {
+  metadata {
+    name      = "postgresql-creds"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels    = local.common_labels
+  }
+  type = "Opaque"
+  data = {
+    password = random_password.postgresql_pwd.result
+  }
+}
+
+resource "kubernetes_secret" "wrp_p12_creds" {
+  metadata {
+    name      = "wrp-p12-creds"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels    = local.common_labels
+  }
+  type = "Opaque"
+  data = {
+    # Sibling's isvawrp.p12 is exported with passout 'Passw0rd' (common/create-ivia-pki.sh:36).
+    # Since we commit the P12 verbatim, base_layer.yaml's `secret:` value MUST be
+    # the same string the P12 was wrapped with: "Passw0rd". When we later
+    # regenerate the P12 (post-Phase 7), this random_password will drive the
+    # passout. For now, override with the sibling-locked string.
+    # CONTEXT D4 documented exception.
+    secret = "Passw0rd"
+  }
+}
+
+resource "kubernetes_secret" "ivia_secauthority_creds" {
+  metadata {
+    name      = "ivia-secauthority-creds"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels    = local.common_labels
+  }
+  type = "Opaque"
+  data = {
+    sec_master_password = random_password.sec_master_pwd.result
+  }
+}
