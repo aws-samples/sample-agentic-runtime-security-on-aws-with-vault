@@ -805,8 +805,8 @@ sweep_cfn_stacks() {
     local stacks
     stacks=$(aws cloudformation list-stacks --region "$REGION" \
         --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE CREATE_IN_PROGRESS \
-            UPDATE_IN_PROGRESS DELETE_FAILED \
-        --query "StackSummaries[?contains(StackName,'workshop')||contains(StackName,'agentic-runtime')].StackName" \
+            UPDATE_IN_PROGRESS DELETE_FAILED ROLLBACK_COMPLETE \
+        --query "StackSummaries[?contains(StackName,'workshop')||contains(StackName,'agentic-runtime')||starts_with(StackName,'${DEFAULT_CLUSTER}')].StackName" \
         --output text 2>/dev/null)
     if [[ -z "$stacks" || "$stacks" == "None" ]]; then
         print_info "CFN stacks: none"; return 0
@@ -1005,6 +1005,28 @@ sweep_vpc_target_groups() {
         [[ -z "$arn" || "$arn" == "None" ]] && continue
         local name="${arn##*/}"
         echo -n "    Deleting target group $name... "
+        aws elbv2 delete-target-group --target-group-arn "$arn" --region "$REGION" &>/dev/null \
+            && echo -e "${GREEN}done${NC}" || echo -e "${RED}failed${NC}"
+    done
+}
+
+# Sweep ALB-Controller-orphaned target groups regardless of VPC association.
+# `sweep_vpc_target_groups` only catches TGs still pointing at a live VPC; once
+# the VPC is deleted, TGs that lost their VPC reference are skipped by the
+# per-VPC loop. This catches workshop-named TGs anywhere in the account.
+sweep_orphan_target_groups() {
+    local tgs
+    tgs=$(aws elbv2 describe-target-groups --region "$REGION" \
+        --query "TargetGroups[?length(LoadBalancerArns)==\`0\` && (starts_with(TargetGroupName,'k8s-bankinga-') || starts_with(TargetGroupName,'k8s-verifyac-') || starts_with(TargetGroupName,'k8s-banking') || starts_with(TargetGroupName,'k8s-verify'))].TargetGroupArn" \
+        --output text 2>/dev/null)
+    if [[ -z "$tgs" || "$tgs" == "None" ]]; then
+        print_info "Orphan target groups (workshop-named): none"
+        return 0
+    fi
+    for arn in $tgs; do
+        [[ -z "$arn" || "$arn" == "None" ]] && continue
+        local name="${arn##*/}"
+        echo -n "    Deleting orphan target group $name... "
         aws elbv2 delete-target-group --target-group-arn "$arn" --region "$REGION" &>/dev/null \
             && echo -e "${GREEN}done${NC}" || echo -e "${RED}failed${NC}"
     done
@@ -1274,6 +1296,11 @@ phase_aws_sweep() {
         done
     fi
 
+    # Orphan target groups (TGs that lost their VPC reference and so are
+    # skipped by the per-VPC loop above).
+    step_header "Orphan target groups (workshop-named, no VPC)"
+    sweep_orphan_target_groups || true
+
     print_success "AWS sweep complete"
 }
 
@@ -1471,6 +1498,14 @@ phase_verify_zero_residuals() {
     [[ "$lts" == "None" ]] && lts=""
     _check "Launch templates (tagged)" "$lts"
 
+    # Orphan target groups (workshop-named, regardless of VPC)
+    local orphan_tgs
+    orphan_tgs=$(aws elbv2 describe-target-groups --region "$REGION" \
+        --query "TargetGroups[?length(LoadBalancerArns)==\`0\` && (starts_with(TargetGroupName,'k8s-bankinga-') || starts_with(TargetGroupName,'k8s-verifyac-') || starts_with(TargetGroupName,'k8s-banking') || starts_with(TargetGroupName,'k8s-verify'))].TargetGroupName" \
+        --output text 2>/dev/null)
+    [[ "$orphan_tgs" == "None" ]] && orphan_tgs=""
+    _check "Target groups (orphan, workshop-named)" "$orphan_tgs"
+
     # ECR repositories
     local ecr_residual=""
     for repo in "${ECR_REPO_NAMES[@]}"; do
@@ -1506,8 +1541,8 @@ phase_verify_zero_residuals() {
     # CFN stacks
     local cfn
     cfn=$(aws cloudformation list-stacks --region "$REGION" \
-        --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE DELETE_FAILED \
-        --query "StackSummaries[?contains(StackName,'workshop')||contains(StackName,'agentic-runtime')].StackName" \
+        --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE DELETE_FAILED ROLLBACK_COMPLETE \
+        --query "StackSummaries[?contains(StackName,'workshop')||contains(StackName,'agentic-runtime')||starts_with(StackName,'${DEFAULT_CLUSTER}')].StackName" \
         --output text 2>/dev/null)
     [[ "$cfn" == "None" ]] && cfn=""
     _check "CFN stacks (workshop-named)" "$cfn"
