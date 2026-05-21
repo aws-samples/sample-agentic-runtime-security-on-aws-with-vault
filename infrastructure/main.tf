@@ -10,7 +10,7 @@
 #           bedrock_kb_index (bedrock_kb_aoss)
 #   Wave 3: vault (eks + audit + addons)
 #   Wave 4: ivia (eks + rds + vault + audit + addons) — gated by time_sleep.alb_webhook_ready
-#   Wave 5: vault_config + isva_config  [LOCAL — kubectl port-forward, not in this root module]
+#   Wave 5: vault_config  [LOCAL — kubectl port-forward, not in this root module]
 #   Wave 6: uc1_agent (vault + rds + bedrock_kb_index + eks)
 #   Wave 7: uc2_app (vault + rds + ivia + bedrock_kb_index + eks)
 #   Wave 8: uc3_agent (vault + rds + ivia + uc2_app)
@@ -393,5 +393,137 @@ module "observability" {
   tags               = var.tags
 
   depends_on = [module.eks, module.addons, module.audit]
+}
+
+#-------------------------------------------------------------------------------
+# IVIA Workshop-Layer Autoconf (Phase B — OAuth clients + token exchange)
+# Second autoconf pass on top of base_layer.yaml. Registers the 3 workshop
+# OAuth clients (agent-uc1/uc2/uc3), associated API protection definitions
+# (client_credentials / authorization_code+PKCE / CIBA+token-exchange), and
+# the JavaScript mapping rule that adds may_act (RFC 8693) + authorization
+# _details (RFC 9396 RAR) claims to the UC3 exchanged token.
+#
+# Lives at root level (not inside modules/verify_access) because the agent-uc2
+# client's redirect_uri must reference module.uc2_app.banking_ui_alb_hostname
+# — an out-of-module dependency that the ivia module can't see.
+#
+# Single source of truth = autoconf YAML, applied via the same
+# ibmvia_autoconf 0.3.34 tool that the base_layer Job uses.
+#-------------------------------------------------------------------------------
+
+locals {
+  workshop_layer_yaml = templatefile(
+    "${path.module}/modules/verify_access/workshop_layer/workshop_layer.yaml.tftpl",
+    {
+      banking_ui_alb_hostname = module.uc2_app.banking_ui_alb_hostname
+      ivia_client_secret      = module.ivia.ivia_client_secret
+    }
+  )
+  workshop_layer_files_hash = sha256(join("", [
+    local.workshop_layer_yaml,
+    filesha256("${path.module}/modules/verify_access/workshop_layer/token_exchange_uc3.js"),
+  ]))
+}
+
+resource "kubernetes_config_map" "ivia_workshop_layer" {
+  metadata {
+    name      = "ivia-workshop-layer"
+    namespace = module.ivia.namespace
+    labels = {
+      "app.kubernetes.io/name"       = "ivia-workshop-autoconf"
+      "app.kubernetes.io/part-of"    = "ivia"
+      "app.kubernetes.io/managed-by" = "terraform"
+    }
+  }
+  data = {
+    "workshop_layer.yaml"   = local.workshop_layer_yaml
+    "token_exchange_uc3.js" = file("${path.module}/modules/verify_access/workshop_layer/token_exchange_uc3.js")
+  }
+}
+
+resource "kubernetes_job_v1" "ivia_workshop_autoconf" {
+  metadata {
+    name      = "ivia-workshop-autoconf-${substr(local.workshop_layer_files_hash, 0, 8)}"
+    namespace = module.ivia.namespace
+    labels = {
+      "app.kubernetes.io/name"       = "ivia-workshop-autoconf"
+      "app.kubernetes.io/part-of"    = "ivia"
+      "app.kubernetes.io/managed-by" = "terraform"
+    }
+  }
+
+  spec {
+    backoff_limit              = 0
+    active_deadline_seconds    = 1200
+    ttl_seconds_after_finished = 86400
+
+    template {
+      metadata {
+        labels = { "app.kubernetes.io/name" = "ivia-workshop-autoconf" }
+      }
+      spec {
+        restart_policy       = "Never"
+        service_account_name = module.ivia.ivia_autoconf_sa_name
+
+        image_pull_secrets {
+          name = module.ivia.dockerlogin_secret_name
+        }
+
+        volume {
+          name = "config-yaml"
+          config_map {
+            name = kubernetes_config_map.ivia_workshop_layer.metadata[0].name
+          }
+        }
+
+        container {
+          name    = "autoconf"
+          image   = "python:3.11-slim"
+          command = ["/bin/sh", "-c"]
+          args = [<<-EOSH
+            set -e
+            pip install --quiet ibmvia_autoconf==0.3.34 pyivia==0.2.44 kubernetes==31.0.0
+            cd /workshop_layer
+            IVIA_CONFIG_YAML=workshop_layer.yaml \
+            IVIA_CONFIG_BASE=/workshop_layer \
+            IVIA_MGMT_BASE_URL=https://iviaconfig.verify-access.svc.cluster.local:9443 \
+            IVIA_MGMT_USER=admin \
+            IVIA_MGMT_OLD_PWD="$ADMIN_PWD" \
+            IVIA_MGMT_PWD="$ADMIN_PWD" \
+            python -m ibmvia_autoconf
+          EOSH
+          ]
+
+          env {
+            name = "ADMIN_PWD"
+            value_from {
+              secret_key_ref {
+                name = module.ivia.ivia_admin_secret_name
+                key  = "adminpw"
+              }
+            }
+          }
+
+          volume_mount {
+            name       = "config-yaml"
+            mount_path = "/workshop_layer"
+            read_only  = true
+          }
+        }
+      }
+    }
+  }
+
+  wait_for_completion = true
+
+  timeouts {
+    create = "20m"
+  }
+
+  depends_on = [
+    module.ivia,
+    module.uc2_app,
+    module.uc3_agent,
+  ]
 }
 

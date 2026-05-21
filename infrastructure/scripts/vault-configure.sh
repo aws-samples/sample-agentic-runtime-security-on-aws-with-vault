@@ -9,7 +9,7 @@
 # Phases:
 #   1. Gather inputs    — reads cluster/RDS/Bedrock info from AWS + kubectl
 #   2. Vault config     — port-forward :8200, terraform apply vault-config/
-#   3. IVIA config      — port-forward :8436, terraform apply isva-config/
+#   3. IVIA verify      — pod-Running + OIDC discovery health check
 #   4. Summary          — pass/fail table
 #
 # Prerequisites:
@@ -34,7 +34,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 VAULT_CONFIG_DIR="${REPO_ROOT}/infrastructure/vault-config"
-ISVA_CONFIG_DIR="${REPO_ROOT}/infrastructure/isva-config"
 
 #--- Defaults ------------------------------------------------------------------
 CLUSTER_NAME=""
@@ -399,42 +398,6 @@ phase_ivia_verify() {
     return 1
   fi
   ok "${running} IVIA pod(s) Running"
-
-  # LMI is reachable in-cluster via the iviaconfig ClusterIP Service.
-  # The isva-config sub-apply runs from a pod (or kubectl exec context) and
-  # uses this DNS name. No NLB; LMI is not exposed externally.
-  local IVIA_LMI_ENDPOINT="iviaconfig.verify-access.svc.cluster.local"
-  ok "IVIA LMI endpoint (in-cluster): ${IVIA_LMI_ENDPOINT}:9443"
-
-  # Resolve UC2 banking-UI ALB hostname for the IVIA agent-uc2 OAuth client.
-  # The banking_ui_alb_hostname root output is exposed in infrastructure/outputs.tf
-  # specifically for this purpose; fall back to direct kubectl query if the
-  # terraform output isn't available (e.g., when running this script standalone).
-  local BANKING_UI_ALB=""
-  if BANKING_UI_ALB=$(terraform -chdir="${REPO_ROOT}/infrastructure" output -raw banking_ui_alb_hostname 2>/dev/null) \
-      && [[ -n "${BANKING_UI_ALB}" ]]; then
-    ok "banking_ui ALB (from terraform output): ${BANKING_UI_ALB}"
-  else
-    BANKING_UI_ALB=$(kubectl get ingress -n banking-app banking-ui-ingress \
-      -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
-    if [[ -n "${BANKING_UI_ALB}" ]]; then
-      ok "banking_ui ALB (from kubectl): ${BANKING_UI_ALB}"
-    else
-      warn "banking_ui ALB hostname not yet provisioned — agent-uc2 OAuth client will be registered with placeholder redirect_uri; re-run vault-configure.sh after the banking-ui Ingress is Ready."
-    fi
-  fi
-  local UC2_REDIRECT_URI="http://${BANKING_UI_ALB:-localhost:5173}/callback"
-
-  # Write isva-config/terraform.tfvars (scaffolded to match VAULT_CONFIG_DIR pattern).
-  info "Writing isva-config/terraform.tfvars..."
-  mkdir -p "${ISVA_CONFIG_DIR}"
-  cat > "${ISVA_CONFIG_DIR}/terraform.tfvars" <<TFVARS
-region                = "${REGION}"
-ivia_service_endpoint = "${IVIA_LMI_ENDPOINT}"
-uc2_redirect_uri      = "${UC2_REDIRECT_URI}"
-TFVARS
-  chmod 600 "${ISVA_CONFIG_DIR}/terraform.tfvars"
-  ok "isva-config/terraform.tfvars written (mode 600) — uc2_redirect_uri=${UC2_REDIRECT_URI}"
 
   info "Verifying OIDC discovery..."
   local issuer

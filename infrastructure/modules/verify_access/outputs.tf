@@ -13,7 +13,7 @@ output "ivia_wrp_alb_hostname" {
 }
 
 output "ivia_admin_password" {
-  description = "Generated admin password for the IVIA LMI. Consumed by isva_config.ivia_admin_password."
+  description = "Generated admin password for the IVIA LMI. Consumed by the workshop_layer autoconf Job (kubernetes_job_v1.ivia_workshop_autoconf)."
   value       = random_password.ivia_admin_pwd.result
   sensitive   = true
 }
@@ -32,5 +32,28 @@ output "ivia_client_secret" {
 output "ivia_ingress_hostname" {
   description = "ALB hostname for the IVIA browser entry. Aliased to ivia_wrp_alb_hostname — only one Ingress exists in this module."
   value       = try(kubernetes_ingress_v1.ivia_wrp.status[0].load_balancer[0].ingress[0].hostname, "")
+}
+
+################################################################################
+# Workshop-layer autoconf re-use outputs
+# Consumed by the root-level kubernetes_job_v1.ivia_workshop_autoconf so it can
+# reuse the ServiceAccount, RBAC, and image-pull secret already provisioned by
+# this module. The Job lives in root main.tf (not here) because it must depend
+# on module.uc2_app.banking_ui_alb_hostname — an out-of-module reference.
+################################################################################
+
+output "ivia_autoconf_sa_name" {
+  description = "ServiceAccount used by the base_layer autoconf Job; reused for the workshop_layer Job."
+  value       = kubernetes_service_account.ivia_autoconf.metadata[0].name
+}
+
+output "dockerlogin_secret_name" {
+  description = "Image-pull Secret for the IBM Container Registry (icr.io) login; reused by the workshop_layer autoconf Job."
+  value       = kubernetes_secret.dockerlogin.metadata[0].name
+}
+
+output "ivia_admin_secret_name" {
+  description = "Secret holding the LMI admin password (key: adminpw); reused by the workshop_layer autoconf Job."
+  value       = kubernetes_secret.ivia_admin.metadata[0].name
 }
 

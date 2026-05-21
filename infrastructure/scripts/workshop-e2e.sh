@@ -477,7 +477,7 @@ phase_identity() {
 #===============================================================================
 # PHASE 6: Vault — init + configure (local via port-forward)
 # Step 1: vault-init.sh — initialize Vault, save root token + recovery keys
-# Step 2: vault-configure.sh — port-forward, terraform apply vault-config + isva-config
+# Step 2: vault-configure.sh — port-forward, terraform apply vault-config; verify IVIA OIDC
 # Step 3: test-vault-verify.sh — verify pods, seal status, Raft peers, audit
 #===============================================================================
 phase_vault() {

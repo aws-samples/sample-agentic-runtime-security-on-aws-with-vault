@@ -1,0 +1,77 @@
+# Workshop OAuth client + RFC 8693 token-exchange autoconf
+#
+# Layered ON TOP OF base_layer.yaml. Registers the 3 workshop OAuth clients,
+# RAR refund_approval type via Rich Authorization Requests, and a JavaScript
+# mapping rule that augments the UC3 token-exchange access token with
+# `may_act` (RFC 8693) and `authorization_details` (RFC 9396) claims.
+#
+# Inputs (templatefile substitution from main.tf):
+#   banking_ui_alb_hostname  — UC2 browser-callback target
+#   ivia_client_secret       — shared confidential-client secret for uc1/uc3
+#                              (uc2 uses authorization_code+PKCE; the secret
+#                              field is required by IVIA for confidential=True
+#                              but PKCE is enforced at the definition level)
+
+mgmt_user: admin
+mgmt_pwd: !secret verify-access/ivia-secauthority-creds:sec_master_password
+
+access_control:
+  api_protection:
+    definitions:
+    - name: WorkshopClientCredDef
+      tcm_behavior: NEVER_PROMPT
+      grant_types:
+      - CLIENT_CREDENTIALS
+      access_token_lifetime: 3600
+    - name: WorkshopAuthCodeDef
+      tcm_behavior: NEVER_PROMPT
+      grant_types:
+      - AUTHORIZATION_CODE
+      - REFRESH_TOKEN
+      enforce_pkce: true
+      access_token_lifetime: 3600
+      refresh_token_length: 50
+    - name: WorkshopCibaDef
+      tcm_behavior: NEVER_PROMPT
+      grant_types:
+      - urn:openid:params:grant-type:ciba
+      - urn:ietf:params:oauth:grant-type:token-exchange
+      access_token_lifetime: 300
+      ciba:
+        poll_interval: 5
+        request_expiry: 300
+
+    clients:
+    - name: agent-uc1
+      client_id: agent-uc1
+      client_secret: "${ivia_client_secret}"
+      definition: WorkshopClientCredDef
+      confidential: true
+      scope:
+      - database:read
+      - bedrock:invoke
+    - name: agent-uc2
+      client_id: agent-uc2
+      client_secret: "${ivia_client_secret}"
+      definition: WorkshopAuthCodeDef
+      confidential: true
+      redirect_uri:
+      - http://${banking_ui_alb_hostname}/callback
+      scope:
+      - openid
+      - profile
+      - database:read
+      - bedrock:invoke
+    - name: agent-uc3
+      client_id: agent-uc3
+      client_secret: "${ivia_client_secret}"
+      definition: WorkshopCibaDef
+      confidential: true
+      scope:
+      - openid
+      - refund:write
+
+  mapping_rules:
+  - name: token_exchange_uc3
+    category: OAUTH
+    file: token_exchange_uc3.js
