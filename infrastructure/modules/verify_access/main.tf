@@ -229,6 +229,18 @@ resource "random_password" "sec_master_pwd" {
   special = false
 }
 
+# IVIA OAuth client secret. Consumed by uc2_app + uc3_agent via the
+# ivia_client_secret module output. Stable across applies (rotation is
+# out of scope for Phase 07.1 — no keepers block).
+# special=false: 32 chars provide ample entropy and the secret is sent in
+# HTTP basic auth + form-urlencoded bodies, where special chars complicate
+# consumers without adding meaningful entropy.
+
+resource "random_password" "ivia_oauth_client_secret" {
+  length  = 32
+  special = false
+}
+
 #-------------------------------------------------------------------------------
 # postgresql TLS material. Sibling: kubernetes/create-secrets.sh:25-27 creates a
 # Secret with a single key 'server.pem'. POSTGRES_SSL_KEYDB env var on the
