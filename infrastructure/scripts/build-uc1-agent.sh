@@ -89,22 +89,12 @@ print_pass "aws CLI available"
 [[ -f "${AGENT_DIR}/Dockerfile" ]] || { print_fail "Dockerfile missing: ${AGENT_DIR}/Dockerfile"; exit 1; }
 print_pass "Agent source + Dockerfile present"
 
-print_info "Ensuring ECR repository ${ECR_REPO_NAME} exists..."
+print_info "Verifying ECR repository ${ECR_REPO_NAME} exists (created by Terraform)..."
 if aws ecr describe-repositories --repository-names "${ECR_REPO_NAME}" \
     --region "${REGION}" --output text &>/dev/null; then
     print_pass "ECR repository exists: ${ECR_REPO_NAME}"
 else
-    if [[ "$DRY_RUN" == true ]]; then
-        print_info "[DRY-RUN] Would create ECR repository: ${ECR_REPO_NAME}"
-    else
-        print_info "Creating ECR repository: ${ECR_REPO_NAME}"
-        aws ecr create-repository \
-            --repository-name "${ECR_REPO_NAME}" \
-            --region "${REGION}" \
-            --image-scanning-configuration scanOnPush=true \
-            --output text --query "repository.repositoryUri" >/dev/null 2>&1
-    fi
-    print_pass "ECR repository ready: ${ECR_REPO_NAME}"
+    print_fail "ECR repository not found: ${ECR_REPO_NAME}. Run 'terraform apply' first."; exit 1
 fi
 
 if [[ "$DRY_RUN" == true ]]; then

@@ -5,11 +5,12 @@
 # Single-file teardown. Wipes EVERYTHING the workshop provisioned.
 #
 # Usage:
-#   teardown.sh                Full nuke: AWS resources + HCP infra
-#   teardown.sh --aws-only     Only AWS resources (K8s drain + tag-scoped sweep)
-#   teardown.sh --hcp-only     Only HCP infra (Stack, varset, IAM role, OIDC)
-#   teardown.sh --dry-run      Preview without executing
-#   teardown.sh --help         Show this help
+#   teardown.sh                    Full nuke: terraform destroy + AWS sweep + HCP
+#   teardown.sh --post-destroy-only  Skip terraform destroy, run full orphan sweep
+#   teardown.sh --aws-only         Only AWS resources (K8s drain + tag-scoped sweep)
+#   teardown.sh --hcp-only         Only HCP infra (Stack, varset, IAM role, OIDC)
+#   teardown.sh --dry-run          Preview without executing
+#   teardown.sh --help             Show this help
 #
 # Discovery: Workshop tag `Workshop=agentic-runtime-security` + the well-known
 # names this workshop uses (cluster `agentic-runtime-usw2`, S3 buckets prefixed
@@ -79,6 +80,7 @@ print_warn()    { echo -e "${YELLOW}  $1${NC}"; }
 DRY_RUN=false
 AWS_ONLY=false
 HCP_ONLY=false
+POST_DESTROY_ONLY=false
 
 usage() {
     sed -n '2,21p' "$0"
@@ -87,9 +89,10 @@ usage() {
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --aws-only) AWS_ONLY=true ;;
-        --hcp-only) HCP_ONLY=true ;;
-        --dry-run)  DRY_RUN=true ;;
+        --aws-only)           AWS_ONLY=true ;;
+        --hcp-only)           HCP_ONLY=true ;;
+        --post-destroy-only)  POST_DESTROY_ONLY=true ;;
+        --dry-run)            DRY_RUN=true ;;
         --help|-h)  usage ;;
         *)
             echo -e "${RED}Unknown option: $1${NC}" >&2
@@ -99,8 +102,12 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-if [ "$AWS_ONLY" = true ] && [ "$HCP_ONLY" = true ]; then
-    echo -e "${RED}Error: --aws-only and --hcp-only are mutually exclusive${NC}" >&2
+local_exclusive=0
+[ "$AWS_ONLY" = true ] && local_exclusive=$((local_exclusive + 1))
+[ "$HCP_ONLY" = true ] && local_exclusive=$((local_exclusive + 1))
+[ "$POST_DESTROY_ONLY" = true ] && local_exclusive=$((local_exclusive + 1))
+if [ "$local_exclusive" -gt 1 ]; then
+    echo -e "${RED}Error: --aws-only, --hcp-only, and --post-destroy-only are mutually exclusive${NC}" >&2
     exit 1
 fi
 
@@ -143,6 +150,7 @@ if [ -z "$DEFAULT_CLUSTER" ]; then
 fi
 
 CW_LOG_PREFIXES=("/workshop/" "/aws/eks/${DEFAULT_CLUSTER}/" "/aws/rds/instance/${DEFAULT_CLUSTER}-pg")
+S3_BUCKET_PREFIXES+=("${DEFAULT_CLUSTER}-workshop-logs")
 
 # KB region — Nova 2 Multimodal Embeddings is us-east-1 only; KB components
 # (AOSS, Bedrock KB, S3 corpus/multimodal, CFN index stack) live there.
@@ -196,6 +204,42 @@ phase_k8s_cleanup() {
     }
     kubectl config use-context "$DEFAULT_CLUSTER" >/dev/null 2>&1 || true
     print_success "Kubeconfig set to $DEFAULT_CLUSTER"
+
+    # === Phase 7 cleanup: drop ivia_hvdb PostgreSQL role + schema from shared RDS ===
+    # CONTEXT R3: the legacy verify_access module bootstrap Job created an ivia_hvdb
+    # role+schema on the shared RDS instance. Phase 7 moves HVDB into the postgresql
+    # pod, so this RDS state is orphaned on destroy. Drop it idempotently before
+    # tearing down module.ivia.
+    local INFRA_DIR="${REPO_ROOT}/infrastructure"
+    print_info "Dropping ivia_hvdb role+schema from shared RDS (idempotent)..."
+    RDS_ENDPOINT=$(cd "${INFRA_DIR}" && terraform output -raw rds_endpoint 2>/dev/null || echo "")
+    RDS_ADMIN=$(cd "${INFRA_DIR}" && terraform output -raw rds_master_username 2>/dev/null || echo "")
+    RDS_SECRET_ARN=$(cd "${INFRA_DIR}" && terraform output -raw rds_master_user_secret_arn 2>/dev/null || echo "")
+    if [ -n "${RDS_ENDPOINT}" ] && [ -n "${RDS_ADMIN}" ] && [ -n "${RDS_SECRET_ARN}" ]; then
+        RDS_PWD=$(aws secretsmanager get-secret-value --secret-id "${RDS_SECRET_ARN}" \
+            --query SecretString --output text 2>/dev/null \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin).get("password",""))')
+        if [ -n "${RDS_PWD}" ]; then
+            PGPASSWORD="${RDS_PWD}" psql -h "${RDS_ENDPOINT%:*}" -U "${RDS_ADMIN}" -d postgres \
+                -c 'DROP SCHEMA IF EXISTS ivia_hvdb CASCADE; DROP ROLE IF EXISTS ivia_hvdb;' \
+                >/dev/null 2>&1 \
+              && print_success "ivia_hvdb role+schema dropped" \
+              || print_warn "ivia_hvdb drop returned non-zero (likely already absent — safe)"
+        else
+            print_warn "RDS master password could not be retrieved; skipping ivia_hvdb drop"
+        fi
+    else
+        print_info "Shared RDS not present in terraform output — skipping ivia_hvdb drop (already torn down?)"
+    fi
+
+    # === Phase 7 cleanup: explicit verify-access object sweep ===
+    # Delete LBC-managed Services (NLB) and Ingresses (ALB) FIRST so the AWS LBC
+    # can reconcile their target groups before we yank the namespace.
+    print_info "Sweeping verify-access namespace objects (LB-managed first)..."
+    kubectl delete -n verify-access --ignore-not-found service iviaconfig-nlb 2>/dev/null || true
+    kubectl delete -n verify-access --ignore-not-found ingress ivia-wrp 2>/dev/null || true
+    # Give LBC ~30s to release the NLB/ALB before namespace delete
+    sleep 30
 
     # Delete workshop namespaces (vault, verify-access, uc1, etc.) so any LB
     # Services in them get torn down by the LB controller.
@@ -402,6 +446,74 @@ sweep_launch_templates() {
         aws ec2 delete-launch-template --launch-template-id "$lt" --region "$REGION" &>/dev/null \
             && echo -e "${GREEN}done${NC}" || echo -e "${RED}failed${NC}"
     done
+}
+
+#----- ECR repositories (workshop container images) ----------------------------
+ECR_REPO_NAMES=("workshop/uc1-agent" "workshop/uc3-agent" "workshop-banking-app")
+sweep_ecr_repos() {
+    local count=0
+    for repo in "${ECR_REPO_NAMES[@]}"; do
+        if aws ecr describe-repositories --repository-names "$repo" --region "$REGION" &>/dev/null; then
+            echo -n "    Deleting ECR repo $repo... "
+            if aws ecr delete-repository --repository-name "$repo" --region "$REGION" --force &>/dev/null; then
+                echo -e "${GREEN}done${NC}"; count=$((count + 1))
+            else
+                echo -e "${RED}failed${NC}"
+            fi
+        fi
+    done
+    if [[ $count -eq 0 ]]; then print_info "ECR repos: none found"
+    else print_success "ECR repos: deleted $count"; fi
+}
+
+#----- CloudWatch subscription filters (must delete BEFORE log groups) ---------
+sweep_cw_subscription_filters() {
+    local count=0
+    for prefix in "${CW_LOG_PREFIXES[@]}"; do
+        local groups
+        groups=$(aws logs describe-log-groups --region "$REGION" --log-group-name-prefix "$prefix" \
+            --query 'logGroups[].logGroupName' --output text 2>/dev/null)
+        for g in $groups; do
+            [[ -z "$g" || "$g" == "None" ]] && continue
+            local filters
+            filters=$(aws logs describe-subscription-filters --region "$REGION" --log-group-name "$g" \
+                --query 'subscriptionFilters[].filterName' --output text 2>/dev/null)
+            for f in $filters; do
+                [[ -z "$f" || "$f" == "None" ]] && continue
+                echo -n "    Deleting subscription filter $f on $g... "
+                aws logs delete-subscription-filter --region "$REGION" \
+                    --log-group-name "$g" --filter-name "$f" &>/dev/null \
+                    && { echo -e "${GREEN}done${NC}"; count=$((count + 1)); } \
+                    || echo -e "${RED}failed${NC}"
+            done
+        done
+    done
+    if [[ $count -eq 0 ]]; then print_info "CW subscription filters: none"
+    else print_success "CW subscription filters: deleted $count"; fi
+}
+
+#----- Kinesis Firehose delivery streams (cluster-named) -----------------------
+sweep_firehose_streams() {
+    local streams
+    streams=$(aws firehose list-delivery-streams --region "$REGION" \
+        --delivery-stream-type DirectPut \
+        --query 'DeliveryStreamNames[]' --output text 2>/dev/null)
+    if [[ -z "$streams" || "$streams" == "None" ]]; then
+        print_info "Firehose streams: none"; return 0
+    fi
+    local count=0
+    for s in $streams; do
+        [[ "$s" == "${DEFAULT_CLUSTER}-"* ]] || continue
+        echo -n "    Deleting Firehose stream $s... "
+        if aws firehose delete-delivery-stream --delivery-stream-name "$s" \
+                --region "$REGION" --allow-force-delete &>/dev/null; then
+            echo -e "${GREEN}done${NC}"; count=$((count + 1))
+        else
+            echo -e "${RED}failed${NC}"
+        fi
+    done
+    if [[ $count -eq 0 ]]; then print_info "Firehose streams: none matching ${DEFAULT_CLUSTER}-*"
+    else print_success "Firehose streams: deleted $count"; fi
 }
 
 #----- RDS ---------------------------------------------------------------------
@@ -1025,8 +1137,11 @@ phase_aws_sweep() {
     if [ "$DRY_RUN" = true ]; then
         print_info "[DRY-RUN] Would sweep: EKS (addons, pod-identity, node groups, cluster),"
         print_info "  Vault PVCs (Raft StatefulSet), EBS volumes, launch templates,"
+        print_info "  ECR repos (workshop/uc1-agent, workshop/uc3-agent, workshop-banking-app),"
         print_info "  RDS, Secrets Manager, Bedrock KB, AOSS,"
-        print_info "  S3, Glue/Athena, CW logs, KMS (alias/vault-unseal + workshop keys),"
+        print_info "  CW subscription filters, Firehose delivery streams,"
+        print_info "  S3 (incl. ${DEFAULT_CLUSTER}-workshop-logs), Glue/Athena,"
+        print_info "  CW logs, KMS (alias/vault-unseal + workshop keys),"
         print_info "  CFN, IAM (policies, roles, instance profiles),"
         print_info "  VPC (ELBs, target groups, endpoints, ENIs, SGs, NAT, IGW, subnets, RTs)"
         return 0
@@ -1059,6 +1174,9 @@ phase_aws_sweep() {
     step_header "Launch templates (orphaned from node groups)"
     sweep_launch_templates || true
 
+    step_header "ECR repositories (workshop container images)"
+    sweep_ecr_repos || true
+
     step_header "RDS (instance + subnet + param + monitoring role)"
     sweep_rds || true
 
@@ -1078,6 +1196,19 @@ phase_aws_sweep() {
 
     step_header "AOSS (collection + 3 policies) (${REGION})"
     sweep_aoss || true
+
+    # Subscription filters + Firehose must be deleted before S3 and log groups.
+    # Run in primary region (observability is not in KB_REGION).
+    local _cur_region="$REGION"
+    REGION="$SAVED_REGION"
+
+    step_header "CloudWatch subscription filters (before log group deletion)"
+    sweep_cw_subscription_filters || true
+
+    step_header "Kinesis Firehose delivery streams (${DEFAULT_CLUSTER}-*)"
+    sweep_firehose_streams || true
+
+    REGION="$_cur_region"
 
     step_header "S3 buckets (workshop-named, both regions)"
     sweep_s3_buckets || true
@@ -1358,6 +1489,22 @@ phase_verify_zero_residuals() {
     [[ "$lts" == "None" ]] && lts=""
     _check "Launch templates (tagged)" "$lts"
 
+    # ECR repositories
+    local ecr_residual=""
+    for repo in "${ECR_REPO_NAMES[@]}"; do
+        aws ecr describe-repositories --repository-names "$repo" --region "$REGION" &>/dev/null \
+            && ecr_residual="$ecr_residual $repo"
+    done
+    _check "ECR repositories" "$(echo "$ecr_residual" | xargs)"
+
+    # Firehose delivery streams
+    local firehose=""
+    for s in $(aws firehose list-delivery-streams --region "$REGION" --delivery-stream-type DirectPut \
+            --query 'DeliveryStreamNames[]' --output text 2>/dev/null); do
+        [[ "$s" == "${DEFAULT_CLUSTER}-"* ]] && firehose="$firehose $s"
+    done
+    _check "Firehose streams (cluster-named)" "$(echo "$firehose" | xargs)"
+
     # Secrets Manager
     local secrets
     secrets=$(aws secretsmanager list-secrets --region "$REGION" \
@@ -1424,7 +1571,13 @@ echo -e "${BLUE}  Agentic Runtime Security Workshop -- Teardown${NC}"
 echo -e "${BLUE}================================================================${NC}"
 if [ "$DRY_RUN" = true ]; then print_warn "DRY RUN MODE — no changes will be made"; fi
 
-if [ "$AWS_ONLY" = true ]; then
+if [ "$POST_DESTROY_ONLY" = true ]; then
+    print_info "Mode: Post-destroy (full orphan sweep — all workshop resources)"
+    phase_k8s_cleanup
+    phase_aws_sweep
+    phase_hcp_cleanup
+    phase_verify_zero_residuals || VERIFY_FAILED=true
+elif [ "$AWS_ONLY" = true ]; then
     print_info "Mode: AWS-only (K8s drain + tag-scoped resource sweep)"
     phase_k8s_cleanup
     phase_aws_sweep
@@ -1437,9 +1590,8 @@ else
 
     # Primary destroy via Terraform (removes all managed resources)
     step_header "Terraform destroy (ordered resource cleanup)..."
-    local infra_dir="$REPO_ROOT/infrastructure"
+    infra_dir="$REPO_ROOT/infrastructure"
     if [ -f "$infra_dir/.terraform/terraform.tfstate" ] || [ -d "$infra_dir/.terraform" ]; then
-        local hcp_org_for_destroy
         hcp_org_for_destroy=$(grep 'hcp_org' "$SCRIPT_DIR/hcp-setup/terraform.tfvars" 2>/dev/null | awk -F'"' '{print $2}')
         if [ -n "$hcp_org_for_destroy" ]; then
             export TF_CLOUD_ORGANIZATION="$hcp_org_for_destroy"

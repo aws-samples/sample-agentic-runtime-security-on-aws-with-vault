@@ -46,9 +46,9 @@
 	let consentStatus = $state('');
 
 	function extractConsent(text: string) {
-		const match = text.match(/CIBA_CONSENT:auth_req_id=([^|]+)\|request_id=([^|]+)\|details=(.+)/);
+		const match = text.match(/CIBA_CONSENT:auth_req_id=([^|]+)\|request_id=([^|]+)\|details=([^|]+)/);
 		if (match) {
-			pendingConsent = { auth_req_id: match[1], request_id: match[2], details: match[3] };
+			pendingConsent = { auth_req_id: match[1], request_id: match[2], details: match[3].replace(/\*+$/, '') };
 		}
 	}
 

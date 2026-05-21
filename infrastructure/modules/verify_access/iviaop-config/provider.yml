@@ -1,0 +1,38 @@
+# Copyright contributors to the IBM Security Verify Access OIDC Provider Resources project
+version: 23.03
+server:
+  ssl:
+    key: 'ks:isvaop_keys/httpserverkey'
+    certificate: 'ks:isvaop_keys/httpservercert'
+  pages:
+    type: zip                       
+    content: "@templates.zip" 
+definition:
+  id: 1
+  name: OIDC Definition
+  grant_types:
+    - authorization_code
+    - urn:openid:params:grant-type:ciba
+  base_url: https://iamlab.ibm.com/isvaop
+  token_settings:
+    issuer: https://iamlab.ibm.com
+    signing_alg: RS256
+    signing_keystore: isvaop_keys
+    signing_keylabel: httpserverkey
+  features:
+    consent_prompt: ALWAYS_PROMPT
+jwks:
+  signing_keystore: isvaop_keys
+
+keystore:
+  - name: isvaop_keys
+    type: pem
+    certificate:
+      - label: httpservercert
+        content: '@isvaop.pem'
+
+      - label: postgres
+        content: '@postgres.crt'
+    key:
+      - label: httpserverkey
+        content: '@isvaop.key'

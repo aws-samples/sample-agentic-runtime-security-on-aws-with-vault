@@ -41,6 +41,8 @@ IVIA_BASE_URL = os.getenv("IVIA_BASE_URL", "https://ivia.banking-app.svc.cluster
 IVIA_CLIENT_ID = os.getenv("IVIA_CLIENT_ID", "uc3-agent")
 IVIA_CLIENT_SECRET = os.getenv("IVIA_CLIENT_SECRET", "")
 IVIA_EXTERNAL_URL = os.getenv("IVIA_EXTERNAL_URL", "")
+IVIA_ACTOR_CLIENT_ID = os.getenv("IVIA_ACTOR_CLIENT_ID", "uc3-actor")
+IVIA_ACTOR_CLIENT_SECRET = os.getenv("IVIA_ACTOR_CLIENT_SECRET", IVIA_CLIENT_SECRET)
 
 # CIBA polling config
 CIBA_POLL_INTERVAL_SECONDS = 5
@@ -232,7 +234,7 @@ def _token_exchange(ciba_token: str, actor_token: str, request_id: str) -> str:
 
     Args:
         ciba_token: The CIBA access_token (user consent proof).
-        actor_token: The agent's identity token (K8s SA JWT or client_credentials token).
+        actor_token: The agent's IVIA-issued client_credentials token (actor identity).
         request_id: UUID for log correlation.
 
     Returns:
@@ -248,10 +250,10 @@ def _token_exchange(ciba_token: str, actor_token: str, request_id: str) -> str:
         "subject_token": ciba_token,
         "subject_token_type": "urn:ietf:params:oauth:token-type:access_token",
         "actor_token": actor_token,
-        "actor_token_type": "urn:ietf:params:oauth:token-type:jwt",
+        "actor_token_type": "urn:ietf:params:oauth:token-type:access_token",
         "requested_token_type": "urn:ietf:params:oauth:token-type:access_token",
-        "client_id": IVIA_CLIENT_ID,
-        "client_secret": IVIA_CLIENT_SECRET,
+        "client_id": IVIA_ACTOR_CLIENT_ID,
+        "client_secret": IVIA_ACTOR_CLIENT_SECRET,
     }
 
     logger.info(
@@ -297,39 +299,30 @@ def _token_exchange(ciba_token: str, actor_token: str, request_id: str) -> str:
     return delegated_jwt
 
 
-def _read_sa_jwt() -> str:
-    """Read the Kubernetes Service Account JWT for use as actor_token.
+def _get_actor_token() -> str:
+    """Get an IVIA-issued client_credentials token for use as actor_token.
 
-    Falls back to fetching a client_credentials token from IVIA if SA JWT
-    is not available (local development without cluster).
+    The agent authenticates to IVIA with its own client_id/secret.
+    IVIA trusts its own tokens, so token exchange validation succeeds.
+    The delegated JWT carries the agent's client_id in the act/may_act claim.
 
     Returns:
-        SA JWT string or client_credentials access_token.
+        IVIA-issued access_token string.
     """
-    sa_jwt_path = "/var/run/secrets/kubernetes.io/serviceaccount/token"
-    try:
-        with open(sa_jwt_path, "r") as fh:
-            return fh.read().strip()
-    except FileNotFoundError:
-        # Fallback: client_credentials token for local dev
-        logger.warning(
-            "sa_jwt_not_found_using_client_credentials_fallback",
-            extra={"path": sa_jwt_path},
+    token_url = f"{IVIA_BASE_URL}/oauth2/token"
+    with httpx.Client(verify=False, timeout=30.0) as client:
+        resp = client.post(
+            token_url,
+            data={
+                "grant_type": "client_credentials",
+                "client_id": IVIA_ACTOR_CLIENT_ID,
+                "client_secret": IVIA_ACTOR_CLIENT_SECRET,
+                "scope": "openid",
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
-        token_url = f"{IVIA_BASE_URL}/oauth2/token"
-        with httpx.Client(verify=False, timeout=30.0) as client:
-            resp = client.post(
-                token_url,
-                data={
-                    "grant_type": "client_credentials",
-                    "client_id": IVIA_CLIENT_ID,
-                    "client_secret": IVIA_CLIENT_SECRET,
-                    "scope": "openid",
-                },
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-            )
-        resp.raise_for_status()
-        return resp.json()["access_token"]
+    resp.raise_for_status()
+    return resp.json()["access_token"]
 
 
 # ---------------------------------------------------------------------------
@@ -468,7 +461,8 @@ def initiate_refund(
         "amount": amount,
         "currency": currency,
         "login_hint": login_hint,
-        "consent_marker": f"CIBA_CONSENT:auth_req_id={auth_req_id}|request_id={request_id}|details={rar_desc}",
+        "consent_url": f"{IVIA_EXTERNAL_URL}/isvaop/oauth2/ciba_user_authorize/{auth_req_id}" if IVIA_EXTERNAL_URL else "",
+        "consent_marker": f"CIBA_CONSENT:auth_req_id={auth_req_id}|request_id={request_id}|details={rar_desc}|consent_url={IVIA_EXTERNAL_URL}/isvaop/oauth2/ciba_user_authorize/{auth_req_id}",
     }
 
 
@@ -512,7 +506,7 @@ def complete_refund(
     )
 
     ciba_token = _poll_ciba(auth_req_id, request_id)
-    actor_token = _read_sa_jwt()
+    actor_token = _get_actor_token()
     delegated_jwt = _token_exchange(ciba_token, actor_token, request_id)
     write_creds = _vault_client.get_refund_credentials(delegated_jwt, request_id)
 

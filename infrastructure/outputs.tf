@@ -51,6 +51,25 @@ output "rds_endpoint" {
 }
 
 #-------------------------------------------------------------------------------
+# RDS master credentials — consumed by teardown.sh for ivia_hvdb role+schema
+# cleanup (CONTEXT R3). The role was created by the legacy verify_access module's
+# bootstrap Job and is orphaned when the module is replaced. teardown.sh runs
+# DROP SCHEMA ... CASCADE; DROP ROLE ... idempotently against the shared RDS
+# instance before module destroy.
+#-------------------------------------------------------------------------------
+
+output "rds_master_username" {
+  description = "RDS PostgreSQL master username (master_username from module.rds). Read by infrastructure/scripts/teardown.sh for the ivia_hvdb cleanup psql command. Required for SC5 (zero orphans)."
+  value       = module.rds.master_username
+}
+
+output "rds_master_user_secret_arn" {
+  description = "Secrets Manager ARN holding the RDS master password. Read by infrastructure/scripts/teardown.sh; teardown invokes aws secretsmanager get-secret-value to extract the password for the ivia_hvdb DROP commands."
+  value       = module.rds.master_user_secret_arn
+  sensitive   = true
+}
+
+#-------------------------------------------------------------------------------
 # Bedrock Knowledge Base Outputs
 #-------------------------------------------------------------------------------
 
@@ -82,12 +101,12 @@ output "glue_database_name" {
 # Simple AD Outputs (consumed by configure-workshop.sh for user provisioning)
 #-------------------------------------------------------------------------------
 
-output "simple_ad_dns_ips" {
-  description = "DNS IP addresses of the Simple AD directory. Used by IVIA for LDAP and by create-simple-ad-users.sh."
-  value       = module.simple_ad.dns_ip_addresses
-}
-
-output "simple_ad_base_dn" {
-  description = "LDAP base DN for Simple AD user lookups (e.g. CN=Users,DC=workshop,DC=internal)."
-  value       = module.simple_ad.base_dn
-}
+# output "simple_ad_dns_ips" {
+#   description = "DNS IP addresses of the Simple AD directory. Used by IVIA for LDAP and by create-simple-ad-users.sh."
+#   value       = module.simple_ad.dns_ip_addresses
+# }
+#
+# output "simple_ad_base_dn" {
+#   description = "LDAP base DN for Simple AD user lookups (e.g. CN=Users,DC=workshop,DC=internal)."
+#   value       = module.simple_ad.base_dn
+# }

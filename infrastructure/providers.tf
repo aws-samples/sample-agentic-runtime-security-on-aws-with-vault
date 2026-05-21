@@ -2,22 +2,13 @@
 # Root Module — Provider Configuration
 # Agentic Runtime Security Workshop
 #
-# HCP Terraform Workspace with local execution — state stored in HCP,
-# plans and applies run on the attendee's machine with local AWS credentials.
-#
-# Kubernetes + Helm use exec-based auth via `aws eks get-token`.
+# Local state. Kubernetes + Helm use exec-based auth via `aws eks get-token`.
 #
 # Canonical region contract:
 #   var.region and var.kb_region are the only region references in .tf files.
 ################################################################################
 
 terraform {
-  cloud {
-    workspaces {
-      name = "agentic-runtime-security"
-    }
-  }
-
   required_version = ">= 1.10"
 
   required_providers {
@@ -85,17 +76,18 @@ provider "aws" {
 
 #-------------------------------------------------------------------------------
 # Kubernetes + Helm — exec-based auth via aws eks get-token.
-# depends_on defers data source evaluation until the cluster exists.
+# Use module.eks outputs directly (NOT a data source with depends_on). Data
+# sources with depends_on become deferred at plan time, leaving provider
+# configs with null host/CA and producing "Kubernetes cluster unreachable:
+# no configuration has been provided" errors on helm_release refresh. The
+# module.eks output reference establishes provider→cluster dependency
+# naturally without the deferred-evaluation pitfall.
+# Refs: hashicorp/terraform-provider-helm#681, terraform-provider-kubernetes#1391
 #-------------------------------------------------------------------------------
 
-data "aws_eks_cluster" "this" {
-  name       = var.cluster_name
-  depends_on = [module.eks]
-}
-
 provider "kubernetes" {
-  host                   = data.aws_eks_cluster.this.endpoint
-  cluster_ca_certificate = base64decode(data.aws_eks_cluster.this.certificate_authority[0].data)
+  host                   = module.eks.cluster_endpoint
+  cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
 
   exec {
     api_version = "client.authentication.k8s.io/v1beta1"
@@ -106,8 +98,8 @@ provider "kubernetes" {
 
 provider "helm" {
   kubernetes {
-    host                   = data.aws_eks_cluster.this.endpoint
-    cluster_ca_certificate = base64decode(data.aws_eks_cluster.this.certificate_authority[0].data)
+    host                   = module.eks.cluster_endpoint
+    cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
 
     exec {
       api_version = "client.authentication.k8s.io/v1beta1"

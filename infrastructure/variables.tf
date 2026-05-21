@@ -55,6 +55,12 @@ variable "admin_principal_arn" {
   description = "ARN of IAM user/role for kubectl access to the EKS cluster."
 }
 
+variable "enable_edr" {
+  type        = bool
+  description = "Deploy Uptycs KSPM EDR (k8sosquery DaemonSet + kubequery Deployment). Enable for HC-COMPUTE-011 compliance; disable for environments that don't require EDR."
+  default     = false
+}
+
 #-------------------------------------------------------------------------------
 # Audit Configuration
 #-------------------------------------------------------------------------------
@@ -84,24 +90,6 @@ variable "icr_entitlement_key" {
   sensitive   = true
   default     = ""
   description = "IBM Container Registry entitlement key for pulling IVIA images (icr.io/ivia/ivia-oidc-provider). Attendees obtain from IBM."
-}
-
-variable "ivia_trial_cert" {
-  type        = string
-  description = "Filename of the IVIA trial certificate (.cer) in the infrastructure/ directory. Uploaded to Config container to activate wga, mga, and federation modules. Obtain from https://isva-trial.verify.ibm.com/ if expired."
-  default     = "ISAM-Trial-HashiCorp.cer"
-}
-
-variable "ivia_activation_code" {
-  type        = string
-  description = "IVIA trial activation code (CN from trial .cer). Extract with: openssl x509 -in <cert> -noout -subject | sed 's/.*CN=//'"
-  default     = ""
-}
-
-variable "ivia_activated" {
-  type        = bool
-  description = "Set to true after activating the IVIA trial via the LMI UI (System > Trial > Import > Save Configuration). Phase 2 deploy creates Config + slapd sidecar; after manual activation, set this to true and re-apply to deploy autoconf, WRP, and Runtime."
-  default     = false
 }
 
 #-------------------------------------------------------------------------------
@@ -145,13 +133,6 @@ variable "banking_app_mcp_image" {
 #-------------------------------------------------------------------------------
 # Simple AD (LDAP identity source for IVIA)
 #-------------------------------------------------------------------------------
-
-variable "simple_ad_admin_password" {
-  type        = string
-  sensitive   = true
-  default     = "WorkshopAdmin1!"
-  description = "Administrator password for AWS Simple AD. Used for LDAP bind and user provisioning."
-}
 
 variable "uc2_redirect_uri" {
   type        = string
