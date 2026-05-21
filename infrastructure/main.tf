@@ -320,32 +320,32 @@ module "uc1_agent" {
 # Gated by time_sleep.alb_webhook_ready (has ALB Ingress resources).
 #-------------------------------------------------------------------------------
 
-# module "uc2_app" {
-#   source = "./modules/uc2_agent"
-#
-#   vault_addr            = "http://vault.vault.svc.cluster.local:8200"
-#   vault_k8s_role        = "uc2-agent"
-#   vault_jwt_role        = "uc2-jwt"
-#   vault_db_role         = "uc2-personal-readonly"
-#   rds_address           = module.rds.address
-#   rds_port              = module.rds.port
-#   rds_db_name           = module.rds.db_name
-#   rds_cidr              = module.vpc.vpc_cidr
-#   knowledge_base_id     = module.bedrock_kb_index.knowledge_base_id
-#   region                = var.region
-#   kb_region             = var.kb_region
-#   ui_image              = var.banking_app_ui_image
-#   agent_image           = var.banking_app_agent_image
-#   mcp_image             = var.banking_app_mcp_image
-#   bedrock_model_id      = var.bedrock_model_id
-#   ivia_ingress_hostname = module.ivia.ivia_ingress_hostname
-#   ivia_service_endpoint = module.ivia.ivia_service_endpoint
-#   ivia_client_id        = "agent-uc2"
-#   ivia_client_secret    = module.ivia.ivia_client_secret
-#   tags                  = var.tags
-#
-#   depends_on = [time_sleep.alb_webhook_ready]
-# }
+module "uc2_app" {
+  source = "./modules/uc2_agent"
+
+  vault_addr            = "http://vault.vault.svc.cluster.local:8200"
+  vault_k8s_role        = "uc2-agent"
+  vault_jwt_role        = "uc2-jwt"
+  vault_db_role         = "uc2-personal-readonly"
+  rds_address           = module.rds.address
+  rds_port              = module.rds.port
+  rds_db_name           = module.rds.db_name
+  rds_cidr              = module.vpc.vpc_cidr
+  knowledge_base_id     = module.bedrock_kb_index.knowledge_base_id
+  region                = var.region
+  kb_region             = var.kb_region
+  ui_image              = var.banking_app_ui_image
+  agent_image           = var.banking_app_agent_image
+  mcp_image             = var.banking_app_mcp_image
+  bedrock_model_id      = var.bedrock_model_id
+  ivia_ingress_hostname = module.ivia.ivia_ingress_hostname
+  ivia_service_endpoint = module.ivia.ivia_service_endpoint
+  ivia_client_id        = "agent-uc2"
+  ivia_client_secret    = module.ivia.ivia_client_secret
+  tags                  = var.tags
+
+  depends_on = [time_sleep.alb_webhook_ready]
+}
 
 #-------------------------------------------------------------------------------
 # Wave 8 — Use Case 3 Agent (privileged refund writer)
@@ -354,25 +354,25 @@ module "uc1_agent" {
 # authorization endpoint), and uc2_app (banking-app namespace must exist first).
 #-------------------------------------------------------------------------------
 
-# module "uc3_agent" {
-#   source = "./modules/uc3_agent"
-#
-#   namespace          = "banking-app"
-#   vault_endpoint     = "http://vault.vault.svc.cluster.local:8200"
-#   ivia_base_url      = "https://${module.ivia.ivia_service_endpoint}:8436"
-#   ivia_client_id     = "agent-uc3"
-#   ivia_client_secret = module.ivia.ivia_client_secret
-#   ivia_external_url  = module.ivia.ivia_wrp_external_endpoint
-#   db_host            = module.rds.address
-#   db_name            = "workshop"
-#   uc3_agent_image    = var.uc3_agent_image
-#   bedrock_model_id   = var.bedrock_model_id
-#   region             = var.region
-#   rds_cidr           = module.vpc.vpc_cidr
-#   tags               = var.tags
-#
-#   depends_on = [module.vault, module.rds, module.ivia, module.uc2_app]
-# }
+module "uc3_agent" {
+  source = "./modules/uc3_agent"
+
+  namespace          = "banking-app"
+  vault_endpoint     = "http://vault.vault.svc.cluster.local:8200"
+  ivia_base_url      = "https://${module.ivia.ivia_service_endpoint}:8436"
+  ivia_client_id     = "agent-uc3"
+  ivia_client_secret = module.ivia.ivia_client_secret
+  ivia_external_url  = "http://${module.ivia.ivia_wrp_alb_hostname}"
+  db_host            = module.rds.address
+  db_name            = "workshop"
+  uc3_agent_image    = var.uc3_agent_image
+  bedrock_model_id   = var.bedrock_model_id
+  region             = var.region
+  rds_cidr           = module.vpc.vpc_cidr
+  tags               = var.tags
+
+  depends_on = [module.vault, module.rds, module.ivia, module.uc2_app]
+}
 
 #-------------------------------------------------------------------------------
 # Wave 9 — Observability (fluent-bit DaemonSet + Firehose + Glue tables)
