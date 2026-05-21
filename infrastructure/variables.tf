@@ -131,16 +131,6 @@ variable "banking_app_mcp_image" {
 }
 
 #-------------------------------------------------------------------------------
-# Simple AD (LDAP identity source for IVIA)
-#-------------------------------------------------------------------------------
-
-variable "uc2_redirect_uri" {
-  type        = string
-  default     = "http://localhost:3000/callback"
-  description = "OAuth redirect URI for UC2 banking app. Set to ALB hostname after deploy."
-}
-
-#-------------------------------------------------------------------------------
 # UC3 Agent Configuration
 # uc3_agent_image: set by attendees after ECR push (Phase 6 lab step).
 #-------------------------------------------------------------------------------

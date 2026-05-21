@@ -98,15 +98,11 @@ output "glue_database_name" {
 }
 
 #-------------------------------------------------------------------------------
-# Simple AD Outputs (consumed by configure-workshop.sh for user provisioning)
+# UC2 Banking UI Outputs (consumed by vault-configure.sh to resolve the OAuth
+# redirect URI registered with IVIA's agent-uc2 client at isva-config apply time).
 #-------------------------------------------------------------------------------
 
-# output "simple_ad_dns_ips" {
-#   description = "DNS IP addresses of the Simple AD directory. Used by IVIA for LDAP and by create-simple-ad-users.sh."
-#   value       = module.simple_ad.dns_ip_addresses
-# }
-#
-# output "simple_ad_base_dn" {
-#   description = "LDAP base DN for Simple AD user lookups (e.g. CN=Users,DC=workshop,DC=internal)."
-#   value       = module.simple_ad.base_dn
-# }
+output "banking_ui_alb_hostname" {
+  description = "Public ALB hostname for the UC2 banking UI Ingress. vault-configure.sh reads this to build uc2_redirect_uri=\"http://<hostname>/callback\" for the isva-config apply."
+  value       = module.uc2_app.banking_ui_alb_hostname
+}
