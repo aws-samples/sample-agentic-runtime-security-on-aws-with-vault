@@ -18,3 +18,19 @@ output "ivia_admin_password" {
   sensitive   = true
 }
 
+output "ivia_service_endpoint" {
+  description = "Cluster-internal Service DNS for the IVIA OIDC Provider runtime (kubernetes_service.iviaop, port 8436). Consumers prepend https:// and :8436."
+  value       = "${kubernetes_service.iviaop.metadata[0].name}.${kubernetes_namespace.verify_access.metadata[0].name}.svc.cluster.local"
+}
+
+output "ivia_client_secret" {
+  description = "IVIA OAuth client secret used by uc2_app and uc3_agent (and uc3-actor) to authenticate to IVIA token + ciba endpoints."
+  value       = random_password.ivia_oauth_client_secret.result
+  sensitive   = true
+}
+
+output "ivia_ingress_hostname" {
+  description = "ALB hostname for the IVIA browser entry. Aliased to ivia_wrp_alb_hostname — only one Ingress exists in this module."
+  value       = try(kubernetes_ingress_v1.ivia_wrp.status[0].load_balancer[0].ingress[0].hostname, "")
+}
+
