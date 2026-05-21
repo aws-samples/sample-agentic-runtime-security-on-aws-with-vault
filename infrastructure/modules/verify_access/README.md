@@ -10,7 +10,7 @@ proven happy path against EKS:
   against a MINIMAL `webseal.runtime` base_layer.yaml.
 - LMI is NOT exposed externally. Admin-only, one-time bring-up via
   `kubectl port-forward svc/iviaconfig 9443:9443` (4 manual browser steps).
-- The `workshop_layer` autoconf Job (root `main.tf`) reaches LMI via in-cluster DNS (`iviaconfig.verify-access.svc.cluster.local:9443`) on top of the base_layer config.
+- `isva_config` reaches LMI via in-cluster DNS (`iviaconfig.verify-access.svc.cluster.local:9443`).
 - WRP browser exposure via ALB Ingress (the OIDC/UC entry point).
 - HVDB hosted in a dedicated `postgresql` pod (NOT shared RDS).
 

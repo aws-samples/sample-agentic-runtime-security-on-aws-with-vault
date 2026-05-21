@@ -98,12 +98,11 @@ output "glue_database_name" {
 }
 
 #-------------------------------------------------------------------------------
-# UC2 Banking UI Outputs. Consumed by the workshop_layer autoconf Job
-# (kubernetes_job_v1.ivia_workshop_autoconf in main.tf) to substitute the
-# agent-uc2 OAuth client's redirect_uri into workshop_layer.yaml.tftpl.
+# UC2 Banking UI Outputs (consumed by vault-configure.sh to resolve the OAuth
+# redirect URI registered with IVIA's agent-uc2 client at isva-config apply time).
 #-------------------------------------------------------------------------------
 
 output "banking_ui_alb_hostname" {
-  description = "Public ALB hostname for the UC2 banking UI Ingress. Used by the workshop_layer autoconf Job to build the agent-uc2 redirect_uri (http://<hostname>/callback)."
+  description = "Public ALB hostname for the UC2 banking UI Ingress. vault-configure.sh reads this to build uc2_redirect_uri=\"http://<hostname>/callback\" for the isva-config apply."
   value       = module.uc2_app.banking_ui_alb_hostname
 }
