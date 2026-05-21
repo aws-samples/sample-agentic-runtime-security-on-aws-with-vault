@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 _vault_client = None
 
 # IVIA configuration from env vars
-IVIA_BASE_URL = os.getenv("IVIA_BASE_URL", "https://ivia.banking-app.svc.cluster.local")
+IVIA_BASE_URL = os.getenv("IVIA_BASE_URL", "https://iviaop.verify-access.svc.cluster.local:8436")
 IVIA_CLIENT_ID = os.getenv("IVIA_CLIENT_ID", "uc3-agent")
 IVIA_CLIENT_SECRET = os.getenv("IVIA_CLIENT_SECRET", "")
 IVIA_EXTERNAL_URL = os.getenv("IVIA_EXTERNAL_URL", "")
