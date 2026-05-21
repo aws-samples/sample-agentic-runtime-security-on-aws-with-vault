@@ -76,6 +76,12 @@ webseal:
     - "req_openid_config.lua"
     - "rsp_openid_config.lua"
   pdadmin:
+    users:
+    - username: "oscar"
+      password: "WorkshopUser1!"
+      dn: "cn=oscar,dc=ibm,dc=com"
+      first_name: "Oscar"
+      last_name: "Medina"
     acls:
     - name: "unauth"
       users:

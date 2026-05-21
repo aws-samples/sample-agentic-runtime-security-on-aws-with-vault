@@ -1250,24 +1250,6 @@ phase_aws_sweep() {
     step_header "Instance profiles (empty after role removal)"
     sweep_instance_profiles || true
 
-    step_header "Simple AD directories (workshop-tagged)"
-    local dirs
-    dirs=$(aws ds describe-directories --region "$REGION" \
-        --query "DirectoryDescriptions[?contains(Name,'workshop')].DirectoryId" \
-        --output text 2>/dev/null)
-    if [[ -z "$dirs" || "$dirs" == "None" ]]; then
-        print_info "Simple AD: none found"
-    else
-        for d in $dirs; do
-            echo -n "    Deleting directory $d... "
-            aws ds delete-directory --directory-id "$d" --region "$REGION" &>/dev/null \
-                && print_success "deleted" \
-                || print_warn "could not delete $d — check AWS Console"
-        done
-        print_info "Waiting 30s for directory ENIs to release..."
-        sleep 30
-    fi
-
     # Per-VPC sweeps — find all VPCs tagged or named for the workshop
     local vpcs
     vpcs=$(aws ec2 describe-vpcs --region "$REGION" \

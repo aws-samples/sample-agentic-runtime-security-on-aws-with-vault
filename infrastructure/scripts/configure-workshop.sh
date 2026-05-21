@@ -326,38 +326,25 @@ else
 fi
 
 #===============================================================================
-# STEP 5: Provision Simple AD Users (create-simple-ad-users.sh)
+# STEP 5: Verify OpenLDAP user 'oscar' seeded by IVIA autoconf
 #===============================================================================
+# User 'oscar' is seeded into the in-cluster OpenLDAP automatically by IVIA
+# autoconf (webseal.pdadmin.users in modules/verify_access/base_layer/base_layer.yaml).
+# This step verifies the seed succeeded.
 echo ""
-echo -e "${YELLOW}> Step 5: Provision Simple AD Users (Oscar, Adriana)${NC}"
+echo -e "${YELLOW}> Step 5: Verify OpenLDAP user 'oscar' seeded${NC}"
 
 if [[ "$DRY_RUN" = true ]]; then
-    print_info "[DRY-RUN] Would run: create-simple-ad-users.sh"
-    print_pass "Step 5: Simple AD users (dry-run)"
+    print_info "[DRY-RUN] Would query in-cluster OpenLDAP for cn=oscar"
+    print_pass "Step 5: OpenLDAP user check (dry-run)"
 else
-    SIMPLE_AD_HOST=""
-    SIMPLE_AD_BASE_DN=""
-    SIMPLE_AD_PASSWORD="${SIMPLE_AD_ADMIN_PASSWORD:-}"
-
-    # Resolve Simple AD DNS IP from Terraform output or AWS API
-    if command -v terraform &>/dev/null && [ -d "${PROJECT_ROOT}/infrastructure" ]; then
-        SIMPLE_AD_HOST=$(cd "${PROJECT_ROOT}/infrastructure" && terraform output -json 2>/dev/null \
-            | jq -r '.simple_ad_dns_ips.value[0] // empty' 2>/dev/null || echo "")
-        SIMPLE_AD_BASE_DN=$(cd "${PROJECT_ROOT}/infrastructure" && terraform output -json 2>/dev/null \
-            | jq -r '.simple_ad_base_dn.value // empty' 2>/dev/null || echo "")
-    fi
-
-    if [ -n "$SIMPLE_AD_HOST" ] && [ -n "$SIMPLE_AD_PASSWORD" ]; then
-        if _run_subscript "Step 5: create-simple-ad-users" \
-                "${SCRIPT_DIR}/create-simple-ad-users.sh" \
-                --ldap-host "$SIMPLE_AD_HOST" \
-                --base-dn "${SIMPLE_AD_BASE_DN:-DC=workshop,DC=internal}" \
-                --admin-password "$SIMPLE_AD_PASSWORD"; then
-            print_pass "Step 5: Simple AD users provisioned"
-        fi
+    LDAP_PW=$(kubectl get secret openldap-creds -n verify-access -o jsonpath='{.data.admin_password}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+    if [ -n "${LDAP_PW}" ] && kubectl exec -n verify-access deploy/openldap -- \
+            ldapsearch -x -H ldapi:/// -D "cn=admin,dc=ibm,dc=com" -w "${LDAP_PW}" \
+            -b "dc=ibm,dc=com" "(cn=oscar)" dn 2>/dev/null | grep -q '^dn:'; then
+        print_pass "Step 5: OpenLDAP user 'oscar' present (seeded by IVIA autoconf)"
     else
-        print_warn "Step 5: Skipping Simple AD user provisioning (SIMPLE_AD_HOST or SIMPLE_AD_ADMIN_PASSWORD not resolved)"
-        print_info "Set SIMPLE_AD_ADMIN_PASSWORD env var and re-run, or run create-simple-ad-users.sh manually"
+        print_warn "Step 5: OpenLDAP user 'oscar' NOT found — re-run terraform apply or inspect ivia-autoconf job logs"
     fi
 fi
 

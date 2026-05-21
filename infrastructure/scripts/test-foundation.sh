@@ -3,7 +3,7 @@
 # test-foundation.sh — verify the entire workshop foundation in one command
 #
 # Calls test-eks.sh, test-rds.sh, test-bedrock-kb.sh, then checks audit log
-# groups, Simple AD directory, and the region contract. Aggregates results.
+# groups, in-cluster OpenLDAP user registry, and the region contract. Aggregates results.
 #
 # Usage:
 #   ./test-foundation.sh \
@@ -39,7 +39,7 @@ while [ $# -gt 0 ]; do
             cat <<USAGE
 Usage: $0 --cluster-name <name> --knowledge-base-id <kb> [--db-instance-id <id>] [--region <region>]
 
-Verifies foundation: EKS, RDS, Bedrock KB, audit log groups, Simple AD, region contract.
+Verifies foundation: EKS, RDS, Bedrock KB, audit log groups, in-cluster OpenLDAP, region contract.
 
 Auto-derived:
   --db-instance-id  defaults to \${cluster_name}-pg
@@ -170,73 +170,40 @@ done
 [ "$audit_ok" = false ] && failures=$((failures + 1))
 
 #-------------------------------------------------------------------------------
-# Simple AD — verify workshop.internal directory is Active
+# In-cluster OpenLDAP (IVIA user registry) — verify reachable + oscar exists
 #-------------------------------------------------------------------------------
 echo
 echo -e "${BLUE}===============================================================================${NC}"
-echo -e "${BLUE}  Simple AD${NC}"
+echo -e "${BLUE}  OpenLDAP (IVIA user registry)${NC}"
 echo -e "${BLUE}===============================================================================${NC}"
 
-ad_stage=$(aws ds describe-directories \
-    --query 'DirectoryDescriptions[?Name==`workshop.internal`].Stage | [0]' \
-    --output text --region "${REGION}" 2>/dev/null || echo "NONE")
+if kubectl get deploy openldap -n verify-access &>/dev/null; then
+    if kubectl wait --for=condition=Available deploy/openldap -n verify-access --timeout=60s &>/dev/null; then
+        print_pass "OpenLDAP deployment Available in verify-access namespace"
+    else
+        print_fail "OpenLDAP deployment not Available" \
+            "Run: kubectl describe deploy/openldap -n verify-access"
+        failures=$((failures + 1))
+    fi
 
-if [ "${ad_stage}" = "Active" ]; then
-    ad_id=$(aws ds describe-directories \
-        --query 'DirectoryDescriptions[?Name==`workshop.internal`].DirectoryId | [0]' \
-        --output text --region "${REGION}" 2>/dev/null || echo "")
-    print_pass "Simple AD directory workshop.internal: Active (${ad_id})"
-
-    ad_dns_ip=$(aws ds describe-directories \
-        --query 'DirectoryDescriptions[?Name==`workshop.internal`].DnsIpAddrs[0] | [0]' \
-        --output text --region "${REGION}" 2>/dev/null || echo "")
-
-    ad_password=$(grep -E '^simple_ad_admin_password\s*=' "${REPO_ROOT}/infrastructure/terraform.tfvars" 2>/dev/null \
-        | sed 's/^[^"]*"\([^"]*\)".*/\1/' || echo "")
-    ad_bind_dn="CN=Administrator,CN=Users,DC=workshop,DC=internal"
-
-    if [ -n "${ad_dns_ip}" ] && [ "${ad_dns_ip}" != "None" ] && [ -n "${ad_password}" ]; then
-        verify_pod="verify-ad-ldap-$$"
-        kubectl delete pod "${verify_pod}" -n default --ignore-not-found --wait=true &>/dev/null
-        kubectl run "${verify_pod}" -n default --restart=Never \
-            --image=alpine:3 \
-            --command -- sh -c "apk add --no-cache openldap-clients >/dev/null 2>&1 && echo 'LDAP_CONNECT:OK' && \
-                for user in oscar adriana; do \
-                    if ldapsearch -x -H ldap://${ad_dns_ip} -D '${ad_bind_dn}' -w '${ad_password}' \
-                        -b 'CN=Users,DC=workshop,DC=internal' \
-                        \"(sAMAccountName=\${user})\" dn 2>/dev/null | grep -q '^dn:'; then \
-                        echo \"USER_FOUND:\${user}\"; \
-                    else \
-                        echo \"USER_MISSING:\${user}\"; \
-                    fi; \
-                done" &>/dev/null
-        kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/"${verify_pod}" -n default --timeout=120s &>/dev/null || true
-        ldap_result=$(kubectl logs "${verify_pod}" -n default 2>/dev/null || echo "LDAP_CONNECT:FAIL")
-        kubectl delete pod "${verify_pod}" -n default --ignore-not-found &>/dev/null
-
-        if echo "${ldap_result}" | grep -q 'LDAP_CONNECT:OK'; then
-            print_pass "LDAP connectivity from cluster to Simple AD (${ad_dns_ip}:389)"
+    ldap_pw=$(kubectl get secret openldap-creds -n verify-access -o jsonpath='{.data.admin_password}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+    if [ -n "${ldap_pw}" ]; then
+        oscar_dn=$(kubectl exec -n verify-access deploy/openldap -- \
+            ldapsearch -x -H ldapi:/// -D "cn=admin,dc=ibm,dc=com" -w "${ldap_pw}" \
+            -b "dc=ibm,dc=com" "(cn=oscar)" dn 2>/dev/null | grep '^dn:' | head -1 || echo "")
+        if [ -n "${oscar_dn}" ]; then
+            print_pass "OpenLDAP user 'oscar' exists (${oscar_dn#dn: })"
         else
-            print_fail "LDAP connectivity to Simple AD" \
-                "Cannot reach ${ad_dns_ip}:389 from cluster. Check security group rule eks_to_simple_ad_ldap."
+            print_fail "OpenLDAP user 'oscar' not found" \
+                "Re-run IVIA autoconf job (oscar is seeded via webseal.pdadmin.users in base_layer.yaml)."
             failures=$((failures + 1))
         fi
-
-        for ad_user in oscar adriana; do
-            if echo "${ldap_result}" | grep -q "USER_FOUND:${ad_user}"; then
-                print_pass "Simple AD user '${ad_user}' exists"
-            else
-                print_fail "Simple AD user '${ad_user}' not found" \
-                    "Run create-simple-ad-users.sh --ldap-host ${ad_dns_ip} --admin-password <password>"
-                failures=$((failures + 1))
-            fi
-        done
     else
-        print_warn "Simple AD DNS IP not found — skipping LDAP and user checks"
+        print_warn "openldap-creds admin_password not readable — skipping user check"
     fi
 else
-    print_fail "Simple AD directory workshop.internal" \
-        "Expected Active, got '${ad_stage}'. Check: aws ds describe-directories --region ${REGION}"
+    print_fail "OpenLDAP deployment not found in verify-access namespace" \
+        "Foundation deploy must include the verify_access module."
     failures=$((failures + 1))
 fi
 

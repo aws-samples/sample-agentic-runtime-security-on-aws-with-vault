@@ -339,7 +339,7 @@ fi
 #
 # This check validates that:
 #   - IVIA agent-uc2 client has password grant type enabled
-#   - IVIA can authenticate oscar against Simple AD (LDAP)
+#   - IVIA can authenticate oscar against the in-cluster OpenLDAP user registry
 #   - The token endpoint returns a valid ROPC response
 #-------------------------------------------------------------------------------
 ivia_endpoint=$(kubectl get ingress -n verify-access isvaop \
@@ -357,7 +357,7 @@ if [ -n "${ivia_endpoint}" ] && [ -n "${client_secret}" ]; then
     else
         error_desc=$(echo "${token_response}" | jq -r '.error_description // .error // "unknown"' 2>/dev/null || echo "parse failed")
         print_fail "ROPC token grant failed" \
-            "IVIA did not return access_token — error: ${error_desc}. Full response: ${token_response:0:300}. Verify IVIA agent-uc2 client has password grant_type and Simple AD is reachable."
+            "IVIA did not return access_token — error: ${error_desc}. Full response: ${token_response:0:300}. Verify IVIA agent-uc2 client has password grant_type and the OpenLDAP user registry is reachable."
     fi
 elif [ -z "${ivia_endpoint}" ]; then
     print_warn "ROPC token grant check skipped — IVIA ALB hostname not resolved (check isvaop Ingress)"
