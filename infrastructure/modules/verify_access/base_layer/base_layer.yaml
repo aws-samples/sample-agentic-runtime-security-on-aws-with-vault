@@ -1,10 +1,7 @@
 container:
-  k8s_deployments:
-    namespace: verify-access
-    deployments:
-    - iviawrprp1
-    - iviaruntime
-    - iviadsc
+  # k8s_deployments removed — SDK 0.3.34 has a bug iterating this dict where it
+  # tries to patch a deployment literally named "namespace". We don't need
+  # autoconf to restart pods; terraform/k8s handle that on ConfigMap change.
   management_authorization:
     authorization_enforcement: True
     roles:

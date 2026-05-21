@@ -8,9 +8,10 @@ proven happy path against EKS:
 - Pinned image tags — see Pinned Versions below.
 - In-cluster `kubernetes_job_v1` running `python -m ibmvia_autoconf 0.3.34`
   against a MINIMAL `webseal.runtime` base_layer.yaml.
-- LMI external exposure via NLB Service (TCP passthrough on 9443) for
-  `isva_config` Mastercard/restapi provider consumption.
-- WRP browser exposure via existing ALB Ingress.
+- LMI is NOT exposed externally. Admin-only, one-time bring-up via
+  `kubectl port-forward svc/iviaconfig 9443:9443` (4 manual browser steps).
+- `isva_config` reaches LMI via in-cluster DNS (`iviaconfig.verify-access.svc.cluster.local:9443`).
+- WRP browser exposure via ALB Ingress (the OIDC/UC entry point).
 - HVDB hosted in a dedicated `postgresql` pod (NOT shared RDS).
 
 ## Pinned versions (do not change without re-validating against sibling)
@@ -43,11 +44,9 @@ PVCs (5, all gp2 RWO 50M):
 (postgresql), `iviaconfig` (LMI).
 
 Services:
-- ClusterIP per pod (in-cluster traffic).
-- `iviaconfig-nlb` LoadBalancer (NLB, internet-facing, TCP passthrough
-  on 9443 — for `isva_config` REST API reachability).
+- ClusterIP per pod (in-cluster traffic only).
 - `ivia-wrp` Ingress (ALB, HTTP listener → HTTPS:9443 backend — for
-  browser-facing CIBA flows).
+  browser-facing CIBA flows). This is the ONLY internet-facing IVIA endpoint.
 
 ## Inputs
 
@@ -57,7 +56,6 @@ Services:
 | `cluster_name` | EKS cluster name (tagging) |
 | `icr_entitlement_key` | ICR pull credential (builds `dockerlogin` Secret) |
 | `node_security_group_id` | EKS node SG (target for cross-node TCP/636 rule) |
-| `lmi_allowed_cidrs` | CIDR allowlist for inbound NLB :9443. Default `["0.0.0.0/0"]`. |
 | `tags` | AWS resource tags |
 
 ## Outputs
@@ -65,10 +63,8 @@ Services:
 | Output | Purpose |
 |---|---|
 | `namespace` | `verify-access` |
-| `ivia_lmi_nlb_hostname` | NLB hostname for `isva_config.ivia_service_endpoint` |
-| `ivia_wrp_alb_hostname` | ALB hostname for browser flows |
+| `ivia_wrp_alb_hostname` | ALB hostname for browser flows (OIDC entry point) |
 | `ivia_admin_password` | Generated LMI admin password (sensitive) |
-| `ivia_nlb_ready` | 90s `time_sleep` gate to mitigate empty-hostname race |
 
 ## Apply
 
@@ -100,7 +96,7 @@ All four fields MUST be non-null.
 | `postgresql CrashLoopBackOff: cannot find name for user ID 70` | securityContext mis-set | `runAsUser=26 fsGroup=26` (NOT upstream's 70/85). (RESEARCH Pitfall 4) |
 | WRP returns 502 / `WGAWA0963E` for minutes after autoconf | Stale snapshot backoff | `kubectl rollout restart deploy/iviawrprp1 -n verify-access`. (RESEARCH Pitfall 6) |
 | cert/lua `Failed to upload … already exists` in Job logs | Cert imports + lua transforms are not idempotent | Expected on re-runs. Non-fatal; cross-cycle convergence. (RESEARCH Pitfall 3) |
-| First `terraform apply` fails because `isva_config` can't resolve NLB | NLB hostname empty on first apply | Re-run apply; the `time_sleep.ivia_nlb_ready` (90s) usually clears it. |
+| autoconf Job fails on first apply with "trust store empty" / "DB cannot be contacted" | LMI bring-up not done yet | Operator must complete the 4 manual LMI steps before terraform apply reaches the Job. See `workshop/content/40-platform/42-deploy-verify-access/` for the port-forward + step-by-step procedure. |
 
 ## Phase 7 plan references
 

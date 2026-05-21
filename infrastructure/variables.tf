@@ -159,13 +159,3 @@ variable "tags" {
   description = "Tags to apply to all resources."
   default     = {}
 }
-
-#-------------------------------------------------------------------------------
-# IVIA LMI NLB CIDR Allowlist
-#-------------------------------------------------------------------------------
-
-variable "lmi_allowed_cidrs" {
-  type        = list(string)
-  default     = ["0.0.0.0/0"]
-  description = "CIDR allowlist for inbound NLB on TCP/9443 (LMI). Passed to module.ivia. Default open for workshop; attendees may lock to their public IP via terraform.tfvars override."
-}

@@ -19,12 +19,6 @@ variable "node_security_group_id" {
   description = "EKS worker node shared security group ID. Used to add a cross-node TCP/636 (LDAPS) self-source ingress rule so pdconfig on iviaruntime can reach openldap pod across nodes."
 }
 
-variable "lmi_allowed_cidrs" {
-  type        = list(string)
-  default     = ["0.0.0.0/0"]
-  description = "CIDR allowlist for inbound NLB on TCP/9443 (LMI). Default open for workshop; attendees may lock to their public IP via tfvars override (e.g. [\"203.0.113.42/32\"])."
-}
-
 variable "tags" {
   type        = map(string)
   default     = {}

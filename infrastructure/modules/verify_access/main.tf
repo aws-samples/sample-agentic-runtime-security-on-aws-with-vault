@@ -10,8 +10,9 @@
 #     OIDC Provider 25.10, OpenLDAP 10.0.6.0).
 #   - In-cluster kubernetes_job_v1 running python -m ibmvia_autoconf 0.3.34
 #     against a MINIMAL webseal.runtime base_layer.yaml.
-#   - LMI external exposure via NLB Service (TCP passthrough on 9443).
-#   - WRP browser exposure via existing ALB Ingress (separate path).
+#   - LMI is NOT exposed externally — admin-only, one-time bring-up via
+#     `kubectl port-forward svc/iviaconfig 9443:9443` (4 manual browser steps).
+#   - WRP browser exposure via ALB Ingress (the OIDC/UC entry point).
 #
 # Phase 7 plan: .planning/phases/07-ivia-deployment-refactor/
 # Sibling reference: ~/git-repos/verify-access-container-deployment/phase-a/
@@ -122,6 +123,13 @@ resource "kubernetes_role" "ivia_autoconf" {
     verbs      = ["get", "list"]
   }
   rule {
+    # Pods list/get — autoconf's _kube_rollout_restart enumerates pods before
+    # patching the deployment template to trigger a rollout.
+    api_groups = [""]
+    resources  = ["pods"]
+    verbs      = ["get", "list"]
+  }
+  rule {
     api_groups = ["apps"]
     resources  = ["deployments"]
     verbs      = ["get", "list", "patch"]
@@ -193,10 +201,8 @@ resource "random_password" "ivia_admin_pwd" {
   special = false
 }
 
-resource "random_password" "cfgsvc_pwd" {
-  length  = 24
-  special = false
-}
+# cfgsvc service account uses the SAME password as admin — matches sibling-repo
+# parity ("1 password: Passw0rd"). configreader.cfgsvcpw references this directly.
 
 resource "random_password" "openldap_admin_pwd" {
   length  = 24
@@ -287,7 +293,7 @@ resource "kubernetes_secret" "configreader" {
   }
   type = "Opaque"
   data = {
-    cfgsvcpw = random_password.cfgsvc_pwd.result
+    cfgsvcpw = random_password.ivia_admin_pwd.result
   }
 }
 
@@ -731,53 +737,6 @@ resource "kubernetes_service" "iviaconfig" {
 }
 
 #-------------------------------------------------------------------------------
-# iviaconfig-nlb — external NLB on TCP/9443 for the LMI. TLS passthrough; the
-# pod serves its own self-signed cert. Provisioned by the AWS Load Balancer
-# Controller (already installed via modules/addons). isva_config's restapi
-# provider hits this hostname; that provider keeps insecure = true.
-#
-# Sibling reference: phase-a/iviaconfig-nlb.yaml. The autoconf tool restarts
-# LMI mid-run (license upload, FIPS, cert keystore changes); NLB service-level
-# routing survives those restarts where `kubectl port-forward` does not.
-#
-# load_balancer_source_ranges defaults to ["0.0.0.0/0"] (workshop); attendees
-# may lock to their public IP via terraform.tfvars: lmi_allowed_cidrs = ["x.x.x.x/32"].
-#-------------------------------------------------------------------------------
-
-resource "kubernetes_service" "iviaconfig_nlb" {
-  metadata {
-    name      = "iviaconfig-nlb"
-    namespace = kubernetes_namespace.verify_access.metadata[0].name
-    labels    = merge(local.common_labels, { app = "iviaconfig" })
-    annotations = {
-      "service.beta.kubernetes.io/aws-load-balancer-type"                 = "external"
-      "service.beta.kubernetes.io/aws-load-balancer-nlb-target-type"      = "ip"
-      "service.beta.kubernetes.io/aws-load-balancer-scheme"               = "internet-facing"
-      "service.beta.kubernetes.io/aws-load-balancer-attributes"           = "load_balancing.cross_zone.enabled=true"
-      "service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol" = "tcp"
-    }
-  }
-  spec {
-    type     = "LoadBalancer"
-    selector = { app = "iviaconfig" }
-
-    port {
-      name        = "lmi"
-      port        = 9443
-      target_port = 9443
-      protocol    = "TCP"
-    }
-
-    load_balancer_source_ranges = var.lmi_allowed_cidrs
-  }
-
-  # Wait for the NLB to provision so downstream consumers (isva_config) get a
-  # non-empty hostname. The Service resource lacks `wait_for_load_balancer`
-  # (only Ingress has it); accept eventual consistency. Plan 07-08 wires
-  # module.isva_config to depend on a time_sleep gate if needed.
-}
-
-#-------------------------------------------------------------------------------
 # iviaop-config ConfigMap. 8 files mounted at /var/isvaop/config in the iviaop
 # pod. storage.yml is templated to substitute the postgresql password (CONTEXT R2
 # — sidesteps the chicken-and-egg "iviaop boots before autoconf publishes the
@@ -797,10 +756,11 @@ resource "kubernetes_config_map" "iviaop_config" {
     "storage.yml" = templatefile("${path.module}/iviaop-config/storage.yml", {
       postgres_password = random_password.postgresql_pwd.result
     })
-    "isvaop.key"   = file("${path.module}/iviaop-config/isvaop.key")
-    "isvaop.pem"   = file("${path.module}/iviaop-config/isvaop.pem")
-    "isvawrp.pem"  = file("${path.module}/iviaop-config/isvawrp.pem")
-    "postgres.crt" = file("${path.module}/iviaop-config/postgres.crt")
+    "isvaop.key"  = file("${path.module}/iviaop-config/isvaop.key")
+    "isvaop.pem"  = file("${path.module}/iviaop-config/isvaop.pem")
+    "isvawrp.pem" = file("${path.module}/iviaop-config/isvawrp.pem")
+    # Dynamic — must match the cert the postgresql pod serves (postgresql-keys.server.pem)
+    "postgres.crt" = tls_self_signed_cert.postgresql.cert_pem
   }
   binary_data = {
     "templates.zip" = filebase64("${path.module}/iviaop-config/templates.zip")
@@ -814,6 +774,10 @@ resource "kubernetes_config_map" "iviaop_config" {
 #-------------------------------------------------------------------------------
 
 resource "kubernetes_deployment" "iviadsc" {
+  # Cannot reach Ready until autoconf creates the DSC instance (post-LMI bring-up).
+  # Sibling phase-a/03-ivia-deploy.sh uses `kubectl apply` (no wait) for this reason.
+  wait_for_rollout = false
+
   metadata {
     name      = "iviadsc"
     namespace = kubernetes_namespace.verify_access.metadata[0].name
@@ -930,6 +894,9 @@ resource "kubernetes_service" "iviadsc" {
 #-------------------------------------------------------------------------------
 
 resource "kubernetes_deployment" "iviaop" {
+  # Cannot reach Ready until autoconf wires DB config + LDAP (post-LMI bring-up).
+  wait_for_rollout = false
+
   metadata {
     name      = "iviaop"
     namespace = kubernetes_namespace.verify_access.metadata[0].name
@@ -1015,6 +982,9 @@ resource "kubernetes_service" "iviaop" {
 #-------------------------------------------------------------------------------
 
 resource "kubernetes_deployment" "iviaruntime" {
+  # Cannot reach Ready until cfgsvc password sync + LMI snapshot publish.
+  wait_for_rollout = false
+
   metadata {
     name      = "iviaruntime"
     namespace = kubernetes_namespace.verify_access.metadata[0].name
@@ -1129,6 +1099,9 @@ resource "kubernetes_service" "iviaruntime" {
 #-------------------------------------------------------------------------------
 
 resource "kubernetes_deployment" "iviawrprp1" {
+  # Cannot reach Ready until autoconf creates the rp1 reverse-proxy instance.
+  wait_for_rollout = false
+
   metadata {
     name      = "iviawrprp1"
     namespace = kubernetes_namespace.verify_access.metadata[0].name
@@ -1290,7 +1263,7 @@ resource "kubernetes_config_map" "base_layer" {
     "ISAM-Trial-HashiCorp.cer" = file("${path.module}/base_layer/ISAM-Trial-HashiCorp.cer")
     "isvaop.pem"               = file("${path.module}/base_layer/isvaop.pem")
     "ldap.crt"                 = file("${path.module}/base_layer/ldap.crt")
-    "postgres.crt"             = file("${path.module}/base_layer/postgres.crt")
+    "postgres.crt"             = tls_self_signed_cert.postgresql.cert_pem
     "req_openid_config.lua"    = file("${path.module}/base_layer/req_openid_config.lua")
     "rsp_openid_config.lua"    = file("${path.module}/base_layer/rsp_openid_config.lua")
   }
@@ -1356,16 +1329,18 @@ resource "kubernetes_job_v1" "ivia_autoconf" {
   }
 
   spec {
-    backoff_limit              = 2
+    # DEBUG: backoff_limit=0 + restart_policy=Never keeps failed pod around for inspection.
+    # TODO: revert to backoff_limit=2 + restart_policy=OnFailure once autoconf is stable.
+    backoff_limit              = 0
     active_deadline_seconds    = 1800
-    ttl_seconds_after_finished = "300"
+    ttl_seconds_after_finished = "86400"
 
     template {
       metadata {
         labels = { "app.kubernetes.io/name" = "ivia-autoconf" }
       }
       spec {
-        restart_policy       = "OnFailure"
+        restart_policy       = "Never"
         service_account_name = kubernetes_service_account.ivia_autoconf.metadata[0].name
 
         image_pull_secrets {
@@ -1415,7 +1390,7 @@ resource "kubernetes_job_v1" "ivia_autoconf" {
           command = ["/bin/sh", "-c"]
           args = [<<-EOSH
             set -e
-            pip install --quiet ibmvia_autoconf==0.3.34 pyivia==0.2.44
+            pip install --quiet ibmvia_autoconf==0.3.34 pyivia==0.2.44 kubernetes==31.0.0
             cd /base_layer
             IVIA_CONFIG_YAML=base_layer.yaml \
             IVIA_CONFIG_BASE=/base_layer \
@@ -1477,18 +1452,5 @@ resource "kubernetes_job_v1" "ivia_autoconf" {
     kubernetes_config_map.base_layer,
     kubernetes_secret.base_layer_p12,
   ]
-}
-
-#-------------------------------------------------------------------------------
-# NLB hostname race mitigation. kubernetes_service does not support
-# wait_for_load_balancer (only kubernetes_ingress_v1 does). Give the AWS LBC
-# ~90s to provision the listener and propagate the hostname before any
-# downstream consumer (isva_config) tries to construct a URL against it.
-# RESEARCH Pitfall 8.
-#-------------------------------------------------------------------------------
-
-resource "time_sleep" "ivia_nlb_ready" {
-  depends_on      = [kubernetes_service.iviaconfig_nlb]
-  create_duration = "90s"
 }
 

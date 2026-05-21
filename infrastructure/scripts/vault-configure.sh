@@ -400,25 +400,18 @@ phase_ivia_verify() {
   fi
   ok "${running} IVIA pod(s) Running"
 
-  # Discover NLB hostname from root state (CONTEXT D3 + R/D3) — used by
-  # isva-config sub-apply as ivia_service_endpoint.
-  info "Reading ivia_lmi_nlb_hostname from root terraform output..."
-  local IVIA_LMI_NLB_HOSTNAME
-  IVIA_LMI_NLB_HOSTNAME=$(cd "${REPO_ROOT}/infrastructure" \
-    && terraform output -raw ivia_lmi_nlb_hostname 2>/dev/null || echo "")
-  if [[ -z "${IVIA_LMI_NLB_HOSTNAME}" ]]; then
-    fail "Could not read ivia_lmi_nlb_hostname from root terraform output. Has module.ivia applied successfully?"
-    record "ivia_verify" "FAIL"
-    return 1
-  fi
-  ok "IVIA LMI NLB hostname: ${IVIA_LMI_NLB_HOSTNAME}"
+  # LMI is reachable in-cluster via the iviaconfig ClusterIP Service.
+  # The isva-config sub-apply runs from a pod (or kubectl exec context) and
+  # uses this DNS name. No NLB; LMI is not exposed externally.
+  local IVIA_LMI_ENDPOINT="iviaconfig.verify-access.svc.cluster.local"
+  ok "IVIA LMI endpoint (in-cluster): ${IVIA_LMI_ENDPOINT}:9443"
 
   # Write isva-config/terraform.tfvars (scaffolded to match VAULT_CONFIG_DIR pattern).
   info "Writing isva-config/terraform.tfvars..."
   mkdir -p "${ISVA_CONFIG_DIR}"
   cat > "${ISVA_CONFIG_DIR}/terraform.tfvars" <<TFVARS
 region                = "${REGION}"
-ivia_service_endpoint = "${IVIA_LMI_NLB_HOSTNAME}"
+ivia_service_endpoint = "${IVIA_LMI_ENDPOINT}"
 TFVARS
   chmod 600 "${ISVA_CONFIG_DIR}/terraform.tfvars"
   ok "isva-config/terraform.tfvars written (mode 600)"

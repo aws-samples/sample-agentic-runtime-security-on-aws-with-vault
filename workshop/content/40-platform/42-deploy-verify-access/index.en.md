@@ -93,64 +93,76 @@ isvaop-deployment-<hash>         1/1     Running   0          12m
 If `ivia-runtime` or `ivia-wrp` pods fail to start with `CrashLoopBackOff`, check whether `ivia-config` is Running. Runtime and WRP cannot download their configuration snapshot until Config's LMI is available. The autoconf Job also requires Config to be ready before it can publish the initial snapshot.
 :::
 
-## Step 2 — Activate the IVIA trial license
+## Step 2 — Wait for the autoconf Job to complete
 
-IVIA locks all management API endpoints until the trial license is activated through the LMI web UI. This is a one-time manual step that cannot be automated via the REST API.
+The `ibmvia_autoconf` SDK provisions IVIA **fully unattended** via the LMI REST
+API — no browser, no port-forward, no manual clicks required. It accepts the
+SLA, uploads the trial license, sets the cfgsvc service-account password,
+configures the runtime database + DSC + reverse-proxy + junctions + ACLs +
+OIDC LUA transforms, and publishes the configuration snapshot.
 
-First, wait for the Config container to be fully ready (both containers Running):
-
-```bash
-kubectl wait --for=condition=Ready pod \
-  -l app.kubernetes.io/name=ivia-config \
-  -n verify-access --timeout=300s
-```
-
-Verify both containers are ready (should show `2/2`):
+Wait for the Job to complete (typically 4-6 minutes):
 
 ```bash
-kubectl get pods -n verify-access -l app.kubernetes.io/name=ivia-config
+kubectl wait --for=condition=complete job \
+  -l app.kubernetes.io/name=ivia-autoconf \
+  -n verify-access --timeout=10m
 ```
 
-Port-forward to the Config container's LMI:
-
-```bash
-kubectl port-forward -n verify-access svc/iviaconfig 9443:9443
-```
-
-Open `https://localhost:9443` in your browser and accept the self-signed certificate warning.
-
-Log in with the admin credentials:
-
-```bash
-kubectl get secret ivia-admin -n verify-access \
-  -o jsonpath='{.data.password}' | base64 -d; echo
-```
-
-- **Username:** `admin`
-- **Password:** (output from the command above)
-
-Complete these steps in the LMI:
-
-1. **Accept the Service Level Agreement** when prompted
-2. Navigate to **System > Trial > Import**
-3. Import your `.cer` trial license file
-4. Click **Save Configuration** — wait ~10s for reload
-5. Click **Publish Configuration** (top banner or System menu) — this publishes the configuration snapshot to the `/shared_volume` endpoint that the runtime container polls. Without this step, the runtime cannot download its snapshot and pdmgrd will never start.
-
-After activation, the Autoconf Job will detect the activated modules and proceed with the remaining configuration steps (HVDB, runtime, federated directory, WRP, junctions, ACLs). Monitor its progress:
+Tail the log if you want to watch the progression:
 
 ```bash
 kubectl logs -n verify-access -l app.kubernetes.io/name=ivia-autoconf -f
 ```
 
-Wait for the final line:
+After the Job completes, the four deferred IVIA pods (`iviaruntime`,
+`iviadsc`, `iviaop`, `iviawrprp1`) download the snapshot from the LMI and
+transition to `1/1 Ready` within ~60 seconds. Verify:
 
-```
-[autoconf] Configuration complete (18 steps)
+```bash
+kubectl get pods -n verify-access
 ```
 
-:::alert{header="Autoconf retries automatically" type="info"}
-The Autoconf Job has a backoff limit of 10 retries. If you activate the trial while the job is in `CrashLoopBackOff`, it will pick up the activation on its next retry and complete successfully. No need to manually restart the job.
+All seven IVIA pods should be `1/1 Running` and `ivia-autoconf-<hash>` should
+be `Completed`.
+
+:::alert{header="If autoconf fails" type="warning"}
+The Job spec sets `backoff_limit=0` and `restart_policy=Never`, so a failed pod
+sticks around for inspection rather than retrying with backoff. Grab the full
+log:
+
+```bash
+kubectl logs -n verify-access <autoconf-pod-name> -c autoconf
+```
+
+Look at the API FAILURE SUMMARY at the bottom of the output. To retry, remove
+the failed Job from terraform state and from the cluster, then re-run
+`terraform apply`:
+
+```bash
+terraform state rm 'module.ivia.kubernetes_job_v1.ivia_autoconf'
+kubectl delete job -n verify-access <autoconf-job-name>
+terraform apply
+```
+:::
+
+:::collapsible{header="When would I ever need to access the LMI manually?"}
+The LMI is intentionally **not exposed externally** — it's an admin surface that
+should never reach the public internet. If you're debugging an autoconf failure
+or want to inspect the appliance state, you can port-forward to it:
+
+```bash
+kubectl port-forward -n verify-access svc/iviaconfig 9443:9443
+```
+
+Then open `https://localhost:9443` and log in as `admin` with the password from:
+
+```bash
+kubectl get secret iviaadmin -n verify-access \
+  -o jsonpath='{.data.adminpw}' | base64 -d; echo
+```
+
+In normal workshop deployment you will never need to do this.
 :::
 
 ## Step 3 — Check the WRP ALB Ingress

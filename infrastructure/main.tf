@@ -278,7 +278,6 @@ module "ivia" {
   cluster_name           = module.eks.cluster_name
   icr_entitlement_key    = var.icr_entitlement_key
   node_security_group_id = module.eks.node_security_group_id
-  lmi_allowed_cidrs      = var.lmi_allowed_cidrs
   tags                   = var.tags
 
   depends_on = [time_sleep.alb_webhook_ready]
