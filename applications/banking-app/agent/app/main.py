@@ -109,9 +109,11 @@ async def chat(request: Request, body: ChatRequest):
     # Set JWT in request context for tool calls
     set_request_jwt(jwt)
 
-    # Refresh Bedrock STS session before each request (OBJ-2: no standing creds)
-    if _vault_client and _vault_client.is_authenticated():
-        _agent = build_uc2_agent(vault_client=_vault_client)
+    # No per-request rebuild needed: the agent's Bedrock session uses
+    # RefreshableCredentials, so botocore transparently re-mints the Vault STS
+    # lease (re-logging into Vault if the pod token expired) as it nears expiry.
+    # This replaces the old rebuild that was silently skipped once the Vault
+    # token aged out, leaving the agent with expired STS creds (OBJ-2).
 
     message = body.message
 

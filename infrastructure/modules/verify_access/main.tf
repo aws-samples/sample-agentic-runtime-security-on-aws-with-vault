@@ -765,13 +765,16 @@ resource "kubernetes_config_map" "iviaop_config" {
     labels    = local.common_labels
   }
   data = {
+    # provider.yml ships with a placeholder issuer/base_url. The real values are
+    # the ivia-wrp (login) ALB hostname, which only exists after this module's
+    # Ingress reconciles — and this ConfigMap is created before that. The root
+    # module patches the provider.yml key with the real ALB issuer via
+    # kubernetes_config_map_v1_data.iviaop_clients_patch + an iviaop rollout
+    # (same indirection as clients.yml). IVIAOP rejects http redirect_uris for
+    # non-localhost, so the patched value is always https://<alb-host>.
     "provider.yml" = templatefile("${path.module}/iviaop-config/provider.yml.tftpl", {
-      # Public OIDC issuer + base_url must match the ALB hostname that
-      # browser redirects actually reach. Hard-coded `iamlab.ibm.com` (IBM
-      # training default) is unresolvable from attendee browsers.
-      # Future: replace with stable DNS — see .planning/phases/08-stable-public-dns/.
-      ivia_public_url    = "http://${kubernetes_ingress_v1.ivia_wrp.status[0].load_balancer[0].ingress[0].hostname}/isvaop"
-      ivia_public_issuer = "http://${kubernetes_ingress_v1.ivia_wrp.status[0].load_balancer[0].ingress[0].hostname}"
+      ivia_public_url    = "https://issuer-patched-at-root.invalid/isvaop"
+      ivia_public_issuer = "https://issuer-patched-at-root.invalid"
     })
     "rules.yaml"        = file("${path.module}/iviaop-config/rules.yaml")
     "accesspolicy.yaml" = file("${path.module}/iviaop-config/accesspolicy.yaml")
@@ -1260,7 +1263,9 @@ resource "kubernetes_ingress_v1" "ivia_wrp" {
     annotations = {
       "alb.ingress.kubernetes.io/scheme"               = "internet-facing"
       "alb.ingress.kubernetes.io/target-type"          = "ip"
-      "alb.ingress.kubernetes.io/listen-ports"         = "[{\"HTTP\":80}]"
+      "alb.ingress.kubernetes.io/listen-ports"         = "[{\"HTTP\":80},{\"HTTPS\":443}]"
+      "alb.ingress.kubernetes.io/certificate-arn"      = var.tls_certificate_arn
+      "alb.ingress.kubernetes.io/ssl-redirect"         = "443"
       "alb.ingress.kubernetes.io/backend-protocol"     = "HTTPS"
       "alb.ingress.kubernetes.io/healthcheck-protocol" = "HTTPS"
       "alb.ingress.kubernetes.io/healthcheck-port"     = "9443"

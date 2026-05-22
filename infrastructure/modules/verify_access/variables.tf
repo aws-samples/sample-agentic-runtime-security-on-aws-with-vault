@@ -24,3 +24,8 @@ variable "tags" {
   default     = {}
   description = "Common tags applied to AWS resources created by this module (the SG rule)."
 }
+
+variable "tls_certificate_arn" {
+  type        = string
+  description = "Self-signed ACM cert ARN (wildcard *.<region>.elb.amazonaws.com) attached to the WRP ALB HTTPS:443 listener. provider.yml issuer/base_url are patched to the real ALB hostname at the root module post-apply."
+}

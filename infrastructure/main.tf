@@ -51,6 +51,64 @@ module "ecr" {
 }
 
 #-------------------------------------------------------------------------------
+# Wave 0 — TLS (self-signed cert for the browser-facing ALB HTTPS listeners)
+#
+# This is an ephemeral, self-contained workshop: every attendee runs in their
+# own isolated AWS account with no custom domain and no shared/central
+# dependency. The browser entry points are the raw ALB DNS names
+# (k8s-...<region>.elb.amazonaws.com), which only exist post-apply, so a
+# publicly-trusted ACM/Route53 cert (which requires a delegated domain) is not
+# an option. Instead we mint a self-signed cert covering the ALB wildcard and
+# import it into ACM so the ALB HTTPS:443 listener has a cert to serve. The
+# attendee accepts the browser "not trusted" prompt once per host — acceptable
+# for a throwaway lab. IVIAOP requires https (not http) redirect_uris for
+# non-localhost hosts, which this satisfies. NOT Vault PKI, NOT a public cert.
+#-------------------------------------------------------------------------------
+
+resource "tls_private_key" "workshop_tls" {
+  algorithm = "RSA"
+  rsa_bits  = 2048
+}
+
+resource "tls_self_signed_cert" "workshop_tls" {
+  private_key_pem = tls_private_key.workshop_tls.private_key_pem
+
+  subject {
+    common_name  = "*.${var.region}.elb.amazonaws.com"
+    organization = "Agentic Runtime Security Workshop"
+  }
+
+  # Covers both LBC-generated ALB hostnames (banking-ui + ivia-wrp), which take
+  # the form k8s-<ns>-<ingress>-<hash>-<num>.<region>.elb.amazonaws.com — a
+  # single label before the regional suffix, so the wildcard matches.
+  dns_names = ["*.${var.region}.elb.amazonaws.com"]
+
+  validity_period_hours = 8760 # 1 year — far longer than any workshop run
+
+  allowed_uses = [
+    "key_encipherment",
+    "digital_signature",
+    "server_auth",
+  ]
+}
+
+resource "aws_acm_certificate" "workshop_tls" {
+  private_key      = tls_private_key.workshop_tls.private_key_pem
+  certificate_body = tls_self_signed_cert.workshop_tls.cert_pem
+  tags             = var.tags
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+locals {
+  # Imported self-signed cert ARN bound to both browser-facing ALB HTTPS:443
+  # listeners (banking-ui + ivia-wrp).
+  tls_certificate_arn = aws_acm_certificate.workshop_tls.arn
+}
+
+#-------------------------------------------------------------------------------
 # Wave 0 — VPC
 #-------------------------------------------------------------------------------
 
@@ -278,6 +336,7 @@ module "ivia" {
   cluster_name           = module.eks.cluster_name
   icr_entitlement_key    = var.icr_entitlement_key
   node_security_group_id = module.eks.node_security_group_id
+  tls_certificate_arn    = local.tls_certificate_arn
   tags                   = var.tags
 
   depends_on = [time_sleep.alb_webhook_ready]
@@ -342,6 +401,8 @@ module "uc2_app" {
   ivia_service_endpoint = module.ivia.ivia_service_endpoint
   ivia_client_id        = "agent-uc2"
   ivia_client_secret    = module.ivia.ivia_client_secret
+  tls_certificate_arn   = local.tls_certificate_arn
+  ivia_public_issuer    = "https://${module.ivia.ivia_ingress_hostname}"
   tags                  = var.tags
 
   depends_on = [time_sleep.alb_webhook_ready]
@@ -362,7 +423,7 @@ module "uc3_agent" {
   ivia_base_url      = "https://${module.ivia.ivia_service_endpoint}:8436"
   ivia_client_id     = "agent-uc3"
   ivia_client_secret = module.ivia.ivia_client_secret
-  ivia_external_url  = "http://${module.ivia.ivia_wrp_alb_hostname}"
+  ivia_external_url  = "https://${module.ivia.ivia_ingress_hostname}"
   db_host            = module.rds.address
   db_name            = "workshop"
   uc3_agent_image    = var.uc3_agent_image
@@ -375,25 +436,40 @@ module "uc3_agent" {
 }
 
 #-------------------------------------------------------------------------------
-# agent-uc2 redirect_uri injection — Path A
+# iviaop-config issuer + redirect_uri injection — Path A (deferred patch)
 #
-# Why this exists: agent-uc2's redirect_uri must contain the banking-ui ALB
-# hostname, which only exists after module.uc2_app deploys the Ingress.
-# module.uc2_app already depends on module.ivia outputs (ivia_client_secret,
-# ivia_service_endpoint, ivia_ingress_hostname), so module.ivia cannot in turn
-# read from module.uc2_app — TF would reject the cycle.
+# Two values in the iviaop-config ConfigMap can only be known after the ALBs
+# exist, and both depend on raw ALB hostnames that the AWS Load Balancer
+# Controller assigns post-apply:
+#   - provider.yml  issuer/base_url  → the ivia-wrp (login) ALB hostname
+#   - clients.yml   agent-uc2 redirect_uri → the banking-ui ALB hostname
 #
-# Resolution: module.ivia ships clients.yml with a placeholder redirect for
-# agent-uc2 (`http://placeholder.invalid/callback`). After both modules
-# complete, this root-level resource pair overwrites just the clients.yml
-# key in the iviaop-config ConfigMap with the real ALB hostname, then triggers
-# a rollout-restart of the iviaop Deployment so the new clients.yml is loaded
-# at startup. agent-uc1 and agent-uc3 remain unaffected (their entries in
-# clients.yml don't contain the templated hostname).
+# module.uc2_app already consumes module.ivia outputs, so module.ivia cannot
+# read back from module.uc2_app (TF rejects the cycle). And inside module.ivia
+# the iviaop-config ConfigMap is created before its own Ingress reconciles, so
+# the login ALB hostname isn't available there either.
+#
+# Resolution: module.ivia ships provider.yml + clients.yml with placeholder
+# hostnames. After module.ivia and module.uc2_app complete (ALB hostnames now
+# known), this root-level patch overwrites just those two ConfigMap keys with
+# the real ALB hostnames, then rolls the iviaop Deployment so it reloads them
+# at startup. agent-uc1/agent-uc3 entries are unaffected.
 #-------------------------------------------------------------------------------
 
 locals {
-  uc2_redirect_uri = "http://${module.uc2_app.banking_ui_alb_hostname}/callback"
+  # Browser-facing https issuer = the ivia-wrp (login) ALB; redirect_uri host =
+  # the banking-ui ALB. Both ALB hostnames are real post-apply values
+  # (wait_for_load_balancer = true on each Ingress).
+  ivia_public_issuer = "https://${module.ivia.ivia_ingress_hostname}"
+  uc2_redirect_uri   = "https://${module.uc2_app.banking_ui_alb_hostname}/callback"
+
+  iviaop_provider_yml_resolved = templatefile(
+    "${path.module}/modules/verify_access/iviaop-config/provider.yml.tftpl",
+    {
+      ivia_public_url    = "${local.ivia_public_issuer}/isvaop"
+      ivia_public_issuer = local.ivia_public_issuer
+    }
+  )
 
   iviaop_clients_yml_resolved = templatefile(
     "${path.module}/modules/verify_access/iviaop-config/clients.yml.tftpl",
@@ -411,7 +487,8 @@ resource "kubernetes_config_map_v1_data" "iviaop_clients_patch" {
   }
 
   data = {
-    "clients.yml" = local.iviaop_clients_yml_resolved
+    "provider.yml" = local.iviaop_provider_yml_resolved
+    "clients.yml"  = local.iviaop_clients_yml_resolved
   }
 
   field_manager = "root-tf-clients-patch"
@@ -420,12 +497,12 @@ resource "kubernetes_config_map_v1_data" "iviaop_clients_patch" {
   depends_on = [module.ivia, module.uc2_app]
 }
 
-# Roll the iviaop Deployment whenever the resolved clients.yml changes. The
-# iviaop pod loads clients.yml only at startup; without a restart the patched
-# ConfigMap would sit on disk unread.
+# Roll the iviaop Deployment whenever the resolved provider.yml or clients.yml
+# changes. The iviaop pod loads both files only at startup; without a restart
+# the patched ConfigMap would sit on disk unread.
 resource "null_resource" "iviaop_rollout_restart" {
   triggers = {
-    clients_yml_sha256 = sha256(local.iviaop_clients_yml_resolved)
+    iviaop_config_sha256 = sha256("${local.iviaop_provider_yml_resolved}${local.iviaop_clients_yml_resolved}")
   }
 
   provisioner "local-exec" {

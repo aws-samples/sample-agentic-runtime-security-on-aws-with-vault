@@ -13,9 +13,12 @@ intentional and pedagogically important for the UC2 workshop demo.
 
 import logging
 import os
+from datetime import datetime, timedelta, timezone
 
 import boto3
 import hvac
+from botocore.credentials import RefreshableCredentials
+from botocore.session import get_session as _get_botocore_session
 
 logger = logging.getLogger(__name__)
 
@@ -66,29 +69,63 @@ class AgentVaultClient:
             },
         )
 
-    def get_bedrock_session(self, region: str) -> boto3.Session:
-        """Obtain ephemeral AWS STS credentials from Vault aws secrets engine (OBJ-2).
+    def _fetch_bedrock_sts(self) -> dict:
+        """Read fresh ephemeral STS credentials from Vault's aws secrets engine.
 
-        Returns a boto3.Session with Vault-issued short-lived credentials
-        scoped to the bedrock-reader IAM role.
+        Re-authenticates to Vault first if the pod's Vault token has expired —
+        the projected SA token on disk is auto-rotated by Kubernetes, so a fresh
+        login always succeeds. This is the refresh callback for
+        RefreshableCredentials, so it is invoked transparently by botocore
+        whenever the cached STS credentials approach their lease expiry.
+
+        Returns the metadata dict botocore expects (access_key/secret_key/token/
+        expiry_time), NOT a boto3.Session.
         """
+        if not self.client.is_authenticated():
+            logger.info("vault_token_expired_relogin")
+            self.login()
+
         response = self.client.read("aws/sts/bedrock-reader")
         data = response["data"]
-        session = boto3.Session(
-            aws_access_key_id=data["access_key"],
-            aws_secret_access_key=data["secret_key"],
-            aws_session_token=data["security_token"],
-            region_name=region,
-        )
+        # Refresh slightly before the lease actually ends; botocore's advisory
+        # window keeps creds valid across the swap.
+        lease_seconds = int(response.get("lease_duration") or 900)
+        expiry = datetime.now(timezone.utc) + timedelta(seconds=lease_seconds)
         logger.info(
             "bedrock_sts_credentials_issued",
             extra={
                 "vault_aws_role": "bedrock-reader",
                 "lease_id": response.get("lease_id", "n/a"),
-                "region": region,
+                "lease_seconds": lease_seconds,
+                "region": "n/a",
             },
         )
-        return session
+        return {
+            "access_key": data["access_key"],
+            "secret_key": data["secret_key"],
+            "token": data["security_token"],
+            "expiry_time": expiry.isoformat(),
+        }
+
+    def get_bedrock_session(self, region: str) -> boto3.Session:
+        """Obtain a boto3.Session with auto-refreshing Vault STS creds (OBJ-2).
+
+        The returned session is backed by botocore RefreshableCredentials: when
+        the short-lived bedrock-reader STS credentials near expiry, botocore
+        calls _fetch_bedrock_sts() to mint a new lease (re-logging into Vault if
+        needed). This lets the agent be built once at startup and run for the
+        pod's full lifetime without the credentials going stale — fixing the
+        ExpiredTokenException that previously surfaced after the lease TTL.
+        """
+        creds = RefreshableCredentials.create_from_metadata(
+            metadata=self._fetch_bedrock_sts(),
+            refresh_using=self._fetch_bedrock_sts,
+            method="vault-aws-sts",
+        )
+        botocore_session = _get_botocore_session()
+        botocore_session._credentials = creds
+        botocore_session.set_config_variable("region", region)
+        return boto3.Session(botocore_session=botocore_session, region_name=region)
 
     def is_authenticated(self) -> bool:
         """Return True if the cached Vault token is still valid."""
