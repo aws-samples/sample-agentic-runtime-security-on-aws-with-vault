@@ -63,17 +63,12 @@ variable "region" {
 }
 
 variable "tls_certificate_arn" {
-  description = "Validated ACM cert ARN attached to the banking-ui ALB HTTPS:443 listener (wildcard *.<workshop_domain>)."
-  type        = string
-}
-
-variable "public_hostname" {
-  description = "Public HTTPS hostname for the banking UI (e.g. bank.demos.devopsoscar.dev). The OAuth redirect_uri is https://<this>/callback."
+  description = "Self-signed ACM cert ARN (wildcard *.<region>.elb.amazonaws.com) attached to the banking-ui ALB HTTPS:443 listener. The redirect_uri (https://<own-alb-host>/callback) is derived from this module's own Ingress hostname."
   type        = string
 }
 
 variable "ivia_public_issuer" {
-  description = "Public HTTPS OIDC issuer base URL for IVIAOP (e.g. https://login.demos.devopsoscar.dev). The UI builds IVIA_ISSUER = <this>/isvaop for discovery + authorize redirects."
+  description = "Public HTTPS OIDC issuer base URL for IVIAOP — the ivia-wrp (login) ALB hostname, e.g. https://k8s-verifyac-...elb.amazonaws.com. The UI builds IVIA_ISSUER = <this>/isvaop for discovery + authorize redirects."
   type        = string
 }
 

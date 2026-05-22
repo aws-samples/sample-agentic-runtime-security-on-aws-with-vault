@@ -106,13 +106,18 @@ resource "kubernetes_service_account" "uc2_mcp_server_sa" {
 ################################################################################
 
 locals {
-  # Real ALB hostname — exported as an output and used as the Route53 CNAME
-  # target at root. NOT the browser-facing URL.
+  # The banking-ui's own ALB hostname (LBC-assigned, post-reconcile). Used both
+  # as a module output and as the browser-facing https origin/redirect_uri.
+  # Referencing it here makes banking_ui_config implicitly depend on the Ingress,
+  # so the ConfigMap is rendered only after the ALB hostname exists — no
+  # post-hoc patch needed. The Ingress depends only on banking_ui_svc, so there
+  # is no cycle.
   banking_ui_alb_hostname = kubernetes_ingress_v1.banking_ui.status[0].load_balancer[0].ingress[0].hostname
-  # Browser-facing HTTPS URLs (stable custom domain + valid ACM cert). The app's
-  # own origin/redirect_uri uses the bank host; the OIDC issuer uses the login
-  # host. IVIAOP rejects http redirect_uris for non-localhost.
-  banking_ui_external_url = "https://${var.public_hostname}"
+  # Browser-facing HTTPS URLs. The app's own origin/redirect_uri uses its own ALB
+  # host; the OIDC issuer uses the ivia-wrp (login) ALB host passed in from root.
+  # IVIAOP rejects http redirect_uris for non-localhost, so both are https; the
+  # ALB serves a self-signed cert (attendee accepts the browser prompt once).
+  banking_ui_external_url = "https://${local.banking_ui_alb_hostname}"
   ivia_external_url       = "${var.ivia_public_issuer}/isvaop"
 
   banking_ui_config_data = {
@@ -1016,12 +1021,12 @@ resource "kubernetes_network_policy" "banking_mcp_egress" {
 }
 
 ################################################################################
-# 22. ALB Ingress — banking-ui (internet-facing, HTTP-only)
+# 22. ALB Ingress — banking-ui (internet-facing)
 #
 # Routes internet traffic to banking-ui-svc:80 over an HTTPS:443 listener
-# (wildcard ACM cert), with HTTP:80 redirected to 443. The OAuth redirect_uri
-# (https://<public_hostname>/callback) requires this — IVIAOP rejects http
-# redirect_uris for non-localhost hosts.
+# (self-signed *.<region>.elb.amazonaws.com cert), with HTTP:80 redirected to
+# 443. The OAuth redirect_uri (https://<this-alb-host>/callback) requires https
+# — IVIAOP rejects http redirect_uris for non-localhost hosts.
 ################################################################################
 
 resource "kubernetes_ingress_v1" "banking_ui" {

@@ -27,10 +27,5 @@ variable "tags" {
 
 variable "tls_certificate_arn" {
   type        = string
-  description = "Validated ACM cert ARN attached to the WRP ALB HTTPS:443 listener (wildcard *.<workshop_domain>)."
-}
-
-variable "public_hostname" {
-  type        = string
-  description = "Public HTTPS hostname for the WRP/IVIAOP browser entry point (e.g. login.demos.devopsoscar.dev). Drives provider.yml base_url + issuer and the ALB cert binding."
+  description = "Self-signed ACM cert ARN (wildcard *.<region>.elb.amazonaws.com) attached to the WRP ALB HTTPS:443 listener. provider.yml issuer/base_url are patched to the real ALB hostname at the root module post-apply."
 }

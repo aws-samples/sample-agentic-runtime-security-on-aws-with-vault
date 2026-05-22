@@ -765,13 +765,16 @@ resource "kubernetes_config_map" "iviaop_config" {
     labels    = local.common_labels
   }
   data = {
+    # provider.yml ships with a placeholder issuer/base_url. The real values are
+    # the ivia-wrp (login) ALB hostname, which only exists after this module's
+    # Ingress reconciles — and this ConfigMap is created before that. The root
+    # module patches the provider.yml key with the real ALB issuer via
+    # kubernetes_config_map_v1_data.iviaop_clients_patch + an iviaop rollout
+    # (same indirection as clients.yml). IVIAOP rejects http redirect_uris for
+    # non-localhost, so the patched value is always https://<alb-host>.
     "provider.yml" = templatefile("${path.module}/iviaop-config/provider.yml.tftpl", {
-      # Public OIDC issuer + base_url use the stable HTTPS hostname (Route53 +
-      # ACM wildcard cert). IVIAOP rejects http redirect_uris for non-localhost,
-      # and browsers must reach the login/authorize/consent pages over valid
-      # HTTPS — both require this to be the https custom domain, not the raw ALB.
-      ivia_public_url    = "https://${var.public_hostname}/isvaop"
-      ivia_public_issuer = "https://${var.public_hostname}"
+      ivia_public_url    = "https://issuer-patched-at-root.invalid/isvaop"
+      ivia_public_issuer = "https://issuer-patched-at-root.invalid"
     })
     "rules.yaml"        = file("${path.module}/iviaop-config/rules.yaml")
     "accesspolicy.yaml" = file("${path.module}/iviaop-config/accesspolicy.yaml")
