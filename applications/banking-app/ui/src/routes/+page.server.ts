@@ -1,30 +1,53 @@
 /**
- * +page.server.ts — Root landing page server load.
+ * Root landing — server-side OAuth Authorization Code + PKCE initiator.
  *
- * Reads the `error` query parameter set by the /login action on failure
- * and passes a human-readable message to the login form.
- *
- * If the user already has a valid session (access_token cookie), redirect
- * them to /dashboard so they don't see the login form again.
+ * Behavior:
+ *   - If the user already has a session (access_token cookie) → /dashboard.
+ *   - Otherwise → generate PKCE state, store it in a short-lived httpOnly
+ *     cookie, and 302 the browser to IVIA /oauth2/authorize. The browser
+ *     never sees a banking-ui login form; WebSEAL (the IVIA WRP) serves
+ *     the login page in front of /isvaop/oauth2/authorize.
  */
 
 import { redirect } from '@sveltejs/kit';
+import { env } from '$env/dynamic/private';
 import type { PageServerLoad } from './$types';
+import { buildAuthorizeUrl, generatePkce } from '$lib/auth';
 
-export const load: PageServerLoad = async ({ url, locals }) => {
-  // Already authenticated — skip the login form
+export const load: PageServerLoad = async ({ locals, cookies }) => {
   if (locals.accessToken) {
     throw redirect(302, '/dashboard');
   }
 
-  const errorParam = url.searchParams.get('error');
-  let errorMessage: string | null = null;
+  const issuer = env.IVIA_ISSUER ?? '';
+  const clientId = env.IVIA_CLIENT_ID ?? 'agent-uc2';
+  const redirectUri = env.REDIRECT_URI ?? '';
 
-  if (errorParam === 'login_failed') {
-    errorMessage = 'Login failed. Check your username and password and try again.';
-  } else if (errorParam) {
-    errorMessage = 'An error occurred. Please try again.';
+  if (!issuer || !redirectUri) {
+    throw new Error('IVIA_ISSUER and REDIRECT_URI must be set');
   }
 
-  return { error: errorMessage };
+  const pkce = generatePkce();
+  cookies.set(
+    'pkce',
+    JSON.stringify({ codeVerifier: pkce.codeVerifier, state: pkce.state }),
+    {
+      path: '/',
+      httpOnly: true,
+      secure: false,
+      sameSite: 'lax',
+      maxAge: 600
+    }
+  );
+
+  throw redirect(
+    302,
+    buildAuthorizeUrl({
+      issuer,
+      clientId,
+      redirectUri,
+      codeChallenge: pkce.codeChallenge,
+      state: pkce.state
+    })
+  );
 };

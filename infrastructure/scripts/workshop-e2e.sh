@@ -9,7 +9,7 @@
 #   Phase 1: Bootstrap (calls bootstrap.sh — variable set + workspace)
 #   Phase 2: Foundation deploy (local terraform apply)
 #   Phase 3: Configure kubectl
-#   Phase 4: Foundation verify (calls test-foundation.sh — EKS + RDS + Bedrock KB + Simple AD)
+#   Phase 4: Foundation verify (calls test-foundation.sh — EKS + RDS + Bedrock KB + OpenLDAP)
 #   Phase 5: Identity (IVIA) — verify IVIA pods + OIDC discovery
 #   Phase 6: Vault — init + configure (local via port-forward)
 #   Phase 7a: Use Case 1 — Non-Personalized Read-Only (build images, deploy, verify)
@@ -372,7 +372,7 @@ phase_configure_kubectl() {
 # PHASE 4: Foundation Verify (EKS + RDS + Bedrock KB)
 #===============================================================================
 phase_verify_foundation() {
-    phase_header "Phase 4: Foundation Verify (EKS + RDS + Bedrock KB + Simple AD)"
+    phase_header "Phase 4: Foundation Verify (EKS + RDS + Bedrock KB + OpenLDAP)"
 
     if [ "$DRY_RUN" = true ]; then
         print_info "[DRY-RUN] Would run: test-foundation.sh"
@@ -402,39 +402,9 @@ phase_verify_foundation() {
         return 0
     fi
 
-    # Provision Simple AD users before verification checks them
-    local ad_dns_ip ad_password
-    ad_dns_ip=$(cd "${PROJECT_ROOT}/infrastructure" && terraform output -json 2>/dev/null \
-        | jq -r '.simple_ad_dns_ips.value[0] // empty' 2>/dev/null || echo "")
-    ad_password=$(grep -E '^simple_ad_admin_password\s*=' "${TF_VARS}" 2>/dev/null \
-        | sed 's/^[^"]*"\([^"]*\)".*/\1/' || echo "")
-    if [ -n "$ad_dns_ip" ] && [ -n "$ad_password" ]; then
-        step_header "Provisioning Simple AD users..."
-        local bind_dn="CN=Administrator,CN=Users,DC=workshop,DC=internal"
-        local base_dn="CN=Users,DC=workshop,DC=internal"
-        local provision_pod="provision-ad-users-$$"
-        kubectl delete pod "${provision_pod}" -n default --ignore-not-found --wait=true &>/dev/null
-        kubectl run "${provision_pod}" -n default --restart=Never \
-            --image=alpine:3 \
-            --command -- sh -c "apk add --no-cache openldap-clients >/dev/null 2>&1 && \
-                for uid in oscar adriana; do \
-                    case \${uid} in oscar) cn='Oscar Medina'; sn=Medina; gn=Oscar;; adriana) cn='Adriana Medina'; sn=Medina; gn=Adriana;; esac; \
-                    if ldapsearch -x -H ldap://${ad_dns_ip} -D '${bind_dn}' -w '${ad_password}' -b '${base_dn}' \"(sAMAccountName=\${uid})\" dn 2>/dev/null | grep -q '^dn:'; then \
-                        echo \"SKIP: \${uid} already exists\"; \
-                    else \
-                        printf \"dn: CN=\${cn},${base_dn}\nobjectClass: top\nobjectClass: person\nobjectClass: organizationalPerson\nobjectClass: user\ncn: \${cn}\nsn: \${sn}\ngivenName: \${gn}\ndisplayName: \${cn}\nsAMAccountName: \${uid}\nuserPrincipalName: \${uid}@workshop.internal\nmail: \${uid}@workshop.internal\n\" | \
-                        ldapadd -x -H ldap://${ad_dns_ip} -D '${bind_dn}' -w '${ad_password}' && \
-                        echo \"CREATED: \${uid}\" || echo \"FAILED: \${uid}\"; \
-                    fi; \
-                done" &>/dev/null
-        kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/"${provision_pod}" -n default --timeout=120s &>/dev/null || true
-        local provision_result
-        provision_result=$(kubectl logs "${provision_pod}" -n default 2>/dev/null || echo "")
-        kubectl delete pod "${provision_pod}" -n default --ignore-not-found &>/dev/null
-        if [ -n "${provision_result}" ]; then
-            echo "${provision_result}" | grep -E 'CREATED|SKIP|FAILED'
-        fi
-    fi
+    # User 'oscar' is now seeded into the in-cluster OpenLDAP automatically by
+    # IVIA autoconf (webseal.pdadmin.users in base_layer.yaml). No external
+    # provisioning step needed.
 
     bash "$SCRIPT_DIR/test-foundation.sh" \
         --cluster-name "$CLUSTER_NAME" \
@@ -507,7 +477,7 @@ phase_identity() {
 #===============================================================================
 # PHASE 6: Vault — init + configure (local via port-forward)
 # Step 1: vault-init.sh — initialize Vault, save root token + recovery keys
-# Step 2: vault-configure.sh — port-forward, terraform apply vault-config + isva-config
+# Step 2: vault-configure.sh — port-forward, terraform apply vault-config (IVIA OAuth client registration moved to clients.yml + DCR Job in root TF)
 # Step 3: test-vault-verify.sh — verify pods, seal status, Raft peers, audit
 #===============================================================================
 phase_vault() {
@@ -1015,7 +985,7 @@ for m in msgs[-5:]:
         obj = json.loads(m)
         t = obj.get('time','')[:19]
         log = obj.get('log','').strip()
-        pod = obj.get('kubernetes',{}).get('pod_name','isvaop')
+        pod = obj.get('kubernetes',{}).get('pod_name','iviaop')
         # Try to extract structured fields from the log line
         try:
             inner = json.loads(log)

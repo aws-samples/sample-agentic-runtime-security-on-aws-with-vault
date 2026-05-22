@@ -253,7 +253,6 @@ aws_account_id       = "$AWS_ACCOUNT_ID"
 project_name         = "$HCP_PROJECT"
 varset_name          = "$VARSET_NAME"
 icr_entitlement_key  = "${ICR_ENTITLEMENT_KEY:-}"
-simple_ad_admin_password = "${SIMPLE_AD_ADMIN_PASSWORD:-WorkshopAdmin1!}"
 TFVARS
     echo -e "${GREEN}OK: Written: $TFVARS_FILE${NC}"
 }

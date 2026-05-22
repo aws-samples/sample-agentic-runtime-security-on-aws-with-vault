@@ -94,7 +94,7 @@ variable "ivia_ingress_hostname" {
 }
 
 variable "ivia_service_endpoint" {
-  description = "IVIA cluster-internal service DNS (e.g. isvaop.verify-access.svc.cluster.local). Used for server-side CIBA status_update calls from the banking UI."
+  description = "IVIA cluster-internal service DNS (e.g. iviaop.verify-access.svc.cluster.local). Used for server-side CIBA status_update calls from the banking UI."
   type        = string
 }
 

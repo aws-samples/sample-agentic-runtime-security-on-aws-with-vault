@@ -1,0 +1,43 @@
+# Static OIDC clients consumed by the ivia-oidc-provider:25.10 pod from
+# /var/isvaop/config/clients.yml. Doc: https://docs.verify.ibm.com/ibm-security-verify-access/docs/yaml_clients-client
+#
+# All 3 workshop clients are static. agent-uc2's redirect_uri starts as the
+# placeholder below and is overwritten post-deploy by
+# `kubernetes_config_map_v1_data.iviaop_clients_patch` in root main.tf with the
+# real banking-ui ALB hostname (the only piece not known at module.ivia plan
+# time). The patch is followed by a rollout-restart of the iviaop Deployment so
+# the new clients.yml is re-read at startup.
+clients:
+  - client_id: agent-uc1
+    client_secret: "${ivia_client_secret}"
+    client_name: Agentic Runtime UC1 — Non-Personalized Read-Only
+    enabled: true
+    grant_types:
+      - client_credentials
+    token_endpoint_auth_method: client_secret_basic
+
+  - client_id: agent-uc2
+    client_secret: "${ivia_client_secret}"
+    client_name: Agentic Runtime UC2 — OAuth Personalized Read-Only
+    enabled: true
+    grant_types:
+      - authorization_code
+      - refresh_token
+    response_types:
+      - code
+    redirect_uris:
+      - "${uc2_redirect_uri}"
+    require_pkce: true
+    token_endpoint_auth_method: client_secret_basic
+
+  - client_id: agent-uc3
+    client_secret: "${ivia_client_secret}"
+    client_name: Agentic Runtime UC3 — CIBA Privileged Refund Writer
+    enabled: true
+    grant_types:
+      - urn:openid:params:grant-type:ciba
+      - urn:ietf:params:oauth:grant-type:token-exchange
+      - refresh_token
+    token_endpoint_auth_method: client_secret_basic
+    backchannel_token_delivery_mode: poll
+    backchannel_user_code_parameter: false

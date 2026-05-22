@@ -130,6 +130,13 @@ locals {
     UC3_AGENT_URL = "http://uc3-agent-svc:8080"
     # SvelteKit CSRF protection: ORIGIN must match the browser's Origin header
     ORIGIN = local.banking_ui_external_url
+    # The /callback handler POSTs to IVIA_BASE_URL (in-cluster DNS, HTTPS)
+    # for the authorization code → token exchange. iviaop presents a
+    # self-signed certificate (httpserverkey/httpservercert) that is not
+    # trusted by Node's default CA bundle. Workshop-only: disable TLS
+    # verification on outbound Node fetches. Production should mount the
+    # iviaop cert via NODE_EXTRA_CA_CERTS instead.
+    NODE_TLS_REJECT_UNAUTHORIZED = "0"
   }
 }
 

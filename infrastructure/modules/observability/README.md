@@ -8,7 +8,7 @@ Three-plane audit correlation infrastructure for the Agentic Runtime Security Wo
 Kubernetes Pods                 CloudWatch               Firehose           S3
 ─────────────────────           ────────────────────     ────────────────   ───────────────────────
 vault-* containers    ──────▶  /workshop/vault-audit   ─────────────────▶  vault-audit/
-isvaop-* containers   ──────▶  /workshop/ivia-decision ─────────────────▶  ivia-decision/
+iviaop-* containers   ──────▶  /workshop/ivia-decision ─────────────────▶  ivia-decision/
 uc3-agent-* containers ─────▶  /workshop/agent-trace   ─────────────────▶  agent-trace/
 ```
 

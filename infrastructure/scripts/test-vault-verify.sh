@@ -18,7 +18,7 @@
 # Env-var overrides:
 #   VAULT_NAMESPACE       (default: vault)
 #   IVIA_NAMESPACE        (default: verify-access)
-#   IVIA_OIDC_URL         (default: https://isvaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration)
+#   IVIA_OIDC_URL         (default: https://iviaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration)
 #   VAULT_POD             (default: vault-0)
 #
 # Per common-checks.sh design: this script does NOT use `set -e`.
@@ -53,7 +53,7 @@ Checks (8 total):
 Env-var overrides:
   VAULT_NAMESPACE   (default: vault)
   IVIA_NAMESPACE    (default: verify-access)
-  IVIA_OIDC_URL     (default: https://isvaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration)
+  IVIA_OIDC_URL     (default: https://iviaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration)
   VAULT_POD         (default: vault-0)
 USAGE
     exit 0
@@ -64,7 +64,7 @@ fi
 #-------------------------------------------------------------------------------
 VAULT_NAMESPACE="${VAULT_NAMESPACE:-vault}"
 IVIA_NAMESPACE="${IVIA_NAMESPACE:-verify-access}"
-IVIA_OIDC_URL="${IVIA_OIDC_URL:-https://isvaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration}"
+IVIA_OIDC_URL="${IVIA_OIDC_URL:-https://iviaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration}"
 VAULT_POD="${VAULT_POD:-vault-0}"
 VAULT_LABEL="app.kubernetes.io/name=vault"
 LBC_LABEL="app.kubernetes.io/name=aws-load-balancer-controller"
@@ -153,7 +153,7 @@ if [ -n "${ivia_issuer}" ]; then
     print_pass "IVIA OIDC discovery: issuer reachable (${ivia_issuer})"
 else
     print_fail "IVIA OIDC discovery" \
-        "OIDC discovery URL returned no issuer. Check IVIA pod logs: kubectl logs -n ${IVIA_NAMESPACE} -l app=ivia. Ensure isvaop Service exists: kubectl get svc -n ${IVIA_NAMESPACE}"
+        "OIDC discovery URL returned no issuer. Check IVIA pod logs: kubectl logs -n ${IVIA_NAMESPACE} -l app=iviaop. Ensure iviaop Service exists: kubectl get svc -n ${IVIA_NAMESPACE}"
 fi
 
 #-------------------------------------------------------------------------------

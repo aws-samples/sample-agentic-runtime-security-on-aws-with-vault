@@ -12,8 +12,10 @@
 import { redirect } from '@sveltejs/kit';
 import type { LayoutServerLoad } from './$types';
 
-// Pages that do NOT require authentication
-const PUBLIC_PATHS = ['/', '/login', '/callback', '/logout'];
+// Pages that do NOT require a banking-ui session cookie. The root path
+// is public because the load() function on / handles the redirect to
+// IVIA when no session exists.
+const PUBLIC_PATHS = ['/', '/callback', '/logout'];
 
 export const load: LayoutServerLoad = async ({ locals, url }) => {
   const isPublic = PUBLIC_PATHS.some((p) => url.pathname === p || url.pathname.startsWith(p + '/'));

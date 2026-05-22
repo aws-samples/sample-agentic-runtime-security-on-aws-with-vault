@@ -29,10 +29,10 @@ container:
   - name: "pdsrv"
     personal_certificates:
     - name: "WRP"
-      p12_file: "isvawrp.p12"
+      p12_file: "iviawrprp1.p12"
       secret: !secret verify-access/wrp-p12-creds:secret
     signer_certificates:
-    - "isvaop.pem"
+    - "iviaop.pem"
   cluster:
     runtime_database:
       host: "postgresql"
@@ -76,6 +76,12 @@ webseal:
     - "req_openid_config.lua"
     - "rsp_openid_config.lua"
   pdadmin:
+    users:
+    - username: "oscar"
+      password: "WorkshopUser1!"
+      dn: "cn=oscar,dc=ibm,dc=com"
+      first_name: "Oscar"
+      last_name: "Medina"
     acls:
     - name: "unauth"
       users:
@@ -90,6 +96,9 @@ webseal:
       - name: "unauth"
         junctions:
         - "/isvaop/oauth2/.well-known"
+        - "/isvaop/oauth2/token"
+        - "/isvaop/oauth2/jwks"
+        - "/isvaop/oauth2/ciba"
   reverse_proxy:
   - name: "rp1"
     host: "www.iamlab.ibm.com"
@@ -133,3 +142,28 @@ webseal:
       operation: "add"
       entry_id: "request-match"
       value: "response:GET /isvaop/oauth2/.well-known/oauth-authorization-server *"
+    # JWT identity injection on the /isvaop junction so iviaop receives the
+    # authenticated WebSEAL user as iv-jwt. WebSEAL signs with the WRP cert
+    # (already in pdsrv keystore); iviaop validates via the signer chain.
+    - stanza: "jwt"
+      operation: "add"
+      entry_id: "jct-id"
+      value: "+/isvaop"
+    - stanza: "jwt:/isvaop"
+      operation: "add"
+    - stanza: "jwt:/isvaop"
+      operation: "add"
+      entry_id: "key-label"
+      value: "WRP"
+    - stanza: "jwt:/isvaop"
+      operation: "add"
+      entry_id: "hdr-name"
+      value: "iv-jwt"
+    - stanza: "jwt:/isvaop"
+      operation: "add"
+      entry_id: "claim"
+      value: "attr::AZN_CRED_PRINCIPAL_NAME::sub"
+    - stanza: "jwt:/isvaop"
+      operation: "add"
+      entry_id: "lifetime"
+      value: "120"

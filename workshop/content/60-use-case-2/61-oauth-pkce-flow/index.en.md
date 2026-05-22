@@ -5,16 +5,21 @@ weight: 61
 
 ## Overview
 
-In this module you open the Banking UI, sign in with your LDAP credentials, and observe how the ROPC (Resource Owner Password Credentials) grant delivers a JWT to the SvelteKit server. You will see how the JWT carries the `sub` claim that Vault's `jwt` auth method validates and that PostgreSQL Row-Level Security uses to filter rows.
+In this module you open the Banking UI, sign in with your LDAP credentials at the IBM Verify Identity Access (IVIA) login page, and observe how the **OAuth Authorization Code + PKCE** flow delivers a JWT to the SvelteKit server. You will see how the JWT carries the `sub` claim that Vault's `jwt` auth method validates and that PostgreSQL Row-Level Security uses to filter rows.
 
-## IVIA OIDC Provider — Authorization Only
+## How the login is split between Banking UI and IVIA
 
-IBM Verify Identity Access (IVIA) OIDC Provider is an **authorization** service, not an **authentication** UI. It issues tokens and validates policies but does not render a login form. In a production deployment, an external identity proxy such as WebSEAL presents the login form, the user authenticates, and IVIA issues tokens via the Authorization Code flow.
+IBM Verify Identity Access has two components in this deployment:
 
-For this workshop, WebSEAL is not deployed. Instead, the Banking UI hosts its own login form and uses the **ROPC grant** (`grant_type=password`) — the canonical IBM pattern validated by the `ibm-verify-login` reference implementation. The user's credentials are posted directly to IVIA's token endpoint; IVIA authenticates the user against the Simple AD directory (LDAP) and returns an `access_token` and `id_token`.
+1. **IVIA OIDC Provider** (`iviaop` pod) — issues tokens, validates OAuth client credentials, runs the pre-token / post-token mapping rules. It does not render a login form.
+2. **IVIA WebSEAL Reverse Proxy** (`iviawrprp1` pod) — sits in front of the OIDC Provider, renders the login form, performs LDAP bind against the user registry, and proxies authenticated traffic to the OIDC Provider with the user's identity attached as HTTP headers.
 
-:::alert{header="ROPC and production security" type="warning"}
-The ROPC grant transmits user credentials directly to the authorization server. It requires a confidential client (the Banking UI sends its `client_secret` in the POST body). In production, the Authorization Code + PKCE flow is preferred — it moves credential handling entirely to the identity provider and eliminates the application as a credential intermediary. PKCE functions are retained in `auth.ts` as the upgrade path when WebSEAL or an external IdP is available.
+The Banking UI never displays a login form of its own. When an unauthenticated user lands on `/`, the SvelteKit server generates a PKCE verifier + challenge, sets a short-lived cookie, and 302s the browser to IVIA's `/oauth2/authorize` endpoint. The WebSEAL Reverse Proxy intercepts that request, serves its own HTML login form, validates the credentials against OpenLDAP, then proxies the (now authenticated) request to the OIDC Provider. The OIDC Provider issues a one-time authorization code and redirects the browser back to the Banking UI's `/callback` URL.
+
+The Banking UI's `/callback` handler then exchanges the code for tokens server-to-server, directly against the OIDC Provider via the in-cluster Kubernetes Service URL — that exchange bypasses the WebSEAL Reverse Proxy entirely.
+
+:::alert{header="Why PKCE for a server-side application?" type="info"}
+PKCE protects against authorization code interception. Even though the Banking UI is a confidential client (it has a `client_secret`), PKCE is required by the IVIA `agent-uc2` client configuration (`require_pkce: true`). The PKCE pair (`code_verifier` + `code_challenge`) is generated server-side in `+page.server.ts`, persisted to a short-lived `pkce` httpOnly cookie, and verified by IVIA at the token exchange step.
 :::
 
 ## Request Flow
@@ -47,20 +52,35 @@ sequenceDiagram
     autonumber
     actor User
     participant UI as Banking UI<br/>(SvelteKit)
-    participant IVIA as IVIA OIDC<br/>Provider
+    participant WRP as IVIA WebSEAL<br/>Reverse Proxy
+    participant OP as IVIA OIDC<br/>Provider
+    participant LDAP as OpenLDAP
     participant Agent as Banking Agent<br/>(Strands SDK)
     participant MCP as MCP Server<br/>(Express)
     participant Vault as HashiCorp<br/>Vault
     participant RDS as PostgreSQL<br/>(RDS + RLS)
 
     rect rgba(208, 226, 255, 0.3)
-    Note over User,IVIA: Authentication — ROPC grant
-    User->>UI: Submit username + password
-    UI->>IVIA: POST /oauth2/token<br/>grant_type=password, scope=openid
-    IVIA->>IVIA: Authenticate against Simple AD (LDAP)
-    IVIA-->>UI: access_token + id_token (JWT with sub claim)
+    Note over User,LDAP: Authentication — Authorization Code + PKCE
+    User->>UI: GET /
+    UI->>UI: Generate code_verifier + code_challenge (S256)
+    UI->>UI: Set pkce cookie {codeVerifier, state}
+    UI-->>User: 302 to IVIA /oauth2/authorize?code_challenge=...
+    User->>WRP: GET /isvaop/oauth2/authorize
+    WRP-->>User: Login page (no WebSEAL session)
+    User->>WRP: POST username + password
+    WRP->>LDAP: LDAP bind cn=oscar,dc=ibm,dc=com
+    LDAP-->>WRP: Bind OK
+    WRP->>WRP: Create WebSEAL session
+    WRP->>OP: Proxy /oauth2/authorize + iv-user header
+    OP->>OP: Resolve user, run pretoken rule
+    OP-->>User: 302 to /callback?code=...&state=...
+    User->>UI: GET /callback?code=...
+    UI->>UI: Validate state matches pkce.state
+    UI->>OP: POST /oauth2/token (in-cluster DNS)<br/>code, code_verifier, Basic auth
+    OP-->>UI: access_token + id_token (JWT with sub claim)
     UI->>UI: Store tokens in httpOnly cookies
-    UI-->>User: Redirect to /dashboard
+    UI-->>User: 302 to /dashboard
     end
 
     rect rgba(186, 230, 255, 0.3)
@@ -72,8 +92,8 @@ sequenceDiagram
     MCP->>MCP: Decode JWT → extract sub claim
 
     MCP->>Vault: POST /v1/auth/jwt/login<br/>{jwt, role: "uc2-jwt"}
-    Vault->>IVIA: Validate JWT signature via JWKS
-    IVIA-->>Vault: Public key confirmation
+    Vault->>OP: Validate JWT signature via JWKS
+    OP-->>Vault: Public key confirmation
     Vault->>Vault: Check bound_audiences = "agent-uc2"
     Vault-->>MCP: Vault token (uc2-personal policy)
 
@@ -101,16 +121,20 @@ sequenceDiagram
 
 **Step-by-step breakdown:**
 
-1. The user submits credentials on the Banking UI login form. The SvelteKit server-side action calls IVIA's token endpoint with the ROPC grant.
-2. IVIA authenticates against Simple AD, runs the `ropc` and `pretoken` mapping rules, and returns an access token + ID token (JWT with `sub` claim).
-3. The Banking UI stores tokens in httpOnly cookies and redirects to the dashboard.
-4. When the user asks a banking question, the UI's server-side proxy reads the `id_token` cookie and forwards it to the Banking Agent as a Bearer token.
-5. The Banking Agent forwards the JWT unchanged to the MCP Server for each tool invocation.
-6. The MCP Server presents the JWT to Vault's `jwt` auth method. Vault validates the signature against IVIA's JWKS endpoint and checks the `bound_audiences` claim (`agent-uc2`).
-7. Vault issues a short-lived token bound to the `uc2-personal` policy.
-8. The MCP Server uses that token to call `database/creds/uc2-personal-readonly`. Vault issues a JIT Postgres credential with a 15-minute TTL.
-9. The MCP Server opens a Postgres connection, sets `app.current_user_sub` to the JWT's `sub` claim, and executes `SELECT` queries. PostgreSQL Row-Level Security filters results to the authenticated user's rows only.
-10. The credential expires at TTL; Vault revokes the Postgres role automatically.
+1. The user opens the Banking UI URL. The SvelteKit server load on `/` sees no `access_token` cookie, generates a PKCE pair (`code_verifier` + `code_challenge` via S256), persists `codeVerifier` and CSRF `state` to a short-lived `pkce` cookie, and 302s the browser to IVIA `/oauth2/authorize` with the public `code_challenge` and `state`.
+2. The WebSEAL Reverse Proxy intercepts the unauthenticated request to `/isvaop/oauth2/authorize` and serves its built-in login page.
+3. The user submits username + password to WebSEAL. WebSEAL performs an LDAP bind against OpenLDAP (`cn=<user>,dc=ibm,dc=com`). On success, WebSEAL creates a session and proxies the authorize request to the OIDC Provider with the `iv-user` header carrying the authenticated identity.
+4. The OIDC Provider runs the pre-token mapping rule, issues a one-time authorization code, and 302s the browser back to the Banking UI's `/callback?code=...&state=...`.
+5. The Banking UI's `/callback` handler validates that the returned `state` matches the `pkce` cookie, then POSTs to the OIDC Provider's `/oauth2/token` endpoint over the in-cluster Kubernetes Service URL (`https://iviaop.verify-access.svc.cluster.local:8436`) — bypassing the WebSEAL ALB. The POST carries HTTP Basic auth (`agent-uc2:<client_secret>`) plus the `code` and `code_verifier`.
+6. The OIDC Provider verifies the code, checks the PKCE proof against the original challenge, runs the post-token mapping rule, and returns an `access_token` plus `id_token` (JWTs with the `sub` claim).
+7. The Banking UI stores the tokens in httpOnly cookies (`access_token`, `id_token`, optional `refresh_token`) and 302s the browser to `/dashboard`.
+8. When the user asks a banking question, the UI's server-side proxy reads the `id_token` cookie and forwards it to the Banking Agent as a Bearer token.
+9. The Banking Agent forwards the JWT unchanged to the MCP Server for each tool invocation.
+10. The MCP Server presents the JWT to Vault's `jwt` auth method. Vault validates the signature against IVIA's JWKS endpoint and checks the `bound_audiences` claim (`agent-uc2`).
+11. Vault issues a short-lived token bound to the `uc2-personal` policy.
+12. The MCP Server uses that token to call `database/creds/uc2-personal-readonly`. Vault issues a JIT Postgres credential with a 15-minute TTL.
+13. The MCP Server opens a Postgres connection, sets `app.current_user_sub` to the JWT's `sub` claim, and executes `SELECT` queries. PostgreSQL Row-Level Security filters results to the authenticated user's rows only.
+14. The credential expires at TTL; Vault revokes the Postgres role automatically.
 
 The `sub` claim in the `id_token` (e.g. `oscar`) flows to:
 
@@ -138,28 +162,30 @@ http://<ALB_HOSTNAME>/
 The ALB uses HTTP (not HTTPS) because ALB-generated hostnames cannot be registered in Route 53 for ACM certificate issuance. In a production deployment, use HTTPS with a custom domain and `secure: true` cookie flags.
 :::
 
-## Step 2 — Sign in as Oscar
+## Step 2 — Sign in at the IVIA login page
 
-On the Banking UI landing page you will see a login form with **Username** and **Password** fields. Enter the pre-created test user credentials:
+When you open the Banking UI URL, the browser is immediately redirected to the IVIA WebSEAL Reverse Proxy login page. You will not see a Banking UI login form — the entire credential entry happens on IVIA.
+
+Enter the pre-created test user credentials:
 
 - **Username:** `oscar`
-- **Password:** `Workshop2026!`
+- **Password:** `WorkshopUser1!`
 
-Click **Sign in with IBM Verify**. The form POSTs to the `/login` SvelteKit action, which calls `passwordGrant()` against IVIA and sets an `httpOnly` `access_token` cookie. The browser is redirected to `/dashboard`.
+Click **Login**. WebSEAL performs an LDAP bind against OpenLDAP and, on success, redirects you back through `/isvaop/oauth2/authorize` to the Banking UI's `/callback?code=...` URL. The Banking UI exchanges the code for an access token and lands you on `/dashboard`.
 
 :::alert{header="Where do these users come from?" type="info"}
-Your organization uses Active Directory for employee identity management. This workshop uses AWS Simple AD — a lightweight managed directory — with two pre-provisioned employees (Oscar and Adriana). IVIA authenticates them via LDAP and issues JWTs that the MCP Server uses to obtain user-scoped database credentials from Vault.
+This workshop uses OpenLDAP as the user registry, with two pre-provisioned users (Oscar and Adriana) created by the `verify_access` Terraform module. WebSEAL authenticates them via LDAP bind. The IVIA OIDC Provider then issues JWTs that the MCP Server uses to obtain user-scoped database credentials from Vault.
 :::
 
 ## Step 3 — Inspect the Banking UI logs
 
-The Banking UI logs the ROPC login outcome. View the logs:
+The Banking UI logs the OAuth code exchange outcome. View the logs:
 
 ```bash
 kubectl logs -n banking-app -l app=banking-ui --tail=30
 ```
 
-Look for a log line that confirms the access_token was received and the cookie was set. Note that no credentials appear in logs — only the outcome.
+You will not see credentials in these logs — only the outcome of the token exchange. Credentials never reach the Banking UI; they are entered on the WebSEAL login page and validated by WebSEAL via LDAP bind.
 
 ## Step 4 — Confirm personalized dashboard data
 
@@ -170,38 +196,52 @@ After login, the dashboard shows Oscar's accounts and transactions. Observe:
 
 ## Step 5 — Switch users: sign in as Adriana
 
-Log out (click **Logout** in the top-right corner), then sign in as:
+Log out (click **Logout** in the top-right corner), then open the Banking UI URL again. You will be sent back to the WebSEAL login page. Sign in as:
 
 - **Username:** `adriana`
-- **Password:** `Workshop2026!`
+- **Password:** `WorkshopUser1!`
 
 The dashboard now shows Adriana's accounts and transactions — not Oscar's. The `sub` claim changed, activating a different RLS filter in PostgreSQL.
 
-:::expand{header="Platform Track — IVIA OAuth client configuration for ROPC"}
+:::expand{header="Platform Track — IVIA OAuth client configuration"}
 
-The IVIA `agent-uc2` client is provisioned by the `verify_access` Terraform module with these settings:
+The IVIA `agent-uc2` client is provisioned by the `verify_access` Terraform module with these settings (declared in `modules/verify_access/iviaop-config/clients.yml.tftpl`):
 
 | Setting | Value | Why |
 |---|---|---|
 | `client_id` | `agent-uc2` | Matches Vault jwt role `bound_audiences` |
-| `client_secret` | `<generated>` | Required for ROPC — confidential client |
-| `grant_types` | `authorization_code`, `refresh_token`, `password` | ROPC active; authorization_code retained for PKCE upgrade |
-| `token_endpoint_auth_method` | `client_secret_post` | Secret sent in POST body (ROPC pattern) |
-| `redirect_uris` | `http://<UI_ALB>/callback` | Retained for PKCE upgrade path |
+| `client_secret` | `<generated>` | Confidential client — sent via HTTP Basic on the token exchange |
+| `grant_types` | `authorization_code`, `refresh_token` | Authorization Code flow with optional refresh |
+| `response_types` | `code` | Authorization Code response type |
+| `require_pkce` | `true` | PKCE proof required at token exchange |
+| `token_endpoint_auth_method` | `client_secret_basic` | HTTP Basic auth on `/oauth2/token` |
+| `redirect_uris` | `http://<UI_ALB>/callback` | Patched post-deploy with the real Banking UI ALB hostname |
 | `scopes` | `openid`, `profile`, `email` | JWT carries sub, email, name claims |
 
-The token endpoint call the Banking UI makes:
+The authorize URL the browser is redirected to:
 
 ```
-POST http://<IVIA_ALB>/oauth2/token
+http://<IVIA_ALB>/isvaop/oauth2/authorize
+  ?response_type=code
+  &client_id=agent-uc2
+  &redirect_uri=http://<UI_ALB>/callback
+  &code_challenge=<S256 hash of code_verifier>
+  &code_challenge_method=S256
+  &state=<CSRF token>
+  &scope=openid+profile+email
+```
+
+The token exchange the Banking UI server makes (in-cluster, bypasses the ALB):
+
+```
+POST https://iviaop.verify-access.svc.cluster.local:8436/oauth2/token
+Authorization: Basic base64(agent-uc2:<client_secret>)
 Content-Type: application/x-www-form-urlencoded
 
-grant_type=password
-&client_id=agent-uc2
-&client_secret=<secret>
-&username=oscar
-&password=Workshop2026!
-&scope=openid+profile+email
+grant_type=authorization_code
+&code=<one-time code>
+&redirect_uri=http://<UI_ALB>/callback
+&code_verifier=<original PKCE verifier>
 ```
 
 The `client_secret` is injected into the Banking UI pod via the `banking-ui-config` ConfigMap, populated from the `verify_access` Terraform module output at deploy time.
@@ -210,15 +250,18 @@ How the Banking UI maps to the SvelteKit file structure:
 
 ```
 src/routes/
-  +page.svelte          — Landing page with login form (action="/login")
-  +page.server.ts       — Load: reads ?error= param, redirects if authenticated
-  login/
-    +page.server.ts     — Action: calls passwordGrant(), sets httpOnly cookies
-    +page.svelte        — Minimal page (route target for SvelteKit)
+  +page.svelte          — Minimal fallback (server always 302s first)
+  +page.server.ts       — Load: redirects authenticated users to /dashboard,
+                          generates PKCE and 302s everyone else to IVIA
+  callback/
+    +page.server.ts     — Validates state, posts to /oauth2/token, sets cookies
   dashboard/
     +page.svelte        — Personalized banking dashboard
   logout/
     +server.ts          — Clears session cookies
+src/lib/
+  auth.ts               — Server-side PKCE helpers: generatePkce,
+                          buildAuthorizeUrl, exchangeCodeForTokens
 ```
 :::
 

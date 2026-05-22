@@ -1,0 +1,66 @@
+# Copyright contributors to the IBM Security Verify Access OIDC Provider Resources project
+version: 23.03
+logging:
+  level: trace
+server:
+  ssl:
+    key: 'ks:isvaop_keys/httpserverkey'
+    certificate: 'ks:isvaop_keys/httpservercert'
+  pages:
+    type: zip                       
+    content: "@templates.zip" 
+# Mandatory when grant_types includes authorization_code or implicit (IBM
+# provider.yml schema). Without it the /oauth2/auth endpoint is a no-op
+# redirect and no authentication session is established. ISVAOP relies on the
+# WRP as point-of-contact: the browser is sent to ${ivia_public_url}/oauth2/auth
+# (an anyauth-protected junction path) where WebSEAL injects the iv-jwt
+# credential, then ISVAOP establishes the session and returns to callback_param.
+authentication:
+  endpoint: ${ivia_public_url}/oauth2/auth
+  callback_param_name: Target
+  # subject_attribute_name names the JWT claim/credential attribute that
+  # populates the OIDC `sub`. Default is `uid`, but the WebSEAL jwt:/isvaop
+  # stanza emits the principal as claim `sub` — so without this the provider
+  # finds no subject and /oauth2/auth never establishes a session.
+  subject_attribute_name: sub
+definition:
+  id: 1
+  name: OIDC Definition
+  grant_types:
+    - authorization_code
+    - client_credentials
+    - refresh_token
+    - urn:openid:params:grant-type:ciba
+    - urn:ietf:params:oauth:grant-type:token-exchange
+  access_policy_id: isvaop_policy
+  base_url: ${ivia_public_url}
+  token_settings:
+    issuer: ${ivia_public_issuer}
+    signing_alg: RS256
+    signing_keystore: isvaop_keys
+    signing_keylabel: httpserverkey
+  features:
+    consent_prompt: ALWAYS_PROMPT
+    enable_dynamic_registration: true
+  backchannel_settings:
+    default_expiry: 900
+    maximum_expiry: 1800
+    polling_interval: 5
+    notifyuser_mappingrule_id: notifyuser
+    checkstatus_mappingrule_id: checkstatus
+    user_code_support: false
+jwks:
+  signing_keystore: isvaop_keys
+
+keystore:
+  - name: isvaop_keys
+    type: pem
+    certificate:
+      - label: httpservercert
+        content: '@iviaop.pem'
+
+      - label: postgres
+        content: '@postgres.crt'
+    key:
+      - label: httpserverkey
+        content: '@iviaop.key'
