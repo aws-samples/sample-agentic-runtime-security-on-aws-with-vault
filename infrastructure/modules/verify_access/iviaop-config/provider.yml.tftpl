@@ -18,6 +18,11 @@ server:
 authentication:
   endpoint: ${ivia_public_url}/oauth2/auth
   callback_param_name: Target
+  # subject_attribute_name names the JWT claim/credential attribute that
+  # populates the OIDC `sub`. Default is `uid`, but the WebSEAL jwt:/isvaop
+  # stanza emits the principal as claim `sub` — so without this the provider
+  # finds no subject and /oauth2/auth never establishes a session.
+  subject_attribute_name: sub
 definition:
   id: 1
   name: OIDC Definition
