@@ -1,5 +1,7 @@
 # Copyright contributors to the IBM Security Verify Access OIDC Provider Resources project
 version: 23.03
+logging:
+  level: trace
 server:
   ssl:
     key: 'ks:isvaop_keys/httpserverkey'
@@ -7,6 +9,15 @@ server:
   pages:
     type: zip                       
     content: "@templates.zip" 
+# Mandatory when grant_types includes authorization_code or implicit (IBM
+# provider.yml schema). Without it the /oauth2/auth endpoint is a no-op
+# redirect and no authentication session is established. ISVAOP relies on the
+# WRP as point-of-contact: the browser is sent to ${ivia_public_url}/oauth2/auth
+# (an anyauth-protected junction path) where WebSEAL injects the iv-jwt
+# credential, then ISVAOP establishes the session and returns to callback_param.
+authentication:
+  endpoint: ${ivia_public_url}/oauth2/auth
+  callback_param_name: Target
 definition:
   id: 1
   name: OIDC Definition

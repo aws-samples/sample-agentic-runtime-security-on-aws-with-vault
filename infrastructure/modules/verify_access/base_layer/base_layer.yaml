@@ -95,14 +95,10 @@ webseal:
       acls:
       - name: "unauth"
         junctions:
-        # Only .well-known is unauthenticated — matches IBM official sample
-        # (IBM-Security/verify-access-container-deployment). All other paths
-        # under /isvaop inherit the default WebSEAL ACL, which challenges
-        # for authentication. That challenge IS the auth-code flow: user
-        # hits /isvaop/oauth2/authorize unauth → WebSEAL serves login form
-        # → user authenticates → WebSEAL session → request proxied to
-        # iviaop with iv-user header → iviaop emits authorization code.
         - "/isvaop/oauth2/.well-known"
+        - "/isvaop/oauth2/token"
+        - "/isvaop/oauth2/jwks"
+        - "/isvaop/oauth2/ciba"
   reverse_proxy:
   - name: "rp1"
     host: "www.iamlab.ibm.com"
@@ -146,3 +142,28 @@ webseal:
       operation: "add"
       entry_id: "request-match"
       value: "response:GET /isvaop/oauth2/.well-known/oauth-authorization-server *"
+    # JWT identity injection on the /isvaop junction so iviaop receives the
+    # authenticated WebSEAL user as iv-jwt. WebSEAL signs with the WRP cert
+    # (already in pdsrv keystore); iviaop validates via the signer chain.
+    - stanza: "jwt"
+      operation: "add"
+      entry_id: "jct-id"
+      value: "+/isvaop"
+    - stanza: "jwt:/isvaop"
+      operation: "add"
+    - stanza: "jwt:/isvaop"
+      operation: "add"
+      entry_id: "key-label"
+      value: "WRP"
+    - stanza: "jwt:/isvaop"
+      operation: "add"
+      entry_id: "hdr-name"
+      value: "iv-jwt"
+    - stanza: "jwt:/isvaop"
+      operation: "add"
+      entry_id: "claim"
+      value: "attr::AZN_CRED_PRINCIPAL_NAME::sub"
+    - stanza: "jwt:/isvaop"
+      operation: "add"
+      entry_id: "lifetime"
+      value: "120"
