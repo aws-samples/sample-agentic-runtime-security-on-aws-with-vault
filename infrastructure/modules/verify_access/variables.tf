@@ -24,3 +24,13 @@ variable "tags" {
   default     = {}
   description = "Common tags applied to AWS resources created by this module (the SG rule)."
 }
+
+variable "tls_certificate_arn" {
+  type        = string
+  description = "Validated ACM cert ARN attached to the WRP ALB HTTPS:443 listener (wildcard *.<workshop_domain>)."
+}
+
+variable "public_hostname" {
+  type        = string
+  description = "Public HTTPS hostname for the WRP/IVIAOP browser entry point (e.g. login.demos.devopsoscar.dev). Drives provider.yml base_url + issuer and the ALB cert binding."
+}

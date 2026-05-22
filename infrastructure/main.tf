@@ -51,6 +51,28 @@ module "ecr" {
 }
 
 #-------------------------------------------------------------------------------
+# Wave 0 — DNS + TLS (AWS-native: Route53 + ACM public cert)
+# Owns a Route53 public hosted zone for a delegated workshop subdomain plus a
+# wildcard ACM cert used by the browser-facing ALB HTTPS listeners (banking-ui
+# + ivia-wrp). Independent of all other resources; only the NS delegation at the
+# parent domain (manual, one-time) gates ACM validation. NOT Vault PKI.
+#-------------------------------------------------------------------------------
+
+module "dns" {
+  source = "./modules/dns"
+
+  domain_name = var.workshop_domain
+  tags        = var.tags
+}
+
+locals {
+  # Browser-facing HTTPS hostnames under the delegated workshop subdomain.
+  # banking-ui (app + OAuth /callback) and IVIA/WRP (login/authorize/consent).
+  bank_hostname  = "bank.${var.workshop_domain}"
+  login_hostname = "login.${var.workshop_domain}"
+}
+
+#-------------------------------------------------------------------------------
 # Wave 0 — VPC
 #-------------------------------------------------------------------------------
 
@@ -278,6 +300,8 @@ module "ivia" {
   cluster_name           = module.eks.cluster_name
   icr_entitlement_key    = var.icr_entitlement_key
   node_security_group_id = module.eks.node_security_group_id
+  tls_certificate_arn    = module.dns.certificate_arn
+  public_hostname        = local.login_hostname
   tags                   = var.tags
 
   depends_on = [time_sleep.alb_webhook_ready]
@@ -342,6 +366,9 @@ module "uc2_app" {
   ivia_service_endpoint = module.ivia.ivia_service_endpoint
   ivia_client_id        = "agent-uc2"
   ivia_client_secret    = module.ivia.ivia_client_secret
+  tls_certificate_arn   = module.dns.certificate_arn
+  public_hostname       = local.bank_hostname
+  ivia_public_issuer    = "https://${local.login_hostname}"
   tags                  = var.tags
 
   depends_on = [time_sleep.alb_webhook_ready]
@@ -362,7 +389,7 @@ module "uc3_agent" {
   ivia_base_url      = "https://${module.ivia.ivia_service_endpoint}:8436"
   ivia_client_id     = "agent-uc3"
   ivia_client_secret = module.ivia.ivia_client_secret
-  ivia_external_url  = "http://${module.ivia.ivia_wrp_alb_hostname}"
+  ivia_external_url  = "https://${local.login_hostname}"
   db_host            = module.rds.address
   db_name            = "workshop"
   uc3_agent_image    = var.uc3_agent_image
@@ -393,7 +420,7 @@ module "uc3_agent" {
 #-------------------------------------------------------------------------------
 
 locals {
-  uc2_redirect_uri = "http://${module.uc2_app.banking_ui_alb_hostname}/callback"
+  uc2_redirect_uri = "https://${local.bank_hostname}/callback"
 
   iviaop_clients_yml_resolved = templatefile(
     "${path.module}/modules/verify_access/iviaop-config/clients.yml.tftpl",
@@ -433,6 +460,29 @@ resource "null_resource" "iviaop_rollout_restart" {
   }
 
   depends_on = [kubernetes_config_map_v1_data.iviaop_clients_patch]
+}
+
+#-------------------------------------------------------------------------------
+# Workshop DNS records — point the stable HTTPS hostnames at the two browser-
+# facing ALBs (created by the AWS Load Balancer Controller from each Ingress).
+# CNAME (not ALIAS) is sufficient for these subdomains and avoids an aws_lb
+# zone-id lookup. The wildcard ACM cert on each ALB matches both names.
+#-------------------------------------------------------------------------------
+
+resource "aws_route53_record" "bank" {
+  zone_id = module.dns.zone_id
+  name    = local.bank_hostname
+  type    = "CNAME"
+  ttl     = 300
+  records = [module.uc2_app.banking_ui_alb_hostname]
+}
+
+resource "aws_route53_record" "login" {
+  zone_id = module.dns.zone_id
+  name    = local.login_hostname
+  type    = "CNAME"
+  ttl     = 300
+  records = [module.ivia.ivia_wrp_alb_hostname]
 }
 
 #-------------------------------------------------------------------------------

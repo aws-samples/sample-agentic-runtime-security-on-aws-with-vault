@@ -766,12 +766,12 @@ resource "kubernetes_config_map" "iviaop_config" {
   }
   data = {
     "provider.yml" = templatefile("${path.module}/iviaop-config/provider.yml.tftpl", {
-      # Public OIDC issuer + base_url must match the ALB hostname that
-      # browser redirects actually reach. Hard-coded `iamlab.ibm.com` (IBM
-      # training default) is unresolvable from attendee browsers.
-      # Future: replace with stable DNS — see .planning/phases/08-stable-public-dns/.
-      ivia_public_url    = "http://${kubernetes_ingress_v1.ivia_wrp.status[0].load_balancer[0].ingress[0].hostname}/isvaop"
-      ivia_public_issuer = "http://${kubernetes_ingress_v1.ivia_wrp.status[0].load_balancer[0].ingress[0].hostname}"
+      # Public OIDC issuer + base_url use the stable HTTPS hostname (Route53 +
+      # ACM wildcard cert). IVIAOP rejects http redirect_uris for non-localhost,
+      # and browsers must reach the login/authorize/consent pages over valid
+      # HTTPS — both require this to be the https custom domain, not the raw ALB.
+      ivia_public_url    = "https://${var.public_hostname}/isvaop"
+      ivia_public_issuer = "https://${var.public_hostname}"
     })
     "rules.yaml"        = file("${path.module}/iviaop-config/rules.yaml")
     "accesspolicy.yaml" = file("${path.module}/iviaop-config/accesspolicy.yaml")
@@ -1260,7 +1260,9 @@ resource "kubernetes_ingress_v1" "ivia_wrp" {
     annotations = {
       "alb.ingress.kubernetes.io/scheme"               = "internet-facing"
       "alb.ingress.kubernetes.io/target-type"          = "ip"
-      "alb.ingress.kubernetes.io/listen-ports"         = "[{\"HTTP\":80}]"
+      "alb.ingress.kubernetes.io/listen-ports"         = "[{\"HTTP\":80},{\"HTTPS\":443}]"
+      "alb.ingress.kubernetes.io/certificate-arn"      = var.tls_certificate_arn
+      "alb.ingress.kubernetes.io/ssl-redirect"         = "443"
       "alb.ingress.kubernetes.io/backend-protocol"     = "HTTPS"
       "alb.ingress.kubernetes.io/healthcheck-protocol" = "HTTPS"
       "alb.ingress.kubernetes.io/healthcheck-port"     = "9443"

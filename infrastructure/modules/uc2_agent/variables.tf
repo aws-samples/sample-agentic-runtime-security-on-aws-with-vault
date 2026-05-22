@@ -62,6 +62,21 @@ variable "region" {
   type        = string
 }
 
+variable "tls_certificate_arn" {
+  description = "Validated ACM cert ARN attached to the banking-ui ALB HTTPS:443 listener (wildcard *.<workshop_domain>)."
+  type        = string
+}
+
+variable "public_hostname" {
+  description = "Public HTTPS hostname for the banking UI (e.g. bank.demos.devopsoscar.dev). The OAuth redirect_uri is https://<this>/callback."
+  type        = string
+}
+
+variable "ivia_public_issuer" {
+  description = "Public HTTPS OIDC issuer base URL for IVIAOP (e.g. https://login.demos.devopsoscar.dev). The UI builds IVIA_ISSUER = <this>/isvaop for discovery + authorize redirects."
+  type        = string
+}
+
 variable "kb_region" {
   description = "AWS region where the Bedrock Knowledge Base is deployed (must match the KB embedding model region)."
   type        = string

@@ -32,6 +32,12 @@ variable "cluster_name" {
   description = "Name of the EKS cluster (also used for VPC + RDS naming)."
 }
 
+variable "workshop_domain" {
+  type        = string
+  description = "Delegated subdomain for workshop browser-facing HTTPS (Route53 zone + wildcard ACM cert). Parent domain must delegate NS to this zone."
+  default     = "demos.devopsoscar.dev"
+}
+
 #-------------------------------------------------------------------------------
 # VPC Configuration
 #-------------------------------------------------------------------------------
