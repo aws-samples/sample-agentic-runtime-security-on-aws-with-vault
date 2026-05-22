@@ -765,8 +765,16 @@ resource "kubernetes_config_map" "iviaop_config" {
     labels    = local.common_labels
   }
   data = {
-    "provider.yml" = file("${path.module}/iviaop-config/provider.yml")
-    "rules.yaml"   = file("${path.module}/iviaop-config/rules.yaml")
+    "provider.yml" = templatefile("${path.module}/iviaop-config/provider.yml.tftpl", {
+      # Public OIDC issuer + base_url must match the ALB hostname that
+      # browser redirects actually reach. Hard-coded `iamlab.ibm.com` (IBM
+      # training default) is unresolvable from attendee browsers.
+      # Future: replace with stable DNS — see .planning/phases/08-stable-public-dns/.
+      ivia_public_url    = "http://${kubernetes_ingress_v1.ivia_wrp.status[0].load_balancer[0].ingress[0].hostname}/isvaop"
+      ivia_public_issuer = "http://${kubernetes_ingress_v1.ivia_wrp.status[0].load_balancer[0].ingress[0].hostname}"
+    })
+    "rules.yaml"        = file("${path.module}/iviaop-config/rules.yaml")
+    "accesspolicy.yaml" = file("${path.module}/iviaop-config/accesspolicy.yaml")
     "storage.yml" = templatefile("${path.module}/iviaop-config/storage.yml", {
       postgres_password = random_password.postgresql_pwd.result
     })

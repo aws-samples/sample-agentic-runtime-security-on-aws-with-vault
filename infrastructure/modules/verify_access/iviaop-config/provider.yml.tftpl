@@ -13,11 +13,13 @@ definition:
   grant_types:
     - authorization_code
     - client_credentials
+    - refresh_token
     - urn:openid:params:grant-type:ciba
     - urn:ietf:params:oauth:grant-type:token-exchange
-  base_url: https://iamlab.ibm.com/isvaop
+  access_policy_id: isvaop_policy
+  base_url: ${ivia_public_url}
   token_settings:
-    issuer: https://iamlab.ibm.com
+    issuer: ${ivia_public_issuer}
     signing_alg: RS256
     signing_keystore: isvaop_keys
     signing_keylabel: httpserverkey
