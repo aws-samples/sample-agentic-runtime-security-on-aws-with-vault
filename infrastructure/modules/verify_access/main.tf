@@ -749,11 +749,13 @@ resource "kubernetes_service" "iviaconfig" {
 }
 
 #-------------------------------------------------------------------------------
-# iviaop-config ConfigMap. 8 files mounted at /var/isvaop/config in the iviaop
+# iviaop-config ConfigMap. 9 files mounted at /var/isvaop/config in the iviaop
 # pod. storage.yml is templated to substitute the postgresql password (CONTEXT R2
 # — sidesteps the chicken-and-egg "iviaop boots before autoconf publishes the
-# Liberty config" race).
-# Sibling source: common/isvaop-config/.
+# Liberty config" race). clients.yml registers agent-uc1 + agent-uc3 statically;
+# agent-uc2 is registered post-deploy via DCR (kubernetes_job in root main.tf)
+# because its redirect_uri depends on the banking-ui ALB hostname.
+# Sibling source: common/isvaop-config/ (+ workshop-specific clients.yml).
 #-------------------------------------------------------------------------------
 
 resource "kubernetes_config_map" "iviaop_config" {
@@ -768,9 +770,19 @@ resource "kubernetes_config_map" "iviaop_config" {
     "storage.yml" = templatefile("${path.module}/iviaop-config/storage.yml", {
       postgres_password = random_password.postgresql_pwd.result
     })
-    "isvaop.key"  = file("${path.module}/iviaop-config/isvaop.key")
-    "isvaop.pem"  = file("${path.module}/iviaop-config/isvaop.pem")
-    "isvawrp.pem" = file("${path.module}/iviaop-config/isvawrp.pem")
+    # clients.yml rendered with a placeholder uc2_redirect_uri. The real ALB
+    # hostname (only known after module.uc2_app deploys the banking-ui Ingress)
+    # is patched in at root level by `kubernetes_config_map_v1_data.iviaop_clients_patch`
+    # followed by `null_resource.iviaop_rollout_restart`. This indirection
+    # breaks the otherwise-circular dep: module.uc2_app depends on module.ivia
+    # outputs, so module.ivia cannot in turn read from module.uc2_app.
+    "clients.yml" = templatefile("${path.module}/iviaop-config/clients.yml.tftpl", {
+      ivia_client_secret = random_password.ivia_oauth_client_secret.result
+      uc2_redirect_uri   = "http://placeholder.invalid/callback"
+    })
+    "iviaop.key"     = file("${path.module}/iviaop-config/iviaop.key")
+    "iviaop.pem"     = file("${path.module}/iviaop-config/iviaop.pem")
+    "iviawrprp1.pem" = file("${path.module}/iviaop-config/iviawrprp1.pem")
     # Dynamic — must match the cert the postgresql pod serves (postgresql-keys.server.pem)
     "postgres.crt" = tls_self_signed_cert.postgresql.cert_pem
   }
@@ -921,7 +933,16 @@ resource "kubernetes_deployment" "iviaop" {
     replicas = 1
     selector { match_labels = { app = "iviaop" } }
     template {
-      metadata { labels = { app = "iviaop" } }
+      metadata {
+        labels = { app = "iviaop" }
+        # Forces a rolling restart whenever any file in iviaop-config changes
+        # (provider.yml, clients.yml, certs, etc.). The iviaop container only
+        # reads /var/isvaop/config on startup — without this, ConfigMap edits
+        # would be invisible until the next pod recreation.
+        annotations = {
+          "checksum/iviaop-config" = sha256(jsonencode(kubernetes_config_map.iviaop_config.data))
+        }
+      }
       spec {
         image_pull_secrets { name = kubernetes_secret.dockerlogin.metadata[0].name }
 
@@ -1273,7 +1294,7 @@ resource "kubernetes_config_map" "base_layer" {
   data = {
     "base_layer.yaml"          = file("${path.module}/base_layer/base_layer.yaml")
     "ISAM-Trial-HashiCorp.cer" = file("${path.module}/base_layer/ISAM-Trial-HashiCorp.cer")
-    "isvaop.pem"               = file("${path.module}/base_layer/isvaop.pem")
+    "iviaop.pem"               = file("${path.module}/base_layer/iviaop.pem")
     "ldap.crt"                 = file("${path.module}/base_layer/ldap.crt")
     "postgres.crt"             = tls_self_signed_cert.postgresql.cert_pem
     "req_openid_config.lua"    = file("${path.module}/base_layer/req_openid_config.lua")
@@ -1297,7 +1318,7 @@ resource "kubernetes_secret" "base_layer_p12" {
   }
   type = "Opaque"
   binary_data = {
-    "isvawrp.p12" = filebase64("${path.module}/base_layer/isvawrp.p12")
+    "iviawrprp1.p12" = filebase64("${path.module}/base_layer/iviawrprp1.p12")
   }
 }
 

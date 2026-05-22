@@ -78,7 +78,7 @@ additionalOutputs: |
 
   [OUTPUT]
       Name                cloudwatch_logs
-      Match               kube.var.log.containers.isvaop-*
+      Match               kube.var.log.containers.iviaop-*
       region              ${region}
       log_group_name      /workshop/ivia-decision
       log_stream_prefix   ivia-

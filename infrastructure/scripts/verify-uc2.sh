@@ -16,7 +16,10 @@
 #   11. Agent /health endpoint returns "healthy"
 #   12. IVIA OAuth pre-check: JWKS endpoint reachable (prerequisite for jwt auth)
 #   13. Active lease exists after cred issuance (credential lifecycle check)
-#   14. ROPC token grant: IVIA returns access_token for oscar (grant_type=password)
+#   14. OAuth discovery: IVIA /.well-known/openid-configuration returns valid JSON
+#       (sanity that the OIDC Provider is reachable via the WRP ALB — the full
+#       Authorization Code + PKCE flow requires browser interaction with the
+#       WebSEAL login form and cannot be tested headlessly here)
 #
 # Usage:
 #   ./verify-uc2.sh [--help]
@@ -60,7 +63,7 @@ Checks (14 total):
   11. Agent /health endpoint returns "healthy"
   12. IVIA JWKS endpoint reachable (OAuth pre-check)
   13. Active lease exists after cred issuance (credential lifecycle)
-  14. ROPC token grant: IVIA returns access_token for oscar (grant_type=password)
+  14. OAuth discovery: IVIA /.well-known/openid-configuration returns valid JSON
 
 Env-var overrides:
   BANKING_NAMESPACE   (default: banking-app)
@@ -298,7 +301,7 @@ fi
 # Verify the JWKS URL is reachable from within the cluster (via vault-0 proxy check).
 # This is a prerequisite for the full OAuth flow, not a full OAuth test.
 #-------------------------------------------------------------------------------
-ivia_jwks_url="https://isvaop.verify-access.svc.cluster.local:8436/oauth2/jwks"
+ivia_jwks_url="https://iviaop.verify-access.svc.cluster.local:8436/oauth2/jwks"
 jwks_result=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
     sh -c "wget -q -O - --no-check-certificate --timeout=10 '${ivia_jwks_url}'" 2>/dev/null | jq -r '.keys | length' 2>/dev/null || echo "0")
 
@@ -329,40 +332,33 @@ else
 fi
 
 #-------------------------------------------------------------------------------
-# Check 14 — ROPC token grant: programmatic login returns access_token
+# Check 14 — OAuth discovery endpoint reachable
 #
-# Tests the ROPC flow end-to-end from outside the cluster:
-#   1. Resolve the IVIA ALB hostname from the isvaop Ingress
-#   2. Read the client_secret from the banking-ui-config ConfigMap
-#   3. POST grant_type=password to IVIA /oauth2/token
-#   4. Verify the response contains an access_token
+# Hits the IVIA OIDC Provider's discovery document via the WRP ALB. This is
+# the only sub-path under /isvaop that has the `unauth` ACL attached, so it
+# is the right sanity check for "the OAuth surface is up and proxied".
 #
-# This check validates that:
-#   - IVIA agent-uc2 client has password grant type enabled
-#   - IVIA can authenticate oscar against the in-cluster OpenLDAP user registry
-#   - The token endpoint returns a valid ROPC response
+# Why not a full end-to-end token test here:
+#   - banking-ui now uses Authorization Code + PKCE, not ROPC.
+#   - The authorize step renders the WebSEAL login form (HTML), which can
+#     only be completed in a real browser. The full flow is validated by
+#     the workshop attendee in sub-module 61.
 #-------------------------------------------------------------------------------
-ivia_endpoint=$(kubectl get ingress -n verify-access isvaop \
+ivia_endpoint=$(kubectl get ingress -n verify-access ivia-wrp \
     -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
-client_secret=$(kubectl get configmap banking-ui-config -n "${BANKING_NAMESPACE}" \
-    -o jsonpath='{.data.IVIA_CLIENT_SECRET}' 2>/dev/null || echo "")
 
-if [ -n "${ivia_endpoint}" ] && [ -n "${client_secret}" ]; then
-    token_response=$(curl -s -X POST "http://${ivia_endpoint}/oauth2/token" \
-        --max-time 15 \
-        -d "grant_type=password&client_id=agent-uc2&client_secret=${client_secret}&username=oscar&password=WorkshopUser1!&scope=openid" \
-        2>/dev/null || echo "{}")
-    if echo "${token_response}" | jq -e '.access_token' >/dev/null 2>&1; then
-        print_pass "ROPC token grant: IVIA returned access_token for oscar (grant_type=password)"
+if [ -n "${ivia_endpoint}" ]; then
+    discovery=$(curl -s "http://${ivia_endpoint}/isvaop/oauth2/.well-known/openid-configuration" \
+        --max-time 15 -H "Accept: application/json" 2>/dev/null || echo "{}")
+    if echo "${discovery}" | jq -e '.issuer and .authorization_endpoint and .token_endpoint and .jwks_uri' >/dev/null 2>&1; then
+        issuer=$(echo "${discovery}" | jq -r '.issuer')
+        print_pass "OAuth discovery: IVIA OIDC Provider reachable (issuer=${issuer})"
     else
-        error_desc=$(echo "${token_response}" | jq -r '.error_description // .error // "unknown"' 2>/dev/null || echo "parse failed")
-        print_fail "ROPC token grant failed" \
-            "IVIA did not return access_token — error: ${error_desc}. Full response: ${token_response:0:300}. Verify IVIA agent-uc2 client has password grant_type and the OpenLDAP user registry is reachable."
+        print_fail "OAuth discovery failed" \
+            "GET /isvaop/oauth2/.well-known/openid-configuration did not return a valid OIDC document. Response: ${discovery:0:300}. Verify the WRP unauth ACL is attached to /isvaop/oauth2/.well-known and the iviaop pod is Ready."
     fi
-elif [ -z "${ivia_endpoint}" ]; then
-    print_warn "ROPC token grant check skipped — IVIA ALB hostname not resolved (check isvaop Ingress)"
 else
-    print_warn "ROPC token grant check skipped — IVIA_CLIENT_SECRET not in banking-ui-config ConfigMap (check uc2_agent Terraform module)"
+    print_warn "OAuth discovery check skipped — IVIA ALB hostname not resolved (check ivia-wrp Ingress)"
 fi
 
 # Summary is printed automatically by the common-checks.sh EXIT trap

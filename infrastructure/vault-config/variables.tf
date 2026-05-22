@@ -31,9 +31,9 @@ variable "cluster_oidc_issuer" {
 }
 
 variable "ivia_jwks_url" {
-  description = "IVIA JWKS URL (cluster-internal). Vault fetches signing keys from this endpoint."
+  description = "IVIA JWKS URL (cluster-internal). Vault fetches signing keys from this endpoint. Service name is `iviaop` (Phase 7 rename — pre-Phase-7 was `isvaop`)."
   type        = string
-  default     = "https://isvaop.verify-access.svc.cluster.local:8436/oauth2/jwks"
+  default     = "https://iviaop.verify-access.svc.cluster.local:8436/oauth2/jwks"
 }
 
 variable "ivia_issuer" {

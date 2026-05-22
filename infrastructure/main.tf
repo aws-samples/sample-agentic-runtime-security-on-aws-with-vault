@@ -10,7 +10,7 @@
 #           bedrock_kb_index (bedrock_kb_aoss)
 #   Wave 3: vault (eks + audit + addons)
 #   Wave 4: ivia (eks + rds + vault + audit + addons) — gated by time_sleep.alb_webhook_ready
-#   Wave 5: vault_config + isva_config  [LOCAL — kubectl port-forward, not in this root module]
+#   Wave 5: vault_config                [LOCAL — kubectl port-forward, not in this root module]
 #   Wave 6: uc1_agent (vault + rds + bedrock_kb_index + eks)
 #   Wave 7: uc2_app (vault + rds + ivia + bedrock_kb_index + eks)
 #   Wave 8: uc3_agent (vault + rds + ivia + uc2_app)
@@ -372,6 +372,67 @@ module "uc3_agent" {
   tags               = var.tags
 
   depends_on = [module.vault, module.rds, module.ivia, module.uc2_app]
+}
+
+#-------------------------------------------------------------------------------
+# agent-uc2 redirect_uri injection — Path A
+#
+# Why this exists: agent-uc2's redirect_uri must contain the banking-ui ALB
+# hostname, which only exists after module.uc2_app deploys the Ingress.
+# module.uc2_app already depends on module.ivia outputs (ivia_client_secret,
+# ivia_service_endpoint, ivia_ingress_hostname), so module.ivia cannot in turn
+# read from module.uc2_app — TF would reject the cycle.
+#
+# Resolution: module.ivia ships clients.yml with a placeholder redirect for
+# agent-uc2 (`http://placeholder.invalid/callback`). After both modules
+# complete, this root-level resource pair overwrites just the clients.yml
+# key in the iviaop-config ConfigMap with the real ALB hostname, then triggers
+# a rollout-restart of the iviaop Deployment so the new clients.yml is loaded
+# at startup. agent-uc1 and agent-uc3 remain unaffected (their entries in
+# clients.yml don't contain the templated hostname).
+#-------------------------------------------------------------------------------
+
+locals {
+  uc2_redirect_uri = "http://${module.uc2_app.banking_ui_alb_hostname}/callback"
+
+  iviaop_clients_yml_resolved = templatefile(
+    "${path.module}/modules/verify_access/iviaop-config/clients.yml.tftpl",
+    {
+      ivia_client_secret = module.ivia.ivia_client_secret
+      uc2_redirect_uri   = local.uc2_redirect_uri
+    }
+  )
+}
+
+resource "kubernetes_config_map_v1_data" "iviaop_clients_patch" {
+  metadata {
+    name      = "iviaop-config"
+    namespace = "verify-access"
+  }
+
+  data = {
+    "clients.yml" = local.iviaop_clients_yml_resolved
+  }
+
+  field_manager = "root-tf-clients-patch"
+  force         = true
+
+  depends_on = [module.ivia, module.uc2_app]
+}
+
+# Roll the iviaop Deployment whenever the resolved clients.yml changes. The
+# iviaop pod loads clients.yml only at startup; without a restart the patched
+# ConfigMap would sit on disk unread.
+resource "null_resource" "iviaop_rollout_restart" {
+  triggers = {
+    clients_yml_sha256 = sha256(local.iviaop_clients_yml_resolved)
+  }
+
+  provisioner "local-exec" {
+    command = "kubectl rollout restart deploy/iviaop -n verify-access && kubectl rollout status deploy/iviaop -n verify-access --timeout=180s"
+  }
+
+  depends_on = [kubernetes_config_map_v1_data.iviaop_clients_patch]
 }
 
 #-------------------------------------------------------------------------------

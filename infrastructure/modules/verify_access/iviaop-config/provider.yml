@@ -12,7 +12,9 @@ definition:
   name: OIDC Definition
   grant_types:
     - authorization_code
+    - client_credentials
     - urn:openid:params:grant-type:ciba
+    - urn:ietf:params:oauth:grant-type:token-exchange
   base_url: https://iamlab.ibm.com/isvaop
   token_settings:
     issuer: https://iamlab.ibm.com
@@ -21,6 +23,14 @@ definition:
     signing_keylabel: httpserverkey
   features:
     consent_prompt: ALWAYS_PROMPT
+    enable_dynamic_registration: true
+  backchannel_settings:
+    default_expiry: 900
+    maximum_expiry: 1800
+    polling_interval: 5
+    notifyuser_mappingrule_id: notifyuser
+    checkstatus_mappingrule_id: checkstatus
+    user_code_support: false
 jwks:
   signing_keystore: isvaop_keys
 
@@ -29,10 +39,10 @@ keystore:
     type: pem
     certificate:
       - label: httpservercert
-        content: '@isvaop.pem'
+        content: '@iviaop.pem'
 
       - label: postgres
         content: '@postgres.crt'
     key:
       - label: httpserverkey
-        content: '@isvaop.key'
+        content: '@iviaop.key'

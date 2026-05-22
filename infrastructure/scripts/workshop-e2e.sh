@@ -477,7 +477,7 @@ phase_identity() {
 #===============================================================================
 # PHASE 6: Vault — init + configure (local via port-forward)
 # Step 1: vault-init.sh — initialize Vault, save root token + recovery keys
-# Step 2: vault-configure.sh — port-forward, terraform apply vault-config + isva-config
+# Step 2: vault-configure.sh — port-forward, terraform apply vault-config (IVIA OAuth client registration moved to clients.yml + DCR Job in root TF)
 # Step 3: test-vault-verify.sh — verify pods, seal status, Raft peers, audit
 #===============================================================================
 phase_vault() {
@@ -985,7 +985,7 @@ for m in msgs[-5:]:
         obj = json.loads(m)
         t = obj.get('time','')[:19]
         log = obj.get('log','').strip()
-        pod = obj.get('kubernetes',{}).get('pod_name','isvaop')
+        pod = obj.get('kubernetes',{}).get('pod_name','iviaop')
         # Try to extract structured fields from the log line
         try:
             inner = json.loads(log)

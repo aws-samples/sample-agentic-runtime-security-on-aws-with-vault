@@ -98,11 +98,11 @@ output "glue_database_name" {
 }
 
 #-------------------------------------------------------------------------------
-# UC2 Banking UI Outputs (consumed by vault-configure.sh to resolve the OAuth
-# redirect URI registered with IVIA's agent-uc2 client at isva-config apply time).
+# UC2 Banking UI Outputs (consumed by the kubernetes_job_v1.agent_uc2_dcr
+# resource to build redirect_uri for the agent-uc2 OIDC client registration).
 #-------------------------------------------------------------------------------
 
 output "banking_ui_alb_hostname" {
-  description = "Public ALB hostname for the UC2 banking UI Ingress. vault-configure.sh reads this to build uc2_redirect_uri=\"http://<hostname>/callback\" for the isva-config apply."
+  description = "Public ALB hostname for the UC2 banking UI Ingress. The agent_uc2_dcr Job uses this to build redirect_uri=\"http://<hostname>/callback\" when registering the agent-uc2 OAuth client via iviaop's RFC 7591 DCR endpoint."
   value       = module.uc2_app.banking_ui_alb_hostname
 }

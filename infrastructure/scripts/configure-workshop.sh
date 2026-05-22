@@ -308,7 +308,7 @@ else
         IVIA_HEALTH=""
         if kubectl --context workshop get pods -n verify-access --no-headers 2>/dev/null | grep -q Running; then
             kubectl --context workshop port-forward \
-                svc/isvaop -n verify-access 8436:8436 \
+                svc/iviaop -n verify-access 8436:8436 \
                 >/dev/null 2>&1 &
             _IVIA_PF_PID=$!
             sleep 3

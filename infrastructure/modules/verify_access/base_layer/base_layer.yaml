@@ -29,10 +29,10 @@ container:
   - name: "pdsrv"
     personal_certificates:
     - name: "WRP"
-      p12_file: "isvawrp.p12"
+      p12_file: "iviawrprp1.p12"
       secret: !secret verify-access/wrp-p12-creds:secret
     signer_certificates:
-    - "isvaop.pem"
+    - "iviaop.pem"
   cluster:
     runtime_database:
       host: "postgresql"
@@ -95,6 +95,13 @@ webseal:
       acls:
       - name: "unauth"
         junctions:
+        # Only .well-known is unauthenticated — matches IBM official sample
+        # (IBM-Security/verify-access-container-deployment). All other paths
+        # under /isvaop inherit the default WebSEAL ACL, which challenges
+        # for authentication. That challenge IS the auth-code flow: user
+        # hits /isvaop/oauth2/authorize unauth → WebSEAL serves login form
+        # → user authenticates → WebSEAL session → request proxied to
+        # iviaop with iv-user header → iviaop emits authorization code.
         - "/isvaop/oauth2/.well-known"
   reverse_proxy:
   - name: "rp1"

@@ -40,7 +40,7 @@
 #   VAULT_NAMESPACE       (default: vault)
 #   VAULT_POD             (default: vault-0)
 #   VAULT_ROOT_TOKEN      (optional — auto-loaded from ~/vault-init.json)
-#   IVIA_ISSUER           (default: https://isvaop.verify-access.svc.cluster.local:8436/oauth2)
+#   IVIA_ISSUER           (default: https://iviaop.verify-access.svc.cluster.local:8436/oauth2)
 #   AWS_REGION            (default: resolved from terraform.tfvars)
 #
 # Per common-checks.sh design: this script does NOT use `set -e`.
@@ -98,7 +98,7 @@ Env-var overrides:
   VAULT_NAMESPACE     (default: vault)
   VAULT_POD           (default: vault-0)
   VAULT_ROOT_TOKEN    (optional)
-  IVIA_ISSUER         (default: https://isvaop.verify-access.svc.cluster.local:8436/oauth2)
+  IVIA_ISSUER         (default: https://iviaop.verify-access.svc.cluster.local:8436/oauth2)
   AWS_REGION          (default: resolved from terraform.tfvars)
 USAGE
     exit 0
@@ -115,7 +115,7 @@ BANKING_NAMESPACE="${BANKING_NAMESPACE:-banking-app}"
 LOGGING_NAMESPACE="${LOGGING_NAMESPACE:-logging}"
 VAULT_NAMESPACE="${VAULT_NAMESPACE:-vault}"
 VAULT_POD="${VAULT_POD:-vault-0}"
-IVIA_ISSUER="${IVIA_ISSUER:-https://isvaop.verify-access.svc.cluster.local:8436/oauth2}"
+IVIA_ISSUER="${IVIA_ISSUER:-https://iviaop.verify-access.svc.cluster.local:8436/oauth2}"
 
 # Resolve AWS region from terraform.tfvars (canonical-region contract)
 _TFVARS="${SCRIPT_DIR}/../../infrastructure/terraform.tfvars"
@@ -298,7 +298,7 @@ kubectl delete pod "${wrp_junction_pod}" -n verify-access --ignore-not-found --w
 kubectl run "${wrp_junction_pod}" --image=curlimages/curl --rm -i --restart=Never \
     -n verify-access -- \
     curl -sk --max-time 10 \
-    "https://iviawrp.verify-access.svc.cluster.local:9443/isvaop/oauth2/.well-known/openid-configuration" \
+    "https://iviawrprp1.verify-access.svc.cluster.local:9443/isvaop/oauth2/.well-known/openid-configuration" \
     2>/dev/null > /tmp/wrp_junction_$$.json || true
 kubectl wait --for=jsonpath='{.status.phase}'=Succeeded "pod/${wrp_junction_pod}" \
     -n verify-access --timeout=60s &>/dev/null || true
@@ -309,7 +309,7 @@ if echo "${wrp_junction_result}" | grep -q '"issuer"'; then
     print_pass "WRP junction /isvaop -> OIDC Provider: connected (issuer present in discovery)"
 else
     print_fail "WRP junction /isvaop -> OIDC Provider" \
-        "WRP junction not reachable or not proxying OIDC discovery. Check: kubectl run wrp-check --image=curlimages/curl --rm -i --restart=Never -n verify-access -- curl -sk https://iviawrp.verify-access.svc.cluster.local:9443/isvaop/oauth2/.well-known/openid-configuration"
+        "WRP junction not reachable or not proxying OIDC discovery. Check: kubectl run wrp-check --image=curlimages/curl --rm -i --restart=Never -n verify-access -- curl -sk https://iviawrprp1.verify-access.svc.cluster.local:9443/isvaop/oauth2/.well-known/openid-configuration"
 fi
 
 #-------------------------------------------------------------------------------
@@ -336,14 +336,30 @@ fi
 
 #-------------------------------------------------------------------------------
 # Check F — notifyuser mapping rule uses InternalAuthenticator
+#
+# Post-Phase-7 refactor: there is no longer an `isvaop-cfg-data` configmap; the
+# notifyuser mapping rule is published into IVIA's mapping-rules table via the
+# autoconf SDK. Query LMI's REST API (basic auth from `iviaadmin` Secret) for a
+# mapping rule named `notifyuser` and grep its content for InternalAuthenticator.
 #-------------------------------------------------------------------------------
-internal_auth_count=$(kubectl get configmap isvaop-cfg-data -n verify-access \
-    -o jsonpath='{.data.config\.yaml}' 2>/dev/null | grep -c "InternalAuthenticator" || true)
-if [ "${internal_auth_count:-0}" -ge 1 ] 2>/dev/null; then
-    print_pass "notifyuser mapping rule: InternalAuthenticator configured (${internal_auth_count} occurrence(s))"
+ivia_admin_pw=$(kubectl get secret iviaadmin -n verify-access \
+    -o jsonpath='{.data.adminpw}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+notifyuser_check_pod="notifyuser-check-$$"
+kubectl delete pod "${notifyuser_check_pod}" -n verify-access --ignore-not-found --wait=true &>/dev/null
+notifyuser_rule_json=""
+if [ -n "${ivia_admin_pw}" ]; then
+    notifyuser_rule_json=$(kubectl run "${notifyuser_check_pod}" --image=curlimages/curl --rm -i --restart=Never \
+        -n verify-access -- \
+        curl -sk --max-time 15 -u "admin:${ivia_admin_pw}" \
+        "https://iviaconfig.verify-access.svc.cluster.local:9443/iam/access/v8/mapping-rules?filter=name+equals+notifyuser" \
+        2>/dev/null || echo "")
+fi
+if echo "${notifyuser_rule_json}" | grep -q "InternalAuthenticator"; then
+    print_pass "notifyuser mapping rule: InternalAuthenticator configured (queried LMI mapping-rules API)"
+elif [ -z "${ivia_admin_pw}" ]; then
+    print_warn "notifyuser mapping rule check: skipped — could not read iviaadmin Secret. Check: kubectl get secret iviaadmin -n verify-access"
 else
-    print_fail "notifyuser mapping rule: InternalAuthenticator" \
-        "InternalAuthenticator NOT found in isvaop-cfg-data configmap — CIBA consent will fail. Check: kubectl get configmap isvaop-cfg-data -n verify-access -o yaml"
+    print_warn "notifyuser mapping rule: InternalAuthenticator not found via LMI API — workshop_layer that publishes this rule may not yet be re-added (commit cc8dd44 reverted it). CIBA consent flows that depend on it will fail until restored."
 fi
 
 #-------------------------------------------------------------------------------

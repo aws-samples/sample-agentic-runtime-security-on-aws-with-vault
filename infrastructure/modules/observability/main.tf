@@ -3,7 +3,7 @@
 #
 # Deploys:
 #   1. fluent-bit DaemonSet (aws-for-fluent-bit Helm chart) — routes pod logs
-#      from vault-*, isvaop-*, uc3-agent-* containers to the pre-created
+#      from vault-*, iviaop-*, uc3-agent-* containers to the pre-created
 #      /workshop/* CloudWatch log groups (audit module owns lifecycle).
 #   2. IAM role for fluent-bit with Pod Identity association — CloudWatch write.
 #   3. S3 bucket for log export with lifecycle and workshop CMK SSE.

@@ -1,15 +1,21 @@
 #!/usr/bin/env bash
 #===============================================================================
-# Vault + IVIA Configuration Script
+# Vault Configuration Script
 #
-# Configures Vault (auth backends, secrets engines, policies, roles) and IVIA
-# (OAuth clients, CIBA policy, RAR types) via local Terraform workspaces with
-# kubectl port-forward. This runs AFTER the first workspace deploy and vault-init.sh.
+# Configures Vault (auth backends, secrets engines, policies, roles) via a local
+# Terraform workspace with kubectl port-forward. Also verifies IVIA OIDC discovery
+# is healthy. This runs AFTER the first workspace deploy and vault-init.sh.
+#
+# IVIA OAuth client registration moved to:
+#   - Static (agent-uc1, agent-uc3): modules/verify_access/iviaop-config/clients.yml
+#   - Dynamic (agent-uc2): kubernetes_job_v1.agent_uc2_dcr in root main.tf
+# The legacy isva-config workspace was deleted — its REST API paths returned 404
+# on IVIA 11.0.2.0 (OAuth runtime moved to standalone iviaop:25.10 pod).
 #
 # Phases:
 #   1. Gather inputs    — reads cluster/RDS/Bedrock info from AWS + kubectl
 #   2. Vault config     — port-forward :8200, terraform apply vault-config/
-#   3. IVIA config      — port-forward :8436, terraform apply isva-config/
+#   3. IVIA verify      — confirms 7 pods Running + OIDC discovery returns issuer
 #   4. Summary          — pass/fail table
 #
 # Prerequisites:
@@ -34,7 +40,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 VAULT_CONFIG_DIR="${REPO_ROOT}/infrastructure/vault-config"
-ISVA_CONFIG_DIR="${REPO_ROOT}/infrastructure/isva-config"
 
 #--- Defaults ------------------------------------------------------------------
 CLUSTER_NAME=""
@@ -201,33 +206,29 @@ phase_gather() {
     ok "Bedrock role ARN: ${BEDROCK_ROLE_ARN}"
   fi
 
-  # IVIA self-signed TLS cert (Vault needs it to trust OIDC discovery)
+  # IVIA self-signed TLS cert (Vault needs it as jwks_ca_pem to trust the
+  # OIDC discovery URL served by the iviaop runtime). Source: ConfigMap
+  # `iviaop-config` in `verify-access`, key `iviaop.pem` — produced by the
+  # verify_access module's iviaop-config ConfigMap from
+  # `modules/verify_access/iviaop-config/iviaop.pem`. Cert SAN matches the
+  # K8s Service DNS `iviaop.verify-access.svc.cluster.local` (regenerated
+  # 2026-05-21 to align with post-Phase-7 service rename isvaop→iviaop).
   info "Reading IVIA TLS certificate..."
-  IVIA_CERT_PEM=$(kubectl get secret -n verify-access \
-    $(kubectl get pods -n verify-access -l app=iviaop -o jsonpath='{.items[0].metadata.name}' 2>/dev/null) \
-    -o jsonpath='{.data.tls\.crt}' 2>/dev/null | base64 -d 2>/dev/null || true)
-  if [[ -z "$IVIA_CERT_PEM" ]]; then
-    # Fallback: extract from the configmap config.yaml B64 cert
-    IVIA_CERT_PEM=$(kubectl get configmap isvaop-cfg-data -n verify-access -o jsonpath='{.data.config\.yaml}' 2>/dev/null \
-      | sed -n 's/.*B64:\([A-Za-z0-9+/=]*\).*/\1/p' | head -1 | base64 -d 2>/dev/null || true)
+  IVIA_CERT_PEM=$(kubectl get configmap iviaop-config -n verify-access \
+    -o jsonpath='{.data.iviaop\.pem}' 2>/dev/null || true)
+  if [[ -z "$IVIA_CERT_PEM" || "${IVIA_CERT_PEM}" != *"BEGIN CERTIFICATE"* ]]; then
+    fail "Could not read IVIA TLS cert from ConfigMap iviaop-config (key iviaop.pem). Vault jwt auth backend would reject empty jwks_ca_pem."
+    fail "Check: kubectl get configmap iviaop-config -n verify-access -o jsonpath='{.data.iviaop\\.pem}'"
+    record "gather" "FAIL"
+    return 1
   fi
-  if [[ -z "$IVIA_CERT_PEM" ]]; then
-    # Last fallback: openssl s_client
-    IVIA_CERT_PEM=$(kubectl exec -n vault vault-0 -- sh -c \
-      'echo | openssl s_client -connect isvaop.verify-access.svc.cluster.local:8436 -servername isvaop 2>/dev/null' 2>/dev/null \
-      | sed -n '/BEGIN CERTIFICATE/,/END CERTIFICATE/p' || true)
-  fi
-  if [[ -n "$IVIA_CERT_PEM" ]]; then
-    ok "IVIA TLS cert: captured ($(echo "$IVIA_CERT_PEM" | wc -l | tr -d ' ') lines)"
-  else
-    warn "Could not capture IVIA TLS cert — JWT auth backend may fail"
-  fi
+  ok "IVIA TLS cert: captured ($(echo "$IVIA_CERT_PEM" | wc -l | tr -d ' ') lines, BEGIN CERTIFICATE present)"
 
   # IVIA issuer (Vault jwt auth bound_issuer)
   info "Reading IVIA issuer from OIDC discovery..."
   IVIA_ISSUER=$(kubectl run ivia-issuer-check --image=curlimages/curl --rm -i --restart=Never \
     -n verify-access -- curl -sk \
-    "https://isvaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration" \
+    "https://iviaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration" \
     2>/dev/null | jq -r '.issuer // empty' 2>/dev/null || echo "")
   if [[ -n "$IVIA_ISSUER" ]]; then
     ok "IVIA issuer: ${IVIA_ISSUER}"
@@ -400,41 +401,11 @@ phase_ivia_verify() {
   fi
   ok "${running} IVIA pod(s) Running"
 
-  # LMI is reachable in-cluster via the iviaconfig ClusterIP Service.
-  # The isva-config sub-apply runs from a pod (or kubectl exec context) and
-  # uses this DNS name. No NLB; LMI is not exposed externally.
+  # LMI is reachable in-cluster via the iviaconfig ClusterIP Service. Only used
+  # for OIDC discovery verification below — no REST writes (OAuth client
+  # registration moved into iviaop-config/clients.yml + the agent-uc2 DCR Job).
   local IVIA_LMI_ENDPOINT="iviaconfig.verify-access.svc.cluster.local"
   ok "IVIA LMI endpoint (in-cluster): ${IVIA_LMI_ENDPOINT}:9443"
-
-  # Resolve UC2 banking-UI ALB hostname for the IVIA agent-uc2 OAuth client.
-  # The banking_ui_alb_hostname root output is exposed in infrastructure/outputs.tf
-  # specifically for this purpose; fall back to direct kubectl query if the
-  # terraform output isn't available (e.g., when running this script standalone).
-  local BANKING_UI_ALB=""
-  if BANKING_UI_ALB=$(terraform -chdir="${REPO_ROOT}/infrastructure" output -raw banking_ui_alb_hostname 2>/dev/null) \
-      && [[ -n "${BANKING_UI_ALB}" ]]; then
-    ok "banking_ui ALB (from terraform output): ${BANKING_UI_ALB}"
-  else
-    BANKING_UI_ALB=$(kubectl get ingress -n banking-app banking-ui-ingress \
-      -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
-    if [[ -n "${BANKING_UI_ALB}" ]]; then
-      ok "banking_ui ALB (from kubectl): ${BANKING_UI_ALB}"
-    else
-      warn "banking_ui ALB hostname not yet provisioned — agent-uc2 OAuth client will be registered with placeholder redirect_uri; re-run vault-configure.sh after the banking-ui Ingress is Ready."
-    fi
-  fi
-  local UC2_REDIRECT_URI="http://${BANKING_UI_ALB:-localhost:5173}/callback"
-
-  # Write isva-config/terraform.tfvars (scaffolded to match VAULT_CONFIG_DIR pattern).
-  info "Writing isva-config/terraform.tfvars..."
-  mkdir -p "${ISVA_CONFIG_DIR}"
-  cat > "${ISVA_CONFIG_DIR}/terraform.tfvars" <<TFVARS
-region                = "${REGION}"
-ivia_service_endpoint = "${IVIA_LMI_ENDPOINT}"
-uc2_redirect_uri      = "${UC2_REDIRECT_URI}"
-TFVARS
-  chmod 600 "${ISVA_CONFIG_DIR}/terraform.tfvars"
-  ok "isva-config/terraform.tfvars written (mode 600) — uc2_redirect_uri=${UC2_REDIRECT_URI}"
 
   info "Verifying OIDC discovery..."
   local issuer
