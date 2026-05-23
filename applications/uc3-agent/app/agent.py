@@ -20,6 +20,7 @@ Tools:
 
 import logging
 import os
+import secrets
 import time
 import uuid
 from datetime import datetime, timezone
@@ -54,13 +55,21 @@ CIBA_TIMEOUT_SECONDS = 120
 # ---------------------------------------------------------------------------
 
 
-def _initiate_ciba(login_hint: str, authorization_details: list, request_id: str) -> str:
+def _initiate_ciba(login_hint: str, authorization_details: list, request_id: str) -> dict:
     """Initiate CIBA backchannel authentication at IVIA.
 
     Sends bc-authorize request with:
       - login_hint: the account owner's username/email (to target the right user)
       - binding_message: request_id UUID (visible in IVIA consent UI; audit anchor)
       - authorization_details: RAR payload describing the refund approval scope
+      - user_code: a short code the user re-enters at /oauth2/user_authorization to
+        bind the browser consent session to this pending request.
+
+    user_code mechanic (unverified between two readings — handled defensively):
+      (A) device-flow style: provider GENERATES and returns user_code in the
+          response. (B) standard CIBA: client SENDS user_code and the provider
+          echoes/accepts it. We send a generated code AND prefer any value the
+          provider returns, logging both so the first live test reveals the truth.
 
     Args:
         login_hint: Username or email to target for CIBA consent.
@@ -68,7 +77,7 @@ def _initiate_ciba(login_hint: str, authorization_details: list, request_id: str
         request_id: UUID threaded through the flow for audit correlation.
 
     Returns:
-        auth_req_id from IVIA (used for polling).
+        Dict with auth_req_id (for polling) and user_code (for the consent page).
 
     Raises:
         RuntimeError: If IVIA bc-authorize returns an error.
@@ -77,13 +86,18 @@ def _initiate_ciba(login_hint: str, authorization_details: list, request_id: str
 
     bc_authorize_url = f"{IVIA_BASE_URL}/oauth2/ciba"
 
+    # Short, user-typable code. The user enters this at the consent page to bind
+    # their authenticated browser session to this CIBA request.
+    sent_user_code = secrets.token_hex(3).upper()  # e.g. "A3F9C1"
+
+    # Client creds go in the HTTP Basic Authorization header (the client is
+    # registered token_endpoint_auth_method=client_secret_basic), NOT the body.
     payload = {
-        "client_id": IVIA_CLIENT_ID,
-        "client_secret": IVIA_CLIENT_SECRET,
         "login_hint": login_hint,
         "binding_message": request_id,
         "authorization_details": _json.dumps(authorization_details),
         "scope": "openid",
+        "user_code": sent_user_code,
     }
 
     logger.info(
@@ -93,6 +107,7 @@ def _initiate_ciba(login_hint: str, authorization_details: list, request_id: str
             "login_hint": login_hint,
             "binding_message": request_id,
             "ivia_url": bc_authorize_url,
+            "sent_user_code": sent_user_code,
         },
     )
 
@@ -100,6 +115,7 @@ def _initiate_ciba(login_hint: str, authorization_details: list, request_id: str
         resp = client.post(
             bc_authorize_url,
             data=payload,
+            auth=(IVIA_CLIENT_ID, IVIA_CLIENT_SECRET),
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
 
@@ -113,6 +129,12 @@ def _initiate_ciba(login_hint: str, authorization_details: list, request_id: str
     if not auth_req_id:
         raise RuntimeError(f"CIBA bc-authorize response missing auth_req_id: {data}")
 
+    # Prefer a provider-returned user_code (interpretation A); fall back to the
+    # code we sent (interpretation B). The log line below disambiguates on first
+    # live test — whichever the user must actually type is the authoritative one.
+    returned_user_code = data.get("user_code")
+    user_code = returned_user_code or sent_user_code
+
     logger.info(
         "ciba_bc_authorize_success",
         extra={
@@ -120,9 +142,12 @@ def _initiate_ciba(login_hint: str, authorization_details: list, request_id: str
             "auth_req_id": auth_req_id,
             "expires_in": data.get("expires_in", "unknown"),
             "interval": data.get("interval", CIBA_POLL_INTERVAL_SECONDS),
+            "sent_user_code": sent_user_code,
+            "returned_user_code": returned_user_code,
+            "user_code_source": "response" if returned_user_code else "sent",
         },
     )
-    return auth_req_id
+    return {"auth_req_id": auth_req_id, "user_code": user_code}
 
 
 def _poll_ciba(auth_req_id: str, request_id: str) -> str:
@@ -154,14 +179,13 @@ def _poll_ciba(auth_req_id: str, request_id: str) -> str:
         payload = {
             "grant_type": grant_type,
             "auth_req_id": auth_req_id,
-            "client_id": IVIA_CLIENT_ID,
-            "client_secret": IVIA_CLIENT_SECRET,
         }
 
         with httpx.Client(verify=False, timeout=30.0) as client:
             resp = client.post(
                 token_url,
                 data=payload,
+                auth=(IVIA_CLIENT_ID, IVIA_CLIENT_SECRET),
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
             )
 
@@ -252,8 +276,6 @@ def _token_exchange(ciba_token: str, actor_token: str, request_id: str) -> str:
         "actor_token": actor_token,
         "actor_token_type": "urn:ietf:params:oauth:token-type:access_token",
         "requested_token_type": "urn:ietf:params:oauth:token-type:access_token",
-        "client_id": IVIA_ACTOR_CLIENT_ID,
-        "client_secret": IVIA_ACTOR_CLIENT_SECRET,
     }
 
     logger.info(
@@ -270,6 +292,7 @@ def _token_exchange(ciba_token: str, actor_token: str, request_id: str) -> str:
         resp = client.post(
             token_url,
             data=payload,
+            auth=(IVIA_ACTOR_CLIENT_ID, IVIA_ACTOR_CLIENT_SECRET),
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
 
@@ -315,10 +338,9 @@ def _get_actor_token() -> str:
             token_url,
             data={
                 "grant_type": "client_credentials",
-                "client_id": IVIA_ACTOR_CLIENT_ID,
-                "client_secret": IVIA_ACTOR_CLIENT_SECRET,
                 "scope": "openid",
             },
+            auth=(IVIA_ACTOR_CLIENT_ID, IVIA_ACTOR_CLIENT_SECRET),
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
     resp.raise_for_status()
@@ -439,15 +461,29 @@ def initiate_refund(
         }
     ]
 
-    auth_req_id = _initiate_ciba(login_hint, authorization_details, request_id)
+    ciba = _initiate_ciba(login_hint, authorization_details, request_id)
+    auth_req_id = ciba["auth_req_id"]
+    user_code = ciba["user_code"]
 
     rar_desc = f"refund_approval ${amount} {currency} for transaction {transaction_id}"
+
+    # Browser consent on the standalone provider is served at
+    # /oauth2/user_authorization (verified live). The page keys off the user_code
+    # the user types and ignores auth_req_id, but we pass auth_req_id as a hint
+    # since the live walkthrough did. IVIA_EXTERNAL_URL is the WRP ALB; the
+    # /isvaop junction fronts the provider.
+    consent_url = (
+        f"{IVIA_EXTERNAL_URL}/isvaop/oauth2/user_authorization?auth_req_id={auth_req_id}"
+        if IVIA_EXTERNAL_URL
+        else ""
+    )
 
     logger.info(
         "ciba_consent_requested",
         extra={
             "request_id": request_id,
             "auth_req_id": auth_req_id,
+            "user_code": user_code,
             "authorization_details": authorization_details,
         },
     )
@@ -461,8 +497,9 @@ def initiate_refund(
         "amount": amount,
         "currency": currency,
         "login_hint": login_hint,
-        "consent_url": f"{IVIA_EXTERNAL_URL}/isvaop/oauth2/ciba_user_authorize/{auth_req_id}" if IVIA_EXTERNAL_URL else "",
-        "consent_marker": f"CIBA_CONSENT:auth_req_id={auth_req_id}|request_id={request_id}|details={rar_desc}|consent_url={IVIA_EXTERNAL_URL}/isvaop/oauth2/ciba_user_authorize/{auth_req_id}",
+        "user_code": user_code,
+        "consent_url": consent_url,
+        "consent_marker": f"CIBA_CONSENT:auth_req_id={auth_req_id}|request_id={request_id}|user_code={user_code}|details={rar_desc}|consent_url={consent_url}",
     }
 
 
@@ -675,7 +712,8 @@ def build_uc3_agent(vault_client=None, session_id: str = "default") -> Agent:
         "   - amount: the absolute value of the amount (positive number)\n"
         "   - currency: 'USD'\n"
         "6. initiate_refund returns a consent_marker string. You MUST include it EXACTLY as-is in your response.\n"
-        "   Tell the user: 'CIBA consent is required. Please approve the refund in the consent banner below.'\n"
+        "   Tell the user: 'CIBA consent is required. Open the approval link in the consent banner below,\n"
+        "   enter the user code shown, and approve the refund.'\n"
         "7. When the user says they approved (or sends any follow-up), call complete_refund with:\n"
         "   auth_req_id, request_id, account_id, transaction_id, amount, currency from the initiate_refund result.\n"
         "8. Report exactly what the complete_refund tool returns to the user.\n\n"

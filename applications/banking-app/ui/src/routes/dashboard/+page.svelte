@@ -42,37 +42,36 @@
 	});
 
 	let chatEndpoint = $state('/api/chat');
-	let pendingConsent: { auth_req_id: string; request_id: string; details: string } | null = $state(null);
-	let consentStatus = $state('');
+	let pendingConsent: { auth_req_id: string; request_id: string; user_code: string; details: string; consent_url: string } | null = $state(null);
 
 	function extractConsent(text: string) {
-		const match = text.match(/CIBA_CONSENT:auth_req_id=([^|]+)\|request_id=([^|]+)\|details=([^|]+)/);
+		const match = text.match(/CIBA_CONSENT:auth_req_id=([^|]+)\|request_id=([^|]+)\|user_code=([^|]+)\|details=([^|]+)(?:\|consent_url=(\S+))?/);
 		if (match) {
-			pendingConsent = { auth_req_id: match[1], request_id: match[2], details: match[3].replace(/\*+$/, '') };
+			pendingConsent = {
+				auth_req_id: match[1],
+				request_id: match[2],
+				user_code: match[3],
+				details: match[4].replace(/\*+$/, ''),
+				consent_url: match[5] ?? ''
+			};
 		}
 	}
 
-	async function approveConsent() {
-		if (!pendingConsent) return;
-		consentStatus = 'approving';
-		try {
-			const res = await fetch('/api/ciba-approve', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ auth_req_id: pendingConsent.auth_req_id }),
-			});
-			const data = await res.json();
-			if (data.approved) {
-				consentStatus = 'approved';
-				messages = [...messages, { role: 'ai', content: `Consent approved for request ${pendingConsent.request_id}. Processing refund...` }];
-			} else {
-				consentStatus = 'error';
-				messages = [...messages, { role: 'error', content: `Consent approval failed: ${data.error ?? 'unknown'}` }];
+	// CIBA consent is granted on the OIDC provider's /oauth2/user_authorization
+	// page (served via the WRP /isvaop junction). The user opens consent_url in a
+	// new tab, is already authenticated via the WRP session, enters the user_code
+	// shown in the banner to bind the session to this request, approves there,
+	// then tells the agent to finish — complete_refund polls IVIA for the grant.
+	function openConsent() {
+		if (!pendingConsent?.consent_url) return;
+		window.open(pendingConsent.consent_url, '_blank', 'noopener');
+		messages = [
+			...messages,
+			{
+				role: 'ai',
+				content: `On the IVIA consent page that just opened, enter user code ${pendingConsent.user_code} and approve the refund, then reply here (e.g. "I approved") so I can complete request ${pendingConsent.request_id}.`
 			}
-		} catch (err) {
-			consentStatus = 'error';
-			messages = [...messages, { role: 'error', content: `Consent approval error: ${err}` }];
-		}
+		];
 		pendingConsent = null;
 	}
 
@@ -207,10 +206,11 @@
 					<strong>CIBA Consent Required (RFC 9126)</strong>
 					<p>The agent is requesting approval for a privileged action:</p>
 					<p class="consent-details">{pendingConsent.details}</p>
+					<p class="consent-usercode">Enter this user code on the IVIA page: <code>{pendingConsent.user_code}</code></p>
 					<p class="consent-rid">Request ID: <code>{pendingConsent.request_id}</code></p>
 					<div class="consent-actions">
-						<button class="btn btn-approve" onclick={approveConsent} disabled={consentStatus === 'approving'}>
-							{consentStatus === 'approving' ? 'Approving...' : 'Approve Refund'}
+						<button class="btn btn-approve" onclick={openConsent} disabled={!pendingConsent.consent_url}>
+							Approve in IVIA →
 						</button>
 						<button class="btn btn-deny" onclick={() => { pendingConsent = null; messages = [...messages, { role: 'ai', content: 'Consent denied by user.' }]; }}>
 							Deny
@@ -473,6 +473,16 @@
 		padding: 0.1rem 0.3rem;
 		border-radius: 3px;
 		font-size: 0.75rem;
+	}
+
+	.consent-usercode code {
+		background: #0f62fe;
+		color: #fff;
+		padding: 0.2rem 0.5rem;
+		border-radius: 3px;
+		font-size: 1rem;
+		font-weight: 700;
+		letter-spacing: 0.1em;
 	}
 
 	.consent-actions {
