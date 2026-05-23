@@ -33,12 +33,20 @@ definition:
     - urn:openid:params:grant-type:ciba
     - urn:ietf:params:oauth:grant-type:token-exchange
   access_policy_id: isvaop_policy
+  # Runs before each access token is minted. Used by UC3 to inject the may_act
+  # delegation claim onto the RFC 8693 token-exchange output token (gated on
+  # grant_type so other grants are untouched). See rules.yaml isvaop_pretoken.
+  pre_mappingrule_id: isvaop_pretoken
   base_url: ${ivia_public_url}
   token_settings:
     issuer: ${ivia_public_issuer}
     signing_alg: RS256
     signing_keystore: isvaop_keys
     signing_keylabel: httpserverkey
+    # Issue access tokens as signed RS256 JWTs (typ: at+jwt) rather than opaque
+    # reference tokens. REQUIRED for UC3: Vault's jwt auth backend validates the
+    # token-exchange output against the iviaop JWKS, which only works for a JWT.
+    access_token_type: jwt
   features:
     consent_prompt: ALWAYS_PROMPT
     enable_dynamic_registration: true
@@ -48,7 +56,19 @@ definition:
     polling_interval: 5
     notifyuser_mappingrule_id: notifyuser
     checkstatus_mappingrule_id: checkstatus
-    user_code_support: false
+    # Allows the uc3-agent to include a user_code on bc-authorize; it surfaces in
+    # the notifyuser rule and the binding context. Consent itself is served by the
+    # InternalAuthenticator at /isvaop/oauth2/ciba_user_authorize/{transactionID}
+    # (NOT the device-flow /oauth2/user_authorization endpoint). Pairs with the
+    # client backchannel_user_code_parameter.
+    user_code_support: true
+  # Rich Authorization Requests (RAR) — UC3 privileged refund flow. Registers the
+  # custom authorization_details type the uc3-agent sends on CIBA bc-authorize;
+  # without it IVIAOP rejects with "Unknown authorization detail type refund_approval".
+  # strategy sha512 hashes the entire payload (no assumption about which fields exist).
+  authorization_details_types_supported:
+    - type: refund_approval
+      strategy: sha512
 jwks:
   signing_keystore: isvaop_keys
 
