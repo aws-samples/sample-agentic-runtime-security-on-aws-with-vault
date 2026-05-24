@@ -582,8 +582,12 @@ module "observability" {
   glue_database_name = module.audit.glue_database_name
   athena_workgroup   = module.audit.athena_workgroup_name
   kms_key_arn        = module.audit.workshop_cmk_arn
-  tags               = var.tags
+  # PLANE-A pgaudit subscription target. The rds module exposes the instance
+  # identifier as db_instance_id (output "identifier" does NOT exist — plan
+  # interface assumption corrected; the log group is /aws/rds/instance/<id>/postgresql).
+  rds_identifier = module.rds.db_instance_id
+  tags           = var.tags
 
-  depends_on = [module.eks, module.addons, module.audit]
+  depends_on = [module.eks, module.addons, module.audit, module.rds]
 }
 

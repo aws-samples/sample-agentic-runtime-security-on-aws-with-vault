@@ -348,6 +348,34 @@ resource "aws_kinesis_firehose_delivery_stream" "agent_trace" {
   tags = var.tags
 }
 
+# PLANE-A (UC3 three-plane audit): dedicated stream for RDS pgaudit lines.
+# A NEW stream rather than reusing an existing one — the RDS postgresql log
+# source has a different line shape than the JSON sources above; a dedicated
+# stream lands raw text at the pgaudit/ prefix for the LazySimpleSerDe Glue
+# table (RESEARCH Open Question 3 RESOLVED).
+resource "aws_kinesis_firehose_delivery_stream" "pgaudit" {
+  name        = "${var.cluster_name}-pgaudit"
+  destination = "extended_s3"
+
+  extended_s3_configuration {
+    role_arn            = aws_iam_role.firehose.arn
+    bucket_arn          = aws_s3_bucket.logs.arn
+    prefix              = "pgaudit/year=!{timestamp:yyyy}/month=!{timestamp:MM}/day=!{timestamp:dd}/"
+    error_output_prefix = "errors/pgaudit/"
+
+    buffering_interval = 60
+    buffering_size     = 5
+
+    compression_format = "UNCOMPRESSED"
+
+    cloudwatch_logging_options {
+      enabled = false
+    }
+  }
+
+  tags = var.tags
+}
+
 #-------------------------------------------------------------------------------
 # CloudWatch subscription filters (3)
 # One per /workshop/* log group → corresponding Firehose delivery stream.
@@ -380,6 +408,20 @@ resource "aws_cloudwatch_log_subscription_filter" "agent_trace" {
   log_group_name  = "/workshop/agent-trace"
   filter_pattern  = ""
   destination_arn = aws_kinesis_firehose_delivery_stream.agent_trace.arn
+  role_arn        = aws_iam_role.cw_firehose.arn
+  distribution    = "ByLogStream"
+
+  depends_on = [aws_iam_role_policy.cw_to_firehose]
+}
+
+# PLANE-A: subscribe the RDS PostgreSQL/pgaudit log group to the pgaudit Firehose.
+# Log group name is the RDS-managed CloudWatch export group for the instance;
+# var.rds_identifier interpolation only — no region literal (canonical contract).
+resource "aws_cloudwatch_log_subscription_filter" "pgaudit" {
+  name            = "${var.cluster_name}-pgaudit"
+  log_group_name  = "/aws/rds/instance/${var.rds_identifier}/postgresql"
+  filter_pattern  = ""
+  destination_arn = aws_kinesis_firehose_delivery_stream.pgaudit.arn
   role_arn        = aws_iam_role.cw_firehose.arn
   distribution    = "ByLogStream"
 
@@ -441,9 +483,54 @@ resource "aws_glue_catalog_table" "vault_audit" {
       name = "request"
       type = "struct<id:string,path:string,operation:string,namespace:struct<id:string>,data:map<string,string>>"
     }
+    # P3 (2026-05-24, live audit line): a database/creds/uc3-refund-writer READ
+    # response carries ONLY data:{username,password} plus secret:{lease_id}. The
+    # numeric lease_duration that RESEARCH assumed at response.data['lease_duration']
+    # is NOT present in the audit-logged response. response.secret.lease_id is the
+    # only TTL-adjacent field actually emitted, so the struct models it and the VIEW
+    # surfaces db_credential_ttl from response.secret.lease_id (Task 4).
     columns {
       name = "response"
-      type = "struct<data:map<string,string>>"
+      type = "struct<data:map<string,string>,secret:struct<lease_id:string>>"
+    }
+  }
+}
+
+# PLANE-A (UC3 three-plane audit): RDS pgaudit log lines as raw text.
+# Two-column workshop schema (timestamp, message); LazySimpleSerDe over the
+# pgaudit/ prefix in the existing KMS-encrypted logs bucket (T-071-05: no new
+# bucket, no public path; refund INSERT SQL carries no secrets). The VIEW
+# regexp-extracts uc3_request_id and db_table/db_statement from message.
+resource "aws_glue_catalog_table" "pgaudit_logs" {
+  name          = "pgaudit_logs"
+  database_name = var.glue_database_name
+  description   = "RDS PostgreSQL pgaudit log lines — data-write audit for UC3 refund INSERT with request_id SQL comment."
+
+  table_type = "EXTERNAL_TABLE"
+
+  parameters = {
+    "classification"     = "json"
+    "EXTERNAL"           = "TRUE"
+    "has_encrypted_data" = "false"
+  }
+
+  storage_descriptor {
+    location      = "${local.log_bucket_uri}/pgaudit/"
+    input_format  = "org.apache.hadoop.mapred.TextInputFormat"
+    output_format = "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat"
+
+    ser_de_info {
+      name                  = "raw-text-serde"
+      serialization_library = "org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe"
+    }
+
+    columns {
+      name = "timestamp"
+      type = "string"
+    }
+    columns {
+      name = "message"
+      type = "string"
     }
   }
 }
