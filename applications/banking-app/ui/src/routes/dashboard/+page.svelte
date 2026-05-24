@@ -57,11 +57,12 @@
 		}
 	}
 
-	// CIBA consent is granted on the OIDC provider's /oauth2/user_authorization
-	// page (served via the WRP /isvaop junction). The user opens consent_url in a
-	// new tab, is already authenticated via the WRP session, enters the user_code
-	// shown in the banner to bind the session to this request, approves there,
-	// then tells the agent to finish — complete_refund polls IVIA for the grant.
+	// CIBA consent is granted on the OIDC provider's hosted consent page
+	// (/isvaop/oauth2/ciba_user_authorize/{transactionID}, served via the WRP /isvaop
+	// junction). The real URL is pushed by the IVIA notifyuser rule to the agent and
+	// arrives in consent_url. The user opens it, signs in via the WRP session if
+	// prompted, approves there, then tells the agent to finish — complete_refund polls
+	// IVIA for the grant.
 	function openConsent() {
 		if (!pendingConsent?.consent_url) return;
 		window.open(pendingConsent.consent_url, '_blank', 'noopener');
@@ -69,7 +70,7 @@
 			...messages,
 			{
 				role: 'ai',
-				content: `On the IVIA consent page that just opened, enter user code ${pendingConsent.user_code} and approve the refund, then reply here (e.g. "I approved") so I can complete request ${pendingConsent.request_id}.`
+				content: `On the IVIA consent page that just opened, approve the refund, then reply here (e.g. "I approved") so I can complete request ${pendingConsent.request_id}.`
 			}
 		];
 		pendingConsent = null;
@@ -206,7 +207,6 @@
 					<strong>CIBA Consent Required (RFC 9126)</strong>
 					<p>The agent is requesting approval for a privileged action:</p>
 					<p class="consent-details">{pendingConsent.details}</p>
-					<p class="consent-usercode">Enter this user code on the IVIA page: <code>{pendingConsent.user_code}</code></p>
 					<p class="consent-rid">Request ID: <code>{pendingConsent.request_id}</code></p>
 					<div class="consent-actions">
 						<button class="btn btn-approve" onclick={openConsent} disabled={!pendingConsent.consent_url}>

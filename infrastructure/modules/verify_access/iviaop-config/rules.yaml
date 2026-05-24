@@ -2,36 +2,29 @@ rules:
   mapping:
     - name: notifyuser
       content: |
-        // InternalAuthenticator: OIDC Provider delegates the consent page to WRP.
-        // WRP serves the login page + /isvaop/oauth2/ciba_user_authorize/{transactionID}
-        // consent page. The current rule does nothing but pick InternalAuthenticator.
+        // CIBA InternalAuthenticator + push the consent URL to the banking app so a
+        // workshop user gets an "Approve" button (no kubectl / no log access needed).
         //
-        // OUTBOUND HTTP FROM notifyuser -- VERIFIED LIVE 2026-05-23 (ivia-oidc-provider:25.10).
-        // A prior comment here claimed "the notifyuser sandbox has no HTTP client". That is
-        // WRONG. notifyuser CAN make outbound HTTP calls. The gotchas (all tested live):
-        //   1. The Rhino sandbox strips the `Packages` reflection root for bare expressions
-        //      (`Packages.x.y.Z` -> "ReferenceError: Packages is not defined").
-        //   2. `HttpClientV2` and `HttpClient` are NOT pre-bound globals (typeof == undefined).
-        //   3. But `importClass(Packages.com.ibm.security.access.httpclient.HttpClientV2)`
-        //      DOES bind it, and the call then works. (v1 `HttpClient` does NOT import --
-        //      only HttpClientV2.) Signature (see IBM util_http doc):
-        //        HttpClientV2.httpPost(url, headers, body, httpsTrustStore,
-        //          basicUser, basicPass, clientKeyStore, clientKeyAlias, protocol,
-        //          throwExec, timeoutSecs, sendAsJson, proxyServer)
-        //      A POST to in-cluster http://uc3-agent-svc.banking-app.svc.cluster.local:8080
-        //      returned a real HTTP status (no truststore needed for plain http://).
-        //
-        // HOW TO PUSH THE CIBA CONSENT URL TO THE WORKSHOP USER (Option A, not yet wired):
-        //   importClass(Packages.com.ibm.security.access.httpclient.HttpClientV2);
-        //   importClass(Packages.com.tivoli.am.fim.trustserver.sts.utilities.IDMappingExtUtils);
-        //   var url = ciba.getUserAuthorizeEndpoint();          // consent URL (internal host)
-        //   var hdr = new java.util.HashMap(); hdr.put("Content-Type","application/json");
-        //   var body = JSON.stringify({auth_req_id: ciba.getAuthRequestID(), consent_url: url});
-        //   var resp = HttpClientV2.httpPost("http://uc3-agent-svc.banking-app.svc.cluster.local:8080/api/ciba/pending",
-        //                hdr, body, null, null, null, null, null, null, false, 5, true, null);
-        //   IDMappingExtUtils.traceString("notifyuser push code=" + resp.getCode());
-        //   // banking backend stores it; banking-ui polls + shows an Approve button -> url.
-        // NOTE: bc-authorize for client agent-uc3 REQUIRES a user_code (FBTAQ5508E if absent).
+        // VERIFIED LIVE 2026-05-23 (ivia-oidc-provider:25.10): notifyuser CAN make
+        // outbound HTTP. The sandbox is position-sensitive -- `Packages` is not a bare
+        // global, and HttpClientV2 is NOT pre-bound; you MUST importClass HttpClientV2
+        // INSIDE this block, on the line immediately before the call. Plain http://
+        // needs no truststore; headers=null + sendAsJson=true sends a JSON body.
+        // httpPost(url,headers,body,trustStore,user,pass,keyStore,keyAlias,proto,
+        //          throwExec,timeoutSecs,sendAsJson,proxy)
+        importClass(Packages.com.tivoli.am.fim.trustserver.sts.utilities.IDMappingExtUtils);
+        try {
+          importClass(Packages.com.ibm.security.access.httpclient.HttpClientV2);
+          var consentUrl = "" + ciba.getUserAuthorizeEndpoint();
+          var authReqId  = "" + ciba.getAuthRequestID();
+          var body = '{"auth_req_id":"' + authReqId + '","consent_url":"' + consentUrl + '"}';
+          var resp = HttpClientV2.httpPost(
+            "http://uc3-agent-svc.banking-app.svc.cluster.local:8080/api/ciba/pending",
+            null, body, null, null, null, null, null, null, false, 5, true, null);
+          IDMappingExtUtils.traceString("notifyuser pushed consent code=" + resp.getCode() + " auth_req_id=" + authReqId);
+        } catch (e) {
+          IDMappingExtUtils.traceString("notifyuser consent push FAILED: " + e);
+        }
         ciba.setAuthenticator(new InternalAuthenticator());
     - name: checkstatus
       content: |

@@ -32,6 +32,8 @@ from strands import Agent, tool
 from strands.models import BedrockModel
 from strands.session import FileSessionManager
 
+from . import ciba_store
+
 logger = logging.getLogger(__name__)
 
 # Module-level vault client reference (set by build_uc3_agent)
@@ -467,16 +469,23 @@ def initiate_refund(
 
     rar_desc = f"refund_approval ${amount} {currency} for transaction {transaction_id}"
 
-    # Browser consent on the standalone provider is served at
-    # /oauth2/user_authorization (verified live). The page keys off the user_code
-    # the user types and ignores auth_req_id, but we pass auth_req_id as a hint
-    # since the live walkthrough did. IVIA_EXTERNAL_URL is the WRP ALB; the
-    # /isvaop junction fronts the provider.
-    consent_url = (
-        f"{IVIA_EXTERNAL_URL}/isvaop/oauth2/user_authorization?auth_req_id={auth_req_id}"
-        if IVIA_EXTERNAL_URL
-        else ""
-    )
+    # The real CIBA consent page is /isvaop/oauth2/ciba_user_authorize/{transactionID},
+    # where transactionID is an internal id the client never sees. The IVIA notifyuser
+    # mapping rule fires during bc-authorize and POSTs that full browser-reachable URL
+    # to our /api/ciba/pending endpoint. Poll the store briefly for it (notifyuser runs
+    # server-side before bc-authorize returns, so it is normally present immediately).
+    consent_url = ""
+    for _ in range(20):  # up to ~5s
+        consent_url = ciba_store.get(auth_req_id) or ""
+        if consent_url:
+            break
+        time.sleep(0.25)
+
+    if not consent_url:
+        logger.warning(
+            "ciba_consent_url_not_pushed",
+            extra={"request_id": request_id, "auth_req_id": auth_req_id},
+        )
 
     logger.info(
         "ciba_consent_requested",
@@ -712,8 +721,8 @@ def build_uc3_agent(vault_client=None, session_id: str = "default") -> Agent:
         "   - amount: the absolute value of the amount (positive number)\n"
         "   - currency: 'USD'\n"
         "6. initiate_refund returns a consent_marker string. You MUST include it EXACTLY as-is in your response.\n"
-        "   Tell the user: 'CIBA consent is required. Open the approval link in the consent banner below,\n"
-        "   enter the user code shown, and approve the refund.'\n"
+        "   Tell the user: 'CIBA consent is required. Click Approve in the consent banner below,\n"
+        "   sign in if prompted, and approve the refund.'\n"
         "7. When the user says they approved (or sends any follow-up), call complete_refund with:\n"
         "   auth_req_id, request_id, account_id, transaction_id, amount, currency from the initiate_refund result.\n"
         "8. Report exactly what the complete_refund tool returns to the user.\n\n"
