@@ -720,45 +720,70 @@ resource "aws_glue_catalog_table" "cloudtrail_events" {
 #-------------------------------------------------------------------------------
 
 locals {
+  # 16-column audit_correlation VIEW (CONTEXT Delta-6, Option B — locked 2026-05-24).
+  # Anchored on ivia_decisions via INNER JOIN: the agent's Branch-B emission (Task 2b)
+  # MUST populate >=1 row per request_id or the whole capstone returns zero rows.
+  #
+  # Probe-driven decisions baked in here (results in 07.1-capstone-SUMMARY.md):
+  #   P1 = NO/DEFERRED -> ship the SAFE Alt-A vault join: anchor ivia_decisions, join
+  #        vault_audit on ivia.user_identity = vault.auth.display_name within a 30s
+  #        window, surface metadata via MAP BRACKET syntax. Alt-D (a true request_id
+  #        JWT claim join: vault.auth.metadata['request_id'] = ivia.request_id) was
+  #        probed and is the documented UPGRADE PATH — it needs binding_message/
+  #        request_id injected into the isvaop_pretoken stsuu context as a top-level
+  #        JWT claim AND added to the uc3-jwt claim_mappings. NOT shipped (would yield
+  #        zero rows until that IVIA mutation lands).
+  #   P2 = double-quoted CSV pgaudit STATEMENT -> db_statement uses the quoted-variant
+  #        regexp ((?:[^,]+,){7}"(...)") so it does not terminate at the first comma
+  #        inside the quoted SQL; db_table is the unquoted OBJNAME field 7.
+  #   P3 = response.secret.lease_id is the only TTL-adjacent field actually emitted in
+  #        a database/creds READ audit response (numeric lease_duration is NOT logged at
+  #        response.data['lease_duration'] as RESEARCH assumed) -> db_credential_ttl
+  #        surfaces vault_creds.response.secret.lease_id.
   athena_view_sql = <<-SQL
     CREATE OR REPLACE VIEW audit_correlation AS
     SELECT
-        a.request_id,
-        a.timestamp       AS event_time,
-        i.user_identity   AS user_approved,
-        a.agent_identity  AS agent_acted,
-        a.action_details  AS action,
-        a.tool_name       AS tool_used,
-        v.request.path    AS vault_path,
-        v.auth.policies   AS vault_policies,
-        c.eventname       AS cloudtrail_event,
-        c.sourceipaddress AS source_ip
-    FROM agent_traces a
-    LEFT JOIN ivia_decisions i
-      ON i.request_id = a.request_id
-    LEFT JOIN vault_audit v
-      ON v.request.id = a.request_id
-    LEFT JOIN cloudtrail_events c
-      ON c.requestparameters LIKE '%' || a.request_id || '%'
+        ivia.request_id,
+        ivia.timestamp                                                AS approval_time,
+        ivia.user_identity                                            AS user_approved_sub,
+        ivia.request_id                                               AS ciba_binding_message,
+        vault.timestamp                                               AS vault_auth_time,
+        vault.auth.display_name                                       AS vault_principal,
+        vault.request.path                                            AS vault_path,
+        vault.auth.metadata['may_act_sub']                            AS vault_bound_claim_may_act,
+        vault.auth.metadata['rar_type']                               AS vault_bound_claim_rar_type,
+        rds.timestamp                                                 AS db_write_time,
+        regexp_extract(rds.message, 'AUDIT: (?:[^,]+,){6}([^,]+),', 1) AS db_table,
+        regexp_extract(rds.message, 'AUDIT: (?:[^,]+,){7}"(.*)"', 1)   AS db_statement,
+        cloudtrail.eventtime                                          AS aws_api_time,
+        cloudtrail.eventname                                          AS aws_api_call,
+        cloudtrail.useridentity.sessioncontext.sessionissuer.username AS aws_principal,
+        vault_creds.response.secret.lease_id                          AS db_credential_ttl
+    FROM workshop_logs.ivia_decisions ivia
+    JOIN workshop_logs.vault_audit vault
+        ON ivia.user_identity = vault.auth.display_name
+        AND ABS(to_unixtime(from_iso8601_timestamp(vault.timestamp))
+              - to_unixtime(from_iso8601_timestamp(ivia.timestamp))) < 30
+    LEFT JOIN workshop_logs.pgaudit_logs rds
+        ON regexp_extract(rds.message, 'uc3_request_id=([0-9a-f-]{36})', 1) = ivia.request_id
+    LEFT JOIN workshop_logs.cloudtrail_events cloudtrail
+        ON cloudtrail.useridentity.sessioncontext.sessionissuer.username = vault.auth.display_name
+        AND ABS(to_unixtime(from_iso8601_timestamp(cloudtrail.eventtime))
+              - to_unixtime(from_iso8601_timestamp(vault.timestamp))) < 5
+    LEFT JOIN workshop_logs.vault_audit vault_creds
+        ON vault_creds.request.path = 'database/creds/uc3-refund-writer'
+        AND vault_creds.auth.display_name = vault.auth.display_name
+        AND ABS(to_unixtime(from_iso8601_timestamp(vault_creds.timestamp))
+              - to_unixtime(from_iso8601_timestamp(vault.timestamp))) < 10
   SQL
 
-  # SELECT query for verify script consumption (excludes the DDL wrapper)
+  # SELECT query for verify-uc3.sh consumption — the verify script substitutes the
+  # captured request_id for REPLACE_WITH_REQUEST_ID and asserts exactly one row.
   athena_select_sql = <<-SQL
-    SELECT
-        a.request_id,
-        a.timestamp       AS event_time,
-        i.user_identity   AS user_approved,
-        a.agent_identity  AS agent_acted,
-        a.action_details  AS action,
-        a.tool_name       AS tool_used,
-        v.request.path    AS vault_path,
-        c.eventname       AS cloudtrail_event
-    FROM agent_traces a
-    LEFT JOIN ivia_decisions i ON i.request_id = a.request_id
-    LEFT JOIN vault_audit v    ON v.request.id = a.request_id
-    LEFT JOIN cloudtrail_events c
-      ON c.requestparameters LIKE '%' || a.request_id || '%'
-    LIMIT 100
+    SELECT *
+    FROM audit_correlation
+    WHERE request_id = 'REPLACE_WITH_REQUEST_ID'
+    LIMIT 1
   SQL
 }
 
