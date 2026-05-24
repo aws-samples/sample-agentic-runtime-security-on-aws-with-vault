@@ -14,6 +14,10 @@ rules:
         //          throwExec,timeoutSecs,sendAsJson,proxy)
         importClass(Packages.com.tivoli.am.fim.trustserver.sts.utilities.IDMappingExtUtils);
         try {
+          // Import BOTH in this order (verbatim the live-verified form): importing
+          // HttpClient first loads the httpclient package so the HttpClientV2 import
+          // resolves. Importing only HttpClientV2 fails ("HttpClientV2 is not defined").
+          importClass(Packages.com.ibm.security.access.httpclient.HttpClient);
           importClass(Packages.com.ibm.security.access.httpclient.HttpClientV2);
           var consentUrl = "" + ciba.getUserAuthorizeEndpoint();
           var authReqId  = "" + ciba.getAuthRequestID();
