@@ -13,8 +13,8 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    color: var(--color-text-secondary);
+    color: #ffffff;
     font-size: 1rem;
-    background: #161616;
+    background: #0f62fe; /* IBM Blue 60 — on-brand loading splash */
   }
 </style>

@@ -15,6 +15,10 @@
 <script lang="ts">
 	import type { PageData } from './$types';
 	import { sendChatMessage } from '$lib/agent-client';
+	import { Tile, Tag, Button, TextArea, InlineNotification } from 'carbon-components-svelte';
+	import Security from 'carbon-icons-svelte/lib/Security.svelte';
+	import Locked from 'carbon-icons-svelte/lib/Locked.svelte';
+	import ArrowRight from 'carbon-icons-svelte/lib/ArrowRight.svelte';
 
 	let { data }: { data: PageData } = $props();
 
@@ -124,27 +128,27 @@
 	}
 </script>
 
-<div class="container">
+<div class="page-narrow">
 	<!-- Welcome header -->
 	<div class="dashboard-header">
 		<div>
 			<h1>Welcome{displayName ? `, ${displayName}` : ''}</h1>
 			<p class="subtitle">
-				Your banking data is personalized — Vault JWT auth + PostgreSQL RLS ensures you only see
-				your own accounts and transactions.
+				This dashboard demonstrates identity-bound data access — your token alone decides which
+				accounts and transactions you can see, enforced in the data layer, not the UI.
 			</p>
 		</div>
 		<div class="security-badges">
-			<span class="badge badge-green">Identity-Bound Session</span>
-			<span class="badge badge-blue">RLS Active</span>
+			<Tag type="green" icon={Security}>Identity-Bound Session</Tag>
+			<Tag type="teal">RLS Active</Tag>
 		</div>
 	</div>
 
 	<!-- Chat interface -->
-	<div class="card chat-card">
+	<Tile class="chat-card">
 		<div class="chat-header">
 			<h2>Banking Agent</h2>
-			<span class="badge badge-aws">Powered by Amazon Nova Pro</span>
+			<Tag type="purple">Powered by Amazon Nova Pro</Tag>
 		</div>
 
 		<div class="messages-container">
@@ -152,90 +156,78 @@
 				<div class="empty-state">
 					<p>Ask me about your accounts or transactions:</p>
 					<div class="suggestions">
-						<button
-							class="suggestion-btn"
-							onclick={() => { inputMessage = 'Show me my account balances'; }}
-						>
+						<Button kind="tertiary" size="small" on:click={() => { inputMessage = 'Show me my account balances'; }}>
 							Show my account balances
-						</button>
-						<button
-							class="suggestion-btn"
-							onclick={() => { inputMessage = 'What are my recent transactions?'; }}
-						>
+						</Button>
+						<Button kind="tertiary" size="small" on:click={() => { inputMessage = 'What are my recent transactions?'; }}>
 							Recent transactions
-						</button>
-						<button
-							class="suggestion-btn"
-							onclick={() => { inputMessage = 'Show transactions for my checking account'; }}
-						>
+						</Button>
+						<Button kind="tertiary" size="small" on:click={() => { inputMessage = 'Show transactions for my checking account'; }}>
 							Checking account transactions
-						</button>
-						<button
-							class="suggestion-btn suggestion-btn-refund"
-							onclick={() => { inputMessage = 'I need a refund for a recent transaction'; chatEndpoint = '/api/uc3-chat'; }}
-						>
+						</Button>
+						<Button kind="danger-tertiary" size="small" on:click={() => { inputMessage = 'I need a refund for a recent transaction'; chatEndpoint = '/api/uc3-chat'; }}>
 							I need a refund
-						</button>
+						</Button>
 					</div>
 				</div>
 			{:else}
 				{#each messages as msg}
-					<div class="message message-{msg.role} {msg.type === 'tool_planning' ? 'tool-planning' : ''}">
-						{#if msg.role === 'user'}
-							<span class="msg-label">You</span>
-						{:else if msg.role === 'ai'}
-							<span class="msg-label">Agent</span>
-						{:else if msg.role === 'tool'}
-							<span class="msg-label tool-label">Tool</span>
-						{:else if msg.role === 'error'}
-							<span class="msg-label error-label">Error</span>
-						{/if}
-						<div class="msg-content">{msg.content}</div>
-					</div>
+					{#if msg.role === 'tool'}
+						<InlineNotification kind="info" lowContrast hideCloseButton title="Tool" subtitle={msg.content} />
+					{:else if msg.role === 'error'}
+						<InlineNotification kind="error" lowContrast hideCloseButton title="Error" subtitle={msg.content} />
+					{:else}
+						<div class="msg msg-{msg.role} {msg.type === 'tool_planning' ? 'msg-tool' : ''}">
+							<span class="msg-label">{msg.role === 'user' ? 'You' : 'Agent'}</span>
+							<div>{msg.content}</div>
+						</div>
+					{/if}
 				{/each}
 
 				{#if isLoading}
-					<div class="message message-ai">
+					<div class="msg msg-ai">
 						<span class="msg-label">Agent</span>
-						<div class="msg-content loading">Thinking...</div>
+						<div>Thinking…</div>
 					</div>
 				{/if}
 			{/if}
 		</div>
 
 		{#if pendingConsent}
-			<div class="consent-banner">
-				<div class="consent-icon">🔐</div>
-				<div class="consent-body">
+			<div class="consent">
+				<div class="consent-head">
+					<Locked size={20} />
 					<strong>CIBA Consent Required (RFC 9126)</strong>
-					<p>The agent is requesting approval for a privileged action:</p>
-					<p class="consent-details">{pendingConsent.details}</p>
-					<p class="consent-rid">Request ID: <code>{pendingConsent.request_id}</code></p>
-					<div class="consent-actions">
-						<button class="btn btn-approve" onclick={openConsent} disabled={!pendingConsent.consent_url}>
-							Approve in IVIA →
-						</button>
-						<button class="btn btn-deny" onclick={() => { pendingConsent = null; messages = [...messages, { role: 'ai', content: 'Consent denied by user.' }]; }}>
-							Deny
-						</button>
-					</div>
+				</div>
+				<p>The agent is requesting approval for a privileged action:</p>
+				<p class="consent-details mono">{pendingConsent.details}</p>
+				<p class="consent-rid">Request ID: <span class="mono">{pendingConsent.request_id}</span></p>
+				<div class="consent-actions">
+					<Button kind="primary" size="small" icon={ArrowRight} disabled={!pendingConsent.consent_url} on:click={openConsent}>
+						Approve in IVIA
+					</Button>
+					<Button kind="danger-tertiary" size="small" on:click={() => { pendingConsent = null; messages = [...messages, { role: 'ai', content: 'Consent denied by user.' }]; }}>
+						Deny
+					</Button>
 				</div>
 			</div>
 		{/if}
 
 		<div class="chat-input-area">
-			<textarea
+			<TextArea
 				bind:value={inputMessage}
-				onkeydown={handleKeydown}
+				on:keydown={handleKeydown}
+				labelText="Message to the banking agent"
+				hideLabel
 				placeholder="Ask about your accounts or transactions..."
-				rows="2"
+				rows={2}
 				disabled={isLoading}
-			></textarea>
-			<button class="btn btn-primary send-btn" onclick={sendMessage} disabled={isLoading || !inputMessage.trim()}>
+			/>
+			<Button kind="primary" on:click={sendMessage} disabled={isLoading || !inputMessage.trim()}>
 				Send
-			</button>
+			</Button>
 		</div>
-	</div>
+	</Tile>
 </div>
 
 <style>
@@ -245,17 +237,19 @@
 		justify-content: space-between;
 		margin-bottom: 1.5rem;
 		gap: 1rem;
+		padding-top: 0.5rem;
 	}
 
 	h1 {
 		font-size: 1.6rem;
 		font-weight: 700;
 		margin: 0 0 0.25rem;
+		color: #161616;
 	}
 
 	.subtitle {
 		font-size: 0.875rem;
-		color: var(--color-text-secondary);
+		color: #525252;
 		margin: 0;
 		max-width: 600px;
 	}
@@ -267,7 +261,7 @@
 		flex-wrap: wrap;
 	}
 
-	.chat-card {
+	:global(.chat-card) {
 		display: flex;
 		flex-direction: column;
 		height: calc(100vh - 16rem);
@@ -280,13 +274,14 @@
 		justify-content: space-between;
 		margin-bottom: 1rem;
 		padding-bottom: 0.75rem;
-		border-bottom: 1px solid var(--color-border);
+		border-bottom: 1px solid #e0e0e0;
 	}
 
 	.chat-header h2 {
 		margin: 0;
 		font-size: 1.1rem;
 		font-weight: 600;
+		color: #161616;
 	}
 
 	.messages-container {
@@ -301,7 +296,7 @@
 	.empty-state {
 		padding: 2rem;
 		text-align: center;
-		color: var(--color-text-secondary);
+		color: #525252;
 	}
 
 	.suggestions {
@@ -312,180 +307,31 @@
 		margin-top: 1rem;
 	}
 
-	.suggestion-btn {
-		background: var(--color-surface);
-		border: 1px solid var(--color-border);
-		border-radius: 0;
-		padding: 0.5rem 0.75rem;
-		font-size: 0.8rem;
-		cursor: pointer;
-		color: #0f62fe;
-		font-family: inherit;
-	}
-
-	.suggestion-btn:hover {
-		background: #d0e2ff;
-		border-color: #0f62fe;
-	}
-
-	.suggestion-btn-refund {
-		color: #da1e28;
-		border-color: #da1e28;
-	}
-
-	.suggestion-btn-refund:hover {
-		background: #ffd7d9;
-		border-color: #da1e28;
-	}
-
-	.message {
-		padding: 0.6rem 0.75rem;
-		border-radius: 8px;
-		max-width: 85%;
-	}
-
-	.message-user {
-		background: #0f62fe;
-		color: #fff;
-		align-self: flex-end;
-	}
-
-	.message-ai {
-		background: #e0e0e0;
-		color: #161616;
-		align-self: flex-start;
-	}
-
-	.message-tool,
-	.tool-planning {
-		background: #d0e2ff;
-		font-size: 0.8rem;
-		align-self: flex-start;
-		opacity: 0.85;
-	}
-
-	.message-error {
-		background: #ffd7d9;
-		color: #750e13;
-		align-self: flex-start;
-	}
-
-	.msg-label {
-		display: block;
-		font-size: 0.7rem;
-		font-weight: 700;
-		text-transform: uppercase;
-		letter-spacing: 0.05em;
-		margin-bottom: 0.2rem;
-		opacity: 0.7;
-	}
-
-	.tool-label {
-		color: #92400e;
-	}
-
-	.error-label {
-		color: var(--color-danger);
-	}
-
-	.msg-content {
-		font-size: 0.9rem;
-		line-height: 1.5;
-		white-space: pre-wrap;
-	}
-
-	.chat-input-area {
-		display: flex;
-		gap: 0.75rem;
-		align-items: flex-end;
-		padding-top: 1rem;
-		border-top: 1px solid var(--color-border);
-		margin-top: 0.75rem;
-	}
-
-	textarea {
-		flex: 1;
-		padding: 0.6rem 0.75rem;
-		border: 1px solid var(--color-border);
-		border-radius: 6px;
-		font-size: 0.9rem;
-		font-family: inherit;
-		resize: none;
-		background: var(--color-bg);
-	}
-
-	textarea:focus {
-		outline: none;
-		border-color: var(--color-primary);
-	}
-
-	textarea:disabled {
-		opacity: 0.6;
-	}
-
-	.send-btn {
-		align-self: flex-end;
-		padding: 0.6rem 1.2rem;
-	}
-
-	.send-btn:disabled {
-		opacity: 0.5;
-		cursor: not-allowed;
-	}
-
-	.consent-banner {
-		display: flex;
-		gap: 1rem;
-		background: #fff8e1;
-		border: 2px solid #f9a825;
-		border-radius: 8px;
+	.consent {
+		background: var(--cds-notification-background-warning, #fdf6dd);
+		border-inline-start: 3px solid var(--cds-support-warning, #f1c21b);
 		padding: 1rem;
 		margin: 0.75rem 0;
 	}
 
-	.consent-icon {
-		font-size: 1.8rem;
-		flex-shrink: 0;
+	.consent-head {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		margin-bottom: 0.5rem;
 	}
 
-	.consent-body {
-		flex: 1;
-	}
-
-	.consent-body strong {
-		display: block;
-		margin-bottom: 0.25rem;
-	}
-
-	.consent-body p {
+	.consent p {
 		margin: 0.25rem 0;
 		font-size: 0.85rem;
+		color: #161616;
 	}
 
 	.consent-details {
-		background: #fff;
+		background: #ffffff;
 		border: 1px solid #e0e0e0;
 		padding: 0.5rem;
-		border-radius: 4px;
-		font-family: monospace;
 		font-size: 0.8rem;
-	}
-
-	.consent-rid code {
-		background: #e8e8e8;
-		padding: 0.1rem 0.3rem;
-		border-radius: 3px;
-		font-size: 0.75rem;
-	}
-
-	.consent-usercode code {
-		background: #0f62fe;
-		color: #fff;
-		padding: 0.2rem 0.5rem;
-		border-radius: 3px;
-		font-size: 1rem;
-		font-weight: 700;
-		letter-spacing: 0.1em;
 	}
 
 	.consent-actions {
@@ -494,28 +340,16 @@
 		margin-top: 0.75rem;
 	}
 
-	.btn-approve {
-		background: #198038;
-		color: #fff;
-		border: none;
-		padding: 0.5rem 1.2rem;
-		border-radius: 4px;
-		font-weight: 600;
-		cursor: pointer;
+	.chat-input-area {
+		display: flex;
+		gap: 0.75rem;
+		align-items: flex-end;
+		padding-top: 1rem;
+		border-top: 1px solid #e0e0e0;
+		margin-top: 0.75rem;
 	}
 
-	.btn-approve:hover { background: #0e6027; }
-	.btn-approve:disabled { opacity: 0.6; cursor: not-allowed; }
-
-	.btn-deny {
-		background: #fff;
-		color: #da1e28;
-		border: 1px solid #da1e28;
-		padding: 0.5rem 1.2rem;
-		border-radius: 4px;
-		font-weight: 600;
-		cursor: pointer;
+	.chat-input-area :global(.cds--form-item) {
+		flex: 1;
 	}
-
-	.btn-deny:hover { background: #ffd7d9; }
 </style>
