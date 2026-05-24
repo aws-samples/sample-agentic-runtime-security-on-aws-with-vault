@@ -377,19 +377,21 @@ resource "vault_jwt_auth_backend_role" "uc3_jwt" {
   token_ttl      = 3600
   token_max_ttl  = 7200
 
-  bound_audiences = ["agent-uc3"]
+  # The RFC 8693 token-exchange output JWT's audience is the client that PERFORMED
+  # the exchange (uc3-actor), not the subject's client (agent-uc3). Bind to the
+  # actor — that is the verified, natural ISVAOP behavior.
+  bound_audiences = ["uc3-actor"]
 
   user_claim = "sub"
 
-  # may_act claim signals RFC 8693 delegation — agent must present token with
-  # a may_act claim before Vault issues DB write creds.
-  #
-  # Open Question 3: glob "*" used for initial deploy. After first successful
-  # UC3 token exchange reveals the actual may_act claim format from IVIA (e.g.,
-  # {"sub":"uc3-agent@banking-app.svc"}), tighten this to the exact sub value.
-  # Keeping glob here avoids a boot-time chicken-and-egg: the exact sub string
-  # is only known after the agent has authenticated at least once.
+  # may_act signals RFC 8693 delegation: the agent must present an exchanged token
+  # carrying it before Vault issues DB write creds. ISVAOP emits may_act as a JSON
+  # object {"sub":"uc3-actor"} (injected by the isvaop_pretoken mapping rule), so
+  # we match the nested member with a JSONPointer key — Vault cannot match a
+  # map-valued claim directly. glob "*" accepts any actor sub; tighten to the
+  # exact value ("uc3-actor") if a single fixed actor is desired.
+  bound_claims_type = "glob"
   bound_claims = {
-    "may_act" = "*"
+    "/may_act/sub" = "*"
   }
 }

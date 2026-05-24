@@ -22,17 +22,19 @@ Env vars consumed (set via Kubernetes ConfigMap):
   REGION               — AWS region (default: us-west-2)
 """
 
+import asyncio
 import json
 import logging
 import os
 import re
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from . import ciba_store
 from .agent import build_uc3_agent
 from .vault_client import UC3VaultClient
 
@@ -112,7 +114,7 @@ async def chat(body: ChatRequest):
         try:
             yield f"data: {json.dumps({'role': 'ai', 'content': 'Processing your request...', 'type': 'tool_planning'})}\n\n"
 
-            response = agent(message)
+            response = await asyncio.to_thread(agent, message)
             content = re.sub(r'<thinking>.*?</thinking>\s*', '', str(response), flags=re.DOTALL)
 
             yield f"data: {json.dumps({'role': 'ai', 'content': content, 'type': 'delta'})}\n\n"
@@ -132,6 +134,34 @@ async def chat(body: ChatRequest):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@app.post("/api/ciba/pending")
+async def ciba_pending_push(request: Request):
+    """Receive the CIBA consent URL pushed by the IVIA notifyuser mapping rule.
+
+    notifyuser fires during bc-authorize and POSTs {auth_req_id, consent_url}.
+    We stash it so initiate_refund (and the banking UI) can hand the user the
+    real consent link without needing kubectl/log access to the internal txid.
+    """
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    auth_req_id = (data or {}).get("auth_req_id")
+    consent_url = (data or {}).get("consent_url")
+    if auth_req_id and consent_url:
+        ciba_store.put(auth_req_id, consent_url)
+        logger.info("ciba_consent_pushed", extra={"auth_req_id": auth_req_id})
+        return {"stored": True}
+    logger.warning("ciba_consent_push_incomplete: %s", data)
+    return {"stored": False}
+
+
+@app.get("/api/ciba/pending/{auth_req_id}")
+async def ciba_pending_get(auth_req_id: str):
+    """Return the consent URL notifyuser pushed for this auth_req_id (or null)."""
+    return {"auth_req_id": auth_req_id, "consent_url": ciba_store.get(auth_req_id)}
 
 
 @app.get("/health")

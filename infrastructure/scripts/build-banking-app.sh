@@ -220,6 +220,7 @@ build_and_push() {
 
     if run docker buildx build \
         --platform linux/amd64 \
+        --no-cache \
         --load \
         --tag "${image_uri}" \
         --file "${dockerfile}" \

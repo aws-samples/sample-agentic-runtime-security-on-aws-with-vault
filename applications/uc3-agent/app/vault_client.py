@@ -119,7 +119,7 @@ class UC3VaultClient:
         Returns:
             Dict with keys: username, password, host, port, dbname
         """
-        response = self._client.auth.jwt.login(
+        response = self._client.auth.jwt.jwt_login(
             role="uc3-jwt",
             jwt=delegated_jwt,
             path="jwt",

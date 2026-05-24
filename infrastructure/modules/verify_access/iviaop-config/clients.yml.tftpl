@@ -1,7 +1,7 @@
 # Static OIDC clients consumed by the ivia-oidc-provider:25.10 pod from
 # /var/isvaop/config/clients.yml. Doc: https://docs.verify.ibm.com/ibm-security-verify-access/docs/yaml_clients-client
 #
-# All 3 workshop clients are static. agent-uc2's redirect_uri starts as the
+# All workshop clients are static. agent-uc2's redirect_uri starts as the
 # placeholder below and is overwritten post-deploy by
 # `kubernetes_config_map_v1_data.iviaop_clients_patch` in root main.tf with the
 # real banking-ui ALB hostname (the only piece not known at module.ivia plan
@@ -40,4 +40,28 @@ clients:
       - refresh_token
     token_endpoint_auth_method: client_secret_basic
     backchannel_token_delivery_mode: poll
-    backchannel_user_code_parameter: false
+    # Allows agent-uc3 to include a user_code on bc-authorize. Pairs with provider
+    # user_code_support: true. Consent is served by the InternalAuthenticator page
+    # at /isvaop/oauth2/ciba_user_authorize/{transactionID}.
+    backchannel_user_code_parameter: true
+    # RAR allowlist — this client may request the refund_approval authorization
+    # details type on CIBA bc-authorize. Must also be registered provider-side
+    # in provider.yml definition.authorization_details_types_supported.
+    authorization_details_types:
+      - refund_approval
+
+  # uc3-actor performs the RFC 8693 token exchange on agent-uc3's behalf. A
+  # SEPARATE client is mandatory: a client cannot exchange its own token
+  # (FBTAQ5207E "Clients are not allowed to perform a token exchange on their own
+  # tokens"). It authenticates with client_credentials and submits the user's
+  # CIBA access token as subject_token; the exchanged JWT carries aud=uc3-actor
+  # plus the may_act delegation claim injected by the isvaop_pretoken rule, which
+  # Vault's uc3-jwt role validates. Matches the agent's IVIA_ACTOR_CLIENT_ID.
+  - client_id: uc3-actor
+    client_secret: "${ivia_client_secret}"
+    client_name: Agentic Runtime UC3 Actor — Token Exchange Performer
+    enabled: true
+    grant_types:
+      - client_credentials
+      - urn:ietf:params:oauth:grant-type:token-exchange
+    token_endpoint_auth_method: client_secret_basic
