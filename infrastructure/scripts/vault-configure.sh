@@ -206,6 +206,19 @@ phase_gather() {
     ok "Bedrock role ARN: ${BEDROCK_ROLE_ARN}"
   fi
 
+  # UC3 logs-writer role ARN — assumable IAM role Vault vends for the agent's
+  # ivia_decisions anchor emission (aws/sts/uc3-logs-writer). Created in root
+  # main.tf as <cluster_name>-uc3-logs-writer (OBJ-2, CONTEXT Delta-6).
+  info "Reading UC3 logs-writer role..."
+  UC3_LOGS_ROLE_ARN=$(aws iam list-roles --query "Roles[?contains(RoleName, 'uc3-logs-writer')].Arn | [0]" \
+    --output text 2>/dev/null || echo "")
+  if [[ -z "$UC3_LOGS_ROLE_ARN" || "$UC3_LOGS_ROLE_ARN" == "None" ]]; then
+    warn "Could not auto-detect UC3 logs-writer role ARN. Set manually in tfvars (apply root main.tf first)."
+    UC3_LOGS_ROLE_ARN="PLACEHOLDER"
+  else
+    ok "UC3 logs-writer role ARN: ${UC3_LOGS_ROLE_ARN}"
+  fi
+
   # IVIA self-signed TLS cert (Vault needs it as jwks_ca_pem to trust the
   # OIDC discovery URL served by the iviaop runtime). Source: ConfigMap
   # `iviaop-config` in `verify-access`, key `iviaop.pem` — produced by the
@@ -286,6 +299,7 @@ cluster_oidc_issuer                = "${CLUSTER_OIDC_ISSUER}"
 rds_endpoint                       = "${RDS_ENDPOINT}"
 rds_master_user_secret_arn         = "${RDS_SECRET_ARN}"
 bedrock_role_arn                   = "${BEDROCK_ROLE_ARN}"
+uc3_logs_role_arn                  = "${UC3_LOGS_ROLE_ARN}"
 ivia_issuer                        = "${IVIA_ISSUER}"
 ivia_oidc_ca_pem                   = <<-CERTEOF
 ${IVIA_CERT_PEM}

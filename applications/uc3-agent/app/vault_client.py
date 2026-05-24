@@ -183,6 +183,39 @@ class UC3VaultClient:
         )
         return session
 
+    def get_logs_credentials(self) -> boto3.Session:
+        """Obtain ephemeral CloudWatch Logs STS credentials from Vault (OBJ-2).
+
+        Mirrors get_bedrock_credentials: reads aws/sts/uc3-logs-writer using the
+        agent's workload-identity Vault token and returns a short-lived boto3
+        session scoped (server-side) to logs:PutLogEvents + logs:CreateLogStream
+        on the single /workshop/ivia-decision log group. The agent holds NO
+        standing AWS identity — these creds expire with the Vault lease.
+
+        Used by the Branch-B ivia_decisions anchor emission (CONTEXT Delta-6).
+
+        Returns:
+            boto3.Session with Vault-issued STS credentials.
+        """
+        region = os.getenv("REGION", "us-west-2")
+        response = self._client.read("aws/sts/uc3-logs-writer")
+        data = response["data"]
+        session = boto3.Session(
+            aws_access_key_id=data["access_key"],
+            aws_secret_access_key=data["secret_key"],
+            aws_session_token=data["security_token"],
+            region_name=region,
+        )
+        logger.info(
+            "uc3_logs_sts_credentials_issued",
+            extra={
+                "vault_aws_role": "uc3-logs-writer",
+                "lease_id": response.get("lease_id", "n/a"),
+                "region": region,
+            },
+        )
+        return session
+
     def refresh_sts_if_needed(self) -> boto3.Session | None:
         """Refresh Bedrock STS credentials if authenticated.
 

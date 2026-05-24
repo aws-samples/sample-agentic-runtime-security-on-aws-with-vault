@@ -64,6 +64,11 @@ variable "bedrock_role_arn" {
   type        = string
 }
 
+variable "uc3_logs_role_arn" {
+  description = "ARN of the assumable IAM role Vault assumes to issue scoped CloudWatch Logs STS credentials (logs:PutLogEvents + logs:CreateLogStream on /workshop/ivia-decision only). Backs the aws/sts/uc3-logs-writer role for the UC3 agent's ivia_decisions anchor emission (OBJ-2, CONTEXT Delta-6)."
+  type        = string
+}
+
 variable "region" {
   description = "AWS region — passed to the Vault AWS secrets engine backend configuration."
   type        = string

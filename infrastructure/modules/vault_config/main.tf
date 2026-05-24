@@ -211,6 +211,41 @@ resource "vault_aws_secret_backend_role" "bedrock_reader" {
   })
 }
 
+# UC3 logs-writer aws/sts role (OBJ-2, CONTEXT Delta-6) — mirrors bedrock_reader.
+# Vended short-lived to the agent so it can write the ivia_decisions ANCHOR
+# record to CloudWatch without any standing AWS identity. The inline session
+# policy_document is scoped (belt-and-suspenders alongside the assumable role's
+# own policy) to ONLY logs:PutLogEvents + logs:CreateLogStream on the single
+# /workshop/ivia-decision log group — never the wildcard form (threat T-071-02, HIGH).
+# The account id is parsed from the assumable role ARN (arn:aws:iam::<acct>:role/..)
+# so the module needs no aws_caller_identity data source; region is var.region.
+locals {
+  uc3_logs_account_id = split(":", var.uc3_logs_role_arn)[4]
+  uc3_logs_group_arn  = "arn:aws:logs:${var.region}:${local.uc3_logs_account_id}:log-group:/workshop/ivia-decision:*"
+}
+
+resource "vault_aws_secret_backend_role" "uc3_logs_writer" {
+  backend         = vault_aws_secret_backend.this.path
+  name            = "uc3-logs-writer"
+  credential_type = "assumed_role"
+
+  role_arns = [var.uc3_logs_role_arn]
+
+  policy_document = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:PutLogEvents",
+          "logs:CreateLogStream"
+        ]
+        Resource = local.uc3_logs_group_arn
+      }
+    ]
+  })
+}
+
 ################################################################################
 # Vault policies — one per use case
 ################################################################################
@@ -263,11 +298,15 @@ resource "vault_policy" "uc3_refund_writer" {
 
   policy = <<-EOT
     # UC3: Refund-writer agent policy
-    # Allows: kubernetes + jwt auth login, database write creds, AWS (Bedrock) STS creds
+    # Allows: kubernetes + jwt auth login, database write creds, AWS (Bedrock) STS creds,
+    # AWS (CloudWatch logs) STS creds for the ivia_decisions anchor emission (OBJ-5)
     path "database/creds/uc3-refund-writer" {
       capabilities = ["read"]
     }
     path "aws/sts/bedrock-reader" {
+      capabilities = ["read", "update"]
+    }
+    path "aws/sts/uc3-logs-writer" {
       capabilities = ["read", "update"]
     }
     path "auth/token/lookup-self" {

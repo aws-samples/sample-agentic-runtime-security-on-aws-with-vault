@@ -18,6 +18,7 @@ Tools:
   check_refund_status  — read-only SELECT from banking.refunds by refund_id
 """
 
+import json
 import logging
 import os
 import secrets
@@ -579,8 +580,17 @@ def complete_refund(
         password=write_creds["password"],
     ) as conn:
         with conn.cursor() as cur:
+            # OBJ-5 PLANE-A: thread request_id into the pgaudit STATEMENT field via
+            # an inline SQL comment. pgaudit (log='write') captures the full statement
+            # text verbatim, so the audit_correlation VIEW can regexp-extract this
+            # request_id (token form uc3_request_id=<uuid>) and LEFT JOIN pgaudit_logs
+            # to the ivia_decisions anchor. Zero semantics impact: comment only — the
+            # 8-column INSERT tuple and placeholders are unchanged. The token value is
+            # an agent-generated uuid4 (T-071-04 accept: a tampered value simply fails
+            # to join, it does not escalate).
             cur.execute(
-                """
+                f"""
+                /* uc3_request_id={request_id} */
                 INSERT INTO banking.refunds
                     (refund_id, account_id, transaction_id, amount, currency,
                      approved_by, request_id, created_at)
@@ -598,6 +608,64 @@ def complete_refund(
                 ),
             )
         conn.commit()
+
+    # OBJ-5 Branch B: emit the ivia_decisions ANCHOR record for the three-plane
+    # audit_correlation VIEW. The VIEW INNER-JOINs on ivia_decisions, so without
+    # this row the whole 16-column capstone returns zero rows. This is the agent's
+    # OBSERVED view of IVIA's decision (a workshop-pedagogy log), NOT IVIA's own
+    # AUDIT record — the authoritative IVIA AUDIT log remains source of truth
+    # (threat T-071-01, disposition accept). The agent holds NO standing AWS
+    # identity (OBJ-2): CloudWatch creds come from the Vault-STS uc3-logs-writer
+    # role, fetched short-lived exactly like bedrock-reader (CONTEXT Delta-6).
+    # Purely additive + best-effort: a failure here must NOT break the working
+    # refund flow (PR #24 chain stays GREEN), so it is wrapped and swallowed.
+    try:
+        logs_session = _vault_client.get_logs_credentials()
+        cw_logs = logs_session.client("logs")
+        log_group = "/workshop/ivia-decision"
+        log_stream = f"uc3-agent/{created_at.date().isoformat()}"
+        try:
+            cw_logs.create_log_stream(
+                logGroupName=log_group, logStreamName=log_stream
+            )
+        except cw_logs.exceptions.ResourceAlreadyExistsException:
+            pass
+        decision_record = {
+            "timestamp": created_at.isoformat(),
+            "request_id": request_id,
+            "user_identity": approved_by,
+            "decision": "approved",
+            "client_id": "agent-uc3",
+            "grant_type": "urn:openid:params:grant-type:ciba",
+            "authorization_details": [
+                {
+                    "type": "refund_approval",
+                    "actions": ["process_refund"],
+                    "amount": str(amount),
+                    "currency": currency,
+                }
+            ],
+            "binding_message": request_id,
+        }
+        cw_logs.put_log_events(
+            logGroupName=log_group,
+            logStreamName=log_stream,
+            logEvents=[
+                {
+                    "timestamp": int(time.time() * 1000),
+                    "message": json.dumps(decision_record),
+                }
+            ],
+        )
+        logger.info(
+            "ivia_decision_anchor_emitted",
+            extra={"request_id": request_id, "log_group": log_group},
+        )
+    except Exception as exc:  # noqa: BLE001 — best-effort audit emission
+        logger.warning(
+            "ivia_decision_anchor_emit_failed",
+            extra={"request_id": request_id, "error": str(exc)},
+        )
 
     logger.info(
         "process_refund_success",
