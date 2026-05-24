@@ -789,6 +789,7 @@ phase_uc3() {
             -c "CREATE TABLE IF NOT EXISTS banking.refunds (
                 refund_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 account_id UUID NOT NULL REFERENCES banking.accounts(id),
+                transaction_id UUID NOT NULL REFERENCES banking.transactions(id),
                 amount DECIMAL(12,2) NOT NULL,
                 currency VARCHAR(3) NOT NULL DEFAULT 'USD',
                 approved_by VARCHAR(255) NOT NULL,

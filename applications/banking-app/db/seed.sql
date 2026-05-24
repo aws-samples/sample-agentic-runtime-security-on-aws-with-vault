@@ -143,11 +143,17 @@ ON CONFLICT DO NOTHING;
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS banking.refunds (
-  refund_id   UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
-  account_id  UUID          NOT NULL REFERENCES banking.accounts(id),
+  refund_id      UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id     UUID          NOT NULL REFERENCES banking.accounts(id),
+  transaction_id UUID          NOT NULL REFERENCES banking.transactions(id),
   amount      DECIMAL(12,2) NOT NULL,
   currency    VARCHAR(3)    NOT NULL DEFAULT 'USD',
   approved_by VARCHAR(255)  NOT NULL,
   request_id  UUID          NOT NULL,
   created_at  TIMESTAMPTZ   NOT NULL DEFAULT NOW()
 );
+
+-- Self-healing migration: add transaction_id to refunds tables created before
+-- this column existed (CREATE TABLE IF NOT EXISTS above is a no-op on those).
+ALTER TABLE banking.refunds
+  ADD COLUMN IF NOT EXISTS transaction_id UUID REFERENCES banking.transactions(id);
