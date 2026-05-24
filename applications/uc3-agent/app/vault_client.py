@@ -153,6 +153,12 @@ class UC3VaultClient:
             "host": os.getenv("DB_HOST", "localhost"),
             "port": int(os.getenv("DB_PORT", "5432")),
             "dbname": os.getenv("DB_NAME", "workshop"),
+            # Real numeric lease TTL (seconds, e.g. 300) the agent OBSERVED when
+            # Vault issued the credential. The Vault AUDIT-logged response does NOT
+            # carry this numeric value (only a lease-id identifier), so the agent
+            # threads it forward here to populate db_credential_ttl in the
+            # three-plane audit_correlation VIEW (proof of OBJ-2: no standing creds).
+            "lease_duration": db_response.get("lease_duration"),
         }
 
     def get_bedrock_credentials(self) -> boto3.Session:

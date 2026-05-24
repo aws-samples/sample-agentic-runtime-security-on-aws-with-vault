@@ -37,7 +37,7 @@ SELECT
     cloudtrail.eventtime                                          AS aws_api_time,
     cloudtrail.eventname                                          AS aws_api_call,
     cloudtrail.useridentity.sessioncontext.sessionissuer.username AS aws_principal,
-    vault_creds.response.secret.lease_id                          AS db_credential_ttl
+    ivia.db_credential_ttl                                        AS db_credential_ttl
 FROM workshop_logs.ivia_decisions ivia
 JOIN workshop_logs.vault_audit vault
     ON ivia.user_identity = vault.auth.display_name
@@ -48,12 +48,7 @@ LEFT JOIN workshop_logs.pgaudit_logs rds
 LEFT JOIN workshop_logs.cloudtrail_events cloudtrail
     ON cloudtrail.useridentity.sessioncontext.sessionissuer.username = vault.auth.display_name
     AND ABS(to_unixtime(from_iso8601_timestamp(cloudtrail.eventtime))
-          - to_unixtime(from_iso8601_timestamp(vault.timestamp))) < 5
-LEFT JOIN workshop_logs.vault_audit vault_creds
-    ON vault_creds.request.path = 'database/creds/uc3-refund-writer'
-    AND vault_creds.auth.display_name = vault.auth.display_name
-    AND ABS(to_unixtime(from_iso8601_timestamp(vault_creds.timestamp))
-          - to_unixtime(from_iso8601_timestamp(vault.timestamp))) < 10;
+          - to_unixtime(from_iso8601_timestamp(vault.timestamp))) < 5;
 ```
 
 ## Run the Athena Query
@@ -116,7 +111,7 @@ A complete row demonstrates that:
 
 1. The same `request_id` appears in the IVIA decision log (user approved), the Vault audit log (agent authenticated with bound claims enforced), and the pgaudit log (data was written to `banking.refunds`).
 2. The `approval_time`, `vault_auth_time`, and `db_write_time` columns show a linear causal chain — approval before auth before write.
-3. The `db_credential_ttl` carries the Vault lease id for the database/creds read — proof a short-lived (5-minute TTL) lease backed the write, not a standing credential.
+3. The `db_credential_ttl` carries the integer lease TTL in seconds (300 = 5 minutes) the agent observed when Vault issued the per-refund database credential — proof the credential expires shortly after the write, not a standing one.
 4. The `vault_bound_claim_may_act` column shows the exact service account that was the actor — provable, not assumed.
 
 This is the answer to the question the CDL Bank demo poses: **"Who authorized this action, through which agent, against what system, and can we prove the credentials have since expired?"**

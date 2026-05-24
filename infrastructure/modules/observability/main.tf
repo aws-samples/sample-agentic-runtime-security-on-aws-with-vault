@@ -483,15 +483,9 @@ resource "aws_glue_catalog_table" "vault_audit" {
       name = "request"
       type = "struct<id:string,path:string,operation:string,namespace:struct<id:string>,data:map<string,string>>"
     }
-    # P3 (2026-05-24, live audit line): a database/creds/uc3-refund-writer READ
-    # response carries ONLY data:{username,password} plus secret:{lease_id}. The
-    # numeric lease_duration that RESEARCH assumed at response.data['lease_duration']
-    # is NOT present in the audit-logged response. response.secret.lease_id is the
-    # only TTL-adjacent field actually emitted, so the struct models it and the VIEW
-    # surfaces db_credential_ttl from response.secret.lease_id (Task 4).
     columns {
       name = "response"
-      type = "struct<data:map<string,string>,secret:struct<lease_id:string>>"
+      type = "struct<data:map<string,string>>"
     }
   }
 }
@@ -589,6 +583,17 @@ resource "aws_glue_catalog_table" "ivia_decisions" {
     columns {
       name = "authorization_details"
       type = "array<struct<type:string,actions:array<string>,amount:string,currency:string>>"
+    }
+    # The REAL numeric lease TTL in seconds (e.g. 300 = 5 min) the agent OBSERVED
+    # when Vault issued the per-refund uc3-refund-writer credential. Emitted by the
+    # agent's Branch-B ivia_decisions anchor record (agent.py decision_record), sourced
+    # from the hvac db_response.lease_duration. The Vault audit-logged response carries
+    # ONLY a lease-id identifier (not a duration), so the agent-observed
+    # value is the only honest numeric TTL — the VIEW surfaces db_credential_ttl from here
+    # (request_id-keyed via the ivia anchor), proving OBJ-2 (no standing privileges).
+    columns {
+      name = "db_credential_ttl"
+      type = "int"
     }
   }
 }
@@ -736,10 +741,13 @@ locals {
   #   P2 = double-quoted CSV pgaudit STATEMENT -> db_statement uses the quoted-variant
   #        regexp ((?:[^,]+,){7}"(...)") so it does not terminate at the first comma
   #        inside the quoted SQL; db_table is the unquoted OBJNAME field 7.
-  #   P3 = response.secret.lease_id is the only TTL-adjacent field actually emitted in
-  #        a database/creds READ audit response (numeric lease_duration is NOT logged at
-  #        response.data['lease_duration'] as RESEARCH assumed) -> db_credential_ttl
-  #        surfaces vault_creds.response.secret.lease_id.
+  #   P3 = the database/creds READ audit response does NOT carry a numeric lease TTL
+  #        (only a lease-id identifier — NOT a duration; and numeric
+  #        lease_duration is NOT logged at response.data['lease_duration'] either). The
+  #        only honest numeric TTL is the value the AGENT itself observed in the hvac
+  #        creds response (db_response.lease_duration, e.g. 300). The agent threads it
+  #        into its Branch-B ivia_decisions anchor record (db_credential_ttl), so the
+  #        VIEW surfaces db_credential_ttl from ivia.db_credential_ttl, request_id-keyed.
   athena_view_sql = <<-SQL
     CREATE OR REPLACE VIEW audit_correlation AS
     SELECT
@@ -758,7 +766,7 @@ locals {
         cloudtrail.eventtime                                          AS aws_api_time,
         cloudtrail.eventname                                          AS aws_api_call,
         cloudtrail.useridentity.sessioncontext.sessionissuer.username AS aws_principal,
-        vault_creds.response.secret.lease_id                          AS db_credential_ttl
+        ivia.db_credential_ttl                                        AS db_credential_ttl
     FROM workshop_logs.ivia_decisions ivia
     JOIN workshop_logs.vault_audit vault
         ON ivia.user_identity = vault.auth.display_name
@@ -770,11 +778,6 @@ locals {
         ON cloudtrail.useridentity.sessioncontext.sessionissuer.username = vault.auth.display_name
         AND ABS(to_unixtime(from_iso8601_timestamp(cloudtrail.eventtime))
               - to_unixtime(from_iso8601_timestamp(vault.timestamp))) < 5
-    LEFT JOIN workshop_logs.vault_audit vault_creds
-        ON vault_creds.request.path = 'database/creds/uc3-refund-writer'
-        AND vault_creds.auth.display_name = vault.auth.display_name
-        AND ABS(to_unixtime(from_iso8601_timestamp(vault_creds.timestamp))
-              - to_unixtime(from_iso8601_timestamp(vault.timestamp))) < 10
   SQL
 
   # SELECT query for verify-uc3.sh consumption — the verify script substitutes the

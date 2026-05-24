@@ -646,6 +646,13 @@ def complete_refund(
                 }
             ],
             "binding_message": request_id,
+            # OBJ-2 (no standing privileges): the REAL numeric lease TTL in seconds
+            # (e.g. 300 = 5 min) the agent observed when Vault issued the per-refund
+            # uc3-refund-writer credential. Sourced from write_creds["lease_duration"]
+            # which get_refund_credentials() captured from db_response.lease_duration.
+            # The Vault audit log does NOT carry this numeric value, so the agent
+            # anchors it here, request_id-keyed, for the audit_correlation VIEW.
+            "db_credential_ttl": write_creds.get("lease_duration"),
         }
         cw_logs.put_log_events(
             logGroupName=log_group,
