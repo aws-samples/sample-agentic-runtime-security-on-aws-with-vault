@@ -243,12 +243,17 @@ def _poll_ciba(auth_req_id: str, request_id: str) -> str:
     )
 
 
-def _token_exchange(ciba_token: str, actor_token: str, request_id: str) -> str:
+def _token_exchange(ciba_token: str, request_id: str) -> str:
     """RFC 8693 token exchange: produce delegated JWT with may_act claim.
+
+    The exchange is authenticated as uc3-actor (a DIFFERENT client than
+    agent-uc3, which owns the CIBA subject_token) — IVIA rejects a client
+    exchanging its own token (FBTAQ5207E). No actor_token is sent: the
+    may_act delegation claim is injected by the isvaop_pretoken mapping rule
+    on the token-exchange grant, which is what Vault's uc3-jwt role validates.
 
     Presents:
       - subject_token: CIBA access token (user's identity + consent)
-      - actor_token: K8s SA JWT (agent workload identity as actor)
 
     IVIA issues a delegated JWT containing:
       - sub: the user (subject)
@@ -260,7 +265,6 @@ def _token_exchange(ciba_token: str, actor_token: str, request_id: str) -> str:
 
     Args:
         ciba_token: The CIBA access_token (user consent proof).
-        actor_token: The agent's IVIA-issued client_credentials token (actor identity).
         request_id: UUID for log correlation.
 
     Returns:
@@ -275,8 +279,6 @@ def _token_exchange(ciba_token: str, actor_token: str, request_id: str) -> str:
         "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
         "subject_token": ciba_token,
         "subject_token_type": "urn:ietf:params:oauth:token-type:access_token",
-        "actor_token": actor_token,
-        "actor_token_type": "urn:ietf:params:oauth:token-type:access_token",
         "requested_token_type": "urn:ietf:params:oauth:token-type:access_token",
     }
 
@@ -286,7 +288,6 @@ def _token_exchange(ciba_token: str, actor_token: str, request_id: str) -> str:
             "request_id": request_id,
             "grant_type": "token-exchange",
             "subject_token_type": "ciba_access_token",
-            "actor_token_type": "k8s_sa_jwt",
         },
     )
 
@@ -552,8 +553,7 @@ def complete_refund(
     )
 
     ciba_token = _poll_ciba(auth_req_id, request_id)
-    actor_token = _get_actor_token()
-    delegated_jwt = _token_exchange(ciba_token, actor_token, request_id)
+    delegated_jwt = _token_exchange(ciba_token, request_id)
     write_creds = _vault_client.get_refund_credentials(delegated_jwt, request_id)
 
     refund_id = str(uuid.uuid4())
