@@ -394,4 +394,17 @@ resource "vault_jwt_auth_backend_role" "uc3_jwt" {
   bound_claims = {
     "/may_act/sub" = "*"
   }
+
+  # Audit-only metadata extraction (OBJ-4 / OBJ-5 three-plane correlation).
+  # claim_mappings writes nested JWT claims into auth.metadata (map<string,string>)
+  # at jwt login; it does NOT participate in authorization enforcement (that stays
+  # in bound_claims above — threat T-071-03, disposition accept). JSONPointer keys
+  # are supported identically to bound_claims
+  # [CITED: developer.hashicorp.com/vault/api-docs/auth/jwt#claim_mappings].
+  #   /may_act/sub                  -> auth.metadata.may_act_sub  (the RFC 8693 actor sub)
+  #   /authorization_details/0/type -> auth.metadata.rar_type     (the RAR grant type)
+  claim_mappings = {
+    "/may_act/sub"                  = "may_act_sub"
+    "/authorization_details/0/type" = "rar_type"
+  }
 }
