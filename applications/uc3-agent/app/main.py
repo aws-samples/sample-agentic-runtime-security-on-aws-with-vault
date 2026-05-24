@@ -22,6 +22,7 @@ Env vars consumed (set via Kubernetes ConfigMap):
   REGION               — AWS region (default: us-west-2)
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -113,7 +114,7 @@ async def chat(body: ChatRequest):
         try:
             yield f"data: {json.dumps({'role': 'ai', 'content': 'Processing your request...', 'type': 'tool_planning'})}\n\n"
 
-            response = agent(message)
+            response = await asyncio.to_thread(agent, message)
             content = re.sub(r'<thinking>.*?</thinking>\s*', '', str(response), flags=re.DOTALL)
 
             yield f"data: {json.dumps({'role': 'ai', 'content': content, 'type': 'delta'})}\n\n"
