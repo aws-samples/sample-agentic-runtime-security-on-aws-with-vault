@@ -154,7 +154,7 @@ fi
 if [[ "${DRY_RUN}" == true ]]; then
     print_info "[DRY-RUN] Would authenticate to ECR: aws ecr get-login-password | docker login"
     print_info "[DRY-RUN] Would build:"
-    print_info "  docker buildx build --platform linux/amd64 --load --tag ${ECR_URI} ${AGENT_DIR}"
+    print_info "  docker buildx build --platform linux/amd64 --no-cache --load --tag ${ECR_URI} ${AGENT_DIR}"
     print_info "[DRY-RUN] Would push: docker push ${ECR_URI}"
     echo ""
     print_pass "UC3 agent image build+push (dry-run)"
@@ -183,9 +183,13 @@ print_pass "ECR login successful"
 #-------------------------------------------------------------------------------
 # Build
 #-------------------------------------------------------------------------------
-print_info "Building uc3-agent (--platform linux/amd64)..."
+print_info "Building uc3-agent (--platform linux/amd64, --no-cache)..."
+# --no-cache: always rebuild every layer so source/dep changes can never be
+# masked by a stale Docker layer cache. Paired with the deployment's
+# imagePullPolicy: Always so the cluster always pulls the freshly pushed :latest.
 docker buildx build \
     --platform linux/amd64 \
+    --no-cache \
     --load \
     --tag "${ECR_URI}" \
     --file "${AGENT_DIR}/Dockerfile" \
