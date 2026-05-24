@@ -2,13 +2,36 @@ rules:
   mapping:
     - name: notifyuser
       content: |
-        // InternalAuthenticator: OIDC Provider delegates consent to WRP.
-        // WRP serves the login page + /isvaop/oauth2/ciba_user_authorize/{id} consent page.
-        // No HTTP call needed — WRP handles everything via junction.
-        // Recovered from commit 3584c17 (phase 06-09) — IBM-confirmed CIBA consent fix.
-        // The notifyuser sandbox has no HTTP client (HttpClientV2 is pretoken/posttoken
-        // only), so ExternalAuthenticatorWithCheckStatusEndpoint cannot reach a callback;
-        // InternalAuthenticator hands consent to the native WRP page instead.
+        // InternalAuthenticator: OIDC Provider delegates the consent page to WRP.
+        // WRP serves the login page + /isvaop/oauth2/ciba_user_authorize/{transactionID}
+        // consent page. The current rule does nothing but pick InternalAuthenticator.
+        //
+        // OUTBOUND HTTP FROM notifyuser -- VERIFIED LIVE 2026-05-23 (ivia-oidc-provider:25.10).
+        // A prior comment here claimed "the notifyuser sandbox has no HTTP client". That is
+        // WRONG. notifyuser CAN make outbound HTTP calls. The gotchas (all tested live):
+        //   1. The Rhino sandbox strips the `Packages` reflection root for bare expressions
+        //      (`Packages.x.y.Z` -> "ReferenceError: Packages is not defined").
+        //   2. `HttpClientV2` and `HttpClient` are NOT pre-bound globals (typeof == undefined).
+        //   3. But `importClass(Packages.com.ibm.security.access.httpclient.HttpClientV2)`
+        //      DOES bind it, and the call then works. (v1 `HttpClient` does NOT import --
+        //      only HttpClientV2.) Signature (see IBM util_http doc):
+        //        HttpClientV2.httpPost(url, headers, body, httpsTrustStore,
+        //          basicUser, basicPass, clientKeyStore, clientKeyAlias, protocol,
+        //          throwExec, timeoutSecs, sendAsJson, proxyServer)
+        //      A POST to in-cluster http://uc3-agent-svc.banking-app.svc.cluster.local:8080
+        //      returned a real HTTP status (no truststore needed for plain http://).
+        //
+        // HOW TO PUSH THE CIBA CONSENT URL TO THE WORKSHOP USER (Option A, not yet wired):
+        //   importClass(Packages.com.ibm.security.access.httpclient.HttpClientV2);
+        //   importClass(Packages.com.tivoli.am.fim.trustserver.sts.utilities.IDMappingExtUtils);
+        //   var url = ciba.getUserAuthorizeEndpoint();          // consent URL (internal host)
+        //   var hdr = new java.util.HashMap(); hdr.put("Content-Type","application/json");
+        //   var body = JSON.stringify({auth_req_id: ciba.getAuthRequestID(), consent_url: url});
+        //   var resp = HttpClientV2.httpPost("http://uc3-agent-svc.banking-app.svc.cluster.local:8080/api/ciba/pending",
+        //                hdr, body, null, null, null, null, null, null, false, 5, true, null);
+        //   IDMappingExtUtils.traceString("notifyuser push code=" + resp.getCode());
+        //   // banking backend stores it; banking-ui polls + shows an Approve button -> url.
+        // NOTE: bc-authorize for client agent-uc3 REQUIRES a user_code (FBTAQ5508E if absent).
         ciba.setAuthenticator(new InternalAuthenticator());
     - name: checkstatus
       content: |
