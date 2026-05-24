@@ -645,4 +645,120 @@ else
         "Expected response referencing refund/confirm/CIBA. Got: ${select_response:0:200}. Check: kubectl logs deployment/uc3-agent -n ${BANKING_NAMESPACE}"
 fi
 
+#-------------------------------------------------------------------------------
+# Check 14 — Athena audit_correlation single-row assertion (D3 step 14)
+#
+# This is the three-plane capstone gate. It runs AFTER a real browser-approved
+# refund (the browser consent step is a documented MANUAL smoke step — it is NOT
+# automated here). Provide the approved refund's request_id via the env var
+# UC3_VERIFY_REQUEST_ID; the check then waits (bounded retry) for fluent-bit +
+# Firehose + Glue propagation, runs SELECT * FROM audit_correlation WHERE
+# request_id='<id>' LIMIT 1, polls to SUCCEEDED, and asserts EXACTLY ONE row.
+#-------------------------------------------------------------------------------
+if [ -z "${UC3_VERIFY_REQUEST_ID:-}" ]; then
+    print_warn "Check 14 skipped — set UC3_VERIFY_REQUEST_ID=<approved-refund-request_id> after a manual browser approval to run the audit_correlation single-row assertion."
+elif [ -z "${AWS_REGION:-}" ]; then
+    print_warn "Check 14 skipped — AWS_REGION not resolved"
+else
+    ac_request_id="${UC3_VERIFY_REQUEST_ID}"
+    ac_database="${GLUE_DATABASE:-workshop_logs}"
+
+    # Resolve an S3 output location for Athena results (reuse the workshop logs bucket).
+    ac_bucket=$(aws s3api list-buckets \
+        --query "Buckets[?contains(Name, 'workshop-logs') || contains(Name, 'workshop-audit')].Name | [0]" \
+        --output text 2>/dev/null || echo "")
+    if [ -z "${ac_bucket}" ] || [ "${ac_bucket}" = "None" ]; then
+        ac_bucket=$(aws s3api list-buckets \
+            --query "Buckets[?contains(Name, 'agentic') && contains(Name, 'log')].Name | [0]" \
+            --output text 2>/dev/null || echo "")
+    fi
+
+    if [ -z "${ac_bucket}" ] || [ "${ac_bucket}" = "None" ]; then
+        print_fail "Check 14: could not resolve an S3 bucket for Athena results" \
+            "Fix: ensure the observability module is applied (workshop-logs bucket exists). Check: aws s3api list-buckets --query \"Buckets[?contains(Name,'workshop')]\""
+    else
+        ac_output="s3://${ac_bucket}/athena-results/"
+        ac_query="SELECT * FROM audit_correlation WHERE request_id = '${ac_request_id}' LIMIT 1"
+
+        # Bounded propagation retry (~90s budget: fluent-bit + Firehose 60s buffer +
+        # Glue), then up to a few query attempts. Not a single blind sleep.
+        ac_row_count=""
+        ac_qid=""
+        ac_attempts=6   # 6 attempts
+        ac_wait_secs=15 # 15s between attempts -> ~90s total budget
+        ac_attempt=1
+        while [ "${ac_attempt}" -le "${ac_attempts}" ]; do
+            print_info "Check 14 attempt ${ac_attempt}/${ac_attempts}: querying audit_correlation for request_id=${ac_request_id}"
+
+            ac_qid=$(aws athena start-query-execution \
+                --query-string "${ac_query}" \
+                --work-group workshop \
+                --query-execution-context "Database=${ac_database}" \
+                --result-configuration "OutputLocation=${ac_output}" \
+                --region "${AWS_REGION}" \
+                --query 'QueryExecutionId' --output text 2>/dev/null || echo "")
+
+            if [ -z "${ac_qid}" ] || [ "${ac_qid}" = "None" ]; then
+                sleep "${ac_wait_secs}"
+                ac_attempt=$((ac_attempt + 1))
+                continue
+            fi
+
+            # Poll the execution until terminal.
+            ac_state="RUNNING"
+            ac_poll=0
+            while [ "${ac_poll}" -lt 20 ]; do
+                ac_state=$(aws athena get-query-execution \
+                    --query-execution-id "${ac_qid}" \
+                    --region "${AWS_REGION}" \
+                    --query 'QueryExecution.Status.State' --output text 2>/dev/null || echo "FAILED")
+                case "${ac_state}" in
+                SUCCEEDED | FAILED | CANCELLED) break ;;
+                esac
+                sleep 3
+                ac_poll=$((ac_poll + 1))
+            done
+
+            if [ "${ac_state}" != "SUCCEEDED" ]; then
+                # Query itself failed/cancelled — surface and stop retrying.
+                ac_reason=$(aws athena get-query-execution \
+                    --query-execution-id "${ac_qid}" \
+                    --region "${AWS_REGION}" \
+                    --query 'QueryExecution.Status.StateChangeReason' --output text 2>/dev/null || echo "")
+                print_fail "Check 14: Athena query did not SUCCEED (state=${ac_state})" \
+                    "Reason: ${ac_reason}. Fix: confirm the audit_correlation VIEW exists (run the named query in Athena first) and the Glue tables resolve. Check: aws athena get-query-execution --query-execution-id ${ac_qid} --region ${AWS_REGION}"
+                ac_row_count="ERROR"
+                break
+            fi
+
+            # Result rows: subtract 1 for the header row.
+            ac_total_rows=$(aws athena get-query-results \
+                --query-execution-id "${ac_qid}" \
+                --region "${AWS_REGION}" \
+                --query 'length(ResultSet.Rows)' --output text 2>/dev/null || echo "0")
+            if [ "${ac_total_rows:-0}" -ge 2 ] 2>/dev/null; then
+                ac_row_count=$((ac_total_rows - 1))
+                break
+            fi
+
+            # No data row yet — propagation likely incomplete; wait and retry.
+            ac_row_count=0
+            sleep "${ac_wait_secs}"
+            ac_attempt=$((ac_attempt + 1))
+        done
+
+        if [ "${ac_row_count}" = "1" ]; then
+            print_pass "Check 14 PASSED: audit_correlation returned exactly ONE row for request_id=${ac_request_id} (three-plane capstone — D3 step 14 GREEN)"
+        elif [ "${ac_row_count}" = "ERROR" ]; then
+            : # already reported by print_fail above
+        elif [ "${ac_row_count}" = "0" ] || [ -z "${ac_row_count}" ]; then
+            print_fail "Check 14: audit_correlation returned ZERO rows for request_id=${ac_request_id} after ~90s" \
+                "Fix: wait longer for fluent-bit + Firehose (60s buffer) + Glue propagation, then re-run; confirm the ivia_decisions anchor row landed (SELECT count(*) FROM ivia_decisions WHERE request_id='${ac_request_id}'); confirm pgaudit/vault rows exist. Check: aws athena get-query-results --query-execution-id ${ac_qid:-<id>} --region ${AWS_REGION}"
+        else
+            print_fail "Check 14: audit_correlation returned ${ac_row_count} rows (expected exactly 1) for request_id=${ac_request_id}" \
+                "Fix: a duplicate anchor or time-window join is producing fan-out; inspect the joined planes for the request_id."
+        fi
+    fi
+fi
+
 # Summary is printed automatically by the common-checks.sh EXIT trap
