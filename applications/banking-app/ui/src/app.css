@@ -1,193 +1,115 @@
-/* CDL Banking UI — IBM Design Language branded */
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+/* OscarVault International (OVI) — IBM Carbon Design System (g10 theme).
+   Carbon's g10.css (imported in +layout.svelte) is the token source of truth.
+   This file holds only: web fonts, the brand Blue-60 header override, and the
+   chat-bubble helpers Carbon has no primitive for. */
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
 
-:root {
-	/* IBM Design Language — Blue family */
-	--color-primary: #0f62fe;
-	--color-primary-dark: #002d9c;
-	--color-primary-light: #d0e2ff;
-	--color-primary-bg: #edf5ff;
-	/* IBM accent */
-	--color-accent: #007d79;
-	/* IBM status */
-	--color-danger: #da1e28;
-	--color-warning: #f1c21b;
-	--color-success: #198038;
-	/* IBM neutrals */
-	--color-bg: #f4f4f4;
-	--color-surface: #ffffff;
-	--color-border: #e0e0e0;
-	--color-text: #161616;
-	--color-text-secondary: #525252;
-	--color-text-muted: #8d8d8d;
-	/* Font */
-	font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+/* ---- Brand override: Blue 60 UIShell header ----------------------------------
+   carbon-components-svelte (Carbon v10, `bx--` prefix) styles the shell with
+   doubled-class selectors like `.bx--header.bx--header` (specificity 0,2,0) and
+   high-specificity compound action selectors, and exposes no color prop. The
+   workshop's "blue at the core" mandate therefore requires `!important` brand
+   overrides, scoped strictly to the header. */
+.bx--header {
+	background: #0f62fe !important; /* IBM Blue 60 */
+}
+.bx--header__name,
+.bx--header__name:focus {
+	color: #ffffff !important;
+	border-color: transparent !important;
+}
+.bx--header__name .bx--header__name--prefix {
+	color: #d0e2ff !important; /* Blue 20 — softer brand prefix on blue */
+}
+.bx--header__menu-item {
+	background: transparent !important; /* let the blue bar show through (Carbon gives items a light bg) */
+	color: #d0e2ff !important; /* Blue 20 */
+}
+.bx--header__menu-item:hover,
+.bx--header__menu-item:focus {
+	background: #0043ce !important; /* Blue 70 */
+	color: #ffffff !important;
+}
+/* Active/current page item: white label + white underline, still on the blue bar */
+.bx--header__menu-item[aria-current='page'],
+.bx--header__menu-item--current {
+	background: transparent !important;
+	color: #ffffff !important;
+}
+.bx--header__menu-item[aria-current='page']::after,
+.bx--header__menu-item--current::after {
+	border-bottom-color: #ffffff !important;
+}
+.bx--header__action,
+.bx--header__action svg {
+	color: #ffffff !important;
+	fill: #ffffff !important;
+	border-color: transparent !important;
+}
+.bx--header__action:hover {
+	background: #0043ce !important; /* Blue 70 */
+}
+.bx--header__action:focus {
+	border-color: #ffffff !important;
 }
 
-*,
-*::before,
-*::after {
-	box-sizing: border-box;
+/* Workshop tagline pill next to the brand name in the blue header. */
+.header-tagline {
+	align-self: center;
+	margin-inline-start: 0.75rem;
+	margin-inline-end: 1.25rem; /* breathing room before the HeaderNav divider */
+	padding: 0.15rem 0.6rem;
+	font-size: 0.7rem;
+	font-weight: 600;
+	letter-spacing: 0.01em;
+	color: #0043ce; /* Blue 70 text — readable on the solid white pill */
+	background: #ffffff;
+	border-radius: 999px;
+	white-space: nowrap;
 }
 
-html,
-body {
-	margin: 0;
-	padding: 0;
-	min-height: 100vh;
-	background-color: var(--color-bg);
-	color: var(--color-text);
-}
-
-a {
-	color: var(--color-primary);
-	text-decoration: none;
-}
-
-a:hover {
-	text-decoration: underline;
-}
-
-button {
-	cursor: pointer;
-	font-family: inherit;
-}
-
-.container {
+/* ---- App helpers -------------------------------------------------------------- */
+.page-narrow {
 	max-width: 1100px;
 	margin: 0 auto;
-	padding: 0 1.5rem;
 }
 
-.card {
-	background: var(--color-surface);
-	border: 1px solid var(--color-border);
-	border-radius: 0;
-	padding: 1.5rem;
-	box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
+.mono {
+	font-family: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
 }
 
-.btn {
-	display: inline-flex;
-	align-items: center;
-	gap: 0.4rem;
-	padding: 0.5rem 1.2rem;
-	border-radius: 0;
-	font-size: 0.875rem;
-	font-weight: 500;
-	border: none;
-	letter-spacing: 0.01em;
-	transition: background 0.12s ease, box-shadow 0.12s ease;
+/* Chat message bubbles — Carbon has no chat-bubble primitive, so these are styled
+   from Carbon CSS custom properties to track the active theme. */
+.msg {
+	padding: 0.6rem 0.75rem;
+	border-radius: 8px;
+	max-width: 85%;
+	font-size: 0.9rem;
+	line-height: 1.5;
+	white-space: pre-wrap;
 }
-
-.btn-primary {
-	background: var(--color-primary);
-	color: #fff;
+.msg-user {
+	background: var(--cds-button-primary, #0f62fe);
+	color: #ffffff;
+	align-self: flex-end;
 }
-
-.btn-primary:hover {
-	background: var(--color-primary-dark);
+.msg-ai {
+	background: var(--cds-layer-accent-01, #e0e0e0);
+	color: var(--cds-text-primary, #161616);
+	align-self: flex-start;
 }
-
-.btn-secondary {
-	background: var(--color-border);
-	color: var(--color-text);
+.msg-tool {
+	background: var(--cds-notification-background-info, #edf5ff);
+	border-inline-start: 3px solid var(--cds-support-info, #0072c3);
+	align-self: flex-start;
+	opacity: 0.95;
 }
-
-.btn-secondary:hover {
-	background: #c6c6c6;
-}
-
-.btn-danger {
-	background: var(--color-danger);
-	color: #fff;
-}
-
-.btn-danger:hover {
-	background: #750e13;
-}
-
-.badge {
-	display: inline-block;
-	padding: 0.2rem 0.6rem;
-	border-radius: 999px;
-	font-size: 0.75rem;
-	font-weight: 600;
-	letter-spacing: 0.01em;
-}
-
-.badge-green {
-	background: #a7f0ba;
-	color: #044317;
-}
-
-.badge-blue {
-	background: #d0e2ff;
-	color: #002d9c;
-}
-
-.badge-purple {
-	background: #e8daff;
-	color: #491d8b;
-}
-
-.badge-teal {
-	background: #9ef0f0;
-	color: #004144;
-}
-
-.badge-red {
-	background: #ffd7d9;
-	color: #750e13;
-}
-
-.badge-yellow {
-	background: #fef3c7;
-	color: #92400e;
-}
-
-.badge-aws {
-	background: #fff2e0;
-	color: #c45500;
-	border: 1px solid #ff9900;
-}
-
-table {
-	width: 100%;
-	border-collapse: collapse;
-	font-size: 0.875rem;
-}
-
-thead th {
-	text-align: left;
-	padding: 0.6rem 1rem;
-	border-bottom: 2px solid var(--color-text);
-	color: var(--color-text);
-	font-weight: 600;
-	font-size: 0.8rem;
+.msg-label {
+	display: block;
+	font-size: 0.7rem;
+	font-weight: 700;
 	text-transform: uppercase;
-	letter-spacing: 0.08em;
-}
-
-tbody td {
-	padding: 0.7rem 1rem;
-	border-bottom: 1px solid var(--color-border);
-}
-
-tbody tr:last-child td {
-	border-bottom: none;
-}
-
-.error-msg {
-	color: var(--color-danger);
-	background: #ffd7d9;
-	border: 1px solid #ff8389;
-	border-radius: 0;
-	padding: 0.75rem 1rem;
-	font-size: 0.875rem;
-}
-
-.loading {
-	color: var(--color-text-secondary);
-	font-style: italic;
+	letter-spacing: 0.05em;
+	margin-bottom: 0.2rem;
+	opacity: 0.75;
 }
