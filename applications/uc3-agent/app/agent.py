@@ -475,7 +475,7 @@ def initiate_refund(
     # to our /api/ciba/pending endpoint. Poll the store briefly for it (notifyuser runs
     # server-side before bc-authorize returns, so it is normally present immediately).
     consent_url = ""
-    for _ in range(20):  # up to ~5s
+    for _ in range(80):  # up to ~20s (push lands ~0.3s when warm; covers cold starts)
         consent_url = ciba_store.get(auth_req_id) or ""
         if consent_url:
             break

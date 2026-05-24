@@ -64,7 +64,10 @@
 	// prompted, approves there, then tells the agent to finish — complete_refund polls
 	// IVIA for the grant.
 	function openConsent() {
-		if (!pendingConsent?.consent_url) return;
+		// Guard: only ever open an absolute http(s) URL. An empty/relative value would
+		// resolve against the banking-ui origin and 404. consent_url is the WRP-hosted
+		// /isvaop/oauth2/ciba_user_authorize/{txid} pushed by the IVIA notifyuser rule.
+		if (!pendingConsent?.consent_url || !/^https?:\/\//.test(pendingConsent.consent_url)) return;
 		window.open(pendingConsent.consent_url, '_blank', 'noopener');
 		messages = [
 			...messages,
