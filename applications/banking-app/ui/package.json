@@ -1,7 +1,7 @@
 {
   "name": "banking-ui",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite dev",
@@ -22,6 +22,8 @@
     "vite": "^6.2.6"
   },
   "dependencies": {
+    "carbon-components-svelte": "^0.107.1",
+    "carbon-icons-svelte": "^13.11.0",
     "oidc-client-ts": "^3.1.0"
   }
 }
