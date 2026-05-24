@@ -52,7 +52,7 @@
 				request_id: match[2],
 				user_code: match[3],
 				details: match[4].replace(/\*+$/, ''),
-				consent_url: match[5] ?? ''
+				consent_url: (match[5] ?? '').replace(/\*+$/, '')
 			};
 		}
 	}
