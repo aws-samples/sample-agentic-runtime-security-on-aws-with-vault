@@ -41,9 +41,9 @@ variable "kms_key_arn" {
   description = "Workshop CMK ARN (alias/workshop-data) — used for S3 SSE on the log export bucket."
 }
 
-variable "rds_identifier" {
+variable "rds_postgresql_log_group_name" {
   type        = string
-  description = "RDS instance identifier whose PostgreSQL/pgaudit log group (/aws/rds/instance/<id>/postgresql) is subscribed to Firehose for the UC3 three-plane audit (PLANE-A). Sourced from module.rds.identifier — never a literal region/name."
+  description = "Full CloudWatch log group name for the RDS PostgreSQL/pgaudit export (e.g. /aws/rds/instance/<identifier>/postgresql), subscribed to Firehose for the UC3 three-plane audit (PLANE-A). Sourced from module.rds.postgresql_log_group_name — never reconstructed from a resource ID."
 }
 
 variable "tags" {

@@ -258,6 +258,7 @@ data "aws_iam_policy_document" "cw_to_firehose" {
       aws_kinesis_firehose_delivery_stream.vault_audit.arn,
       aws_kinesis_firehose_delivery_stream.ivia_decision.arn,
       aws_kinesis_firehose_delivery_stream.agent_trace.arn,
+      aws_kinesis_firehose_delivery_stream.pgaudit.arn,
     ]
   }
 }
@@ -415,11 +416,11 @@ resource "aws_cloudwatch_log_subscription_filter" "agent_trace" {
 }
 
 # PLANE-A: subscribe the RDS PostgreSQL/pgaudit log group to the pgaudit Firehose.
-# Log group name is the RDS-managed CloudWatch export group for the instance;
-# var.rds_identifier interpolation only — no region literal (canonical contract).
+# Log group name is the authoritative pre-created RDS export group passed in from
+# the rds module — never reconstructed from a resource ID (no region literal).
 resource "aws_cloudwatch_log_subscription_filter" "pgaudit" {
   name            = "${var.cluster_name}-pgaudit"
-  log_group_name  = "/aws/rds/instance/${var.rds_identifier}/postgresql"
+  log_group_name  = var.rds_postgresql_log_group_name
   filter_pattern  = ""
   destination_arn = aws_kinesis_firehose_delivery_stream.pgaudit.arn
   role_arn        = aws_iam_role.cw_firehose.arn

@@ -582,11 +582,14 @@ module "observability" {
   glue_database_name = module.audit.glue_database_name
   athena_workgroup   = module.audit.athena_workgroup_name
   kms_key_arn        = module.audit.workshop_cmk_arn
-  # PLANE-A pgaudit subscription target. The rds module exposes the instance
-  # identifier as db_instance_id (output "identifier" does NOT exist — plan
-  # interface assumption corrected; the log group is /aws/rds/instance/<id>/postgresql).
-  rds_identifier = module.rds.db_instance_id
-  tags           = var.tags
+  # PLANE-A pgaudit subscription target. Use the authoritative pre-created log
+  # group name from the rds module (aws_cloudwatch_log_group.rds_postgresql) —
+  # NOT a path reconstructed from db_instance_id. db_instance_id returns the RDS
+  # resource ID (db-XXXX), but the real CloudWatch export group uses the DB
+  # *identifier* (/aws/rds/instance/agenticlife-pg/postgresql), so reconstructing
+  # from the resource ID points at a non-existent group (ResourceNotFoundException).
+  rds_postgresql_log_group_name = module.rds.postgresql_log_group_name
+  tags                          = var.tags
 
   depends_on = [module.eks, module.addons, module.audit, module.rds]
 }
