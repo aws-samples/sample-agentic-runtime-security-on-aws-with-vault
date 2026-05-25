@@ -326,31 +326,6 @@ def _token_exchange(ciba_token: str, request_id: str) -> str:
     return delegated_jwt
 
 
-def _get_actor_token() -> str:
-    """Get an IVIA-issued client_credentials token for use as actor_token.
-
-    The agent authenticates to IVIA with its own client_id/secret.
-    IVIA trusts its own tokens, so token exchange validation succeeds.
-    The delegated JWT carries the agent's client_id in the act/may_act claim.
-
-    Returns:
-        IVIA-issued access_token string.
-    """
-    token_url = f"{IVIA_BASE_URL}/oauth2/token"
-    with httpx.Client(verify=False, timeout=30.0) as client:
-        resp = client.post(
-            token_url,
-            data={
-                "grant_type": "client_credentials",
-                "scope": "openid",
-            },
-            auth=(IVIA_ACTOR_CLIENT_ID, IVIA_ACTOR_CLIENT_SECRET),
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-        )
-    resp.raise_for_status()
-    return resp.json()["access_token"]
-
-
 # ---------------------------------------------------------------------------
 # Strands tools
 # ---------------------------------------------------------------------------
