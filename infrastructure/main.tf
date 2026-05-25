@@ -310,6 +310,60 @@ resource "aws_iam_role_policy" "vault_assume_bedrock" {
 }
 
 #-------------------------------------------------------------------------------
+# UC3 CloudWatch logs-writer role (OBJ-2, CONTEXT Delta-6)
+# Assumable ONLY by the Vault Helm pod's IAM role. Vault vends short-lived STS
+# creds from it (aws/sts/uc3-logs-writer) so the UC3 agent can write the
+# ivia_decisions ANCHOR record to /workshop/ivia-decision WITHOUT any standing
+# AWS identity on the agent's service account. Scoped to logs:PutLogEvents +
+# logs:CreateLogStream on the single /workshop/ivia-decision log group only —
+# never the wildcard form (threat T-071-02, HIGH). Region + account interpolated;
+# no literal region (canonical region contract).
+#-------------------------------------------------------------------------------
+
+data "aws_caller_identity" "current" {}
+
+resource "aws_iam_role" "uc3_logs_writer" {
+  name = "${var.cluster_name}-uc3-logs-writer"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Action    = ["sts:AssumeRole", "sts:TagSession"]
+      Principal = { AWS = module.vault.vault_iam_role_arn }
+    }]
+  })
+
+  tags = var.tags
+}
+
+resource "aws_iam_role_policy" "uc3_logs_writer" {
+  name = "uc3-logs-writer-put"
+  role = aws_iam_role.uc3_logs_writer.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["logs:PutLogEvents", "logs:CreateLogStream"]
+      Resource = "arn:aws:logs:${var.region}:${data.aws_caller_identity.current.account_id}:log-group:/workshop/ivia-decision:*"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "vault_assume_uc3_logs" {
+  name = "vault-assume-uc3-logs"
+  role = module.vault.vault_iam_role_id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["sts:AssumeRole", "sts:TagSession"]
+      Resource = aws_iam_role.uc3_logs_writer.arn
+    }]
+  })
+}
+
+#-------------------------------------------------------------------------------
 # ALB Timing Gate (between Wave 3 addons and Wave 4 workloads)
 # The ALB webhook must be fully ready before Ingress resources are created.
 # 30s sleep after addons module ensures the LBC webhook is registered.
@@ -528,8 +582,15 @@ module "observability" {
   glue_database_name = module.audit.glue_database_name
   athena_workgroup   = module.audit.athena_workgroup_name
   kms_key_arn        = module.audit.workshop_cmk_arn
-  tags               = var.tags
+  # PLANE-A pgaudit subscription target. Use the authoritative pre-created log
+  # group name from the rds module (aws_cloudwatch_log_group.rds_postgresql) —
+  # NOT a path reconstructed from db_instance_id. db_instance_id returns the RDS
+  # resource ID (db-XXXX), but the real CloudWatch export group uses the DB
+  # *identifier* (/aws/rds/instance/agenticlife-pg/postgresql), so reconstructing
+  # from the resource ID points at a non-existent group (ResourceNotFoundException).
+  rds_postgresql_log_group_name = module.rds.postgresql_log_group_name
+  tags                          = var.tags
 
-  depends_on = [module.eks, module.addons, module.audit]
+  depends_on = [module.eks, module.addons, module.audit, module.rds]
 }
 

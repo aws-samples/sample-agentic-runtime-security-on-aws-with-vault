@@ -153,6 +153,12 @@ class UC3VaultClient:
             "host": os.getenv("DB_HOST", "localhost"),
             "port": int(os.getenv("DB_PORT", "5432")),
             "dbname": os.getenv("DB_NAME", "workshop"),
+            # Real numeric lease TTL (seconds, e.g. 300) the agent OBSERVED when
+            # Vault issued the credential. The Vault AUDIT-logged response does NOT
+            # carry this numeric value (only a lease-id identifier), so the agent
+            # threads it forward here to populate db_credential_ttl in the
+            # three-plane audit_correlation VIEW (proof of OBJ-2: no standing creds).
+            "lease_duration": db_response.get("lease_duration"),
         }
 
     def get_bedrock_credentials(self) -> boto3.Session:
@@ -177,6 +183,39 @@ class UC3VaultClient:
             "uc3_bedrock_sts_credentials_issued",
             extra={
                 "vault_aws_role": "bedrock-reader",
+                "lease_id": response.get("lease_id", "n/a"),
+                "region": region,
+            },
+        )
+        return session
+
+    def get_logs_credentials(self) -> boto3.Session:
+        """Obtain ephemeral CloudWatch Logs STS credentials from Vault (OBJ-2).
+
+        Mirrors get_bedrock_credentials: reads aws/sts/uc3-logs-writer using the
+        agent's workload-identity Vault token and returns a short-lived boto3
+        session scoped (server-side) to logs:PutLogEvents + logs:CreateLogStream
+        on the single /workshop/ivia-decision log group. The agent holds NO
+        standing AWS identity — these creds expire with the Vault lease.
+
+        Used by the Branch-B ivia_decisions anchor emission (CONTEXT Delta-6).
+
+        Returns:
+            boto3.Session with Vault-issued STS credentials.
+        """
+        region = os.getenv("REGION", "us-west-2")
+        response = self._client.read("aws/sts/uc3-logs-writer")
+        data = response["data"]
+        session = boto3.Session(
+            aws_access_key_id=data["access_key"],
+            aws_secret_access_key=data["secret_key"],
+            aws_session_token=data["security_token"],
+            region_name=region,
+        )
+        logger.info(
+            "uc3_logs_sts_credentials_issued",
+            extra={
+                "vault_aws_role": "uc3-logs-writer",
                 "lease_id": response.get("lease_id", "n/a"),
                 "region": region,
             },

@@ -75,6 +75,11 @@ variable "bedrock_role_arn" {
   type        = string
 }
 
+variable "uc3_logs_role_arn" {
+  description = "IAM role ARN Vault assumes for scoped CloudWatch Logs STS credentials (logs:PutLogEvents + logs:CreateLogStream on /workshop/ivia-decision only). Backs aws/sts/uc3-logs-writer for the UC3 ivia_decisions anchor emission."
+  type        = string
+}
+
 variable "tags" {
   description = "Tags applied to taggable AWS resources."
   type        = map(string)

@@ -54,5 +54,6 @@ module "vault_config" {
   rds_master_user_secret_arn         = var.rds_master_user_secret_arn
   rds_db_name                        = var.rds_db_name
   bedrock_role_arn                   = var.bedrock_role_arn
+  uc3_logs_role_arn                  = var.uc3_logs_role_arn
   tags                               = var.tags
 }

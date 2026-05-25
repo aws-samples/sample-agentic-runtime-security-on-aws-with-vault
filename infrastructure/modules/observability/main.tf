@@ -12,7 +12,7 @@
 #   5. CloudWatch subscription filters (3) — one per log group → Firehose stream.
 #   6. IAM roles for Firehose (write S3) and CloudWatch (put-records to Firehose).
 #   7. Glue catalog tables (4) — vault_audit, ivia_decisions, agent_traces,
-#      cloudtrail_events in the existing workshop_logs database.
+#      pgaudit_logs in the existing workshop_logs database.
 #   8. Athena named query (audit_correlation_view) — attendees execute this
 #      CREATE OR REPLACE VIEW to instantiate the cross-plane JOIN.
 #
@@ -258,6 +258,7 @@ data "aws_iam_policy_document" "cw_to_firehose" {
       aws_kinesis_firehose_delivery_stream.vault_audit.arn,
       aws_kinesis_firehose_delivery_stream.ivia_decision.arn,
       aws_kinesis_firehose_delivery_stream.agent_trace.arn,
+      aws_kinesis_firehose_delivery_stream.pgaudit.arn,
     ]
   }
 }
@@ -294,6 +295,35 @@ resource "aws_kinesis_firehose_delivery_stream" "vault_audit" {
 
     compression_format = "UNCOMPRESSED"
 
+    # Unwrap the gzipped CloudWatch Logs DATA_MESSAGE envelope so the inner
+    # logEvents[].message (the real record) lands in S3. Without this Firehose
+    # writes the envelope verbatim, the Glue tables parse the wrapper instead of
+    # the record, every real column is NULL, and the audit_correlation VIEW
+    # returns zero rows (Task 3B — root cause verified live 2026-05-24).
+    # Processor 1 gunzips (Decompression/GZIP); processor 2 extracts each log
+    # event's message (CloudWatchLogProcessing/DataMessageExtraction). Type,
+    # parameter_name, and parameter_value all confirmed against the Firehose
+    # Processor / ProcessorParameter API enums.
+    processing_configuration {
+      enabled = true
+
+      processors {
+        type = "Decompression"
+        parameters {
+          parameter_name  = "CompressionFormat"
+          parameter_value = "GZIP"
+        }
+      }
+
+      processors {
+        type = "CloudWatchLogProcessing"
+        parameters {
+          parameter_name  = "DataMessageExtraction"
+          parameter_value = "true"
+        }
+      }
+    }
+
     cloudwatch_logging_options {
       enabled = false
     }
@@ -317,6 +347,35 @@ resource "aws_kinesis_firehose_delivery_stream" "ivia_decision" {
 
     compression_format = "UNCOMPRESSED"
 
+    # Unwrap the gzipped CloudWatch Logs DATA_MESSAGE envelope so the inner
+    # logEvents[].message (the real record) lands in S3. Without this Firehose
+    # writes the envelope verbatim, the Glue tables parse the wrapper instead of
+    # the record, every real column is NULL, and the audit_correlation VIEW
+    # returns zero rows (Task 3B — root cause verified live 2026-05-24).
+    # Processor 1 gunzips (Decompression/GZIP); processor 2 extracts each log
+    # event's message (CloudWatchLogProcessing/DataMessageExtraction). Type,
+    # parameter_name, and parameter_value all confirmed against the Firehose
+    # Processor / ProcessorParameter API enums.
+    processing_configuration {
+      enabled = true
+
+      processors {
+        type = "Decompression"
+        parameters {
+          parameter_name  = "CompressionFormat"
+          parameter_value = "GZIP"
+        }
+      }
+
+      processors {
+        type = "CloudWatchLogProcessing"
+        parameters {
+          parameter_name  = "DataMessageExtraction"
+          parameter_value = "true"
+        }
+      }
+    }
+
     cloudwatch_logging_options {
       enabled = false
     }
@@ -339,6 +398,92 @@ resource "aws_kinesis_firehose_delivery_stream" "agent_trace" {
     buffering_size     = 5
 
     compression_format = "UNCOMPRESSED"
+
+    # Unwrap the gzipped CloudWatch Logs DATA_MESSAGE envelope so the inner
+    # logEvents[].message (the real record) lands in S3. Without this Firehose
+    # writes the envelope verbatim, the Glue tables parse the wrapper instead of
+    # the record, every real column is NULL, and the audit_correlation VIEW
+    # returns zero rows (Task 3B — root cause verified live 2026-05-24).
+    # Processor 1 gunzips (Decompression/GZIP); processor 2 extracts each log
+    # event's message (CloudWatchLogProcessing/DataMessageExtraction). Type,
+    # parameter_name, and parameter_value all confirmed against the Firehose
+    # Processor / ProcessorParameter API enums.
+    processing_configuration {
+      enabled = true
+
+      processors {
+        type = "Decompression"
+        parameters {
+          parameter_name  = "CompressionFormat"
+          parameter_value = "GZIP"
+        }
+      }
+
+      processors {
+        type = "CloudWatchLogProcessing"
+        parameters {
+          parameter_name  = "DataMessageExtraction"
+          parameter_value = "true"
+        }
+      }
+    }
+
+    cloudwatch_logging_options {
+      enabled = false
+    }
+  }
+
+  tags = var.tags
+}
+
+# PLANE-A (UC3 three-plane audit): dedicated stream for RDS pgaudit lines.
+# A NEW stream rather than reusing an existing one — the RDS postgresql log
+# source has a different line shape than the JSON sources above; a dedicated
+# stream lands raw text at the pgaudit/ prefix for the LazySimpleSerDe Glue
+# table (RESEARCH Open Question 3 RESOLVED).
+resource "aws_kinesis_firehose_delivery_stream" "pgaudit" {
+  name        = "${var.cluster_name}-pgaudit"
+  destination = "extended_s3"
+
+  extended_s3_configuration {
+    role_arn            = aws_iam_role.firehose.arn
+    bucket_arn          = aws_s3_bucket.logs.arn
+    prefix              = "pgaudit/year=!{timestamp:yyyy}/month=!{timestamp:MM}/day=!{timestamp:dd}/"
+    error_output_prefix = "errors/pgaudit/"
+
+    buffering_interval = 60
+    buffering_size     = 5
+
+    compression_format = "UNCOMPRESSED"
+
+    # Unwrap the gzipped CloudWatch Logs DATA_MESSAGE envelope so the inner
+    # logEvents[].message (the real record) lands in S3. Without this Firehose
+    # writes the envelope verbatim, the Glue tables parse the wrapper instead of
+    # the record, every real column is NULL, and the audit_correlation VIEW
+    # returns zero rows (Task 3B — root cause verified live 2026-05-24).
+    # Processor 1 gunzips (Decompression/GZIP); processor 2 extracts each log
+    # event's message (CloudWatchLogProcessing/DataMessageExtraction). Type,
+    # parameter_name, and parameter_value all confirmed against the Firehose
+    # Processor / ProcessorParameter API enums.
+    processing_configuration {
+      enabled = true
+
+      processors {
+        type = "Decompression"
+        parameters {
+          parameter_name  = "CompressionFormat"
+          parameter_value = "GZIP"
+        }
+      }
+
+      processors {
+        type = "CloudWatchLogProcessing"
+        parameters {
+          parameter_name  = "DataMessageExtraction"
+          parameter_value = "true"
+        }
+      }
+    }
 
     cloudwatch_logging_options {
       enabled = false
@@ -386,6 +531,20 @@ resource "aws_cloudwatch_log_subscription_filter" "agent_trace" {
   depends_on = [aws_iam_role_policy.cw_to_firehose]
 }
 
+# PLANE-A: subscribe the RDS PostgreSQL/pgaudit log group to the pgaudit Firehose.
+# Log group name is the authoritative pre-created RDS export group passed in from
+# the rds module — never reconstructed from a resource ID (no region literal).
+resource "aws_cloudwatch_log_subscription_filter" "pgaudit" {
+  name            = "${var.cluster_name}-pgaudit"
+  log_group_name  = var.rds_postgresql_log_group_name
+  filter_pattern  = ""
+  destination_arn = aws_kinesis_firehose_delivery_stream.pgaudit.arn
+  role_arn        = aws_iam_role.cw_firehose.arn
+  distribution    = "ByLogStream"
+
+  depends_on = [aws_iam_role_policy.cw_to_firehose]
+}
+
 #-------------------------------------------------------------------------------
 # Glue catalog tables in existing workshop_logs database
 # JSON SerDe — matches structured JSON emitted by Vault audit device,
@@ -422,6 +581,22 @@ resource "aws_glue_catalog_table" "vault_audit" {
 
       parameters = {
         "ignore.malformed.json" = "TRUE"
+        # Pre-2026-05-24 objects in these prefixes are gzipped CloudWatch-Logs
+        # DATA_MESSAGE envelopes written before Task 3B added Firehose
+        # decompression. The OpenX JSON SerDe reads those raw gzip bytes as text
+        # and fails with "Primitive can not be coerced to a ROW" on struct
+        # columns; ignore.malformed.json does NOT cover that case. This property
+        # makes the SerDe emit NULL for unparseable rows instead, so the old
+        # envelope objects become all-NULL (dropped by the VIEW's INNER JOIN)
+        # while new unwrapped records parse normally. Recommended by Athena's
+        # own error message (openx-json-serde docs).
+        "use.null.for.invalid.data" = "true"
+        # Vault audit records carry the event timestamp under the JSON key "time",
+        # but the Athena column is named "timestamp" (matches the other audit
+        # tables). Map the column to the real key so vault_auth_time populates;
+        # without this the column reads NULL and the audit_correlation VIEW cannot
+        # time-window the Vault cred issuance to a single CIBA request.
+        "mapping.timestamp" = "time"
       }
     }
 
@@ -444,6 +619,47 @@ resource "aws_glue_catalog_table" "vault_audit" {
     columns {
       name = "response"
       type = "struct<data:map<string,string>>"
+    }
+  }
+}
+
+# PLANE-A (UC3 three-plane audit): RDS pgaudit log lines as raw text.
+# Single-column schema (line); LazySimpleSerDe over the pgaudit/ prefix in the
+# existing KMS-encrypted logs bucket (T-071-05: no new bucket, no public path;
+# refund INSERT SQL carries no secrets). The VIEW regexp-extracts uc3_request_id
+# (join key), db_write_time, and db_command (WRITE,INSERT) from `line`.
+resource "aws_glue_catalog_table" "pgaudit_logs" {
+  name          = "pgaudit_logs"
+  database_name = var.glue_database_name
+  description   = "RDS PostgreSQL pgaudit log lines — data-write audit for UC3 refund INSERT with request_id SQL comment."
+
+  table_type = "EXTERNAL_TABLE"
+
+  parameters = {
+    "classification"     = "csv"
+    "EXTERNAL"           = "TRUE"
+    "has_encrypted_data" = "false"
+  }
+
+  storage_descriptor {
+    location      = "${local.log_bucket_uri}/pgaudit/"
+    input_format  = "org.apache.hadoop.mapred.TextInputFormat"
+    output_format = "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat"
+
+    ser_de_info {
+      name                  = "raw-text-serde"
+      serialization_library = "org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe"
+    }
+
+    # pgaudit records are raw PostgreSQL log TEXT lines (not JSON), so the table
+    # is a SINGLE honest column holding the whole line. The VIEW regex-extracts
+    # db_write_time, db_command (e.g. WRITE,INSERT) and the uc3_request_id join
+    # key from `line`. A 2-column (timestamp,message) shape was wrong: with the
+    # LazySimpleSerDe default delimiter the entire line lands in column 1 and the
+    # second column is always NULL — so VIEW regexes over `message` matched nothing.
+    columns {
+      name = "line"
+      type = "string"
     }
   }
 }
@@ -472,6 +688,16 @@ resource "aws_glue_catalog_table" "ivia_decisions" {
 
       parameters = {
         "ignore.malformed.json" = "TRUE"
+        # Pre-2026-05-24 objects in these prefixes are gzipped CloudWatch-Logs
+        # DATA_MESSAGE envelopes written before Task 3B added Firehose
+        # decompression. The OpenX JSON SerDe reads those raw gzip bytes as text
+        # and fails with "Primitive can not be coerced to a ROW" on struct
+        # columns; ignore.malformed.json does NOT cover that case. This property
+        # makes the SerDe emit NULL for unparseable rows instead, so the old
+        # envelope objects become all-NULL (dropped by the VIEW's INNER JOIN)
+        # while new unwrapped records parse normally. Recommended by Athena's
+        # own error message (openx-json-serde docs).
+        "use.null.for.invalid.data" = "true"
       }
     }
 
@@ -503,6 +729,17 @@ resource "aws_glue_catalog_table" "ivia_decisions" {
       name = "authorization_details"
       type = "array<struct<type:string,actions:array<string>,amount:string,currency:string>>"
     }
+    # The REAL numeric lease TTL in seconds (e.g. 300 = 5 min) the agent OBSERVED
+    # when Vault issued the per-refund uc3-refund-writer credential. Emitted by the
+    # agent's Branch-B ivia_decisions anchor record (agent.py decision_record), sourced
+    # from the hvac db_response.lease_duration. The Vault audit-logged response carries
+    # ONLY a lease-id identifier (not a duration), so the agent-observed
+    # value is the only honest numeric TTL — the VIEW surfaces db_credential_ttl from here
+    # (request_id-keyed via the ivia anchor), proving OBJ-2 (no standing privileges).
+    columns {
+      name = "db_credential_ttl"
+      type = "int"
+    }
   }
 }
 
@@ -530,6 +767,16 @@ resource "aws_glue_catalog_table" "agent_traces" {
 
       parameters = {
         "ignore.malformed.json" = "TRUE"
+        # Pre-2026-05-24 objects in these prefixes are gzipped CloudWatch-Logs
+        # DATA_MESSAGE envelopes written before Task 3B added Firehose
+        # decompression. The OpenX JSON SerDe reads those raw gzip bytes as text
+        # and fails with "Primitive can not be coerced to a ROW" on struct
+        # columns; ignore.malformed.json does NOT cover that case. This property
+        # makes the SerDe emit NULL for unparseable rows instead, so the old
+        # envelope objects become all-NULL (dropped by the VIEW's INNER JOIN)
+        # while new unwrapped records parse normally. Recommended by Athena's
+        # own error message (openx-json-serde docs).
+        "use.null.for.invalid.data" = "true"
       }
     }
 
@@ -560,65 +807,6 @@ resource "aws_glue_catalog_table" "agent_traces" {
   }
 }
 
-resource "aws_glue_catalog_table" "cloudtrail_events" {
-  name          = "cloudtrail_events"
-  database_name = var.glue_database_name
-  description   = "AWS CloudTrail management events — correlates AWS API calls with agent request_id via requestParameters match."
-
-  table_type = "EXTERNAL_TABLE"
-
-  parameters = {
-    "classification"     = "json"
-    "EXTERNAL"           = "TRUE"
-    "has_encrypted_data" = "false"
-    "projection.enabled" = "false"
-  }
-
-  storage_descriptor {
-    # CloudTrail S3 path pattern — attendees set the actual bucket name via
-    # the CloudTrail console or the audit module's existing trail.
-    # Using the log export bucket for workshop simplicity; a full CloudTrail
-    # integration would point to the org-level trail bucket.
-    location      = "${local.log_bucket_uri}/cloudtrail/"
-    input_format  = "com.amazon.emr.cloudtrail.CloudTrailInputFormat"
-    output_format = "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat"
-
-    ser_de_info {
-      name                  = "json-serde"
-      serialization_library = "org.openx.data.jsonserde.JsonSerDe"
-
-      parameters = {
-        "ignore.malformed.json" = "TRUE"
-      }
-    }
-
-    columns {
-      name = "eventtime"
-      type = "string"
-    }
-    columns {
-      name = "eventname"
-      type = "string"
-    }
-    columns {
-      name = "useridentity"
-      type = "struct<type:string,principalid:string,arn:string,accountid:string,sessioncontext:struct<sessionissuer:struct<type:string,principalid:string,arn:string,accountid:string,username:string>>>"
-    }
-    columns {
-      name = "requestparameters"
-      type = "string"
-    }
-    columns {
-      name = "responseelements"
-      type = "string"
-    }
-    columns {
-      name = "sourceipaddress"
-      type = "string"
-    }
-  }
-}
-
 #-------------------------------------------------------------------------------
 # Athena named query — audit_correlation VIEW
 #
@@ -633,45 +821,82 @@ resource "aws_glue_catalog_table" "cloudtrail_events" {
 #-------------------------------------------------------------------------------
 
 locals {
+  # 12-column audit_correlation VIEW (CONTEXT Delta-6, Option B — locked 2026-05-24;
+  # CloudTrail plane removed 2026-05-25 — see SUMMARY: no workshop-owned trail delivers
+  # to S3 in a fresh attendee account, and the refund is a Postgres write CloudTrail
+  # never witnesses; the three planes IVIA + Vault + pgaudit fully satisfy OBJ-5).
+  # Anchored on ivia_decisions via INNER JOIN: the agent's Branch-B emission (Task 2b)
+  # MUST populate >=1 row per request_id or the whole capstone returns zero rows.
+  #
+  # Probe-driven decisions baked in here (results in 07.1-capstone-SUMMARY.md):
+  #   P1 = NO/DEFERRED -> ship the SAFE Alt-A vault join: anchor ivia_decisions, join
+  #        vault_audit on the principal. VERIFIED 2026-05-24 against live unwrapped
+  #        records: the Vault JWT-auth display_name is 'jwt-<sub>' (e.g. jwt-oscar),
+  #        NOT the bare sub, so the join key is vault.auth.display_name = 'jwt-' ||
+  #        ivia.user_identity. The join is further scoped to the refund-writer cred
+  #        path (request.path = 'database/creds/uc3-refund-writer') and to the
+  #        completed operation (vault.type = 'response') so a single cred issuance
+  #        yields exactly one row instead of fanning out across the request+response
+  #        audit pair, then bounded to a 30s window of the approval. The vault.timestamp
+  #        column is SerDe-mapped to the record's "time" key (mapping.timestamp=time on
+  #        the vault_audit Glue table) — without that map the column reads NULL and the
+  #        time window cannot fire. Metadata surfaced via MAP BRACKET syntax. Alt-D (a true request_id
+  #        JWT claim join: vault.auth.metadata['request_id'] = ivia.request_id) was
+  #        probed and is the documented UPGRADE PATH — it needs binding_message/
+  #        request_id injected into the isvaop_pretoken stsuu context as a top-level
+  #        JWT claim AND added to the uc3-jwt claim_mappings. NOT shipped (would yield
+  #        zero rows until that IVIA mutation lands).
+  #   P2 = pgaudit Fork B (chosen 2026-05-25). The agent's INSERT is a MULTI-LINE
+  #        statement, and the log pipeline splits it on newlines into separate S3 rows,
+  #        so the row carrying the uc3_request_id comment also carries the AUDIT header
+  #        and the WRITE,INSERT command — but NOT the table name (pgaudit.log_relation
+  #        is off -> OBJNAME field blank) nor the full quoted SQL (its closing quote is
+  #        on a later split row). So the VIEW surfaces only what one row honestly proves:
+  #        db_write_time (leading 'YYYY-MM-DD HH:MM:SS UTC' prefix) and db_command
+  #        (the WRITE,INSERT operation), with the uc3_request_id regex as the join key.
+  #        db_table/db_statement were DROPPED rather than shipped blank. The richer
+  #        forensic variant (Fork A: pgaudit.log_relation=1 + single-line agent INSERT)
+  #        is the documented upgrade path — it needs an agent rebuild + a new refund.
+  #   P3 = the database/creds READ audit response does NOT carry a numeric lease TTL
+  #        (only a lease-id identifier — NOT a duration; and numeric
+  #        lease_duration is NOT logged at response.data['lease_duration'] either). The
+  #        only honest numeric TTL is the value the AGENT itself observed in the hvac
+  #        creds response (db_response.lease_duration, e.g. 300). The agent threads it
+  #        into its Branch-B ivia_decisions anchor record (db_credential_ttl), so the
+  #        VIEW surfaces db_credential_ttl from ivia.db_credential_ttl, request_id-keyed.
   athena_view_sql = <<-SQL
     CREATE OR REPLACE VIEW audit_correlation AS
     SELECT
-        a.request_id,
-        a.timestamp       AS event_time,
-        i.user_identity   AS user_approved,
-        a.agent_identity  AS agent_acted,
-        a.action_details  AS action,
-        a.tool_name       AS tool_used,
-        v.request.path    AS vault_path,
-        v.auth.policies   AS vault_policies,
-        c.eventname       AS cloudtrail_event,
-        c.sourceipaddress AS source_ip
-    FROM agent_traces a
-    LEFT JOIN ivia_decisions i
-      ON i.request_id = a.request_id
-    LEFT JOIN vault_audit v
-      ON v.request.id = a.request_id
-    LEFT JOIN cloudtrail_events c
-      ON c.requestparameters LIKE '%' || a.request_id || '%'
+        ivia.request_id,
+        ivia.timestamp                                                AS approval_time,
+        ivia.user_identity                                            AS user_approved_sub,
+        ivia.request_id                                               AS ciba_binding_message,
+        vault.timestamp                                               AS vault_auth_time,
+        vault.auth.display_name                                       AS vault_principal,
+        vault.request.path                                            AS vault_path,
+        vault.auth.metadata['may_act_sub']                            AS vault_bound_claim_may_act,
+        ivia.authorization_details[1].type                            AS vault_bound_claim_rar_type,
+        regexp_extract(rds.line, '^([0-9-]+ [0-9:]+ UTC)', 1)        AS db_write_time,
+        regexp_extract(rds.line, 'AUDIT: SESSION,[0-9]+,[0-9]+,([A-Z]+,[A-Z]+),', 1) AS db_command,
+        ivia.db_credential_ttl                                        AS db_credential_ttl
+    FROM workshop_logs.ivia_decisions ivia
+    JOIN workshop_logs.vault_audit vault
+        ON vault.auth.display_name = 'jwt-' || ivia.user_identity
+        AND vault.request.path = 'database/creds/uc3-refund-writer'
+        AND vault.type = 'response'
+        AND ABS(to_unixtime(from_iso8601_timestamp(vault.timestamp))
+              - to_unixtime(from_iso8601_timestamp(ivia.timestamp))) < 30
+    LEFT JOIN workshop_logs.pgaudit_logs rds
+        ON regexp_extract(rds.line, 'uc3_request_id=([0-9a-f-]{36})', 1) = ivia.request_id
   SQL
 
-  # SELECT query for verify script consumption (excludes the DDL wrapper)
+  # SELECT query for verify-uc3.sh consumption — the verify script substitutes the
+  # captured request_id for REPLACE_WITH_REQUEST_ID and asserts exactly one row.
   athena_select_sql = <<-SQL
-    SELECT
-        a.request_id,
-        a.timestamp       AS event_time,
-        i.user_identity   AS user_approved,
-        a.agent_identity  AS agent_acted,
-        a.action_details  AS action,
-        a.tool_name       AS tool_used,
-        v.request.path    AS vault_path,
-        c.eventname       AS cloudtrail_event
-    FROM agent_traces a
-    LEFT JOIN ivia_decisions i ON i.request_id = a.request_id
-    LEFT JOIN vault_audit v    ON v.request.id = a.request_id
-    LEFT JOIN cloudtrail_events c
-      ON c.requestparameters LIKE '%' || a.request_id || '%'
-    LIMIT 100
+    SELECT *
+    FROM audit_correlation
+    WHERE request_id = 'REPLACE_WITH_REQUEST_ID'
+    LIMIT 1
   SQL
 }
 
@@ -679,6 +904,6 @@ resource "aws_athena_named_query" "audit_correlation_view" {
   name        = "create-audit-correlation-view"
   workgroup   = var.athena_workgroup
   database    = var.glue_database_name
-  description = "Creates the audit_correlation VIEW joining agent_traces, ivia_decisions, vault_audit, and cloudtrail_events on W3C traceparent request_id. Execute this in Athena before running correlation queries."
+  description = "Creates the audit_correlation VIEW joining ivia_decisions, vault_audit, and pgaudit_logs on the shared request_id. Execute this in Athena before running correlation queries."
   query       = local.athena_view_sql
 }
