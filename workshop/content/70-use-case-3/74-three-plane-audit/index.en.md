@@ -13,11 +13,11 @@ Use Case 3 culminates in a single Athena query that answers all five workshop ob
 | OBJ-2 — No standing privileges | `db_credential_ttl` | DB credentials lived for 5 minutes only |
 | OBJ-3 — Action tied to user intent | `user_approved_sub` + `ciba_binding_message` | The user approved this exact `request_id` out-of-band |
 | OBJ-4 — Enforcement at point of use | `vault_bound_claim_may_act` + `vault_bound_claim_rar_type` | Vault enforced `may_act` and `authorization_details` at auth time |
-| OBJ-5 — Correlated audit evidence | `request_id` present in all three planes | IVIA + Vault + CloudTrail share a single traceable identifier |
+| OBJ-5 — Correlated audit evidence | `request_id` present in all three planes | IVIA + Vault + pgaudit share a single traceable identifier |
 
 ## The `audit_correlation` VIEW
 
-The VIEW joins three log streams in Athena using `request_id` as the primary key:
+This VIEW is **created for you automatically** when Use Case 3 is deployed and verified (`verify-uc3.sh` executes the DDL from the Terraform-managed Athena named query). You do **not** need to create it — it is shown here so you can see how the three log streams are joined in Athena using `request_id` as the primary key:
 
 ```sql
 CREATE OR REPLACE VIEW audit_correlation AS
@@ -30,25 +30,19 @@ SELECT
     vault.auth.display_name                                       AS vault_principal,
     vault.request.path                                            AS vault_path,
     vault.auth.metadata['may_act_sub']                            AS vault_bound_claim_may_act,
-    vault.auth.metadata['rar_type']                               AS vault_bound_claim_rar_type,
-    rds.timestamp                                                 AS db_write_time,
-    regexp_extract(rds.message, 'AUDIT: (?:[^,]+,){6}([^,]+),', 1) AS db_table,
-    regexp_extract(rds.message, 'AUDIT: (?:[^,]+,){7}"(.*)"', 1)   AS db_statement,
-    cloudtrail.eventtime                                          AS aws_api_time,
-    cloudtrail.eventname                                          AS aws_api_call,
-    cloudtrail.useridentity.sessioncontext.sessionissuer.username AS aws_principal,
+    ivia.authorization_details[1].type                            AS vault_bound_claim_rar_type,
+    regexp_extract(rds.line, '^([0-9-]+ [0-9:]+ UTC)', 1)        AS db_write_time,
+    regexp_extract(rds.line, 'AUDIT: SESSION,[0-9]+,[0-9]+,([A-Z]+,[A-Z]+),', 1) AS db_command,
     ivia.db_credential_ttl                                        AS db_credential_ttl
 FROM workshop_logs.ivia_decisions ivia
 JOIN workshop_logs.vault_audit vault
-    ON ivia.user_identity = vault.auth.display_name
+    ON vault.auth.display_name = 'jwt-' || ivia.user_identity
+    AND vault.request.path = 'database/creds/uc3-refund-writer'
+    AND vault.type = 'response'
     AND ABS(to_unixtime(from_iso8601_timestamp(vault.timestamp))
           - to_unixtime(from_iso8601_timestamp(ivia.timestamp))) < 30
 LEFT JOIN workshop_logs.pgaudit_logs rds
-    ON regexp_extract(rds.message, 'uc3_request_id=([0-9a-f-]{36})', 1) = ivia.request_id
-LEFT JOIN workshop_logs.cloudtrail_events cloudtrail
-    ON cloudtrail.useridentity.sessioncontext.sessionissuer.username = vault.auth.display_name
-    AND ABS(to_unixtime(from_iso8601_timestamp(cloudtrail.eventtime))
-          - to_unixtime(from_iso8601_timestamp(vault.timestamp))) < 5;
+    ON regexp_extract(rds.line, 'uc3_request_id=([0-9a-f-]{36})', 1) = ivia.request_id;
 ```
 
 ## Run the Athena Query
@@ -57,9 +51,11 @@ LEFT JOIN workshop_logs.cloudtrail_events cloudtrail
 
 **Step 2:** Select the `workshop_logs` database from the dropdown.
 
-**Step 3:** Create the VIEW by running the CREATE OR REPLACE VIEW statement above. This is a one-time setup step.
+:::alert{header="The VIEW already exists" type="info"}
+The `audit_correlation` VIEW was created automatically during Use Case 3 deployment. You do not create it — your only job here is to query it and read the forensic row.
+:::
 
-**Step 4:** Find a `request_id` from the UC3 agent logs:
+**Step 3:** Find a `request_id` from the UC3 agent logs:
 
 ```bash
 # Retrieve a recent request_id from CloudWatch
@@ -71,7 +67,7 @@ aws logs filter-log-events \
   --output text | jq -r .request_id
 ```
 
-**Step 5:** Query the correlation VIEW:
+**Step 4:** Query the correlation VIEW:
 
 ```sql
 SELECT *
@@ -79,7 +75,7 @@ FROM audit_correlation
 WHERE request_id = 'YOUR-REQUEST-ID-HERE'
 ```
 
-**Step 6:** Inspect the result. One row should contain all three plane timestamps, the user who approved, the agent that acted, the DB table written, and the credential TTL. Every column maps directly to one of the five workshop objectives.
+**Step 5:** Inspect the result. One row should contain all three plane timestamps, the user who approved, the agent that acted, the database write operation (`WRITE,INSERT`), and the credential TTL. Every column maps directly to one of the five workshop objectives.
 
 ## CLI Alternative
 

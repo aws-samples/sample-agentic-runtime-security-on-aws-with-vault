@@ -23,7 +23,7 @@
 #   8.  CloudWatch log group /workshop/agent-trace has recent log events
 #   9.  fluent-bit DaemonSet pods Running in logging namespace
 #   10. S3 log bucket exists and has objects
-#   11. Athena audit_correlation VIEW named query exists
+#   11. Athena audit_correlation VIEW auto-created (attendees run only the SELECT)
 #   12. UC3 agent chat: "I need a refund" returns transaction list
 #   13. UC3 agent chat: multi-turn session — selecting a transaction is acknowledged
 #
@@ -84,7 +84,7 @@ Normal mode checks (19 total):
   8.  CloudWatch log group /workshop/agent-trace has recent log events
   9.  fluent-bit DaemonSet Running in logging namespace
   10. S3 log bucket exists and has objects
-  11. Athena audit_correlation VIEW named query exists
+  11. Athena audit_correlation VIEW auto-created (attendees run only the SELECT)
   12. UC3 agent chat: "I need a refund" returns transaction list
   13. UC3 agent chat: multi-turn session — selecting a transaction is acknowledged
 
@@ -561,44 +561,83 @@ else
 fi
 
 #-------------------------------------------------------------------------------
-# Check 11 — Athena audit_correlation VIEW named query exists
+# Check 11 — Auto-create the audit_correlation VIEW (attendees run ONLY the SELECT)
 #
-# The VIEW is created as an Athena named query (not via null_resource).
-# Attendees execute CREATE OR REPLACE VIEW as an explicit lab step.
-# We verify the named query exists in Athena as the configuration signal.
+# The VIEW DDL lives once, in the observability module's aws_athena_named_query
+# (local.athena_view_sql). Instead of making attendees paste CREATE OR REPLACE
+# VIEW by hand, this check fetches that named query's body and EXECUTES it with
+# the caller's own credentials (the same identity that later runs the SELECT).
+# By the time the attendee reaches the Athena audit page the VIEW already exists,
+# so their only job is to run the SELECT and inspect the forensic row.
 #-------------------------------------------------------------------------------
 if [ -n "${AWS_REGION:-}" ]; then
-    named_query_count=$(aws athena list-named-queries \
-        --work-group workshop \
-        --region "${AWS_REGION}" \
-        --query "NamedQueryIds | length(@)" \
-        --output text 2>/dev/null || echo "0")
-
-    if [ "${named_query_count:-0}" -ge 1 ] 2>/dev/null; then
-        correlation_query=$(aws athena list-named-queries \
-            --work-group workshop \
-            --region "${AWS_REGION}" \
-            --query "NamedQueryIds" \
-            --output json 2>/dev/null \
-            | jq -r '.[]' 2>/dev/null | while read -r qid; do
-                name=$(aws athena get-named-query \
-                    --named-query-id "${qid}" \
-                    --region "${AWS_REGION}" \
-                    --query 'NamedQuery.Name' \
-                    --output text 2>/dev/null || echo "")
-                if echo "${name}" | grep -qi "audit_correlation\|audit-correlation"; then
-                    echo "${name}"
-                    break
-                fi
-            done)
-
-        if [ -n "${correlation_query}" ]; then
-            print_pass "Athena audit_correlation named query exists: '${correlation_query}' (workgroup: workshop)"
-        else
-            print_warn "Athena workshop workgroup has ${named_query_count} named query(ies) but none named 'audit_correlation' — check: aws athena list-named-queries --work-group workshop --region ${AWS_REGION}"
+    # Locate the audit_correlation named query; capture BOTH its id and DDL body.
+    view_query_id=""
+    view_query_ddl=""
+    for qid in $(aws athena list-named-queries \
+        --work-group workshop --region "${AWS_REGION}" \
+        --query 'NamedQueryIds[]' --output text 2>/dev/null); do
+        qname=$(aws athena get-named-query --named-query-id "${qid}" \
+            --region "${AWS_REGION}" --query 'NamedQuery.Name' --output text 2>/dev/null || echo "")
+        if echo "${qname}" | grep -qi "audit.correlation"; then
+            view_query_id="${qid}"
+            view_query_ddl=$(aws athena get-named-query --named-query-id "${qid}" \
+                --region "${AWS_REGION}" --query 'NamedQuery.QueryString' --output text 2>/dev/null || echo "")
+            break
         fi
+    done
+
+    if [ -z "${view_query_id}" ] || [ -z "${view_query_ddl}" ]; then
+        print_warn "Check 11: audit_correlation named query not found in workshop workgroup — observability module may not be applied; the VIEW was NOT auto-created. Check: aws athena list-named-queries --work-group workshop --region ${AWS_REGION}"
     else
-        print_warn "No Athena named queries in workshop workgroup — observability module may not have been applied. Check: aws athena list-named-queries --work-group workshop --region ${AWS_REGION}"
+        # CREATE OR REPLACE VIEW still needs an Athena results location.
+        view_bucket=$(aws s3api list-buckets \
+            --query "Buckets[?contains(Name,'workshop-logs') || contains(Name,'workshop-audit')].Name | [0]" \
+            --output text 2>/dev/null || echo "")
+        if [ -z "${view_bucket}" ] || [ "${view_bucket}" = "None" ]; then
+            view_bucket=$(aws s3api list-buckets \
+                --query "Buckets[?contains(Name,'agentic') && contains(Name,'log')].Name | [0]" \
+                --output text 2>/dev/null || echo "")
+        fi
+
+        if [ -z "${view_bucket}" ] || [ "${view_bucket}" = "None" ]; then
+            print_warn "Check 11: found the audit_correlation DDL but could not resolve an S3 results bucket to execute it — VIEW not auto-created. Check: aws s3api list-buckets"
+        else
+            view_qid=$(aws athena start-query-execution \
+                --query-string "${view_query_ddl}" \
+                --work-group workshop \
+                --query-execution-context "Database=${GLUE_DATABASE:-workshop_logs}" \
+                --result-configuration "OutputLocation=s3://${view_bucket}/athena-results/" \
+                --region "${AWS_REGION}" \
+                --query 'QueryExecutionId' --output text 2>/dev/null || echo "")
+
+            view_state="FAILED"
+            if [ -n "${view_qid}" ] && [ "${view_qid}" != "None" ]; then
+                view_poll=0
+                while [ "${view_poll}" -lt 20 ]; do
+                    view_state=$(aws athena get-query-execution \
+                        --query-execution-id "${view_qid}" \
+                        --region "${AWS_REGION}" \
+                        --query 'QueryExecution.Status.State' --output text 2>/dev/null || echo "FAILED")
+                    case "${view_state}" in
+                    SUCCEEDED | FAILED | CANCELLED) break ;;
+                    esac
+                    sleep 2
+                    view_poll=$((view_poll + 1))
+                done
+            fi
+
+            if [ "${view_state}" = "SUCCEEDED" ]; then
+                print_pass "Athena audit_correlation VIEW auto-created/refreshed from the named query (attendees run only the SELECT)"
+            else
+                view_reason=$(aws athena get-query-execution \
+                    --query-execution-id "${view_qid:-}" \
+                    --region "${AWS_REGION}" \
+                    --query 'QueryExecution.Status.StateChangeReason' --output text 2>/dev/null || echo "")
+                print_fail "Check 11: failed to auto-create the audit_correlation VIEW (state=${view_state})" \
+                    "Reason: ${view_reason}. Fix: confirm the Glue tables (ivia_decisions, vault_audit, pgaudit_logs) exist and the caller can run Athena in the workshop workgroup. Check: aws athena get-query-execution --query-execution-id ${view_qid:-<id>} --region ${AWS_REGION}"
+            fi
+        fi
     fi
 else
     print_warn "Check 11 skipped — AWS_REGION not resolved"
@@ -726,7 +765,7 @@ else
                     --region "${AWS_REGION}" \
                     --query 'QueryExecution.Status.StateChangeReason' --output text 2>/dev/null || echo "")
                 print_fail "Check 14: Athena query did not SUCCEED (state=${ac_state})" \
-                    "Reason: ${ac_reason}. Fix: confirm the audit_correlation VIEW exists (run the named query in Athena first) and the Glue tables resolve. Check: aws athena get-query-execution --query-execution-id ${ac_qid} --region ${AWS_REGION}"
+                    "Reason: ${ac_reason}. Fix: confirm the audit_correlation VIEW exists (Check 11 auto-creates it from the named query) and the Glue tables resolve. Check: aws athena get-query-execution --query-execution-id ${ac_qid} --region ${AWS_REGION}"
                 ac_row_count="ERROR"
                 break
             fi
