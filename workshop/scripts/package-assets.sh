@@ -17,7 +17,7 @@ DST_DIR="$REPO_ROOT/workshop/static/images"
 
 mkdir -p "$DST_DIR"
 
-for svg in architecture-overview uc1-flow uc2-oauth-flow uc3-ciba-flow audit-correlation verify-vault-split; do
+for svg in architecture-overview uc1-flow uc2-oauth-flow uc3-ciba-flow audit-correlation verify-vault-split vault-authorization-flow; do
     if [ -f "$SRC_DIR/$svg.svg" ]; then
         cp "$SRC_DIR/$svg.svg" "$DST_DIR/$svg.svg"
         echo "  copied $svg.svg -> workshop/static/images/"

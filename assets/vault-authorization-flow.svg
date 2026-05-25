@@ -1,0 +1,177 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1540 660" width="1540" height="660" style="background:#0d1117; font-family: 'Segoe UI', Arial, sans-serif;">
+
+  <rect width="1540" height="660" fill="#0d1117"/>
+
+  <!-- Title -->
+  <text x="32" y="44" fill="white" font-size="21" font-weight="bold">Vault authorization (Ephemeral &amp; per-request)</text>
+  <text x="32" y="64" fill="#8b949e" font-size="12">scoped, tamper proof, on demand — Workshop UC 1–3</text>
+
+  <!-- Badge -->
+  <rect x="1296" y="20" width="220" height="36" rx="18" fill="none" stroke="#22c55e" stroke-width="2"/>
+  <text x="1311" y="43" fill="#22c55e" font-size="12" font-weight="bold">✓ Scoped per-request</text>
+
+  <!-- ===== DEFS ===== -->
+  <defs>
+    <radialGradient id="vaultRing2" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#1f2937"/>
+      <stop offset="100%" stop-color="#111827"/>
+    </radialGradient>
+    <linearGradient id="ringGrad2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#22d3ee"/>
+      <stop offset="33%" stop-color="#a855f7"/>
+      <stop offset="66%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#f59e0b"/>
+    </linearGradient>
+    <marker id="ag" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#6b7280"/></marker>
+    <marker id="at" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#14b8a6"/></marker>
+    <marker id="ap" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#a855f7"/></marker>
+    <marker id="ab" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#3b82f6"/></marker>
+    <marker id="au" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#b45309"/></marker>
+    <marker id="ai" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#f97316"/></marker>
+  </defs>
+
+  <!-- ===== DELEGATE ===== -->
+  <circle cx="72" cy="330" r="34" fill="#2a2010" stroke="#b45309" stroke-width="2"/>
+  <circle cx="72" cy="319" r="9" fill="#f59e0b"/>
+  <path d="M52,350 Q72,334 92,350" fill="#f59e0b"/>
+  <text x="72" y="378" fill="#8b949e" font-size="11" text-anchor="middle">Delegate</text>
+  <text x="72" y="391" fill="#8b949e" font-size="11" text-anchor="middle">access</text>
+
+  <!-- delegate → agent1 -->
+  <line x1="106" y1="308" x2="186" y2="264" stroke="#6b7280" stroke-width="1.5" marker-end="url(#ag)"/>
+  <!-- delegate → agent2 -->
+  <line x1="106" y1="348" x2="186" y2="392" stroke="#6b7280" stroke-width="1.5" marker-end="url(#ag)"/>
+
+  <!-- ===== AGENT 1 (UC1 + UC2) ===== -->
+  <rect x="186" y="230" width="80" height="56" rx="10" fill="#1e3a5f" stroke="#3b82f6" stroke-width="2"/>
+  <rect x="198" y="239" width="56" height="38" rx="5" fill="#2563eb" opacity="0.55"/>
+  <rect x="208" y="246" width="9" height="9" rx="2" fill="white"/>
+  <rect x="225" y="246" width="9" height="9" rx="2" fill="white"/>
+  <rect x="213" y="258" width="16" height="4" rx="2" fill="white"/>
+  <text x="226" y="302" fill="#60a5fa" font-size="10" text-anchor="middle">Agent 1</text>
+  <text x="226" y="314" fill="#6b7280" font-size="8.5" text-anchor="middle">K8s SA / PKCE</text>
+
+  <!-- ===== AGENT 2 (UC3) ===== -->
+  <rect x="186" y="366" width="80" height="56" rx="10" fill="#1e3a5f" stroke="#3b82f6" stroke-width="2"/>
+  <rect x="198" y="375" width="56" height="38" rx="5" fill="#2563eb" opacity="0.55"/>
+  <rect x="208" y="382" width="9" height="9" rx="2" fill="white"/>
+  <rect x="225" y="382" width="9" height="9" rx="2" fill="white"/>
+  <rect x="213" y="394" width="16" height="4" rx="2" fill="white"/>
+  <text x="226" y="438" fill="#60a5fa" font-size="10" text-anchor="middle">Agent 3</text>
+  <text x="226" y="450" fill="#6b7280" font-size="8.5" text-anchor="middle">CIBA / JWT</text>
+
+  <!-- ===== IVIA node ===== -->
+  <!-- UC2: Agent1 → IVIA  (purple) -->
+  <line x1="266" y1="268" x2="336" y2="296" stroke="#a855f7" stroke-width="1.5" marker-end="url(#ap)"/>
+  <!-- UC3: Agent2 → IVIA  (blue) -->
+  <line x1="266" y1="394" x2="336" y2="360" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#ab)"/>
+
+  <rect x="336" y="296" width="152" height="88" rx="10" fill="#1a0a2e" stroke="#f97316" stroke-width="2"/>
+  <!-- IBM logo-ish: horizontal bars -->
+  <rect x="350" y="309" width="34" height="5" rx="2" fill="#f97316"/>
+  <rect x="350" y="318" width="28" height="5" rx="2" fill="#f97316"/>
+  <rect x="350" y="327" width="34" height="5" rx="2" fill="#f97316"/>
+  <text x="392" y="318" fill="#fb923c" font-size="10" font-weight="bold">IBM Verify</text>
+  <text x="392" y="330" fill="#fb923c" font-size="10" font-weight="bold">Identity Access</text>
+  <text x="350" y="351" fill="#fdba74" font-size="9">UC2: PKCE → JWT (sub)</text>
+  <text x="350" y="363" fill="#fdba74" font-size="9">UC3: CIBA + RAR JWT</text>
+  <text x="350" y="375" fill="#6b7280" font-size="8">(may_act · auth_details)</text>
+
+  <!-- IVIA → auth-details boxes: UC2 (purple) -->
+  <line x1="490" y1="326" x2="518" y2="284" stroke="#a855f7" stroke-width="1.5" marker-end="url(#ap)"/>
+  <!-- IVIA → auth-details boxes: UC3 (blue) -->
+  <line x1="490" y1="346" x2="518" y2="386" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#ab)"/>
+
+  <!-- UC1: Agent1 → auth-detail box directly (teal, bypasses IVIA) -->
+  <line x1="266" y1="252" x2="518" y2="198" stroke="#14b8a6" stroke-width="1.5" marker-end="url(#at)"/>
+
+  <!-- ===== AUTH DETAILS column label ===== -->
+  <text x="668" y="108" fill="white" font-size="14" font-weight="bold" text-anchor="middle">Authorization details</text>
+
+  <!-- UC1 box -->
+  <rect x="518" y="148" width="300" height="68" rx="8" fill="#0d2a2a" stroke="#14b8a6" stroke-width="1.8"/>
+  <text x="536" y="169" fill="#14b8a6" font-size="10" font-weight="bold">UC1 — Non-personalized R/O</text>
+  <text x="536" y="184" fill="#a7f3d0" font-size="11">K8s SA JWT → Vault k8s auth (EKS OIDC)</text>
+  <text x="536" y="198" fill="#6b7280" font-size="10">uc1-retriever-sa · uc1 ns · TTL 15m · no IVIA</text>
+
+  <!-- UC2 box -->
+  <rect x="518" y="248" width="300" height="68" rx="8" fill="#1e1040" stroke="#a855f7" stroke-width="1.8"/>
+  <text x="536" y="269" fill="#c084fc" font-size="10" font-weight="bold">UC2 — OAuth Personalized R/O</text>
+  <text x="536" y="284" fill="#e9d5ff" font-size="11">IVIA JWT (sub claim) → Vault jwt auth</text>
+  <text x="536" y="298" fill="#6b7280" font-size="10">uc2-mcp-server-sa · per-user creds · TTL 15m</text>
+
+  <!-- UC3 box -->
+  <rect x="518" y="348" width="300" height="68" rx="8" fill="#0a1a3f" stroke="#3b82f6" stroke-width="1.8"/>
+  <text x="536" y="369" fill="#60a5fa" font-size="10" font-weight="bold">UC3 — CIBA Privileged Write</text>
+  <text x="536" y="384" fill="#bfdbfe" font-size="11">IVIA RAR JWT → Vault bound_claims</text>
+  <text x="536" y="398" fill="#6b7280" font-size="10">may_act (RFC 8693) · auth_details (RFC 9396) · TTL 5m</text>
+
+  <!-- No standing privs box -->
+  <rect x="518" y="438" width="300" height="48" rx="8" fill="#1a1200" stroke="#b45309" stroke-width="1.8"/>
+  <text x="536" y="458" fill="#f59e0b" font-size="10" font-weight="bold">All UCs — No Standing Privileges</text>
+  <text x="536" y="474" fill="#fde68a" font-size="10">Credentials expire with token lifecycle</text>
+
+  <!-- auth boxes → Vault -->
+  <line x1="820" y1="185" x2="930" y2="308" stroke="#14b8a6" stroke-width="1.5" marker-end="url(#at)"/>
+  <line x1="820" y1="282" x2="930" y2="318" stroke="#a855f7" stroke-width="1.5" marker-end="url(#ap)"/>
+  <line x1="820" y1="382" x2="930" y2="328" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#ab)"/>
+
+  <!-- ===== VAULT ===== -->
+  <circle cx="982" cy="320" r="68" fill="url(#ringGrad2)" opacity="0.9"/>
+  <circle cx="982" cy="320" r="60" fill="url(#vaultRing2)"/>
+  <polygon points="982,292 960,330 1004,330" fill="white" opacity="0.9"/>
+  <rect x="973" y="302" width="18" height="12" fill="#0d1117"/>
+  <text x="982" y="354" fill="white" font-size="12" text-anchor="middle" font-weight="bold">Vault</text>
+  <text x="982" y="366" fill="#8b949e" font-size="8.5" text-anchor="middle">4-layer policy</text>
+
+  <!-- Vault → action boxes -->
+  <line x1="1050" y1="298" x2="1096" y2="190" stroke="#14b8a6" stroke-width="1.5" marker-end="url(#at)"/>
+  <line x1="1052" y1="312" x2="1096" y2="282" stroke="#a855f7" stroke-width="1.5" marker-end="url(#ap)"/>
+  <line x1="1052" y1="332" x2="1096" y2="382" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#ab)"/>
+  <line x1="1048" y1="342" x2="1096" y2="456" stroke="#b45309" stroke-width="1.5" marker-end="url(#au)"/>
+
+  <!-- ===== ACTION column label ===== -->
+  <text x="1246" y="108" fill="white" font-size="14" font-weight="bold" text-anchor="middle">Only the requested action</text>
+
+  <!-- UC1 action -->
+  <rect x="1096" y="148" width="310" height="68" rx="8" fill="#0d2a2a" stroke="#14b8a6" stroke-width="1.8"/>
+  <text x="1114" y="169" fill="#14b8a6" font-size="10" font-weight="bold">UC1 — JIT Read Credentials</text>
+  <text x="1114" y="184" fill="#a7f3d0" font-size="11">Postgres R/O (TTL 15m) + Bedrock STS</text>
+  <text x="1114" y="198" fill="#6b7280" font-size="10">uc1-readonly role · no disk/env storage</text>
+
+  <!-- UC2 action -->
+  <rect x="1096" y="248" width="310" height="68" rx="8" fill="#1e1040" stroke="#a855f7" stroke-width="1.8"/>
+  <text x="1114" y="269" fill="#c084fc" font-size="10" font-weight="bold">UC2 — Per-User Scoped Creds</text>
+  <text x="1114" y="284" fill="#e9d5ff" font-size="11">Postgres per-user R/O + RLS isolation</text>
+  <text x="1114" y="298" fill="#6b7280" font-size="10">sub → DB GRANT · NetworkPolicy egress</text>
+
+  <!-- UC3 action -->
+  <rect x="1096" y="348" width="310" height="68" rx="8" fill="#0a1a3f" stroke="#3b82f6" stroke-width="1.8"/>
+  <text x="1114" y="369" fill="#60a5fa" font-size="10" font-weight="bold">UC3 — Time-boxed Write Creds</text>
+  <text x="1114" y="384" fill="#bfdbfe" font-size="11">uc3-refund-writer · SELECT+INSERT+UPDATE</text>
+  <text x="1114" y="398" fill="#6b7280" font-size="10">TTL 5m · 3-plane audit (request_id JOIN)</text>
+
+  <!-- Ephemeral action -->
+  <rect x="1096" y="430" width="310" height="48" rx="8" fill="#1a1200" stroke="#b45309" stroke-width="1.8"/>
+  <text x="1114" y="450" fill="#f59e0b" font-size="10" font-weight="bold">All UCs — Ephemeral Lifecycle</text>
+  <text x="1114" y="466" fill="#fde68a" font-size="10">Token expiry = credential revocation</text>
+
+  <!-- ===== LEGEND ===== -->
+  <rect x="32" y="536" width="1480" height="98" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+  <text x="52" y="557" fill="#8b949e" font-size="10.5" font-weight="bold">LEGEND</text>
+
+  <rect x="114" y="545" width="12" height="12" rx="2" fill="#14b8a6"/>
+  <text x="130" y="556" fill="#8b949e" font-size="10">UC1 — K8s workload identity only (uc1-retriever-sa); Vault k8s auth validates SA JWT against EKS OIDC; no IVIA involvement; JIT Postgres+Bedrock TTL 15m</text>
+
+  <rect x="114" y="563" width="12" height="12" rx="2" fill="#a855f7"/>
+  <text x="130" y="574" fill="#8b949e" font-size="10">UC2 — IVIA issues OAuth PKCE JWT (sub claim) → Vault jwt auth maps sub to per-user DB creds; RLS enforces data isolation; TTL 15m</text>
+
+  <rect x="114" y="581" width="12" height="12" rx="2" fill="#3b82f6"/>
+  <text x="130" y="592" fill="#8b949e" font-size="10">UC3 — IVIA handles CIBA backchannel approval + token exchange; stamps may_act (RFC 8693) + authorization_details (RFC 9396 RAR); Vault bound_claims enforces; uc3-refund-writer TTL 5m; 3-plane audit</text>
+
+  <rect x="114" y="599" width="12" height="12" rx="2" fill="#f97316"/>
+  <text x="130" y="610" fill="#8b949e" font-size="10">IVIA (IBM Verify Identity Access) — identity &amp; authorization authority for UC2+UC3; issues JWTs that Vault trusts via jwt auth method</text>
+
+  <rect x="114" y="617" width="12" height="12" rx="2" fill="#b45309"/>
+  <text x="130" y="628" fill="#8b949e" font-size="10">All UCs — No standing privileges; credentials are JIT-issued and expire with the Vault token lifecycle</text>
+</svg>
