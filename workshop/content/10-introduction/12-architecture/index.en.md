@@ -45,7 +45,7 @@ Plan on roughly 3 hours end-to-end if you run with a pre-provisioned Workshop St
 - **AWS Simple AD** — lightweight managed Active Directory pre-populated with two employees (Oscar, Adriana), authenticated by IVIA via LDAP.
 - **Amazon RDS PostgreSQL 17** with pgaudit, Row-Level Security policies, and Vault-managed dynamic credentials.
 - **Amazon Bedrock Knowledge Base** with Nova Pro inference and Nova 2 Multimodal Embeddings, backed by OpenSearch Serverless.
-- An **Athena workgroup** with the cross-plane audit correlation query joining IVIA decision logs, Vault audit logs, and AWS CloudTrail.
+- An **Athena workgroup** with the cross-plane audit correlation query joining IVIA decision logs, Vault audit logs, and RDS pgaudit logs.
 - **KMS encryption** across all storage (RDS, AOSS, S3, CloudWatch) under a single workshop CMK.
 
 More importantly: the mental model and the working configuration to extend the same pattern to your own agentic systems.
