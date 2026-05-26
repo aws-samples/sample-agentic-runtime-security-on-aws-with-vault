@@ -41,7 +41,7 @@ If any check fails, the script prints a `Fix:` hint inline. Address the issue an
 | Vault Raft peers: 3 | `kubectl exec vault-0 -- vault operator raft list-peers -format=json` | `servers \| length` == 3 |
 | Vault audit device: enabled | `kubectl exec vault-0 -- vault audit list -format=json` | `length` >= 1 |
 | IVIA pods running | `kubectl get pods -n verify-access` | at least 1 pod `Running` |
-| IVIA OIDC discovery: issuer reachable | `kubectl run oidc-check --image=curlimages/curl --rm -i --restart=Never -n verify-access -- curl -sk https://isvaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration` | `issuer` field non-empty |
+| IVIA OIDC discovery: issuer reachable | `kubectl run oidc-check --image=curlimages/curl --rm -i --restart=Never -n verify-access -- curl -sk https://iviaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration` | `issuer` field non-empty |
 | cert-manager pods running | `kubectl get pods -n cert-manager` | at least 1 pod `Running` |
 | AWS Load Balancer Controller running | `kubectl get pods -n kube-system -l app.kubernetes.io/name=aws-load-balancer-controller` | at least 1 pod `Running` |
 :::
@@ -65,6 +65,6 @@ Proceed to the use case modules to see these components in action.
 
 **IVIA pods in ImagePullBackOff** — The `icr_entitlement_key` is missing or incorrect. Update `icr_entitlement_key` in `infrastructure/terraform.tfvars` and re-run `terraform -chdir=infrastructure apply`.
 
-**IVIA OIDC discovery not reachable** — The `verify-access` Service may not be ready. Run `kubectl get svc -n verify-access` and confirm `isvaop` has a ClusterIP. If the pod is Running but the service is not responsive, check the pod logs: `kubectl logs -n verify-access -l app=ivia`.
+**IVIA OIDC discovery not reachable** — The `verify-access` Service may not be ready. Run `kubectl get svc -n verify-access` and confirm `iviaop` has a ClusterIP. If the pod is Running but the service is not responsive, check the pod logs: `kubectl logs -n verify-access -l app=ivia`.
 
 **cert-manager or AWS LBC not running** — These are deployed in the `addons` module. Re-run `terraform -chdir=infrastructure apply` if they are missing.

@@ -85,14 +85,14 @@ The `sub` claim from the JWT flows through Vault into the Postgres session varia
 
 ### IVIA (declarative — deployed with verify_access module)
 
-IVIA's OIDC provider (`isvaop`) is configured entirely via `config.yaml` embedded in the Terraform `verify_access` module. The configuration includes:
+IVIA's OIDC provider (`iviaop`) is configured entirely via `config.yaml` embedded in the Terraform `verify_access` module. The configuration includes:
 
 - **OAuth 2.0 clients** — `agent-uc2` (authorization code + PKCE, public client) and `workshop_agent` (confidential client for CIBA flows).
 - **LDAP server connection** — authenticates users against the in-cluster OpenLDAP directory on port 636 (LDAPS), with bind credentials from a Kubernetes Secret.
 - **User attribute mapping** — maps LDAP attributes (`mail`, `cn`, `uid`) to JWT claims (`sub`, `name`, `email`).
 - **Grant types** — `authorization_code` + `refresh_token` for Use Case 2; CIBA for Use Case 3.
 
-No `isva_config` REST API module is needed — `isvaop` reads its configuration at startup from the ConfigMap.
+No `isva_config` REST API module is needed — `iviaop` reads its configuration at startup from the ConfigMap.
 
 ## Step 1 — VAULT_TOKEN and VAULT_ADDR
 
@@ -156,8 +156,8 @@ kubectl exec -n vault vault-0 -- vault read auth/jwt/config
 Expected output includes:
 
 ```
-oidc_discovery_url    https://isvaop.verify-access.svc.cluster.local:8436/oauth2
-bound_issuer          https://isvaop.verify-access.svc.cluster.local:8436/oauth2
+oidc_discovery_url    https://iviaop.verify-access.svc.cluster.local:8436/oauth2
+bound_issuer          https://iviaop.verify-access.svc.cluster.local:8436/oauth2
 ```
 
 ## Step 5 — Verify the database connection
@@ -180,7 +180,7 @@ From within the cluster, confirm IVIA is serving the OIDC discovery document:
 ```bash
 kubectl run oidc-check --image=curlimages/curl --rm -i --restart=Never \
   -n verify-access -- \
-  curl -sk https://isvaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration \
+  curl -sk https://iviaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration \
   | jq .
 ```
 
@@ -188,10 +188,10 @@ Expected output includes:
 
 ```json
 {
-  "issuer": "https://isvaop.verify-access.svc.cluster.local:8436/oauth2",
-  "authorization_endpoint": "https://isvaop.verify-access.svc.cluster.local:8436/oauth2/authorize",
-  "token_endpoint": "https://isvaop.verify-access.svc.cluster.local:8436/oauth2/token",
-  "jwks_uri": "https://isvaop.verify-access.svc.cluster.local:8436/oauth2/jwks",
+  "issuer": "https://iviaop.verify-access.svc.cluster.local:8436/oauth2",
+  "authorization_endpoint": "https://iviaop.verify-access.svc.cluster.local:8436/oauth2/authorize",
+  "token_endpoint": "https://iviaop.verify-access.svc.cluster.local:8436/oauth2/token",
+  "jwks_uri": "https://iviaop.verify-access.svc.cluster.local:8436/oauth2/jwks",
   ...
 }
 ```
@@ -214,7 +214,7 @@ Expected output includes:
 
 :::expand{header="Platform Track — Why declarative IVIA configuration?"}
 
-The `isvaop` image (IBM Verify Identity Access OIDC Provider) reads its entire configuration from a `config.yaml` file mounted as a ConfigMap. This is different from the full ISVA appliance, which exposes a management REST API (`/mga/sps/...`).
+The `iviaop` image (IBM Verify Identity Access OIDC Provider) reads its entire configuration from a `config.yaml` file mounted as a ConfigMap. This is different from the full ISVA appliance, which exposes a management REST API (`/mga/sps/...`).
 
 Advantages of the declarative approach:
 
