@@ -53,7 +53,3 @@ weight: 90
 - [Amazon EKS Documentation](https://docs.aws.amazon.com/eks/latest/userguide/)
 - [Amazon Bedrock Knowledge Bases](https://docs.aws.amazon.com/bedrock/latest/userguide/knowledge-base.html)
 - [AWS Cognito Pricing](https://aws.amazon.com/cognito/pricing/)
-
-## Workshop Reference Repository
-
-- [eks-terraform-stacks](https://github.com/sharepointoscar/eks-terraform-stacks) — EKS + Terraform Stacks reference pattern this workshop builds on
