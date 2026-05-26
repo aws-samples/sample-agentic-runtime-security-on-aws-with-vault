@@ -3,10 +3,6 @@ title: 'Summary'
 weight: 85
 ---
 
-:::alert{header="Content pending" type="info"}
-This module will recap the five control objectives against what attendees actually deployed, with concrete pointers back to the configuration that satisfies each objective and a takeaway pattern attendees can lift into their own agentic systems.
-:::
-
 ## What You Built — and Where the Industry Is Heading
 
 This workshop deployed **HashiCorp Vault 2.0** on EKS and wired it, by hand, to enforce the five control objectives for agentic systems. That hands-on approach was deliberate: you now understand the security primitives — Kubernetes auth, `jwt` auth with `bound_claims`, dynamic secrets with TTL ceilings, RFC 9396 Rich Authorization Requests (RAR), and three-plane audit correlation — at the layer where enforcement actually happens.
