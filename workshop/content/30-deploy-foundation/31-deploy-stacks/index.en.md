@@ -3,17 +3,9 @@ title: 'Deploy Workspace'
 weight: 31
 ---
 
-The bootstrap script already created the HCP Terraform Workspace (local execution, state-only) and variable set (sensitive vars). In this step, you run `terraform apply` locally to deploy all foundation infrastructure, then run `configure-workshop.sh` to complete post-deploy configuration.
+Terraform state is stored locally under `infrastructure/terraform.tfstate`. In this step, you run `terraform apply` locally to deploy all foundation infrastructure, then run `configure-workshop.sh` to complete post-deploy configuration.
 
-## Step 1 — Set TF_CLOUD_ORGANIZATION
-
-Export your HCP Terraform organization name so the backend configuration can find your workspace:
-
-```bash
-export TF_CLOUD_ORGANIZATION=<YOUR_HCP_ORG>
-```
-
-## Step 2 — Run terraform apply
+## Step 1 — Run terraform apply
 
 Run the apply from the `infrastructure/` directory:
 
@@ -27,7 +19,7 @@ Terraform generates a plan showing ~80-120 resource additions. Review the plan, 
 Total time: ~25-35 minutes (EKS ~12 min, RDS ~10 min including pgaudit reboot, Bedrock KB ~3 min, addons ~5 min). The apply runs locally but provisions AWS resources remotely — timing depends on AWS API response times, not your machine.
 :::
 
-## Step 3 — Run configure-workshop.sh
+## Step 2 — Run configure-workshop.sh
 
 After the apply completes, run the post-deploy configuration script. This configures kubectl, initializes and configures Vault, verifies IVIA (the workshop user is seeded into the in-cluster OpenLDAP directory by the IVIA autoconf job), and seeds the banking database:
 

@@ -3,7 +3,7 @@ title: 'Deploy Foundation'
 weight: 30
 ---
 
-In this module you deploy the entire AWS foundation via `terraform apply` (with HCP Terraform storing state remotely) — VPC, EKS cluster, RDS PostgreSQL, Bedrock Knowledge Base, and the audit-correlation substrate. Work through each sub-module in order:
+In this module you deploy the entire AWS foundation via `terraform apply` — VPC, EKS cluster, RDS PostgreSQL, Bedrock Knowledge Base, and the audit-correlation substrate. Work through each sub-module in order:
 
 1. **[Deploy Workspace](31-deploy-stacks/)** — Run terraform apply to deploy all foundation infrastructure
 2. **[Configure kubectl](32-configure-kubectl/)** — Connect to the EKS cluster
@@ -37,4 +37,4 @@ Confirm you completed the [Prerequisites module](../20-prerequisites/) before de
 bash infrastructure/scripts/check-prerequisites.sh
 ```
 
-If any item fails, return to Prerequisites — this deploy will fail at apply time without all three (AWS access, HCP Terraform bootstrap, Bedrock model access).
+If any item fails, return to Prerequisites — this deploy will fail at apply time without all three (AWS access, IVIA licenses, Bedrock model access).

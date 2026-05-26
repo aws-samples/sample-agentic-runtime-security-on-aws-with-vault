@@ -5,7 +5,7 @@ weight: 52
 
 ## Overview
 
-The Vault Kubernetes auth method, database secrets engine role, AWS secrets engine role, and access policy for Use Case 1 were all configured by the `vault_config` Terraform module in Phase 3 (applied via the HCP Terraform workspace). **You do not need to reconfigure anything in this module.**
+The Vault Kubernetes auth method, database secrets engine role, AWS secrets engine role, and access policy for Use Case 1 were all configured by the `vault_config` Terraform module in Phase 3 (applied via local Terraform (`terraform -chdir=infrastructure apply`)). **You do not need to reconfigure anything in this module.**
 
 This page explains what was configured and why — understanding the Vault trust chain is essential before you observe credential issuance in the next module.
 

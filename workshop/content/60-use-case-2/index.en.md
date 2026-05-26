@@ -48,7 +48,7 @@ You must have completed the **Platform** module (Phase 3) before starting here. 
 - `vault` — Vault HA cluster running and initialized
 - `vault_config` — Kubernetes auth backend, jwt auth backend (pointing to IVIA OIDC discovery), `uc2-personal` policy, `uc2` Kubernetes auth role, `uc2-jwt` JWT auth role, and `uc2-personal-readonly` database credentials role configured
 - `verify_access` — IVIA OIDC provider deployed with `agent-uc2` OAuth client (PKCE required, authorization_code grant) configured declaratively via config.yaml
-- `uc2_app` — Banking UI, Banking Agent, and MCP Server deployed via the HCP Terraform workspace
+- `uc2_app` — Banking UI, Banking Agent, and MCP Server deployed via local Terraform (`terraform -chdir=infrastructure apply`)
 - `seed-banking-db.sh` — Banking schema, RLS policies, and test data seeded into RDS (run post-deploy)
 
 ## Sub-Modules
