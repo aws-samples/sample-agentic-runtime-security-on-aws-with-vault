@@ -5,7 +5,7 @@ weight: 53
 
 ## Overview
 
-In this module you send a query to the UC1 agent, observe just-in-time credential issuance in the Vault audit log, run the ENFC-01 enforcement test (proving UC1 cannot access UC3 credentials), and execute `verify-uc1.sh` to validate all end-to-end criteria.
+In this module you send a query to the Use Case 1 agent, observe just-in-time credential issuance in the Vault audit log, run the ENFC-01 enforcement test (proving Use Case 1 cannot access Use Case 3 credentials), and execute `verify-uc1.sh` to validate all end-to-end criteria.
 
 ## Step 1 — Port-forward to the agent service
 
@@ -61,7 +61,7 @@ Expected output for each query you sent:
 }
 ```
 
-The `auth.display_name` field shows `kubernetes/uc1` — the Vault mount path and role name. This entry is the first link in the audit correlation chain: the same `lease_id` appears in the Postgres `pg_audit` log (CloudWatch) and, in Phase 6, in the Athena JOIN query that correlates agent identity to data access.
+The `auth.display_name` field shows `kubernetes/uc1` — the Vault mount path and role name. This entry is the first link in the audit correlation chain: the same `lease_id` appears in the Postgres `pg_audit` log (CloudWatch) and, in the Use Case 3 module, in the Athena JOIN query that correlates agent identity to data access.
 
 Also verify the STS credential issuance:
 
@@ -72,7 +72,7 @@ kubectl logs -n vault vault-0 --tail=50 \
   | jq '{time: .time, path: .request.path, auth_display_name: .auth.display_name}'
 ```
 
-## Step 4 — ENFC-01 enforcement test — attempt UC3 credential from UC1 identity
+## Step 4 — ENFC-01 enforcement test — attempt Use Case 3 credential from Use Case 1 identity
 
 The `uc1-readonly` Vault policy does not include a path for `database/creds/uc3-refund-writer`. Verify this directly:
 
@@ -80,7 +80,7 @@ The `uc1-readonly` Vault policy does not include a path for `database/creds/uc3-
 vault policy read uc1-readonly | grep uc3
 ```
 
-Expected output: no output (the pattern does not match — there is no UC3 path in the policy).
+Expected output: no output (the pattern does not match — there is no Use Case 3 path in the policy).
 
 To see the policy-text-absence in context:
 
@@ -113,26 +113,26 @@ The script runs the following checks and prints a pass/fail summary:
 
 | Check | What It Validates |
 |---|---|
-| UC1 pod Running | `kubectl get pods -n uc1` shows `1/1 Running` |
+| Use Case 1 pod Running | `kubectl get pods -n uc1` shows `1/1 Running` |
 | ServiceAccount bound | `uc1-retriever-sa` exists in the `uc1` namespace |
 | Vault role exists | `vault read auth/kubernetes/role/uc1` returns `bound_service_account_names=[uc1-retriever-sa]` |
 | DB creds issuable | `vault read database/creds/uc1-readonly` returns a username + password |
 | STS creds issuable | `vault read aws/sts/bedrock-reader` returns access_key + security_token |
 | KB retrieve succeeds | Agent responds to a test query with a non-empty `answer` field |
-| ENFC-01 enforced | UC1 token cannot access `database/creds/uc3-refund-writer` — Vault returns 403 |
+| ENFC-01 enforced | Use Case 1 token cannot access `database/creds/uc3-refund-writer` — Vault returns 403 |
 | Audit log entry present | Vault audit log contains a `database/creds/uc1-readonly` response entry |
 
 Expected summary output:
 
 ```
-[PASS] UC1 pod Running (1/1)
-[PASS] ServiceAccount uc1-retriever-sa present in namespace uc1
-[PASS] Vault Kubernetes role uc1 bound to uc1-retriever-sa
-[PASS] Vault DB creds issuable for uc1-readonly (TTL=900s)
-[PASS] Vault STS creds issuable for bedrock-reader
-[PASS] Agent query returned non-empty answer
-[PASS] ENFC-01: UC1 token cannot access uc3-refund-writer (403)
-[PASS] Vault audit log contains uc1-readonly issuance entry
+[PASS] Use Case 1 agent pod Running (1 pod(s) in uc1)
+[PASS] Use Case 1 ServiceAccount uc1-retriever-sa exists
+[PASS] Vault role uc1 bound to uc1-retriever-sa
+[PASS] JIT DB creds issuance: username=v-kubernetes-uc1-readonly-...
+[PASS] JIT STS creds issuance: access_key=ASIA...
+[PASS] Agent /health endpoint: healthy
+[PASS] ENFC-01: uc1-readonly policy does not grant Use Case 3 (uc3-refund-writer) path access
+[PASS] Vault audit device: enabled (1 device(s))
 
 8 check(s) passed, 0 failed.
 ```
@@ -253,7 +253,7 @@ Why does this matter for OBJ-2? If the agent pod is compromised at `T+800s`, the
 :::alert{header="What Would Have Failed" type="warning"}
 **Without workload identity (OBJ-1):** If the agent pod had no dedicated ServiceAccount or used the `default` ServiceAccount, Vault's Kubernetes auth role binding (`bound_service_account_names = ["uc1-retriever-sa"]`) would reject the JWT. The pod would receive a Vault 403 at startup and the agent would be unable to fetch any credentials. Workload identity is the trust anchor — without it there is no credential issuance.
 
-**With shared credentials (OBJ-2 violation):** If all agents shared a single long-lived database password (stored in a Secret or environment variable), a compromised UC1 agent could read and write to any table, and the password would remain valid indefinitely unless manually rotated. JIT credentials with a 15-minute TTL limit the blast radius to one query window — after which the credential self-destructs and Vault records the revocation.
+**With shared credentials (OBJ-2 violation):** If all agents shared a single long-lived database password (stored in a Secret or environment variable), a compromised Use Case 1 agent could read and write to any table, and the password would remain valid indefinitely unless manually rotated. JIT credentials with a 15-minute TTL limit the blast radius to one query window — after which the credential self-destructs and Vault records the revocation.
 
-**Without audit (OBJ-5 violation):** If Vault audit logging were disabled, there would be no record of which agent identity requested which credential at what time. The Vault audit log entry you observed in Step 3 — with `auth.display_name = "kubernetes/uc1"` and the `lease_id` — is the first link in the audit correlation chain that Phase 6 (Use Case 3) completes end-to-end. Without it, a security incident investigation would have no starting point for attributing data access to a specific workload identity.
+**Without audit (OBJ-5 violation):** If Vault audit logging were disabled, there would be no record of which agent identity requested which credential at what time. The Vault audit log entry you observed in Step 3 — with `auth.display_name = "kubernetes/uc1"` and the `lease_id` — is the first link in the audit correlation chain that the Use Case 3 module completes end-to-end. Without it, a security incident investigation would have no starting point for attributing data access to a specific workload identity.
 :::

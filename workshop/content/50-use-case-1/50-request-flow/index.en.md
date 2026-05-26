@@ -82,7 +82,7 @@ sequenceDiagram
     end
 ```
 
-**Step-by-step breakdown:**
+:::expand{header="Step-by-step breakdown — numbered steps in the diagram explained"}
 
 1. At pod startup, the agent reads its projected ServiceAccount JWT from the Kubernetes token volume mount (`/var/run/secrets/kubernetes.io/serviceaccount/token`).
 2. The agent's `VaultClient.login()` method POSTs the SA JWT to Vault's Kubernetes auth endpoint with `role: "uc1"`.
@@ -94,6 +94,8 @@ sequenceDiagram
 8. The agent calls the Bedrock Knowledge Base `retrieve()` API using the ephemeral STS session.
 9. The Strands LLM combines database and knowledge base results into a formatted answer.
 10. After 15 minutes, Vault automatically revokes the Postgres role (`DROP ROLE`). The STS session expires at its own TTL.
+
+:::
 
 ## Key security properties
 
