@@ -61,5 +61,5 @@ aws bedrock get-foundation-model \
 If either command returns access denied, request access via the Bedrock console model-access page in both [us-west-2](https://us-west-2.console.aws.amazon.com/bedrock/home#/modelaccess) and [us-east-1](https://us-east-1.console.aws.amazon.com/bedrock/home#/modelaccess).
 
 :::alert{header="Amazon Nova is usually enabled by default" type="info"}
-Amazon's own Nova family is generally enabled by default in fresh AWS accounts (no click-through acceptance), unlike Anthropic Claude models. **Cost note:** Nova Pro on-demand pricing (~$0.80 / 1M input tokens, ~$3.20 / 1M output tokens); total LLM cost for a single workshop run is typically under $0.10.
+Amazon's own Nova family is generally enabled by default in fresh AWS accounts (no click-through acceptance), unlike Anthropic Claude models.
 :::
