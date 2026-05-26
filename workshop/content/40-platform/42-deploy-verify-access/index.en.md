@@ -5,7 +5,7 @@ weight: 42
 
 ## Overview
 
-IBM Verify Identity Access (IVIA) runs as a **self-contained seven-pod stack** in the `verify-access` namespace — four IVIA containers plus three supporting services they depend on. Critically, the directory and database are **in-cluster pods**, not AWS Simple AD or the shared workshop RDS:
+IBM Verify Identity Access (IVIA) runs as a **self-contained seven-pod stack** in the `verify-access` namespace — four IVIA containers plus three supporting services they depend on. Critically, the directory and database are **in-cluster pods**, not shared with the workshop RDS:
 
 | Pod | Image | Role |
 |-----|-------|------|
@@ -44,7 +44,7 @@ The `verify_access` module creates (all in the `verify-access` namespace):
 - AAC Runtime (`iviaruntime`, `ivia-runtime:11.0.2.0`) — Deployment, ClusterIP Service
 - OIDC Provider (`iviaop`, `ivia-oidc-provider:25.10`) — Deployment, ClusterIP Service; reachable via the WRP `/isvaop` junction and directly at ClusterIP `:8436` for machine-to-machine flows
 - Distributed Session Cache (`iviadsc`, `ivia-dsc:11.0.2.0`) — Deployment, ClusterIP Service
-- In-cluster OpenLDAP directory (`openldap`, `verify-access-openldap:10.0.6.0`) — Deployment, ClusterIP Service (LDAPS `:636`); the federated user registry, replacing AWS Simple AD
+- In-cluster OpenLDAP directory (`openldap`, `verify-access-openldap:10.0.6.0`) — Deployment, ClusterIP Service (LDAPS `:636`); the federated user registry (in-cluster OpenLDAP, not a managed directory service)
 - In-cluster PostgreSQL HVDB (`postgresql`, `ivia-postgresql:11.0.2.0`) — Deployment, ClusterIP Service (`:5432`); IVIA's runtime DB / sessions / cluster store — pod-local, **not** the shared workshop RDS
 - Autoconf Kubernetes Job (`ivia-autoconf`) — configures the HVDB, runtime, OpenLDAP federated directory, WRP instance, `/isvaop` junction, and ACLs
 - ICR pull secret for all seven containers

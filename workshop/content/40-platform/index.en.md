@@ -12,7 +12,7 @@ This module deploys the credential-vending backbone and identity provider that a
 
 After deployment and configuration, the Vault `jwt` auth method trusts IVIA's OIDC discovery URL. This is the **single seam where user intent becomes a Vault-vended credential** — the architectural keystone all three use cases build on.
 
-![Vault authorization flow — ephemeral, per-request credentials across UC1–3](/static/images/vault-authorization-flow.svg)
+![Vault authorization flow — ephemeral, per-request credentials across Use Cases 1, 2, and 3](/static/images/vault-authorization-flow.svg)
 
 ## Sub-modules
 
