@@ -5,10 +5,9 @@
 # Single-file teardown. Wipes EVERYTHING the workshop provisioned.
 #
 # Usage:
-#   teardown.sh                    Full nuke: terraform destroy + AWS sweep + HCP
+#   teardown.sh                    Full nuke: terraform destroy + AWS sweep
 #   teardown.sh --post-destroy-only  Skip terraform destroy, run full orphan sweep
 #   teardown.sh --aws-only         Only AWS resources (K8s drain + tag-scoped sweep)
-#   teardown.sh --hcp-only         Only HCP infra (Stack, varset, IAM role, OIDC)
 #   teardown.sh --dry-run          Preview without executing
 #   teardown.sh --help             Show this help
 #
@@ -16,10 +15,6 @@
 # names this workshop uses (cluster `agentic-runtime-usw2`, S3 buckets prefixed
 # `workshop-kb-corpus`, Glue DB `workshop_logs`, Athena workgroup `workshop`,
 # CW log groups `/workshop/*`, RDS instance `<cluster>-pg`).
-#
-# Default behavior is "skip the HCP destroy plan and just nuke." If the deploy
-# already broke (orphans exist with HCP state diverged from AWS), there is no
-# value in waiting for a destroy plan that will fail or no-op.
 #===============================================================================
 
 set -e
@@ -33,12 +28,6 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 #-------------------------------------------------------------------------------
 WORKSHOP_TAG_KEY="Workshop"
 WORKSHOP_TAG_VAL="agentic-runtime-security"
-HCP_ROLE_NAME="hcp-stacks-deploy"
-HCP_STACK_NAME="agentic-runtime-security"
-HCP_WORKSPACE_NAME="agentic-runtime-security"
-HCP_PROJECT_NAME="Agentic Runtime Security"
-HCP_VARSET_NAME="agentic-runtime-stacks-config"
-TFE_API="https://app.terraform.io/api/v2"
 
 # Default cluster — resolved from infrastructure/terraform.tfvars.
 # Workshop is single-region single-cluster. Override with $CLUSTER_NAME env var.
@@ -79,7 +68,6 @@ print_warn()    { echo -e "${YELLOW}  $1${NC}"; }
 #-------------------------------------------------------------------------------
 DRY_RUN=false
 AWS_ONLY=false
-HCP_ONLY=false
 POST_DESTROY_ONLY=false
 
 usage() {
@@ -90,7 +78,6 @@ usage() {
 while [ $# -gt 0 ]; do
     case "$1" in
         --aws-only)           AWS_ONLY=true ;;
-        --hcp-only)           HCP_ONLY=true ;;
         --post-destroy-only)  POST_DESTROY_ONLY=true ;;
         --dry-run)            DRY_RUN=true ;;
         --help|-h)  usage ;;
@@ -104,10 +91,9 @@ done
 
 local_exclusive=0
 [ "$AWS_ONLY" = true ] && local_exclusive=$((local_exclusive + 1))
-[ "$HCP_ONLY" = true ] && local_exclusive=$((local_exclusive + 1))
 [ "$POST_DESTROY_ONLY" = true ] && local_exclusive=$((local_exclusive + 1))
 if [ "$local_exclusive" -gt 1 ]; then
-    echo -e "${RED}Error: --aws-only, --hcp-only, and --post-destroy-only are mutually exclusive${NC}" >&2
+    echo -e "${RED}Error: --aws-only and --post-destroy-only are mutually exclusive${NC}" >&2
     exit 1
 fi
 
@@ -156,28 +142,6 @@ S3_BUCKET_PREFIXES+=("${DEFAULT_CLUSTER}-workshop-logs")
 # (AOSS, Bedrock KB, S3 corpus/multimodal, CFN index stack) live there.
 KB_REGION="${KB_REGION:-us-east-1}"
 
-# HCP organization — source-of-truth is the `hcp_org` terraform variable in
-# infrastructure/scripts/hcp-setup/terraform.tfvars (written by bootstrap.sh
-# from the operator's shell). Override with $HCP_ORG env var.
-HCP_SETUP_TFVARS="${SCRIPT_DIR}/hcp-setup/terraform.tfvars"
-HCP_ORG="${HCP_ORG:-}"
-if [ -z "$HCP_ORG" ] && [ -f "$HCP_SETUP_TFVARS" ]; then
-    HCP_ORG=$(grep -E '^\s*hcp_org\s*=\s*"' "$HCP_SETUP_TFVARS" 2>/dev/null \
-        | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
-fi
-# Don't fail-fast here — phase_hcp_cleanup may be skipped (--aws-only mode).
-# Validation deferred to that phase.
-
-#-------------------------------------------------------------------------------
-# TFE token loader
-#-------------------------------------------------------------------------------
-load_tfe_token() {
-    if [ -z "${TFE_TOKEN:-}" ] && [ -f "$HOME/.terraform.d/credentials.tfrc.json" ]; then
-        TFE_TOKEN=$(jq -r '.credentials["app.terraform.io"].token // empty' \
-            "$HOME/.terraform.d/credentials.tfrc.json" 2>/dev/null || true)
-        export TFE_TOKEN
-    fi
-}
 
 #===============================================================================
 # K8S CLEANUP
@@ -904,8 +868,6 @@ sweep_iam_workshop_policies() {
 sweep_iam_roles() {
     local matched=""
     for r in $(aws iam list-roles --query 'Roles[].RoleName' --output text 2>/dev/null); do
-        # Skip the HCP role — that's handled by hcp-only path
-        [[ "$r" == "$HCP_ROLE_NAME" ]] && continue
         local tag
         tag=$(aws iam list-role-tags --role-name "$r" \
             --query "Tags[?Key=='${WORKSHOP_TAG_KEY}' && Value=='${WORKSHOP_TAG_VAL}'].Value" \
@@ -1266,7 +1228,7 @@ phase_aws_sweep() {
     step_header "IAM customer-managed policies tagged Workshop"
     sweep_iam_workshop_policies || true
 
-    step_header "IAM roles tagged Workshop (excluding HCP role)"
+    step_header "IAM roles tagged Workshop"
     sweep_iam_roles || true
 
     step_header "Instance profiles (empty after role removal)"
@@ -1304,53 +1266,6 @@ phase_aws_sweep() {
     print_success "AWS sweep complete"
 }
 
-#===============================================================================
-# HCP CLEANUP — delete Stack, variable set, AWS IAM role for HCP, OIDC provider
-#===============================================================================
-phase_hcp_cleanup() {
-    phase_header "HCP Cleanup (variable set + project)"
-
-    if [ "$DRY_RUN" = true ]; then
-        print_info "[DRY-RUN] Would destroy HCP variable set + project via terraform"
-        return 0
-    fi
-
-    load_tfe_token
-    local hcp_setup_dir="$SCRIPT_DIR/hcp-setup"
-
-    if [ -z "$HCP_ORG" ]; then
-        print_error "Could not resolve HCP org from $HCP_SETUP_TFVARS or \$HCP_ORG."
-        print_info "Run bootstrap.sh first to populate hcp-setup/terraform.tfvars."
-        return 1
-    fi
-    print_info "HCP org: $HCP_ORG"
-
-    #-- Variable set + project (terraform destroy in hcp-setup)
-    step_header "Destroy variable set + project (terraform destroy in hcp-setup/)"
-    if [ ! -f "$hcp_setup_dir/terraform.tfstate" ]; then
-        print_info "No hcp-setup terraform state — skipping"
-    elif [ -z "${TFE_TOKEN:-}" ]; then
-        print_warn "TFE_TOKEN not set — skipping"
-    else
-        if terraform -chdir="$hcp_setup_dir" destroy -auto-approve -input=false; then
-            print_success "Variable set + project destroyed"
-        else
-            print_warn "terraform destroy in hcp-setup/ had errors — check HCP UI"
-        fi
-    fi
-
-    # Clean up local terraform state for vault-config (prevents stale state on next deploy)
-    step_header "Clean up vault-config local state"
-    local vault_config_dir="$REPO_ROOT/infrastructure/vault-config"
-    if [ -f "$vault_config_dir/terraform.tfstate" ]; then
-        rm -f "$vault_config_dir/terraform.tfstate" "$vault_config_dir/terraform.tfstate.backup"
-        print_success "vault-config local state removed"
-    else
-        print_info "vault-config state: already clean"
-    fi
-
-    print_success "HCP cleanup complete"
-}
 
 #===============================================================================
 # VERIFICATION — read-only audit to confirm zero residuals
@@ -1448,7 +1363,6 @@ phase_verify_zero_residuals() {
     # IAM roles (tagged)
     local iam_roles=""
     for r in $(aws iam list-roles --query 'Roles[].RoleName' --output text 2>/dev/null); do
-        [[ "$r" == "$HCP_ROLE_NAME" ]] && continue
         local tag
         tag=$(aws iam list-role-tags --role-name "$r" \
             --query "Tags[?Key=='${WORKSHOP_TAG_KEY}' && Value=='${WORKSHOP_TAG_VAL}'].Value" \
@@ -1592,27 +1506,19 @@ if [ "$POST_DESTROY_ONLY" = true ]; then
     print_info "Mode: Post-destroy (full orphan sweep — all workshop resources)"
     phase_k8s_cleanup
     phase_aws_sweep
-    phase_hcp_cleanup
     phase_verify_zero_residuals || VERIFY_FAILED=true
 elif [ "$AWS_ONLY" = true ]; then
     print_info "Mode: AWS-only (K8s drain + tag-scoped resource sweep)"
     phase_k8s_cleanup
     phase_aws_sweep
     phase_verify_zero_residuals || VERIFY_FAILED=true
-elif [ "$HCP_ONLY" = true ]; then
-    print_info "Mode: HCP-only (Stack + varset + IAM role + OIDC)"
-    phase_hcp_cleanup
 else
-    print_info "Mode: FULL (terraform destroy + AWS sweep + HCP cleanup)"
+    print_info "Mode: FULL (terraform destroy + AWS sweep)"
 
     # Primary destroy via Terraform (removes all managed resources)
     step_header "Terraform destroy (ordered resource cleanup)..."
     infra_dir="$REPO_ROOT/infrastructure"
     if [ -f "$infra_dir/.terraform/terraform.tfstate" ] || [ -d "$infra_dir/.terraform" ]; then
-        hcp_org_for_destroy=$(grep 'hcp_org' "$SCRIPT_DIR/hcp-setup/terraform.tfvars" 2>/dev/null | awk -F'"' '{print $2}')
-        if [ -n "$hcp_org_for_destroy" ]; then
-            export TF_CLOUD_ORGANIZATION="$hcp_org_for_destroy"
-        fi
         if [ "$DRY_RUN" = true ]; then
             print_info "[DRY-RUN] Would run: terraform destroy -auto-approve"
         else
@@ -1625,7 +1531,6 @@ else
 
     phase_k8s_cleanup
     phase_aws_sweep
-    phase_hcp_cleanup
     phase_verify_zero_residuals || VERIFY_FAILED=true
 fi
 
