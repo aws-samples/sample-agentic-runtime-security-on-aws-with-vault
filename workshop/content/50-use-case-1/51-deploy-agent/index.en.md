@@ -27,12 +27,12 @@ aws ecr create-repository \
 Record the repository URI from the output — you will need it in Step 3:
 
 ```bash
-export UCl_REPO_URI=$(aws ecr describe-repositories \
+export UC1_REPO_URI=$(aws ecr describe-repositories \
   --repository-names workshop/uc1-agent \
   --region <REGION> \
   --query 'repositories[0].repositoryUri' \
   --output text)
-echo "Repository: $UCl_REPO_URI"
+echo "Repository: $UC1_REPO_URI"
 ```
 
 ## Step 2 — Build and push the agent image
@@ -46,10 +46,10 @@ aws ecr get-login-password --region <REGION> | \
 
 cd infrastructure/modules/uc1_agent/agent
 
-docker build -t workshop/uc1-agent:latest .
+docker build --platform linux/amd64 -t workshop/uc1-agent:latest .
 
-docker tag workshop/uc1-agent:latest "${UCl_REPO_URI}:latest"
-docker push "${UCl_REPO_URI}:latest"
+docker tag workshop/uc1-agent:latest "${UC1_REPO_URI}:latest"
+docker push "${UC1_REPO_URI}:latest"
 ```
 
 Confirm the image is in ECR:
