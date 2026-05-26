@@ -5,7 +5,7 @@ weight: 23
 
 ## CLI tools
 
-The workshop expects these versions: kubectl 1.33.x, helm 3.12+, terraform 1.10+, vault 1.21.x, aws CLI v2, jq, and yq.
+The workshop expects these versions: kubectl 1.34.x, helm 3.12+, terraform 1.10+, vault 1.21.x, aws CLI v2, jq, and yq.
 
 The pre-flight script installs them all and verifies your AWS account in one step. Manual install steps are intentionally omitted — running the script is the documented path. Windows users: use WSL2 (Linux subsystem).
 
@@ -45,10 +45,6 @@ The script also verifies these service quotas in `us-west-2`:
 | RDS DB instances | 1 | `L-7B6409FD` |
 | AOSS indexing OCUs | 2 | `L-50FA809B` |
 | AOSS search OCUs | 2 | `L-4E98D4EB` |
-
-:::alert{header="AWS Simple AD" type="info"}
-The workshop deploys one AWS Simple AD directory. The default account limit is 10 directories, which is not tracked via the Service Quotas API. If your account already has 10 directories, delete an unused one or request a limit increase via AWS Support.
-:::
 
 If any quota is insufficient, the script prints the exact `aws service-quotas request-service-quota-increase` command. You can also check manually:
 

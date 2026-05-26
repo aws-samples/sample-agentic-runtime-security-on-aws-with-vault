@@ -55,16 +55,17 @@ LEFT JOIN workshop_logs.pgaudit_logs rds
 The `audit_correlation` VIEW was created automatically during Use Case 3 deployment. You do not create it — your only job here is to query it and read the forensic row.
 :::
 
-**Step 3:** Find a `request_id` from the UC3 agent logs:
+**Step 3:** Capture a `request_id` from the Use Case 3 agent logs:
 
 ```bash
-# Retrieve a recent request_id from CloudWatch
-aws logs filter-log-events \
+# Retrieve a recent request_id from CloudWatch and store it
+REQUEST_ID=$(aws logs filter-log-events \
   --log-group-name /workshop/agent-trace \
   --region "${AWS_REGION}" \
-  --filter-pattern "{ $.event_type = \"refund_approved\" }" \
+  --filter-pattern "{ $.message = \"process_refund_success\" }" \
   --query 'events[0].message' \
-  --output text | jq -r .request_id
+  --output text | jq -r .request_id)
+echo "request_id: ${REQUEST_ID}"
 ```
 
 **Step 4:** Query the correlation VIEW:
@@ -72,7 +73,7 @@ aws logs filter-log-events \
 ```sql
 SELECT *
 FROM audit_correlation
-WHERE request_id = 'YOUR-REQUEST-ID-HERE'
+WHERE request_id = '${REQUEST_ID}'
 ```
 
 **Step 5:** Inspect the result. One row should contain all three plane timestamps, the user who approved, the agent that acted, the database write operation (`WRITE,INSERT`), and the credential TTL. Every column maps directly to one of the five workshop objectives.
@@ -80,11 +81,22 @@ WHERE request_id = 'YOUR-REQUEST-ID-HERE'
 ## CLI Alternative
 
 ```bash
+# Capture request_id from Step 3 (if not already set)
+REQUEST_ID=$(aws logs filter-log-events \
+  --log-group-name /workshop/agent-trace \
+  --region "${AWS_REGION}" \
+  --filter-pattern "{ $.message = \"process_refund_success\" }" \
+  --query 'events[0].message' \
+  --output text | jq -r .request_id)
+
+# Resolve the S3 log bucket from Terraform output
+LOG_BUCKET=$(terraform -chdir=infrastructure output -raw log_bucket_name)
+
 # Start Athena query and get execution ID
 QUERY_ID=$(aws athena start-query-execution \
-  --query-string "SELECT * FROM audit_correlation WHERE request_id = 'YOUR-REQUEST-ID-HERE' LIMIT 1" \
+  --query-string "SELECT * FROM audit_correlation WHERE request_id = '${REQUEST_ID}' LIMIT 1" \
   --query-execution-context Database=workshop_logs \
-  --result-configuration OutputLocation="s3://YOUR-LOG-BUCKET/athena-results/" \
+  --result-configuration OutputLocation="s3://${LOG_BUCKET}/athena-results/" \
   --region "${AWS_REGION}" \
   --query 'QueryExecutionId' --output text)
 
@@ -110,4 +122,4 @@ A complete row demonstrates that:
 3. The `db_credential_ttl` carries the integer lease TTL in seconds (300 = 5 minutes) the agent observed when Vault issued the per-refund database credential — proof the credential expires shortly after the write, not a standing one.
 4. The `vault_bound_claim_may_act` column shows the exact service account that was the actor — provable, not assumed.
 
-This is the answer to the question the CDL Bank demo poses: **"Who authorized this action, through which agent, against what system, and can we prove the credentials have since expired?"**
+This is the answer to the question the OscarVault International (OVI) demo poses: **"Who authorized this action, through which agent, against what system, and can we prove the credentials have since expired?"**

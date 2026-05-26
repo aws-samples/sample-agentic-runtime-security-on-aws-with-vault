@@ -135,9 +135,12 @@ locals {
     PUBLIC_IVIA_ISSUER    = local.ivia_external_url
     PUBLIC_IVIA_CLIENT_ID = var.ivia_client_id
     PUBLIC_REDIRECT_URI   = "${local.banking_ui_external_url}/callback"
-    # Server-side proxy (SvelteKit $env/dynamic/private) — /api/chat + /api/uc3-chat routes
+    # Server-side proxy (SvelteKit $env/dynamic/private) — /api/chat + /api/uc3-chat + /api/ask routes
     AGENT_URL     = "http://banking-agent-svc:3002"
     UC3_AGENT_URL = "http://uc3-agent-svc:8080"
+    # /api/ask (public Use Case 1 page) proxies to the uc1-agent in the uc1
+    # namespace. Cross-namespace, so the fully-qualified service DNS is required.
+    UC1_AGENT_URL = "http://uc1-agent-svc.uc1.svc.cluster.local"
     # SvelteKit CSRF protection: ORIGIN must match the browser's Origin header
     ORIGIN = local.banking_ui_external_url
     # The /callback handler POSTs to IVIA_BASE_URL (in-cluster DNS, HTTPS)

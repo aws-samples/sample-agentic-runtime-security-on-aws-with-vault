@@ -16,7 +16,7 @@
 #   1.  UC3 agent pod Running in banking-app namespace (app=uc3-agent)
 #   2.  ServiceAccount uc3-privileged-actor-sa exists in banking-app namespace
 #   3.  Vault k8s auth role uc3 bound to uc3-privileged-actor-sa
-#   4.  Vault jwt auth role uc3-jwt exists with bound_audiences=[agent-uc3]
+#   4.  Vault jwt auth role uc3-jwt exists with bound_audiences=[uc3-actor]
 #   5.  Vault DB role uc3-refund-writer generates credentials (JIT)
 #   6.  banking.refunds table exists in RDS
 #   7.  JIT credential fetch: vault read database/creds/uc3-refund-writer
@@ -77,7 +77,7 @@ Normal mode checks (19 total):
   1.  UC3 agent pod Running (app=uc3-agent in banking-app namespace)
   2.  ServiceAccount uc3-privileged-actor-sa exists
   3.  Vault k8s auth role uc3 bound to uc3-privileged-actor-sa
-  4.  Vault jwt auth role uc3-jwt exists (bound_audiences=agent-uc3)
+  4.  Vault jwt auth role uc3-jwt exists (bound_audiences=uc3-actor)
   5.  Vault DB role uc3-refund-writer accessible
   6.  banking.refunds table exists in RDS
   7.  JIT credential fetch: database/creds/uc3-refund-writer
@@ -398,16 +398,20 @@ else
 fi
 
 #-------------------------------------------------------------------------------
-# Check 4 — Vault jwt auth role uc3-jwt exists with bound_audiences=[agent-uc3]
+# Check 4 — Vault jwt auth role uc3-jwt exists with bound_audiences=[uc3-actor]
 #-------------------------------------------------------------------------------
+# Per RFC 8693 token exchange, the exchanged JWT's audience is the actor that
+# PERFORMED the exchange (uc3-actor), NOT the subject's client (agent-uc3). Set
+# deliberately in commit fe8f133 (vault_config/main.tf:422, with rationale). Do
+# NOT "restore" agent-uc3 here — that reverts the working UC3 token-exchange chain.
 jwt_audiences=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
     sh -c "${VAULT_EXEC} vault read auth/jwt/role/uc3-jwt -format=json" 2>/dev/null \
     | jq -r '.data.bound_audiences[]' 2>/dev/null | tr '\n' ',' | sed 's/,$//' || echo "")
-if echo "${jwt_audiences}" | grep -q "agent-uc3"; then
-    print_pass "Vault jwt auth role uc3-jwt exists (bound_audiences contains agent-uc3)"
+if echo "${jwt_audiences}" | grep -q "uc3-actor"; then
+    print_pass "Vault jwt auth role uc3-jwt exists (bound_audiences contains uc3-actor)"
 else
     print_fail "Vault jwt auth role uc3-jwt" \
-        "Vault jwt role uc3-jwt not found or bound_audiences does not contain agent-uc3 (got '${jwt_audiences}') — reapply vault_config. Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault read auth/jwt/role/uc3-jwt"
+        "Vault jwt role uc3-jwt not found or bound_audiences does not contain uc3-actor (got '${jwt_audiences}') — reapply vault_config. Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault read auth/jwt/role/uc3-jwt"
 fi
 
 #-------------------------------------------------------------------------------

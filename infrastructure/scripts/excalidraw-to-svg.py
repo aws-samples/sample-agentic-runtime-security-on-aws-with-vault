@@ -240,7 +240,10 @@ def main():
     assets = root / "assets"
     assets.mkdir(exist_ok=True)
     files = [
-        "architecture-overview",
+        # NOTE: "architecture-overview" is intentionally NOT regenerated here.
+        # assets/architecture-overview.svg is hand-authored (dark-theme, polished)
+        # and is the authoritative source-of-truth. Re-adding it would clobber the
+        # hand-authored SVG with the older roughjs/sketch render.
         "uc1-flow",
         "uc2-oauth-flow",
         "uc3-ciba-flow",

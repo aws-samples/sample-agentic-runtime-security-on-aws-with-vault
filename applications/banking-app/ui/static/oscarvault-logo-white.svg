@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 232 56" role="img" aria-label="OscarVault International (OVI)">
+  <title>OscarVault International (OVI)</title>
+
+  <!-- ===== Reversed (white) nav lockup for the Blue-60 header =====
+       Same geometry as oscarvault-logo.svg, recolored for a #0f62fe background:
+       white shield with the OVI monogram in Blue 60 so the mark stays legible. -->
+  <g transform="translate(27 28) scale(0.46)">
+    <path d="M0,-42 L37,-30 V3 C37,27 21,41 0,47 C-21,41 -37,27 -37,3 V-30 Z" fill="#ffffff"/>
+    <text x="0" y="9" text-anchor="middle"
+          font-family="'IBM Plex Sans', 'Helvetica Neue', Arial, sans-serif"
+          font-size="25" font-weight="700" letter-spacing="0.5" fill="#0f62fe">OVI</text>
+  </g>
+
+  <!-- ===== Wordmark ===== -->
+  <text x="58" y="27"
+        font-family="'IBM Plex Sans', 'Helvetica Neue', Arial, sans-serif"
+        font-size="22" font-weight="600" letter-spacing="-0.5" fill="#ffffff">OscarVault</text>
+
+  <!-- ===== Sub-wordmark ===== -->
+  <text x="59" y="44"
+        font-family="'IBM Plex Sans', 'Helvetica Neue', Arial, sans-serif"
+        font-size="8" font-weight="500" letter-spacing="3.2" fill="#d0e2ff">INTERNATIONAL (OVI)</text>
+</svg>

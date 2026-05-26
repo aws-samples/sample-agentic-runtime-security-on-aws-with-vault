@@ -33,11 +33,11 @@ Key fields:
 
 | Field | Value | Meaning |
 |---|---|---|
-| `oidc_discovery_url` | `https://isvaop.verify-access.svc.cluster.local:8436/oauth2` | IVIA's in-cluster OIDC discovery URL. Vault fetches JWKS from this endpoint to validate JWT signatures. |
-| `bound_issuer` | `https://isvaop.verify-access.svc.cluster.local:8436/...` | JWT `iss` claim must match this value. |
+| `jwks_url` | IVIA's JWKS endpoint URL | Vault is given the JWKS URL directly rather than an OIDC discovery URL. This is necessary because OIDC discovery validation fails with IVIA's self-signed certificate; providing the JWKS URL directly (paired with `jwks_ca_pem`) bypasses that step. |
+| `bound_issuer` | External WRP ALB issuer URL (e.g., `https://<ivia-ingress-hostname>`) | JWT `iss` claim must match this external WRP ALB hostname. The issuer is the public-facing ALB URL, not an in-cluster address. |
 | `default_role` | _(empty)_ | Role must be specified explicitly on each login call. |
 
-Vault uses the `oidc_discovery_url` to fetch IVIA's public signing keys (JWKS) and cache them for JWT signature validation. The in-cluster URL keeps the validation traffic inside the cluster — no external DNS required.
+Vault uses the `jwks_url` to fetch IVIA's public signing keys and cache them for JWT signature validation.
 
 ## Step 2 — Inspect the uc2-jwt role
 
@@ -53,7 +53,7 @@ Key                   Value
 bound_audiences       [agent-uc2]
 token_policies        [uc2-personal]
 token_ttl             1h
-token_max_ttl         4h
+token_max_ttl         2h
 user_claim            sub
 role_type             jwt
 ```
@@ -103,16 +103,17 @@ Expected output (key fields):
 ```
 Key                    Value
 ---                    -----
-db_name                workshop-db
+db_name                workshop-pg
 default_ttl            15m
 max_ttl                1h
-creation_statements    ["CREATE ROLE \"{{name}}\" WITH LOGIN ...
-                         PASSWORD '{{password}}'
-                         VALID UNTIL '{{expiration}}'
-                         IN ROLE uc2_personal_readonly"]
+creation_statements    ["CREATE ROLE \"{{name}}\" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}';",
+                        "ALTER ROLE \"{{name}}\" SET search_path TO banking,public;",
+                        "GRANT USAGE ON SCHEMA banking TO \"{{name}}\";",
+                        "GRANT SELECT ON ALL TABLES IN SCHEMA banking TO \"{{name}}\";",
+                        "ALTER DEFAULT PRIVILEGES IN SCHEMA banking GRANT SELECT ON TABLES TO \"{{name}}\";"]
 ```
 
-The `IN ROLE uc2_personal_readonly` clause is the link to the permanent Postgres role that carries the SELECT GRANTs. The ephemeral role inherits those GRANTs but has no INSERT, UPDATE, or DELETE.
+Each ephemeral role is created with login credentials scoped to the banking schema. The `search_path` pin, `GRANT USAGE`, and `GRANT SELECT` statements together restrict the role to read-only access on the banking schema. There is no permanent Postgres role involved — grants are applied directly to the ephemeral role. No INSERT, UPDATE, or DELETE access is granted.
 
 ## Step 5 — Perform a live jwt login (demo)
 
@@ -136,7 +137,7 @@ token                hvs.CAEIQ...
 token_accessor       abcde12345
 token_duration       1h
 token_policies       [uc2-personal default]
-token_meta_sub       oscar@cdlbank.com
+token_meta_sub       oscar
 ```
 
 The `token_meta_sub` field confirms Vault extracted the `sub` claim from the JWT. Now use that Vault token to fetch DB credentials:
@@ -166,11 +167,11 @@ resource "vault_jwt_auth_backend_role" "uc2_jwt" {
 }
 ```
 
-The `bound_audiences` check is the critical guard: Vault rejects any JWT whose `aud` claim does not include `agent-uc2`. This means tokens issued for IVIA's other OAuth clients (e.g., the UC3 CIBA client) cannot be used to obtain `uc2-personal` credentials.
+The `bound_audiences` check is the critical guard: Vault rejects any JWT whose `aud` claim does not include `agent-uc2`. This means tokens issued for IVIA's other OAuth clients (e.g., the Use Case 3 CIBA client) cannot be used to obtain `uc2-personal` credentials.
 
-IVIA JWKS validation happens at the `jwt` auth backend level, not at the role level. Vault fetches IVIA's JWKS from the `oidc_discovery_url` and caches the signing keys. Each incoming JWT is verified against these cached keys before the role's `bound_audiences` check runs.
+IVIA JWKS validation happens at the `jwt` auth backend level, not at the role level. Vault fetches IVIA's JWKS from the `jwks_url` and caches the signing keys. Each incoming JWT is verified against these cached keys before the role's `bound_audiences` check runs.
 
-The `insecure_tls = true` setting on the Vault jwt auth backend (set in `vault_config` for the workshop) allows Vault to fetch IVIA's JWKS over HTTPS with IVIA's self-signed certificate. In production, replace this with a properly signed certificate or provide the CA bundle.
+The `jwks_ca_pem` field on the Vault jwt auth backend supplies IVIA's CA certificate PEM, allowing Vault to trust the IVIA JWKS endpoint's self-signed certificate. This is used instead of `insecure_tls` — Vault is given the CA bundle explicitly rather than disabling TLS verification. In production, replace this with a properly signed certificate from a trusted CA.
 
 Key design decision: **Vault validates the JWT signature; the MCP Server does not.** This keeps the MCP Server code simple and puts the cryptographic validation responsibility on Vault, which has battle-tested JWT validation logic.
 :::
@@ -234,13 +235,13 @@ HTTP request → Authorization: Bearer <JWT>
                MCP Server extracts JWT
                      ↓
                Vault jwt login (role=uc2-jwt, jwt=<JWT>)
-                     → Vault extracts sub = "oscar@cdlbank.com"
+                     → Vault extracts sub = "oscar"
                      → Vault issues token + metadata.sub
                      ↓
                Vault database/creds/uc2-personal-readonly
                      → returns username, password, lease_id
                      ↓
-               psql SET app.current_user_sub = 'oscar@cdlbank.com'
+               psql SET app.current_user_sub = 'oscar'
                psql SELECT * FROM banking.accounts   ← RLS filters to Oscar's rows
 ```
 

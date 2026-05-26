@@ -69,15 +69,20 @@ resource "kubernetes_config_map" "uc1_config" {
     namespace = kubernetes_namespace.uc1.metadata[0].name
   }
 
+  # NOTE: key names must match what agent/app/agent.py reads via os.getenv:
+  # DB_HOST/DB_PORT/DB_NAME (db tool), REGION (model-invocation plane),
+  # KB_REGION/KNOWLEDGE_BASE_ID (kb retrieve), BEDROCK_MODEL_ID, VAULT_*.
+  # AWS_REGION is also kept so the AWS SDK's default region resolution works.
   data = {
     VAULT_ADDR        = var.vault_addr
     VAULT_ROLE        = var.vault_role
-    RDS_ADDRESS       = var.rds_address
-    RDS_PORT          = tostring(var.rds_port)
-    RDS_DB_NAME       = var.rds_db_name
+    DB_HOST           = var.rds_address
+    DB_PORT           = tostring(var.rds_port)
+    DB_NAME           = var.rds_db_name
     KNOWLEDGE_BASE_ID = var.knowledge_base_id
     KB_REGION         = var.kb_region
     AWS_REGION        = var.region
+    REGION            = var.region
     BEDROCK_MODEL_ID  = var.bedrock_model_id
   }
 }

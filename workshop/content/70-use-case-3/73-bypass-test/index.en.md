@@ -42,13 +42,12 @@ The forged tokens are rejected by Vault for two independent reasons, either of w
 | Layer | Mechanism | What It Enforces |
 |---|---|---|
 | JWT signature | JWKS validation against IVIA's RS256 public keys | Only IVIA-signed tokens are accepted — HS256 self-signed tokens are always rejected |
-| `bound_claims` | `may_act/sub` must match `service-account:agent-uc3` | Only the UC3 service account can be the actor in a delegated token |
-| `bound_claims` | `authorization_details/0/type` must equal `refund_approval` | Only tokens explicitly authorizing a refund unlock the `uc3-refund-writer` DB role |
+| `bound_claims` | `/may_act/sub = "*"` (glob) — any `may_act.sub` value in the JWT satisfies this check; the key constraint is that `may_act` must be present and the token must be IVIA-signed | Only properly delegated RFC 8693 tokens carry `may_act`; a raw CIBA token without delegation is rejected |
 
-The signature layer and the claim layer are both enforced. A real attacker would need to compromise IVIA's private signing key AND present a token with the correct service account AND the correct authorization type — all simultaneously.
+The signature layer and the claim layer are both enforced. A real attacker would need to compromise IVIA's RS256 private signing key in order to produce a token that passes JWKS validation — the bound_claim on `/may_act/sub` is an additional structural check that a raw (non-delegated) CIBA token lacks the `may_act` object entirely.
 
-:::alert{header="Threat Model" type="warning"}
-**What this protects against:** A rogue agent pod that obtains a user's CIBA access token (via network interception or a compromised secret) cannot use it to issue a refund. Without `may_act.sub = service-account:agent-uc3`, Vault rejects the Vault login attempt. No DB credentials are ever issued.
+### Threat Model
+
+**What this protects against:** A rogue agent pod that obtains a user's CIBA access token (via network interception or a compromised secret) cannot use it to issue a refund. A raw CIBA access token has no `may_act` object, so the `/may_act/sub` bound_claim check fails — but more fundamentally, the forged HS256 token the bypass test generates is rejected first by JWKS signature validation: Vault trusts only tokens signed by IVIA's RS256 key pair. No DB credentials are ever issued.
 
 **What this does NOT protect against:** A compromised agent-uc3 pod with its service account JWT intact could initiate a CIBA flow and present the resulting delegated token to Vault. Mitigations for pod compromise (e.g., falco runtime rules, IRSA session policy restrictions) are out of scope for this workshop but represent the next layer of defense.
-:::

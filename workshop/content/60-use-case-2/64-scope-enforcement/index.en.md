@@ -30,24 +30,20 @@ path "database/creds/uc2-personal-readonly" {
 path "sys/leases/renew" {
   capabilities = ["update"]
 }
-
-path "sys/leases/revoke" {
-  capabilities = ["update"]
-}
 ```
 
-Note: there is no path for any UC3 write-capable role (e.g., `database/creds/uc3-refund-writer`). The policy grants `read` on exactly one database credential path.
+Note: there is no path for any Use Case 3 write-capable role (e.g., `database/creds/uc3-refund-writer`). The policy grants `read` on exactly one database credential path.
 
 ### Step 1.2 — Attempt to read a write-capable credential role
 
-Obtain a Vault token using the `uc2-personal` policy and attempt to read a UC3 credential:
+Obtain a Vault token using the `uc2-personal` policy and attempt to read a Use Case 3 credential:
 
 ```bash
 # Get a Vault token bound to uc2-personal policy
 UC2_TOKEN=$(kubectl exec -n vault vault-0 -- \
   vault token create -policy=uc2-personal -ttl=5m -field=token 2>/dev/null)
 
-# Attempt to read UC3 write-capable credentials
+# Attempt to read Use Case 3 write-capable credentials
 kubectl exec -n vault vault-0 -- sh -c \
   "VAULT_TOKEN='${UC2_TOKEN}' vault read database/creds/uc3-refund-writer"
 ```
@@ -102,8 +98,8 @@ Record the `username` and `password` values.
 ### Step 2.2 — Attempt INSERT with those credentials
 
 ```bash
-RDS_HOST=$(kubectl get configmap uc2-mcp-config -n banking-app \
-  -o jsonpath='{.data.RDS_HOST}')
+RDS_HOST=$(kubectl get configmap banking-mcp-config -n banking-app \
+  -o jsonpath='{.data.RDS_ADDRESS}')
 
 kubectl exec -n banking-app deploy/banking-mcp-server -- \
   sh -c "PGPASSWORD='<password>' psql -h ${RDS_HOST} -U <username> -d workshop \
@@ -148,7 +144,7 @@ The two enforcement layers protect against different failure modes:
 |---|---|---|
 | Vault policy misconfiguration | Would fail to catch | Still blocks write |
 | DB GRANT misconfiguration | Would still block via policy | Would fail to catch |
-| Compromised UC2 Vault token | Policy blocks UC3 paths | DB blocks write ops |
+| Compromised Use Case 2 Vault token | Policy blocks Use Case 3 paths | DB blocks write ops |
 | Direct DB connection (bypass Vault) | N/A — no standing credentials | DB blocks write ops for any non-admin role |
 
 The "no standing credentials" property of OBJ-2 is what makes the last row possible: an attacker who bypasses Vault still cannot write to the database because there is no long-lived credential with write access to steal. The only credentials in existence are the ephemeral Vault-vended ones, and those have only `r` (SELECT) at the DB GRANT layer.
@@ -158,7 +154,7 @@ This is the practical meaning of defense-in-depth: each layer is independently s
 
 :::expand{header="Agent Developer Track — How the MCP server handles INSERT errors"}
 
-When the Banking Agent routes a user request to a tool that attempts a write operation (which should not happen in UC2's read-only design, but can be triggered in testing), the MCP Server receives a Postgres error and propagates it back to the agent:
+When the Banking Agent routes a user request to a tool that attempts a write operation (which should not happen in Use Case 2's read-only design, but can be triggered in testing), the MCP Server receives a Postgres error and propagates it back to the agent:
 
 ```typescript
 // tools/banking-tools.ts

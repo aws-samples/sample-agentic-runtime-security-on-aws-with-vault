@@ -22,18 +22,17 @@ Deeper diagrams (per-use-case flows, audit correlation) are produced in Phase 1 
 
 ## Prerequisites
 
-Workshop attendees do not install CLI tools manually. A single consolidated `preflight.sh` script auto-installs every required CLI and verifies the AWS account in one shot; `bootstrap.sh` then wires up HCP Terraform.
+Workshop attendees do not install CLI tools manually. A single consolidated `preflight.sh` script auto-installs every required CLI and verifies the AWS account in one shot.
 
 ```bash
-# 1. Single pre-flight: install CLI tools (kubectl 1.33.x, helm 3.12+,
+# Single pre-flight: install CLI tools (kubectl 1.33.x, helm 3.12+,
 #    terraform 1.10+, vault 1.21.x, aws v2, jq, yq) AND verify
 #    Bedrock access (us.amazon.nova-pro-v1:0 — Amazon Nova Pro via
 #    cross-region inference profile) + service quotas + IAM permissions
 ./infrastructure/scripts/preflight.sh
-
-# 2. Bootstrap HCP Terraform org/varset/OIDC/IAM
-./infrastructure/scripts/bootstrap.sh <HCP_ORG>
 ```
+
+Obtain the two IVIA licensing artifacts (ICR entitlement key + IVIA trial certificate) before deploying — see the [Prerequisites module](workshop/content/20-prerequisites/22-ivia-licensing/index.en.md).
 
 `preflight.sh` emits colored `✓ PASS` / `✗ FAIL` / `⚠ WARN` markers and a single consolidated summary with full inline copy-paste remediation for any failure (no "see external doc" indirection). Flags: `--interactive` (prompt before each install + each check section), `--dry-run` (print install plan), `--help`.
 
@@ -59,13 +58,13 @@ Preview the Workshop Studio content locally (downloads the AWS preview utility o
 
 ## Deploy
 
-After prerequisites and bootstrap, run the end-to-end deploy + verification:
+After prerequisites, run the end-to-end deploy + verification:
 
 ```bash
-./infrastructure/scripts/workshop-e2e.sh <HCP_ORG> --interactive --skip-teardown
+./infrastructure/scripts/workshop-e2e.sh --interactive --skip-teardown
 ```
 
-The deploy story will cover applying the Terraform Stacks `vpc` + `eks` + `rds` + `bedrock_kb` + (later) `vault` + `verify_access` + `vault_config` + `isva_config` + (later) `uc1_agent` + `uc2_agent` + `uc3_agent` + `observability` components on HCP Terraform, plus the `aws eks update-kubeconfig` one-liner to reach the cluster from `kubectl`.
+The deploy covers `terraform -chdir=infrastructure apply` which provisions `vpc` + `eks` + `rds` + `bedrock_kb` + `vault` + `verify_access` + `vault_config` + `uc1_agent` + `uc2_app` + `uc3_agent` in dependency order, plus the `aws eks update-kubeconfig` one-liner to reach the cluster from `kubectl`. State is stored locally in `infrastructure/terraform.tfstate`.
 
 ## Cleanup
 
@@ -98,7 +97,7 @@ The cleanup story will cover the one-shot `infrastructure/scripts/teardown.sh` t
 │       ├── 98-summary/              # Phase 7 content
 │       ├── 99-credits/
 │       └── 99-resources/            # Phase 7 content
-└── infrastructure/                  # Terraform Stacks IaC (HCP working directory)
+└── infrastructure/                  # Terraform IaC (local state)
     ├── modules/
     │   ├── vpc/                     # Phase 2
     │   ├── eks/                     # Phase 2
@@ -114,12 +113,9 @@ The cleanup story will cover the one-shot `infrastructure/scripts/teardown.sh` t
     │   └── uc3_agent/               # Phase 6
     └── scripts/
         ├── preflight.sh             # PREF-01/02/03/05 — install CLIs + verify Bedrock + quotas + IAM
-        ├── bootstrap.sh             # PREF-04 — HCP Terraform org/varset/OIDC/IAM setup
         ├── common-checks.sh         # shared bash library (print_pass/fail, confirm, print_summary)
         └── excalidraw-to-svg.py     # SVG regeneration pipeline
 ```
-
-> **HCP Terraform Working Directory:** When creating the Stack in HCP Terraform, set the working directory to `infrastructure/`. This tells HCP Terraform where to find the Stacks HCL files.
 
 ## Diagram Style Guide
 

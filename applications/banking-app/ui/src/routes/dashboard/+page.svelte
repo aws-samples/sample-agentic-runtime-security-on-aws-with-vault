@@ -10,7 +10,7 @@
   and forwarded to the agent pod via Authorization: Bearer header.
   The agent never stores tokens — each request is independently authenticated.
 
-  Test users: Oscar and Adriana
+  Test users: Oscar and Jaime
 -->
 <script lang="ts">
 	import type { PageData } from './$types';
@@ -27,6 +27,15 @@
 	let inputMessage = $state('');
 	let isLoading = $state(false);
 	let sessionId = $state(`session-${Date.now()}`);
+
+	// Auto-scroll the message list to the newest message. The effect re-runs
+	// whenever a message is appended or the "Thinking…" indicator toggles.
+	let messagesEl: HTMLDivElement | undefined = $state();
+	$effect(() => {
+		messages.length;
+		isLoading;
+		messagesEl?.scrollTo({ top: messagesEl.scrollHeight, behavior: 'smooth' });
+	});
 
 	// Decode user identity from id_token for display
 	let displayName = $state('');
@@ -81,6 +90,15 @@
 			}
 		];
 		pendingConsent = null;
+	}
+
+	// Persistent starter prompts. The refund prompt also switches the chat to the
+	// UC3 CIBA endpoint before sending (mirrors the old empty-state behavior).
+	function sendSuggestion(text: string, endpoint = '/api/chat') {
+		if (isLoading) return;
+		chatEndpoint = endpoint;
+		inputMessage = text;
+		sendMessage();
 	}
 
 	async function sendMessage() {
@@ -151,24 +169,10 @@
 			<Tag type="purple">Powered by Amazon Nova Pro</Tag>
 		</div>
 
-		<div class="messages-container">
+		<div class="messages-container" bind:this={messagesEl}>
 			{#if messages.length === 0}
 				<div class="empty-state">
-					<p>Ask me about your accounts or transactions:</p>
-					<div class="suggestions">
-						<Button kind="tertiary" size="small" on:click={() => { inputMessage = 'Show me my account balances'; }}>
-							Show my account balances
-						</Button>
-						<Button kind="tertiary" size="small" on:click={() => { inputMessage = 'What are my recent transactions?'; }}>
-							Recent transactions
-						</Button>
-						<Button kind="tertiary" size="small" on:click={() => { inputMessage = 'Show transactions for my checking account'; }}>
-							Checking account transactions
-						</Button>
-						<Button kind="danger-tertiary" size="small" on:click={() => { inputMessage = 'I need a refund for a recent transaction'; chatEndpoint = '/api/uc3-chat'; }}>
-							I need a refund
-						</Button>
-					</div>
+					<p>Ask me about your accounts or transactions, or pick a starter prompt below.</p>
 				</div>
 			{:else}
 				{#each messages as msg}
@@ -212,6 +216,22 @@
 				</div>
 			</div>
 		{/if}
+
+		<!-- Persistent starter prompts — always available, not just on the empty state -->
+		<div class="suggestions-bar">
+			<Button kind="tertiary" size="small" disabled={isLoading} on:click={() => sendSuggestion('Show me my account balances')}>
+				Show my account balances
+			</Button>
+			<Button kind="tertiary" size="small" disabled={isLoading} on:click={() => sendSuggestion('What are my recent transactions?')}>
+				Recent transactions
+			</Button>
+			<Button kind="tertiary" size="small" disabled={isLoading} on:click={() => sendSuggestion('Show transactions for my checking account')}>
+				Checking account transactions
+			</Button>
+			<Button kind="danger-tertiary" size="small" disabled={isLoading} on:click={() => sendSuggestion('I need a refund for a recent transaction', '/api/uc3-chat')}>
+				I need a refund
+			</Button>
+		</div>
 
 		<div class="chat-input-area">
 			<TextArea
@@ -340,13 +360,20 @@
 		margin-top: 0.75rem;
 	}
 
+	.suggestions-bar {
+		display: flex;
+		gap: 0.5rem;
+		flex-wrap: wrap;
+		padding-top: 0.75rem;
+		margin-top: 0.5rem;
+		border-top: 1px solid #e0e0e0;
+	}
+
 	.chat-input-area {
 		display: flex;
 		gap: 0.75rem;
 		align-items: flex-end;
-		padding-top: 1rem;
-		border-top: 1px solid #e0e0e0;
-		margin-top: 0.75rem;
+		padding-top: 0.75rem;
 	}
 
 	.chat-input-area :global(.cds--form-item) {

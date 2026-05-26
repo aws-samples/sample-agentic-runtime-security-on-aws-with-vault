@@ -146,6 +146,13 @@ resource "aws_iam_role_policy" "kb_bedrock" {
           "arn:aws:bedrock:*:*:inference-profile/us.amazon.nova-pro-v1:0",
           "arn:aws:bedrock:*::foundation-model/amazon.nova-pro-v1:0"
         ]
+      },
+      {
+        # UC1 agent KB semantic search (bedrock-agent-runtime Retrieve). Vault's
+        # bedrock-reader session policy also grants this; both layers are required.
+        Effect   = "Allow"
+        Action   = ["bedrock:Retrieve"]
+        Resource = "arn:aws:bedrock:${var.region}:*:knowledge-base/*"
       }
     ]
   })

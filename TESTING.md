@@ -8,8 +8,7 @@ Before running the full workshop or after making changes, validate that the repo
 
 ### E2E Workshop Flow Checklist
 
-Complete walkthrough to validate the full workshop. Steps marked [MANUAL] require HCP Terraform UI interaction.
-Steps marked [WAIT] require waiting for HCP Terraform to apply.
+Complete walkthrough to validate the full workshop.
 
 #### Phase 1: Scaffold and Pre-Flight
 
@@ -17,8 +16,8 @@ Steps marked [WAIT] require waiting for HCP Terraform to apply.
 - [ ] `npx reveal-md slides.md` opens the slide deck in a browser
 - [ ] `npx reveal-md slides.md --print slides.pdf` exports the deck to PDF
 - [ ] `python3 infrastructure/scripts/excalidraw-to-svg.py` regenerates all six SVGs in `assets/` from their `.excalidraw` sources
-- [ ] `./infrastructure/scripts/preflight.sh` installs CLI tools (kubectl 1.33.x, helm 3.12+, terraform 1.10+, vault 1.21.x, aws v2, jq, yq) and verifies Bedrock model access (PREF-01) + AWS service quotas (PREF-02) + IAM permissions (PREF-03) + companion to PREF-05
-- [ ] `./infrastructure/scripts/bootstrap.sh <HCP_ORG>` creates HCP project + variable set + OIDC trust + IAM role for Stacks (PREF-04)
+- [ ] `./infrastructure/scripts/preflight.sh` installs CLI tools (kubectl 1.33.x, helm 3.12+, terraform 1.10+, vault 1.21.x, aws v2, jq, yq) and verifies Bedrock model access (PREF-01) + AWS service quotas (PREF-02) + IAM permissions (PREF-03)
+- [ ] `icr_entitlement_key` is set in `infrastructure/terraform.tfvars` and IVIA trial cert placed at `infrastructure/modules/verify_access/base_layer/ISAM-Trial-HashiCorp.cer`
 
 #### Phase 2: Foundation Infrastructure
 
@@ -107,7 +106,6 @@ Must regenerate all six SVGs in `assets/` from their `.excalidraw` sources witho
 
 ```bash
 ./infrastructure/scripts/preflight.sh              # PREF-01 + PREF-02 + PREF-03 + PREF-05
-./infrastructure/scripts/bootstrap.sh <HCP_ORG>    # PREF-04
 ```
 
 ## Workshop Studio quota auto-provisioning (publisher action)
@@ -164,5 +162,4 @@ brew install bash
 | `workshop/content/NN-*/index.en.md` | Workshop Studio content modules |
 | `infrastructure/modules/*/` | Terraform Stacks components (one per phase deliverable) |
 | `infrastructure/scripts/preflight.sh` | Single entry-point: installs CLI prereqs (PREF-05) + Bedrock access (PREF-01) + service quotas (PREF-02) + IAM permissions (PREF-03) |
-| `infrastructure/scripts/bootstrap.sh` | HCP Terraform org/varset/OIDC/IAM setup (PREF-04) |
 | `infrastructure/scripts/excalidraw-to-svg.py` | SVG regeneration pipeline |

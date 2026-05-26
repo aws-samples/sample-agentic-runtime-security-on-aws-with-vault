@@ -3,7 +3,7 @@
 # Workshop Pre-Flight (consolidated)
 #
 # Single entry-point that:
-#   1. Installs missing CLI prereqs (kubectl 1.33.x, helm 3.12+, terraform 1.10+,
+#   1. Installs missing CLI prereqs (kubectl 1.34.x, helm 3.12+, terraform 1.10+,
 #      vault 1.21.x, aws v2, jq, yq) — macOS Homebrew or Linux apt/yum
 #   2. Verifies Amazon Bedrock model access (us.amazon.nova-pro-v1:0
 #      Amazon Nova Pro cross-region inference profile) in us-west-2 via
@@ -11,7 +11,7 @@
 #   3. Verifies AWS service quotas in us-west-2 (EC2 vCPU >= 32,
 #      VPC EIP >= 6, RDS DB instances >= 1, AOSS OCU indexing >= 2,
 #      AOSS OCU search >= 2)
-#   4. Verifies IAM permissions for HCP Terraform Workspace bootstrap (17 actions via
+#   4. Verifies IAM permissions for the workshop bootstrap (17 actions via
 #      iam:SimulatePrincipalPolicy with self-test fallback)
 #
 # Exit codes:
@@ -54,7 +54,7 @@ for arg in "$@"; do
 Usage: $0 [--interactive] [--dry-run] [--help]
 
 Workshop pre-flight: installs CLI prereqs, then verifies Bedrock model access,
-AWS service quotas, and IAM permissions for HCP Terraform Workspace bootstrap.
+AWS service quotas, and IAM permissions for the workshop bootstrap.
 
 Modes:
   (no flags)        Default: auto-install missing CLIs (no per-tool prompts),
@@ -97,10 +97,8 @@ AWS_REGION="${AWS_REGION:-us-west-2}"
 export AWS_PAGER=""
 
 # ---- Minimum tool versions (enforced in the "Verify CLI tool versions" section) ----
-# Terraform 1.10 is the floor: workspace features
-# require 1.10+. The hcp-setup module deliberately keeps a looser >= 1.0 pin
-# so attendees can bootstrap with stock CLIs, but the workshop's actual workspace
-# deploy needs 1.10+ at the local CLI to dry-run / plan.
+# Terraform 1.10 is the floor: Stacks features require 1.10+ for the
+# `terraform stacks plan/apply` workflow used in the workshop.
 TERRAFORM_MIN_VERSION="1.10.0"
 
 # ---- Portable semver compare (returns 0 if $1 >= $2) ----
@@ -139,7 +137,7 @@ run() {
 echo -e "${BLUE}=== Install CLI tools ===${NC}"
 
 # Tool versions (matches PREF-05 documentation)
-KUBECTL_MAJOR_MINOR="1.33"
+KUBECTL_MAJOR_MINOR="1.34"
 AWS_CLI_MAJOR="2"
 
 # Per-section gate (only matters in --interactive mode; auto-yes otherwise)
@@ -617,20 +615,18 @@ if confirm "Run IAM permissions check (iam:SimulatePrincipalPolicy)?"; then
             # the eks-terraform-stacks reference workshop (which uses the
             # exact same OIDC + role bootstrap flow) does not preflight them:
             #
-            #   - iam:CreateOpenIDConnectProvider — sandboxed roles (e.g. the
-            #     HashiCorp internal IndividualSandbox inline policy) grant
-            #     this action with a Resource ARN list that matches
-            #     arn:aws:iam::ACCOUNT:oidc-provider/app.terraform.io, but
-            #     simulate-principal-policy still returns implicitDeny even
-            #     when the actual create call succeeds (likely an SCP/inline
-            #     evaluation interaction the simulator can't model). Let
-            #     bootstrap.sh attempt the create — AWS will return a clear
-            #     error if the perm really is missing.
+            #   - iam:CreateOpenIDConnectProvider — needed for EKS IRSA; some
+            #     scoped roles grant this only with a specific Resource ARN
+            #     pattern, making simulate-principal-policy return implicitDeny
+            #     even when the actual create call succeeds (SCP/inline
+            #     evaluation interaction the simulator cannot model). The EKS
+            #     module will surface a clear error if the permission is
+            #     genuinely absent.
             #
-            #   - sts:AssumeRoleWithWebIdentity — invoked by HCP Terraform at
-            #     deploy time, not by the local caller. The trust-policy of
-            #     the IAM role we create governs whether HCP can assume it.
-            #     Local-caller simulation here produces a false deny.
+            #   - sts:AssumeRoleWithWebIdentity — invoked by EKS IRSA service
+            #     accounts at pod startup, not by the local caller. The trust
+            #     policy of the IAM role governs whether the OIDC provider can
+            #     issue it. Local-caller simulation produces a false deny.
             REQUIRED_ACTIONS=(
                 iam:CreateRole
                 iam:AttachRolePolicy
@@ -676,7 +672,7 @@ if confirm "Run IAM permissions check (iam:SimulatePrincipalPolicy)?"; then
                         print_pass "${action}: allowed"
                     else
                         print_fail "${action}: ${decision}" \
-                            "Attach a policy granting ${action} to ${PRINCIPAL_ARN}, or use AWS managed policy AdministratorAccess for the workshop. Workshop pedagogical scope = Admin; production deployments use the scoped least-privilege policy in infrastructure/scripts/hcp-setup."
+                            "Attach a policy granting ${action} to ${PRINCIPAL_ARN}, or use AWS managed policy AdministratorAccess for the workshop. Workshop pedagogical scope = Admin."
                     fi
                 done <<< "$sim_out"
             fi

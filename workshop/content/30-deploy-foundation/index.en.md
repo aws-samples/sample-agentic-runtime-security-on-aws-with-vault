@@ -3,19 +3,17 @@ title: 'Deploy Foundation'
 weight: 30
 ---
 
-In this module you deploy the entire AWS foundation via `terraform apply` (with HCP Terraform storing state remotely) — VPC, EKS cluster, RDS PostgreSQL, Bedrock Knowledge Base, and the audit-correlation substrate. Work through each sub-module in order:
+In this module you run the single `terraform apply` that provisions the entire workshop stack — VPC, EKS cluster, RDS PostgreSQL, Bedrock Knowledge Base, the audit-correlation substrate, and the in-cluster platform backbone (**HashiCorp Vault** + **IBM Verify Identity Access**). The later Platform and Use Case modules verify and configure what this apply deploys; they do not run their own `terraform apply`. Work through the sub-modules in the left navigation in order.
 
-1. **[Deploy Workspace](31-deploy-stacks/)** — Run terraform apply to deploy all foundation infrastructure
-2. **[Configure kubectl](32-configure-kubectl/)** — Connect to the EKS cluster
-3. **[Verify Infrastructure](33-verify-infrastructure/)** — Run five checks to confirm everything deployed correctly
-4. **[Ingest Knowledge Base](34-ingest-knowledge-base/)** — Trigger and validate Bedrock KB data source ingestion
-5. **[Production Considerations](35-production-considerations/)** — Workshop simplifications vs. production patterns
+## Pre-flight check
 
-## Reference architecture
+Confirm you completed the [Prerequisites module](../20-prerequisites/) before deploying:
 
-![Reference architecture](/static/images/architecture-overview.svg)
+```bash
+bash infrastructure/scripts/check-prerequisites.sh
+```
 
-The eleven Terraform modules wire together in dependency order. Three (`audit`, `vpc`, `bedrock_kb_aoss`) have no inter-module dependencies — they apply in parallel. The others layer on top: `eks` depends on `vpc` + `audit`; `rds` depends on `vpc` + `audit` + `eks`; `bedrock_kb_index` depends on `bedrock_kb_aoss`; `addons` depends on `eks`.
+If any item fails, return to Prerequisites — this deploy will fail at apply time without all three (AWS access, IVIA licenses, Bedrock model access).
 
 ## The audit-correlation contract
 
@@ -28,13 +26,3 @@ Before any workload lands on this cluster, the workshop pays its **audit-correla
 :::alert{header="Why this matters now" type="info"}
 Trying to retrofit cross-plane audit correlation after agents and Vault are running is effectively impossible — every plane stamps a different correlation field, log groups inherit the wrong KMS key, and the JOIN never resolves. This module deliberately fronts the cost before anyone writes agent code.
 :::
-
-## Pre-flight check
-
-Confirm you completed the [Prerequisites module](../20-prerequisites/) before deploying:
-
-```bash
-bash infrastructure/scripts/check-prerequisites.sh
-```
-
-If any item fails, return to Prerequisites — this deploy will fail at apply time without all three (AWS access, HCP Terraform bootstrap, Bedrock model access).

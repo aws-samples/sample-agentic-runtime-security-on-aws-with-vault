@@ -11,6 +11,7 @@
 #   6. Agent /health endpoint returns "healthy"
 #   7. ENFC-01: uc1-readonly policy does NOT grant UC3 database path access
 #   8. Vault audit device enabled (>= 1 audit device)
+#   9. Agent /query end-to-end: KB retrieve + Nova Pro answer returned
 #
 # Usage:
 #   ./verify-uc1.sh [--help]
@@ -40,7 +41,7 @@ verify-uc1.sh — ${SCRIPT_DESCRIPTION}
 Usage:
   ./verify-uc1.sh [--help]
 
-Checks (8 total):
+Checks (9 total):
   1. UC1 agent pod Running (app=uc1-agent in uc1 namespace)
   2. UC1 ServiceAccount uc1-retriever-sa exists
   3. Vault role uc1 bound to uc1-retriever-sa
@@ -49,6 +50,7 @@ Checks (8 total):
   6. Agent /health endpoint returns "healthy"
   7. ENFC-01: uc1-readonly policy does not grant UC3 database path access
   8. Vault audit device enabled
+  9. Agent /query end-to-end (KB retrieve + Nova Pro answer)
 
 Env-var overrides:
   UC1_NAMESPACE     (default: uc1)
@@ -176,6 +178,48 @@ if [ "${audit_count:-0}" -ge 1 ]; then
 else
     print_fail "Vault audit device" \
         "Vault audit device not enabled — reapply vault_config. Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault audit list"
+fi
+
+#-------------------------------------------------------------------------------
+# Check 9 — Agent /query end-to-end (KB retrieve + JIT DB + Nova Pro answer)
+#
+# POSTs a real natural-language question to the agent. This is the ONLY check
+# that exercises the full data path end-to-end: Vault STS -> bedrock:Retrieve on
+# the Knowledge Base -> Amazon Nova Pro inference (plus the db tool when the model
+# selects it). A non-empty "answer" with no error means the path works.
+#-------------------------------------------------------------------------------
+query_result=$(kubectl exec -n "${UC1_NAMESPACE}" deploy/uc1-agent -- \
+    python3 -c '
+import urllib.request, urllib.error, json, re
+body = json.dumps({"query": "Using the knowledge base, summarize the employee PTO policy including accrual by tenure."}).encode()
+req = urllib.request.Request("http://localhost:8080/query", data=body,
+                            headers={"Content-Type": "application/json"})
+# Phrases the model emits when the KB retrieve returned nothing. A non-empty
+# answer that is really one of these is NOT a working retrieval — it is the
+# empty-index cop-out that previously let this check pass falsely.
+FAIL_RE = re.compile(r"(unable to find|could ?n.?t find|not (?:available|indexed|find)|no (?:information|results|relevant)|reach(?:ing)? out to .*HR|consult .*HR)", re.I)
+try:
+    r = urllib.request.urlopen(req, timeout=120)
+    ans = (json.loads(r.read()).get("answer") or "").strip()
+    if not ans:
+        print("EMPTY_ANSWER")
+    elif FAIL_RE.search(ans):
+        print("NO_KB_CONTENT")
+    else:
+        print("OK")
+except urllib.error.HTTPError as e:
+    print("HTTP_%d:%s" % (e.code, e.read().decode("utf-8", "replace")[:300]))
+except Exception as e:
+    print("ERR:%s" % str(e)[:300])
+' 2>/dev/null || echo "EXEC_FAIL")
+if [ "${query_result}" = "OK" ]; then
+    print_pass "Agent /query end-to-end: KB retrieve + Nova Pro answer returned"
+elif [ "${query_result}" = "NO_KB_CONTENT" ]; then
+    print_fail "Agent /query end-to-end (KB empty)" \
+        "Agent answered but retrieved NOTHING from the Knowledge Base (model said it could not find the policy). The corpus is in S3 but the vector index is empty — run: ./sync-bedrock-kb.sh"
+else
+    print_fail "Agent /query end-to-end" \
+        "POST /query returned no usable answer (result: ${query_result}). Needs bedrock:Retrieve on the KB, the DB_*/REGION env vars in uc1-config, KB ingestion (./sync-bedrock-kb.sh), and Nova Pro access. Check: kubectl logs -n ${UC1_NAMESPACE} deploy/uc1-agent --tail=50"
 fi
 
 # Summary is printed automatically by the common-checks.sh EXIT trap

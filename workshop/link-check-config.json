@@ -22,9 +22,6 @@
       "pattern": "localhost"
     },
     {
-      "pattern": "app.terraform.io"
-    },
-    {
       "pattern": "developer.hashicorp.com"
     }
   ]

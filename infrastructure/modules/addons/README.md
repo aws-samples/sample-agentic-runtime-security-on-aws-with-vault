@@ -22,7 +22,7 @@ CONTEXT.md ([Phase 2 context](../../../.planning/phases/02-foundation-infrastruc
 - **Pod Identity vs IRSA** — accept the pinned `eks-blueprints-addons` v1.x module's defaults. Per RESEARCH Open Question 2/3, that version installs the 3 external addons via **IRSA** (consumes `oidc_provider_arn`). CONTEXT's "Pod Identity for cluster addons" decision applies to MANAGED addons (vpc-cni, ebs-csi) which are owned by the `eks` module — external addons inherit module defaults.
 - **cert-manager** ships with the default `selfsigned` ClusterIssuer; **Vault PKI integration is deferred to Phase 3+**.
 - **Karpenter is OUT of scope** — `enable_karpenter = false`. Cluster runs with managed node group only (per project [CLAUDE.md](../../../CLAUDE.md)).
-- **ArgoCD is OUT of scope** — `enable_argocd = false`. Deploys are Helm-direct or via HCP Terraform Workspace (per project [CLAUDE.md](../../../CLAUDE.md)).
+- **ArgoCD is OUT of scope** — `enable_argocd = false`. Deploys are Helm-direct or via local Terraform (per project [CLAUDE.md](../../../CLAUDE.md)).
 - **`aws_load_balancer_controller.replicaCount = 2`** — keeps the mutating webhook reachable across pod restarts; otherwise brief webhook outages can fail concurrent Service applies.
 
 ## Inputs

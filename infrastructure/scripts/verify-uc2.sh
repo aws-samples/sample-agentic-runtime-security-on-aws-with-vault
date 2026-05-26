@@ -348,7 +348,7 @@ ivia_endpoint=$(kubectl get ingress -n verify-access ivia-wrp \
     -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
 
 if [ -n "${ivia_endpoint}" ]; then
-    discovery=$(curl -s "http://${ivia_endpoint}/isvaop/oauth2/.well-known/openid-configuration" \
+    discovery=$(curl -sLk "https://${ivia_endpoint}/isvaop/oauth2/.well-known/openid-configuration" \
         --max-time 15 -H "Accept: application/json" 2>/dev/null || echo "{}")
     if echo "${discovery}" | jq -e '.issuer and .authorization_endpoint and .token_endpoint and .jwks_uri' >/dev/null 2>&1; then
         issuer=$(echo "${discovery}" | jq -r '.issuer')

@@ -9,6 +9,7 @@ RUN npm ci
 # Copy source and build
 COPY svelte.config.js vite.config.ts tsconfig.json ./
 COPY src/ ./src/
+COPY static/ ./static/
 RUN npx svelte-kit sync && npm run build
 
 # Remove dev dependencies after build

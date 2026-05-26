@@ -34,3 +34,8 @@ output "ivia_ingress_hostname" {
   value       = try(kubernetes_ingress_v1.ivia_wrp.status[0].load_balancer[0].ingress[0].hostname, "")
 }
 
+output "ivia_oidc_ca_pem" {
+  description = "IVIA OIDC Provider self-signed TLS cert (iviaop-config/iviaop.pem) that iviaop serves on :8436. Vault consumes it as jwks_ca_pem to trust the JWKS endpoint. Static repo file — never drifts on a rebuild (unlike the ELB-derived issuer)."
+  value       = file("${path.module}/iviaop-config/iviaop.pem")
+}
+

@@ -1,19 +1,11 @@
 ---
-title: 'Deploy Workspace'
+title: 'Terraform Apply'
 weight: 31
 ---
 
-The bootstrap script already created the HCP Terraform Workspace (local execution, state-only) and variable set (sensitive vars). In this step, you run `terraform apply` locally to deploy all foundation infrastructure, then run `configure-workshop.sh` to complete post-deploy configuration.
+Terraform state is stored locally under `infrastructure/terraform.tfstate`. In this step, you run `terraform apply` locally to deploy all foundation infrastructure, then run `configure-workshop.sh` to complete post-deploy configuration.
 
-## Step 1 — Set TF_CLOUD_ORGANIZATION
-
-Export your HCP Terraform organization name so the backend configuration can find your workspace:
-
-```bash
-export TF_CLOUD_ORGANIZATION=<YOUR_HCP_ORG>
-```
-
-## Step 2 — Run terraform apply
+## Step 1 — Run terraform apply
 
 Run the apply from the `infrastructure/` directory:
 
@@ -27,9 +19,16 @@ Terraform generates a plan showing ~80-120 resource additions. Review the plan, 
 Total time: ~25-35 minutes (EKS ~12 min, RDS ~10 min including pgaudit reboot, Bedrock KB ~3 min, addons ~5 min). The apply runs locally but provisions AWS resources remotely — timing depends on AWS API response times, not your machine.
 :::
 
-## Step 3 — Run configure-workshop.sh
+## Step 2 — Run configure-workshop.sh
 
-After the apply completes, run the post-deploy configuration script. This configures kubectl, initializes and configures Vault, verifies IVIA, provisions Simple AD users, and seeds the banking database:
+After the apply completes, run the post-deploy configuration script. It performs six steps in order:
+
+1. Configure kubectl (`aws eks update-kubeconfig`)
+2. Initialize Vault (`vault-init.sh`) — writes `~/vault-init.json` with the root token and unseal keys
+3. Configure Vault (`vault-configure.sh`) — auth methods, policies, secrets engines
+4. Configure IVIA (`ivia-configure.sh`) — verifies OIDC discovery is responding
+5. Verify the workshop user `oscar` was seeded into the in-cluster OpenLDAP directory by the IVIA autoconf job
+6. Seed the banking database (`seed-banking-db.sh`)
 
 ```bash
 bash infrastructure/scripts/configure-workshop.sh
@@ -43,20 +42,20 @@ The script prints a pass/fail summary for each configuration step. All steps mus
 
 ## What Happens During Apply
 
-When the apply runs, Terraform deploys the modules in dependency order:
+You don't sequence this yourself; Terraform's dependency graph handles ordering. Broadly, resources flow through these waves:
 
-1. **audit** + **vpc** + **bedrock_kb_aoss** — apply in parallel (no inter-dependencies)
-2. **eks** — depends on `vpc` + `audit`
-3. **addons** + **rds** + **simple_ad** — depend on `eks` (Simple AD shares the VPC)
-4. **bedrock_kb_index** — depends on `bedrock_kb_aoss`
-5. **vault** + **verify_access** — depend on `eks` + `addons` (ALB webhook ready) + `simple_ad` (LDAP)
-6. **vault_config** — depends on Vault running
-7. **uc1_agent** + **uc2_app** — depend on `vault_config`
+1. **Networking, audit & registry foundation** — `vpc`, `audit`, `ecr`
+2. **EKS cluster** — `eks` (needs the VPC)
+3. **Cluster add-ons & data services** — `addons` (cert-manager, external-dns, AWS Load Balancer Controller), `rds`, and the Bedrock Knowledge Base
+4. **HashiCorp Vault** — needs the add-ons (ALB controller / cert-manager) ready
+5. **IBM Verify Access** — needs the ALB controller webhook ready
+6. **Vault configuration** — auth methods, policies, secrets engines (needs Vault running)
+7. **Use-case workloads** — the Use Case 1, 2, and 3 agent pods (need Vault configured)
 
 When the apply completes, note these outputs — you will need them in the next sub-modules:
 
 - `kubectl_config_command` — the `aws eks update-kubeconfig` one-liner
-- `knowledge_base_id` — the Bedrock KB ID for ingestion
+- `kb_id` — the Bedrock KB ID for ingestion
 - `rds_endpoint` — the PostgreSQL connection endpoint
 
 ## Module Reference
@@ -74,19 +73,13 @@ When the apply completes, note these outputs — you will need them in the next 
 ::::
 
 ::::expand{header="eks — Kubernetes cluster and managed addons"}
-- Kubernetes 1.33 cluster, 3 x m5.xlarge managed node group (AL2023)
+- Kubernetes 1.34 cluster, 5 × m5.xlarge managed node group (min 3 / desired 5 / max 7, AL2023)
 - 5 control-plane log types, EKS Access Entry for your `admin_principal_arn`
 - 5 managed addons: `vpc-cni`, `coredns`, `kube-proxy`, `eks-pod-identity-agent`, `aws-ebs-csi-driver`
 ::::
 
 ::::expand{header="addons — External cluster addons"}
 - cert-manager, external-dns, AWS Load Balancer Controller (via eks-blueprints-addons)
-::::
-
-::::expand{header="simple_ad — Employee identity directory"}
-- AWS Simple AD (Small, `workshop.internal` domain) deployed in 2 private subnets
-- Security group rule allowing LDAP (port 389) from EKS nodes to Simple AD
-- Users (Oscar, Adriana) provisioned post-deploy by `create-simple-ad-users.sh`
 ::::
 
 ::::expand{header="rds — PostgreSQL 17 with audit logging"}

@@ -12,6 +12,7 @@ attendees can correlate agent actions back to the Vault audit log (OBJ-5).
 import logging
 import logging.config
 import os
+import re
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -142,7 +143,9 @@ async def query(request: QueryRequest) -> QueryResponse:
 
     try:
         result = _agent(request.query)
-        answer = str(result)
+        # Strip any <thinking>...</thinking> chain-of-thought the model emits so it
+        # never leaks into the answer (mirrors uc3-agent + banking-app agent).
+        answer = re.sub(r'<thinking>.*?</thinking>\s*', '', str(result), flags=re.DOTALL)
     except Exception as exc:
         logger.error(f'"query_error" error="{exc}"')
         raise HTTPException(status_code=500, detail=f"Agent error: {exc}") from exc

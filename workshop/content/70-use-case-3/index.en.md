@@ -21,10 +21,32 @@ A single `request_id` (W3C `traceparent`) propagates through every plane and bec
 The diagram below shows how `request_id` moves from the agent through CIBA approval, token exchange, Vault JWT auth, the database write, and all three audit planes.
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"primaryColor": "#0f62fe", "primaryTextColor": "#161616", "primaryBorderColor": "#0043ce", "lineColor": "#525252", "secondaryColor": "#f4f4f4", "tertiaryColor": "#e0e0e0", "noteBkgColor": "#d9fbfb", "noteTextColor": "#161616", "noteBorderColor": "#3ddbd9"}}}%%
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#d0e2ff',
+  'primaryTextColor': '#161616',
+  'primaryBorderColor': '#0f62fe',
+  'lineColor': '#0f62fe',
+  'secondaryColor': '#bae6ff',
+  'tertiaryColor': '#f4f4f4',
+  'noteBkgColor': '#e8daff',
+  'noteTextColor': '#161616',
+  'noteBorderColor': '#8a3ffc',
+  'actorBkg': '#d0e2ff',
+  'actorBorder': '#0f62fe',
+  'actorTextColor': '#161616',
+  'signalColor': '#161616',
+  'signalTextColor': '#161616',
+  'labelBoxBkgColor': '#d0e2ff',
+  'labelBoxBorderColor': '#0f62fe',
+  'labelTextColor': '#161616',
+  'loopTextColor': '#161616',
+  'activationBorderColor': '#0f62fe',
+  'activationBkgColor': '#edf5ff',
+  'sequenceNumberColor': '#ffffff'
+}}}%%
 sequenceDiagram
     autonumber
-    participant Agent as UC3 Agent<br/>(banking-app)
+    participant Agent as Use Case 3 Agent<br/>(banking-app)
     participant IVIA as IBM Verify<br/>(IVIA / CIBA)
     participant User as Authorized User<br/>(browser approval)
     participant TE as Token Exchange<br/>(IVIA RFC 8693)
@@ -34,7 +56,7 @@ sequenceDiagram
     participant S3 as S3 Log Bucket
     participant Athena as Athena<br/>(audit_correlation VIEW)
 
-    Agent->>IVIA: POST /bc-authorize<br/>binding_message=request_id<br/>(direct to OIDC Provider ClusterIP)
+    Agent->>IVIA: POST /oauth2/ciba<br/>binding_message=request_id<br/>(direct to OIDC Provider ClusterIP)
     IVIA-->>Agent: auth_req_id
     IVIA->>IVIA: notifyuser rule (InternalAuthenticator)<br/>sets consent URL on WRP
     Note over IVIA,User: Consent URL: http://wrp-alb/isvaop/oauth2/ciba_user_authorize/{id}<br/>Browser flow goes through WRP — agent shows URL in chat
@@ -42,11 +64,11 @@ sequenceDiagram
     User->>IVIA: Approve via WRP consent page<br/>(WRP handles login + forwards authenticated session)
     Agent->>IVIA: Poll /token (grant_type=ciba)<br/>until approval (direct to OIDC Provider ClusterIP)
     IVIA-->>Agent: subject_token (access_token)
-    Agent->>TE: POST /token (grant_type=urn:ietf:params:oauth:grant-type:token-exchange)<br/>actor_token=SA JWT, subject_token=user token
+    Agent->>TE: POST /token (grant_type=token-exchange)<br/>subject_token=user token<br/>(auth as uc3-actor client, HTTP Basic — no actor_token)
     TE-->>Agent: delegated JWT with may_act + authorization_details
-    Note over Agent,TE: JWT carries request_id, may_act.sub, authorization_details.type=refund_approval
+    Note over Agent,TE: isvaop_pretoken rule injects may_act.sub=uc3-actor<br/>JWT carries request_id + authorization_details.type=refund_approval
     Agent->>Vault: POST auth/jwt/login role=uc3-jwt jwt=delegated_JWT
-    Note over Vault: bound_claims: may_act.sub=service-account:agent-uc3<br/>authorization_details[0].type=refund_approval
+    Note over Vault: bound_claims: /may_act/sub=* (glob, any actor sub passes)<br/>authorization_details[0].type=refund_approval is claim_mapping metadata only — not enforced
     Vault-->>Agent: Vault token
     Agent->>Vault: GET database/creds/uc3-refund-writer (TTL=5m)
     Vault-->>Agent: username + password (JIT, time-boxed)
@@ -57,10 +79,3 @@ sequenceDiagram
     S3->>Athena: Glue crawler → audit_correlation VIEW
     Note over Athena: SELECT * FROM audit_correlation WHERE request_id = '...'<br/>→ one row answers all 5 objectives
 ```
-
-## Sub-modules
-
-1. **[CIBA Out-of-Band Approval](71-ciba-approval-flow/)** — How IVIA handles the backchannel approval and token exchange
-2. **[Vault Bound Claims Enforcement](72-configure-bound-claims/)** — How `bound_claims` enforces `may_act` and `authorization_details`
-3. **[The Bypass Test](73-bypass-test/)** — Forged JWT rejection proof (run `verify-uc3.sh --bypass`)
-4. **[Three-Plane Audit Correlation](74-three-plane-audit/)** — The Athena query that joins all three audit planes by `request_id`

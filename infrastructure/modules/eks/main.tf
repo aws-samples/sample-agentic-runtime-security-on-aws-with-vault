@@ -2,7 +2,7 @@
 # EKS Module — workshop foundation
 #
 # Wraps terraform-aws-modules/eks/aws ~> 20.37 to provide:
-#   - EKS 1.33 control plane (public + private endpoint)
+#   - EKS 1.34 control plane (public + private endpoint)
 #   - All 5 control-plane log types (CONTEXT decision; supports OBJ-5 forensics)
 #   - Managed node group: m5.xlarge × desired=3 / min=2 / max=5 / AL2023 / on-demand
 #   - EKS Access Entries (replaces aws-auth ConfigMap)

@@ -13,7 +13,9 @@
 # on IVIA 11.0.2.0 (OAuth runtime moved to standalone iviaop:25.10 pod).
 #
 # Phases:
-#   1. Gather inputs    — reads cluster/RDS/Bedrock info from AWS + kubectl
+#   1. Gather inputs    — resolves the Vault root token + confirms root TF state
+#                         (all other inputs come from root outputs via
+#                         terraform_remote_state in vault-config/main.tf)
 #   2. Vault config     — port-forward :8200, terraform apply vault-config/
 #   3. IVIA verify      — confirms 7 pods Running + OIDC discovery returns issuer
 #   4. Summary          — pass/fail table
@@ -28,12 +30,14 @@
 #   ./vault-configure.sh [OPTIONS]
 #
 # Options:
-#   --cluster-name NAME   EKS cluster name (default: auto-detect from kubeconfig)
-#   --region REGION        AWS region (default: auto-detect from kubeconfig)
 #   --vault-token TOKEN    Vault root token (default: read from ~/vault-init.json)
 #   --dry-run              Show what would be done without executing
 #   --skip-ivia            Skip IVIA verification (Phase 3)
 #   --help                 Show this help message
+#
+# All deploy-derived inputs (region, cluster, RDS, IVIA issuer + cert, role
+# ARNs) are read by the vault-config Terraform root from the root module's
+# outputs (data.terraform_remote_state.root) — not auto-detected here.
 #===============================================================================
 set -euo pipefail
 
@@ -42,8 +46,6 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 VAULT_CONFIG_DIR="${REPO_ROOT}/infrastructure/vault-config"
 
 #--- Defaults ------------------------------------------------------------------
-CLUSTER_NAME=""
-REGION=""
 VAULT_TOKEN=""
 DRY_RUN=false
 SKIP_IVIA=false
@@ -55,13 +57,13 @@ PHASE_ORDER=("gather" "vault_config" "ivia_verify")
 #--- Parse arguments -----------------------------------------------------------
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --cluster-name) CLUSTER_NAME="$2"; shift 2 ;;
-    --region)       REGION="$2"; shift 2 ;;
     --vault-token)  VAULT_TOKEN="$2"; shift 2 ;;
     --dry-run)      DRY_RUN=true; shift ;;
     --skip-ivia)    SKIP_IVIA=true; shift ;;
     --help)
-      sed -n '2,/^#=====/{ /^#/s/^# \{0,1\}//p }' "$0"
+      # Print the header comment block (line 2 → first #=== separator),
+      # stripping the leading "# ". awk is portable across GNU + BSD/macOS sed.
+      awk 'NR>2 && /^#={3,}/{exit} NR>2 && /^#/{sub(/^# ?/,""); print}' "$0"
       exit 0
       ;;
     *) echo "Unknown option: $1"; exit 1 ;;
@@ -125,29 +127,14 @@ print_summary() {
 phase_gather() {
   phase "1" "Gather Inputs"
 
-  # Auto-detect region
-  if [[ -z "$REGION" ]]; then
-    REGION=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null \
-      | sed -n 's/.*\.\([a-z]*-[a-z]*-[0-9]*\)\..*/\1/p' || true)
-    if [[ -z "$REGION" ]]; then
-      REGION=$(aws configure get region 2>/dev/null || echo "us-west-2")
-    fi
-  fi
-  ok "Region: ${REGION}"
-
-  # Auto-detect cluster name
-  if [[ -z "$CLUSTER_NAME" ]]; then
-    CLUSTER_NAME=$(kubectl config current-context 2>/dev/null \
-      | sed -n 's/.*:cluster\/\([^:]*\).*/\1/p' || true)
-    if [[ -z "$CLUSTER_NAME" ]]; then
-      local _tfvars="${SCRIPT_DIR}/../../infrastructure/terraform.tfvars"
-      [[ -f "$_tfvars" ]] && CLUSTER_NAME=$(grep -E '^\s*cluster_name\s*=' "$_tfvars" | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
-    fi
-    [[ -z "$CLUSTER_NAME" ]] && CLUSTER_NAME="agenticlife"
-  fi
-  ok "Cluster: ${CLUSTER_NAME}"
-
-  # Vault token
+  # Vault token — the ONLY input this script still gathers. Every deploy-derived
+  # value (region, cluster endpoint/CA/OIDC, RDS coordinates, IVIA issuer + OIDC
+  # CA cert, IAM role ARNs) is now read by the vault-config Terraform root from
+  # the root module's outputs via data.terraform_remote_state.root — no bash
+  # auto-detection, no hand-written tfvars strings (that is what let the JWT
+  # bound_issuer go stale after an IVIA rebuild changed the WRP ALB hostname).
+  # The Vault root token is a runtime secret from `vault operator init`, not a
+  # Terraform-managed value, so it stays external.
   if [[ -z "$VAULT_TOKEN" ]]; then
     if [[ -f "${HOME}/vault-init.json" ]]; then
       VAULT_TOKEN=$(jq -r '.root_token // empty' "${HOME}/vault-init.json" 2>/dev/null || true)
@@ -162,103 +149,14 @@ phase_gather() {
     ok "Vault token: provided via --vault-token"
   fi
 
-  # EKS cluster details
-  info "Reading EKS cluster details..."
-  CLUSTER_ENDPOINT=$(aws eks describe-cluster --name "${CLUSTER_NAME}" \
-    --query 'cluster.endpoint' --output text --region "${REGION}" 2>/dev/null) || {
-    fail "Could not describe EKS cluster '${CLUSTER_NAME}'"
+  # Confirm the root Terraform state (the source of all deploy-derived inputs)
+  # exists before vault-config tries to read it via terraform_remote_state.
+  if [[ -f "${VAULT_CONFIG_DIR}/../terraform.tfstate" ]]; then
+    ok "Root state present (terraform_remote_state source for vault-config inputs)"
+  else
+    fail "Root state ${VAULT_CONFIG_DIR}/../terraform.tfstate not found — apply the root module first; vault-config reads its inputs from those outputs."
     record "gather" "FAIL"
     return 1
-  }
-  ok "Cluster endpoint: ${CLUSTER_ENDPOINT}"
-
-  CLUSTER_CA=$(aws eks describe-cluster --name "${CLUSTER_NAME}" \
-    --query 'cluster.certificateAuthority.data' --output text --region "${REGION}" 2>/dev/null)
-  ok "Cluster CA: (base64, ${#CLUSTER_CA} chars)"
-
-  CLUSTER_OIDC_ISSUER=$(aws eks describe-cluster --name "${CLUSTER_NAME}" \
-    --query 'cluster.identity.oidc.issuer' --output text --region "${REGION}" 2>/dev/null)
-  ok "OIDC issuer: ${CLUSTER_OIDC_ISSUER}"
-
-  # RDS details
-  info "Reading RDS details..."
-  RDS_ENDPOINT=$(aws rds describe-db-instances \
-    --query 'DBInstances[0].Endpoint.[Address,Port]' --output text --region "${REGION}" 2>/dev/null \
-    | awk '{printf "%s:%s", $1, $2}')
-  ok "RDS endpoint: ${RDS_ENDPOINT}"
-
-  RDS_SECRET_ARN=$(aws rds describe-db-instances \
-    --query 'DBInstances[0].MasterUserSecret.SecretArn' --output text --region "${REGION}" 2>/dev/null)
-  ok "RDS secret ARN: ${RDS_SECRET_ARN}"
-
-  # Bedrock KB role ARN
-  info "Reading Bedrock KB role..."
-  BEDROCK_ROLE_ARN=$(aws iam list-roles --query "Roles[?contains(RoleName, 'kb-role')].Arn | [0]" \
-    --output text 2>/dev/null || echo "")
-  if [[ -z "$BEDROCK_ROLE_ARN" || "$BEDROCK_ROLE_ARN" == "None" ]]; then
-    BEDROCK_ROLE_ARN=$(aws iam list-roles --query "Roles[?contains(RoleName, 'workshop-kb')].Arn | [0]" \
-      --output text 2>/dev/null || echo "")
-  fi
-  if [[ -z "$BEDROCK_ROLE_ARN" || "$BEDROCK_ROLE_ARN" == "None" ]]; then
-    warn "Could not auto-detect Bedrock KB role ARN. Set manually in tfvars."
-    BEDROCK_ROLE_ARN="PLACEHOLDER"
-  else
-    ok "Bedrock role ARN: ${BEDROCK_ROLE_ARN}"
-  fi
-
-  # UC3 logs-writer role ARN — assumable IAM role Vault vends for the agent's
-  # ivia_decisions anchor emission (aws/sts/uc3-logs-writer). Created in root
-  # main.tf as <cluster_name>-uc3-logs-writer (OBJ-2, CONTEXT Delta-6).
-  info "Reading UC3 logs-writer role..."
-  UC3_LOGS_ROLE_ARN=$(aws iam list-roles --query "Roles[?contains(RoleName, 'uc3-logs-writer')].Arn | [0]" \
-    --output text 2>/dev/null || echo "")
-  if [[ -z "$UC3_LOGS_ROLE_ARN" || "$UC3_LOGS_ROLE_ARN" == "None" ]]; then
-    warn "Could not auto-detect UC3 logs-writer role ARN. Set manually in tfvars (apply root main.tf first)."
-    UC3_LOGS_ROLE_ARN="PLACEHOLDER"
-  else
-    ok "UC3 logs-writer role ARN: ${UC3_LOGS_ROLE_ARN}"
-  fi
-
-  # IVIA self-signed TLS cert (Vault needs it as jwks_ca_pem to trust the
-  # OIDC discovery URL served by the iviaop runtime). Source: ConfigMap
-  # `iviaop-config` in `verify-access`, key `iviaop.pem` — produced by the
-  # verify_access module's iviaop-config ConfigMap from
-  # `modules/verify_access/iviaop-config/iviaop.pem`. Cert SAN matches the
-  # K8s Service DNS `iviaop.verify-access.svc.cluster.local` (regenerated
-  # 2026-05-21 to align with post-Phase-7 service rename isvaop→iviaop).
-  info "Reading IVIA TLS certificate..."
-  IVIA_CERT_PEM=$(kubectl get configmap iviaop-config -n verify-access \
-    -o jsonpath='{.data.iviaop\.pem}' 2>/dev/null || true)
-  if [[ -z "$IVIA_CERT_PEM" || "${IVIA_CERT_PEM}" != *"BEGIN CERTIFICATE"* ]]; then
-    fail "Could not read IVIA TLS cert from ConfigMap iviaop-config (key iviaop.pem). Vault jwt auth backend would reject empty jwks_ca_pem."
-    fail "Check: kubectl get configmap iviaop-config -n verify-access -o jsonpath='{.data.iviaop\\.pem}'"
-    record "gather" "FAIL"
-    return 1
-  fi
-  ok "IVIA TLS cert: captured ($(echo "$IVIA_CERT_PEM" | wc -l | tr -d ' ') lines, BEGIN CERTIFICATE present)"
-
-  # IVIA issuer (Vault jwt auth bound_issuer)
-  info "Reading IVIA issuer from OIDC discovery..."
-  IVIA_ISSUER=$(kubectl run ivia-issuer-check --image=curlimages/curl --rm -i --restart=Never \
-    -n verify-access -- curl -sk \
-    "https://iviaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration" \
-    2>/dev/null | jq -r '.issuer // empty' 2>/dev/null || echo "")
-  if [[ -n "$IVIA_ISSUER" ]]; then
-    ok "IVIA issuer: ${IVIA_ISSUER}"
-  else
-    warn "Could not read IVIA issuer — using fallback from Ingress hostname"
-    local wrp_host
-    wrp_host=$(kubectl get ingress -n verify-access -l app=iviawrprp1 \
-      -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
-    if [[ -n "$wrp_host" ]]; then
-      IVIA_ISSUER="http://${wrp_host}/isvaop"
-    else
-      local oidc_host
-      oidc_host=$(kubectl get ingress -n verify-access \
-        -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
-      IVIA_ISSUER="http://${oidc_host:-PLACEHOLDER}"
-    fi
-    ok "IVIA issuer (fallback): ${IVIA_ISSUER}"
   fi
 
   # Check pods
@@ -288,25 +186,15 @@ phase_vault_config() {
     return 0
   fi
 
-  # Write tfvars
-  info "Writing terraform.tfvars..."
+  # Write tfvars — only the Vault root token. All other inputs come from the
+  # root module's outputs via data.terraform_remote_state.root (see
+  # vault-config/main.tf). Do NOT reintroduce deploy-derived strings here.
+  info "Writing terraform.tfvars (vault_token only)..."
   cat > "${VAULT_CONFIG_DIR}/terraform.tfvars" <<TFVARS
-region                             = "${REGION}"
-vault_token                        = "${VAULT_TOKEN}"
-cluster_endpoint                   = "${CLUSTER_ENDPOINT}"
-cluster_certificate_authority_data = "${CLUSTER_CA}"
-cluster_oidc_issuer                = "${CLUSTER_OIDC_ISSUER}"
-rds_endpoint                       = "${RDS_ENDPOINT}"
-rds_master_user_secret_arn         = "${RDS_SECRET_ARN}"
-bedrock_role_arn                   = "${BEDROCK_ROLE_ARN}"
-uc3_logs_role_arn                  = "${UC3_LOGS_ROLE_ARN}"
-ivia_issuer                        = "${IVIA_ISSUER}"
-ivia_oidc_ca_pem                   = <<-CERTEOF
-${IVIA_CERT_PEM}
-CERTEOF
+vault_token = "${VAULT_TOKEN}"
 TFVARS
   chmod 600 "${VAULT_CONFIG_DIR}/terraform.tfvars"
-  ok "terraform.tfvars written (mode 600)"
+  ok "terraform.tfvars written (mode 600, vault_token only)"
 
   # Port-forward
   info "Starting port-forward to Vault (8200)..."
