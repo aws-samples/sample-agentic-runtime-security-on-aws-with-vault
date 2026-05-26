@@ -17,6 +17,16 @@ In this module you deploy the entire AWS foundation via `terraform apply` — VP
 
 The eleven Terraform modules wire together in dependency order. Three (`audit`, `vpc`, `bedrock_kb_aoss`) have no inter-module dependencies — they apply in parallel. The others layer on top: `eks` depends on `vpc` + `audit`; `rds` depends on `vpc` + `audit` + `eks`; `bedrock_kb_index` depends on `bedrock_kb_aoss`; `addons` depends on `eks`.
 
+## Pre-flight check
+
+Confirm you completed the [Prerequisites module](../20-prerequisites/) before deploying:
+
+```bash
+bash infrastructure/scripts/check-prerequisites.sh
+```
+
+If any item fails, return to Prerequisites — this deploy will fail at apply time without all three (AWS access, IVIA licenses, Bedrock model access).
+
 ## The audit-correlation contract
 
 Before any workload lands on this cluster, the workshop pays its **audit-correlation design tax**:
@@ -28,13 +38,3 @@ Before any workload lands on this cluster, the workshop pays its **audit-correla
 :::alert{header="Why this matters now" type="info"}
 Trying to retrofit cross-plane audit correlation after agents and Vault are running is effectively impossible — every plane stamps a different correlation field, log groups inherit the wrong KMS key, and the JOIN never resolves. This module deliberately fronts the cost before anyone writes agent code.
 :::
-
-## Pre-flight check
-
-Confirm you completed the [Prerequisites module](../20-prerequisites/) before deploying:
-
-```bash
-bash infrastructure/scripts/check-prerequisites.sh
-```
-
-If any item fails, return to Prerequisites — this deploy will fail at apply time without all three (AWS access, IVIA licenses, Bedrock model access).

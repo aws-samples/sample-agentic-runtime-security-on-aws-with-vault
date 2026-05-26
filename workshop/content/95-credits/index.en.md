@@ -15,4 +15,4 @@ This workshop was made possible by the collaboration and expertise of the follow
 Thank you to each contributor for dedicating their time, domain expertise, and feedback to make this workshop a reality. Your combined knowledge of agentic security, AWS EKS, and identity architecture shaped every section of this guide.
 
 
-Made with ❤️ in San Francisco, California.
+Made in San Francisco, California.

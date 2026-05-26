@@ -3,6 +3,8 @@ title: 'Cleanup'
 weight: 80
 ---
 
-:::alert{header="Content pending" type="info"}
-This module will cover the ordered tear-down sequence (agents -> integration config -> platform -> foundational) and verification that no chargeable resources remain in the AWS account.
+This module covers ordered tear-down of all workshop resources and verification that no chargeable resources remain in your AWS account.
+
+:::alert{header="Full teardown steps coming in a future phase" type="info"}
+Detailed cleanup commands (agent teardown → platform teardown → foundation teardown → resource verification) are authored in a dedicated phase. This page will be updated when that content is complete.
 :::
