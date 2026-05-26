@@ -140,7 +140,7 @@ if [ "${running_ivia}" -ge 1 ]; then
     print_pass "IVIA pods running (${running_ivia} pod(s))"
 else
     print_fail "IVIA pods running" \
-        "No IVIA pods Running in ${IVIA_NAMESPACE}. Check: kubectl get pods -n ${IVIA_NAMESPACE}. If ImagePullBackOff, the ibm_entitlement_key HCP variable is missing or incorrect."
+        "No IVIA pods Running in ${IVIA_NAMESPACE}. Check: kubectl get pods -n ${IVIA_NAMESPACE}. If ImagePullBackOff, verify ibm_entitlement_key is set in infrastructure/terraform.tfvars."
 fi
 
 #-------------------------------------------------------------------------------
@@ -165,7 +165,7 @@ if [ "${running_cm}" -ge 1 ]; then
     print_pass "cert-manager pods running (${running_cm} pod(s))"
 else
     print_fail "cert-manager pods running" \
-        "No cert-manager pods Running. Check the addons module: kubectl get pods -n cert-manager. Re-apply the addons component in HCP Terraform if needed."
+        "No cert-manager pods Running. Check the addons module: kubectl get pods -n cert-manager. Re-apply the addons module if needed."
 fi
 
 #-------------------------------------------------------------------------------
@@ -177,7 +177,7 @@ if [ "${running_lbc}" -ge 1 ]; then
     print_pass "AWS Load Balancer Controller running (${running_lbc} pod(s))"
 else
     print_fail "AWS Load Balancer Controller running" \
-        "No AWS LBC pods Running. Check the addons component: kubectl get pods -n kube-system -l ${LBC_LABEL}. Re-apply the addons component in HCP Terraform if needed."
+        "No AWS LBC pods Running. Check the addons module: kubectl get pods -n kube-system -l ${LBC_LABEL}. Re-apply the addons module if needed."
 fi
 
 # Summary is printed automatically by the common-checks.sh EXIT trap

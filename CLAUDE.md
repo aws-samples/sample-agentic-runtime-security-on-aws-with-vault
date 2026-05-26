@@ -19,7 +19,7 @@
 - Terraform fmt clean; modules carry README.md as authoritative module documentation.
 - Helm provider pinned **2.17** (NOT 3.x — Pitfall H1).
 - opensearch-project/opensearch provider pinned **EXACT `= 2.2.0`** (Bedrock KB index creation).
-- **Terraform CLI minimum: 1.10** for the workshop's Stacks deploy (Stacks features `terraform stacks plan/apply` require 1.10+). Enforced by `infrastructure/scripts/check-prerequisites.sh` via the `TERRAFORM_MIN_VERSION` constant + `version_gte` helper. The `infrastructure/scripts/hcp-setup` module is intentionally pinned `>= 1.0` (looser) because it only uses the tfe provider.
+- **Terraform CLI minimum: 1.10** for the workshop's Stacks deploy (Stacks features `terraform stacks plan/apply` require 1.10+). Enforced by `infrastructure/scripts/check-prerequisites.sh` via the `TERRAFORM_MIN_VERSION` constant + `version_gte` helper.
 
 ## Don't
 

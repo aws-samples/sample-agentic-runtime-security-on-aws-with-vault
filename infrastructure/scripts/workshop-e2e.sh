@@ -3,10 +3,10 @@
 # Workshop End-to-End Orchestration — Agentic Runtime Security on AWS
 #
 # Single-command deployment and validation of the entire workshop.
-# Uses local Terraform execution with HCP Terraform as remote state backend.
+# Uses local Terraform state (no remote backend required).
 #
 #   Phase 0: Prerequisites (calls check-prerequisites.sh)
-#   Phase 1: Bootstrap (calls bootstrap.sh — variable set + workspace)
+#   Phase 1: Bootstrap (calls bootstrap.sh — EC2 Spot SLR + terraform.tfvars)
 #   Phase 2: Foundation deploy (local terraform apply)
 #   Phase 3: Configure kubectl
 #   Phase 4: Foundation verify (calls test-foundation.sh — EKS + RDS + Bedrock KB + OpenLDAP)
@@ -17,16 +17,16 @@
 #   Phase 7c: Use Case 3 — CIBA Privileged (build+push, deploy, verify, bypass test)
 #   Phase 8: Teardown (calls teardown.sh — unless --skip-teardown)
 #
-# Usage: ./workshop-e2e.sh <HCP_ORG> [OPTIONS]
+# Usage: ./workshop-e2e.sh [OPTIONS]
 #
 # Options:
 #   --interactive       Pause between phases for manual verification
 #   --skip-teardown     Leave deployment running after verification
 #   --teardown-only     Skip deployment, run teardown only
-#   --nuke              Delete EVERYTHING: AWS resources via terraform destroy,
-#                        dangling AWS resources, HCP variable set
+#   --nuke              Delete EVERYTHING: AWS resources via terraform destroy
+#                        and dangling AWS resources
 #   --cleanup-only      Skip terraform destroy — just clean up dangling AWS
-#                        resources (ENIs, SGs, EIPs, VPCs) + HCP objects
+#                        resources (ENIs, SGs, EIPs, VPCs)
 #   --skip-addons       (no-op for now; reserved for future controllers)
 #   --skip-prereq-gate  (no-op at this level; passed automatically to
 #                        bootstrap.sh in Phase 1 since Phase 0 already runs
@@ -35,40 +35,35 @@
 #   --start-from PHASE  Skip phases before PHASE. Valid values:
 #                        prerequisites, bootstrap, foundation, kubectl,
 #                        verify, identity, vault, uc1, uc2
-#   --project NAME      HCP project name (default: "Agentic Runtime Security")
-#   --workspace NAME    HCP workspace name (default: "agentic-runtime-security")
 #   --help              Show this help message
 #
 # Prerequisites:
 #   - AWS CLI configured with valid credentials
-#   - Terraform CLI installed and authenticated (terraform login)
+#   - Terraform CLI installed
 #   - kubectl installed
 #   - jq installed
 #
 # Examples:
 #   # Full lifecycle: bootstrap -> deploy -> verify -> teardown
-#   ./scripts/workshop-e2e.sh MyOrg
+#   ./scripts/workshop-e2e.sh
 #
 #   # Full lifecycle, pause between phases for manual checks
-#   ./scripts/workshop-e2e.sh MyOrg --interactive
+#   ./scripts/workshop-e2e.sh --interactive
 #
 #   # Deploy and leave running (skip teardown)
-#   ./scripts/workshop-e2e.sh MyOrg --skip-teardown
+#   ./scripts/workshop-e2e.sh --skip-teardown
 #
 #   # Teardown only (foundation must exist)
-#   ./scripts/workshop-e2e.sh MyOrg --teardown-only
+#   ./scripts/workshop-e2e.sh --teardown-only
 #
 #   # Nuke: terraform destroy + clean up everything
-#   ./scripts/workshop-e2e.sh MyOrg --nuke
+#   ./scripts/workshop-e2e.sh --nuke
 #
 #   # Cleanup only: foundation already destroyed, just remove leftovers
-#   ./scripts/workshop-e2e.sh MyOrg --cleanup-only
+#   ./scripts/workshop-e2e.sh --cleanup-only
 #
 #   # Preview what any command would do
-#   ./scripts/workshop-e2e.sh MyOrg --nuke --dry-run
-#
-#   # Use a specific project
-#   ./scripts/workshop-e2e.sh MyOrg --project "My Project"
+#   ./scripts/workshop-e2e.sh --nuke --dry-run
 #===============================================================================
 
 set -e
@@ -105,8 +100,6 @@ NC='\033[0m'
 #-------------------------------------------------------------------------------
 # Defaults
 #-------------------------------------------------------------------------------
-HCP_ORG=""
-HCP_PROJECT="Agentic Runtime Security"
 INTERACTIVE=false
 SKIP_TEARDOWN=false
 TEARDOWN_ONLY=false
@@ -115,8 +108,6 @@ CLEANUP_ONLY=false
 SKIP_ADDONS=false
 DRY_RUN=false
 START_FROM=""
-WORKSPACE_NAME="agentic-runtime-security"
-LOCAL_STATE=true
 
 # Resolve canonical region + cluster_name from infrastructure/terraform.tfvars.
 # No string literals here — only the config file is the source of truth.
@@ -197,14 +188,12 @@ usage() {
 while [ $# -gt 0 ]; do
     case "$1" in
         --help|-h)        usage ;;
-        --workspace)      WORKSPACE_NAME="$2"; shift ;;
         --interactive)    INTERACTIVE=true ;;
         --skip-teardown)  SKIP_TEARDOWN=true ;;
         --teardown-only)  TEARDOWN_ONLY=true ;;
         --nuke)           NUKE=true ;;
         --cleanup-only)   CLEANUP_ONLY=true; NUKE=true ;;
         --skip-addons)    SKIP_ADDONS=true ;;
-        --local)          LOCAL_STATE=true ;;
         --skip-prereq-gate)
             # No-op at this level. workshop-e2e.sh ALWAYS passes
             # --skip-prereq-gate to bootstrap.sh internally because Phase 0
@@ -214,34 +203,11 @@ while [ $# -gt 0 ]; do
             ;;
         --dry-run)        DRY_RUN=true ;;
         --start-from)     START_FROM="$2"; shift ;;
-        --project)        HCP_PROJECT="$2"; shift ;;
         -*)               echo -e "${RED}Unknown option: $1${NC}"; usage ;;
-        *)
-            if [ -z "$HCP_ORG" ]; then
-                HCP_ORG="$1"
-            else
-                echo -e "${RED}Unexpected argument: $1${NC}"; usage
-            fi
-            ;;
+        *)                echo -e "${RED}Unexpected argument: $1${NC}"; usage ;;
     esac
     shift
 done
-
-# HCP_ORG is required unless --local or teardown-only
-if [ -z "$HCP_ORG" ] && [ "$TEARDOWN_ONLY" = false ] && [ "$LOCAL_STATE" = false ]; then
-    if [ -f "$SCRIPT_DIR/hcp-setup/terraform.tfvars" ]; then
-        HCP_ORG=$(grep 'hcp_org' "$SCRIPT_DIR/hcp-setup/terraform.tfvars" 2>/dev/null | awk -F'"' '{print $2}')
-    fi
-    if [ -z "$HCP_ORG" ]; then
-        echo -e "${RED}Error: HCP_ORG is required (or use --local for local state)${NC}"
-        echo "Usage: $0 <HCP_ORG> [OPTIONS]"
-        exit 1
-    fi
-fi
-
-if [ "$TEARDOWN_ONLY" = true ] && [ -z "$HCP_ORG" ]; then
-    HCP_ORG=$(grep 'hcp_org' "$SCRIPT_DIR/hcp-setup/terraform.tfvars" 2>/dev/null | awk -F'"' '{print $2}')
-fi
 
 if [ -z "$WORKSHOP_REGION" ] && [ "$TEARDOWN_ONLY" = false ] && [ "$NUKE" = false ]; then
     echo -e "${RED}Error: could not resolve workshop region${NC}"
@@ -273,28 +239,17 @@ phase_prerequisites() {
 }
 
 #===============================================================================
-# PHASE 1: Bootstrap (Variable Set + Workspace)
+# PHASE 1: Bootstrap (EC2 Spot SLR + terraform.tfvars)
 #===============================================================================
 phase_bootstrap() {
-    phase_header "Phase 1: Bootstrap (Variable Set + Workspace)"
+    phase_header "Phase 1: Bootstrap (EC2 Spot SLR + terraform.tfvars)"
 
     if [ "$DRY_RUN" = true ]; then
-        print_info "[DRY-RUN] Would run: bootstrap.sh $HCP_ORG --skip-prereq-gate"
+        print_info "[DRY-RUN] Would run: bootstrap.sh --skip-prereq-gate"
         return 0
     fi
 
-    # Check if variable set already configured — fast path
-    if [ -f "$SCRIPT_DIR/hcp-setup/terraform.tfstate" ] && \
-       [ -f "$SCRIPT_DIR/hcp-setup/terraform.tfvars" ]; then
-        print_info "Verifying variable set is current..."
-        terraform -chdir="$SCRIPT_DIR/hcp-setup" apply -auto-approve -input=false >/dev/null 2>&1 && {
-            print_success "Variable set verified — bootstrap already complete"
-            return 0
-        }
-        print_warn "Variable set refresh failed — re-running full bootstrap"
-    fi
-
-    bash "$SCRIPT_DIR/bootstrap.sh" "$HCP_ORG" --skip-prereq-gate
+    bash "$SCRIPT_DIR/bootstrap.sh" --skip-prereq-gate
 }
 
 #===============================================================================
@@ -307,10 +262,6 @@ phase_deploy_foundation() {
         print_info "[DRY-RUN] Would run: terraform -chdir=infrastructure apply -auto-approve"
         print_info "[DRY-RUN] Would call configure-workshop.sh after apply completes"
         return 0
-    fi
-
-    if [ "$LOCAL_STATE" = false ]; then
-        export TF_CLOUD_ORGANIZATION="$HCP_ORG"
     fi
 
     step_header "Running terraform init..."
@@ -554,7 +505,6 @@ phase_uc1() {
 
     # Step 3: Terraform apply
     step_header "Running terraform apply for UC1 deployment..."
-    [ "$LOCAL_STATE" = false ] && export TF_CLOUD_ORGANIZATION="$HCP_ORG"
     terraform -chdir="$PROJECT_ROOT/infrastructure" apply -auto-approve || {
         print_error "UC1 terraform apply failed"
         return 1
@@ -653,7 +603,6 @@ phase_uc2() {
 
     # Step 3: Terraform apply
     step_header "Running terraform apply for UC2 deployment..."
-    [ "$LOCAL_STATE" = false ] && export TF_CLOUD_ORGANIZATION="$HCP_ORG"
     terraform -chdir="$PROJECT_ROOT/infrastructure" apply -auto-approve || {
         print_error "UC2 terraform apply failed"
         return 1
@@ -755,7 +704,6 @@ phase_uc3() {
 
     # Step 3: Init (new modules) + apply
     step_header "Running terraform init for new UC3 + observability modules..."
-    [ "$LOCAL_STATE" = false ] && export TF_CLOUD_ORGANIZATION="$HCP_ORG"
     terraform -chdir="$PROJECT_ROOT/infrastructure" init -upgrade || {
         print_error "UC3 terraform init failed"
         return 1
@@ -1058,7 +1006,7 @@ phase_teardown() {
     phase_header "Phase 8: Teardown"
 
     if [ "$DRY_RUN" = true ]; then
-        print_info "[DRY-RUN] Would run: teardown.sh (full nuke: AWS + HCP)"
+        print_info "[DRY-RUN] Would run: teardown.sh (full: terraform destroy + AWS sweep)"
         return 0
     fi
 
@@ -1069,17 +1017,17 @@ phase_teardown() {
 }
 
 #===============================================================================
-# NUKE: Delete everything — terraform destroy + AWS sweep + HCP variable set
+# NUKE: Delete everything — terraform destroy + AWS sweep
 #===============================================================================
 phase_nuke() {
     if [ "$CLEANUP_ONLY" = true ]; then
         phase_header "NUKE: Cleanup Only (skip terraform destroy)"
-        print_info "Cleaning up dangling AWS resources + HCP objects."
+        print_info "Cleaning up dangling AWS resources."
         print_info "Foundation assumed already destroyed."
     else
         phase_header "NUKE: Delete Everything"
         print_warn "This will destroy ALL resources: foundation (EKS/RDS/KB), VPC,"
-        print_warn "HCP variable set, and all dangling AWS resources."
+        print_warn "and all dangling AWS resources."
     fi
     echo ""
 
@@ -1114,7 +1062,6 @@ phase_nuke() {
 
     if [ "$cluster_active" = true ]; then
         step_header "Running terraform destroy..."
-        [ "$LOCAL_STATE" = false ] && export TF_CLOUD_ORGANIZATION="$HCP_ORG"
         terraform -chdir="$PROJECT_ROOT/infrastructure" destroy -auto-approve || {
             print_warn "Terraform destroy did not fully complete — continuing with cleanup"
         }
@@ -1132,31 +1079,14 @@ phase_nuke() {
         print_success "EKS cluster already destroyed — skipping terraform destroy"
     fi
 
-    # --- Step 3: Cleanup (always runs) ---
-
-    # 3a: AWS resource sweep (everything tagged Workshop=*)
+    # --- Step 3: AWS resource sweep (everything tagged Workshop=*) ---
     step_header "Sweeping AWS workshop resources..."
     bash "$SCRIPT_DIR/teardown.sh" --aws-only 2>&1 || \
         print_warn "AWS sweep had warnings"
 
-    # 3b: Destroy HCP variable set via terraform
-    step_header "Destroying HCP variable set..."
-    if [ -f "$SCRIPT_DIR/hcp-setup/terraform.tfstate" ]; then
-        terraform -chdir="$SCRIPT_DIR/hcp-setup" destroy -auto-approve -input=false >/dev/null 2>&1 && \
-            print_success "HCP variable set destroyed" || \
-            print_warn "Variable set destroy had errors (may already be gone)"
-    else
-        print_info "No terraform state found — variable set may already be destroyed"
-    fi
-
-    # 3c: Clean up local state
-    step_header "Cleaning up local state..."
-    rm -f "$SCRIPT_DIR/hcp-setup/terraform.tfstate" "$SCRIPT_DIR/hcp-setup/terraform.tfstate.backup" 2>/dev/null
-    print_success "Local terraform state removed"
-
     echo ""
     print_success "NUKE COMPLETE — all resources deleted"
-    print_info "To redeploy from scratch: $0 <HCP_ORG> --interactive --skip-teardown"
+    print_info "To redeploy from scratch: $0 --interactive --skip-teardown"
 }
 
 #===============================================================================
@@ -1207,11 +1137,7 @@ should_run() {
 }
 
 should_run prerequisites   && phase_prerequisites
-if [ "$LOCAL_STATE" = false ]; then
-    should_run bootstrap       && phase_bootstrap
-else
-    print_info "Skipping bootstrap (--local: no HCP Terraform)"
-fi
+should_run bootstrap       && phase_bootstrap
 should_run foundation      && phase_deploy_foundation
 should_run kubectl         && phase_configure_kubectl
 should_run verify          && phase_verify_foundation

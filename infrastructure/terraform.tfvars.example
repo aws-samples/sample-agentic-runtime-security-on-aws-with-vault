@@ -9,8 +9,8 @@
 # This .example file is the committed reference.
 #
 # SENSITIVE VARIABLES (icr_entitlement_key, simple_ad_admin_password) are
-# stored in the HCP Terraform variable set — NOT in this file.
-# bootstrap.sh creates the variable set with these values.
+# set directly in your local terraform.tfvars (gitignored, never committed).
+# bootstrap.sh copies this file to terraform.tfvars as the starting point.
 #
 # CANONICAL REGION CONTRACT
 # The string literals "us-west-2" and "us-east-1" appear ONLY in this file.

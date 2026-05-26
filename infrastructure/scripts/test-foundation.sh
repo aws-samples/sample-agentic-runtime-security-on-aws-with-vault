@@ -223,7 +223,6 @@ leaks=$(grep -rn "$REGION" \
     "$REPO_ROOT/infrastructure/" 2>/dev/null \
     | grep -v "terraform.tfvars" \
     | grep -v "/.terraform/" \
-    | grep -v "/hcp-setup/" \
     | grep -v ':\s*#\|:\s*//' || true)
 
 if [ -z "$leaks" ]; then
