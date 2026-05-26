@@ -55,7 +55,7 @@ You must have completed the **Platform** module (Phase 3) before starting here. 
 
 | Module | What You Do |
 |---|---|
-| [OAuth Authorization Code + PKCE Flow](./61-oauth-pkce-flow/) | Understand the PKCE flow, log in as Oscar or Adriana, and inspect the JWT claims in the banking app |
+| [OAuth Authorization Code + PKCE Flow](./61-oauth-pkce-flow/) | Understand the PKCE flow, log in as Oscar or Jaime, and inspect the JWT claims in the banking app |
 | [Vault JWT Authentication](./62-configure-jwt-auth/) | Inspect the Vault jwt auth role and policy, trace the token exchange from user JWT to DB credential |
 | [Verify Per-User Data Access](./63-verify-user-access/) | Confirm per-user data isolation with RLS, run verify-uc2.sh, review the threat-model callout |
 | [Scope Enforcement (Layer 2)](./64-scope-enforcement/) | Demonstrate Vault policy denial of write roles and Postgres INSERT rejection |

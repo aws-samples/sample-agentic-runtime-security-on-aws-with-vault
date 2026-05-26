@@ -22,7 +22,7 @@ The table below maps our workshop's use cases to Vault's new native agent featur
 | **Use Case 1** — Vault K8s auth binds agent SA to `uc1-readonly` role with JIT credentials (TTL 15m) | **Agent Registry** — register and manage agent identities separately from human and traditional NHI identities, with baseline access policies |
 | **Use Case 2** — IVIA OAuth + PKCE → Vault `jwt` auth vends per-user-scoped credentials | **On-Behalf-Of (OBO) delegation** — agents act with human user authority; delegation and consent explicitly tracked in the agent registry |
 | **Use Case 3** — `may_act` (RFC 8693) + `authorization_details` (RFC 9396 RAR) enforced by Vault `bound_claims`; TTL 5m R/W ceiling | **4-layer policy intersection** — human policies, baseline access, ceiling policies (absolute blast radius), and per-request `authorization_details` embedded in the JWT |
-| **Use Case 3** — three-plane audit correlation (IVIA + Vault + CloudTrail joined by `request_id`) | **End-to-end tracing and attribution** — per-agent action tracking with clear attribution for actions performed on behalf of users |
+| **Use Case 3** — three-plane audit correlation (IVIA + Vault + RDS pgaudit joined by `request_id`) | **End-to-end tracing and attribution** — per-agent action tracking with clear attribution for actions performed on behalf of users |
 | All use cases — no standing privileges; credentials expire with the token lifecycle | **Ephemeral per-request authorization** — permissions bound to the token's lifecycle; when the token expires, the agent cannot take further action |
 
 ### The Five Control Objectives Map to Vault's Four-Layer Model

@@ -136,7 +136,7 @@ token                hvs.CAEIQ...
 token_accessor       abcde12345
 token_duration       1h
 token_policies       [uc2-personal default]
-token_meta_sub       oscar@cdlbank.com
+token_meta_sub       oscar
 ```
 
 The `token_meta_sub` field confirms Vault extracted the `sub` claim from the JWT. Now use that Vault token to fetch DB credentials:
@@ -234,13 +234,13 @@ HTTP request → Authorization: Bearer <JWT>
                MCP Server extracts JWT
                      ↓
                Vault jwt login (role=uc2-jwt, jwt=<JWT>)
-                     → Vault extracts sub = "oscar@cdlbank.com"
+                     → Vault extracts sub = "oscar"
                      → Vault issues token + metadata.sub
                      ↓
                Vault database/creds/uc2-personal-readonly
                      → returns username, password, lease_id
                      ↓
-               psql SET app.current_user_sub = 'oscar@cdlbank.com'
+               psql SET app.current_user_sub = 'oscar'
                psql SELECT * FROM banking.accounts   ← RLS filters to Oscar's rows
 ```
 

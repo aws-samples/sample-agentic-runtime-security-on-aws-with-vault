@@ -10,7 +10,67 @@ In this step you configure the **OIDC seam** — the integration point where an 
 1. **Vault configuration** (via `configure-workshop.sh` → `vault-configure.sh`) — wires up Vault auth methods, secrets engines, and policies.
 2. **IVIA verification** (via `configure-workshop.sh` → `ivia-configure.sh`) — confirms IVIA's OIDC discovery and OAuth clients are serving correctly. IVIA itself is configured **declaratively** — the `verify_access` Terraform module embeds the full OIDC provider configuration (clients, LDAP, grant types) in `config.yaml` at deploy time. No post-deploy REST API calls are needed.
 
-After this step, Vault trusts IVIA-issued JWTs, and IVIA authenticates users against AWS Simple AD via LDAP.
+After this step, Vault trusts IVIA-issued JWTs, and IVIA authenticates users against an in-cluster OpenLDAP directory via LDAP.
+
+## The OIDC Seam at Runtime
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#d0e2ff',
+  'primaryTextColor': '#161616',
+  'primaryBorderColor': '#0f62fe',
+  'lineColor': '#0f62fe',
+  'secondaryColor': '#bae6ff',
+  'tertiaryColor': '#f4f4f4',
+  'noteBkgColor': '#e8daff',
+  'noteTextColor': '#161616',
+  'noteBorderColor': '#8a3ffc',
+  'actorBkg': '#d0e2ff',
+  'actorBorder': '#0f62fe',
+  'actorTextColor': '#161616',
+  'signalColor': '#161616',
+  'signalTextColor': '#161616',
+  'labelBoxBkgColor': '#d0e2ff',
+  'labelBoxBorderColor': '#0f62fe',
+  'labelTextColor': '#161616',
+  'loopTextColor': '#161616',
+  'activationBorderColor': '#0f62fe',
+  'activationBkgColor': '#edf5ff',
+  'sequenceNumberColor': '#ffffff'
+}}}%%
+sequenceDiagram
+    autonumber
+    actor Oscar as Employee (Oscar)
+    participant ALB as IVIA ALB
+    participant IVIA as IVIA OIDC Provider
+    participant LDAP as OpenLDAP
+    participant Agent as Agent Workload
+    participant Vault as Vault jwt auth
+
+    rect rgba(208, 226, 255, 0.3)
+    Note over Oscar,LDAP: User authentication via LDAP
+    Oscar->>ALB: Login request
+    ALB->>IVIA: Forward
+    IVIA->>LDAP: LDAP bind — authenticate Oscar
+    LDAP-->>IVIA: Bind success
+    IVIA-->>Oscar: JWT issued<br/>(sub=oscar, aud=agent-uc2)
+    end
+
+    rect rgba(186, 230, 255, 0.3)
+    Note over Agent,Vault: OIDC seam — JWT becomes Vault credential (OBJ-3)
+    Agent->>Vault: POST /v1/auth/jwt/login<br/>{jwt: IVIA token, role: "uc2"}
+    Vault->>IVIA: Verify JWT signature against JWKS
+    IVIA-->>Vault: Signature valid
+    Vault->>Vault: Check bound_claims: {aud=agent-uc2}<br/>Evaluate uc2-agent-policy
+    end
+
+    rect rgba(232, 218, 255, 0.3)
+    Note over Vault,Vault: Dynamic credential vend
+    Vault-->>Agent: Dynamic PostgreSQL credential (TTL 1h)<br/>+ sets app.current_user_sub = oscar
+    end
+```
+
+The `sub` claim from the JWT flows through Vault into the Postgres session variable that activates Row-Level Security — each user sees only their own data, enforced at the database layer.
 
 ## What gets configured
 
@@ -28,7 +88,7 @@ After this step, Vault trusts IVIA-issued JWTs, and IVIA authenticates users aga
 IVIA's OIDC provider (`isvaop`) is configured entirely via `config.yaml` embedded in the Terraform `verify_access` module. The configuration includes:
 
 - **OAuth 2.0 clients** — `agent-uc2` (authorization code + PKCE, public client) and `workshop_agent` (confidential client for CIBA flows).
-- **LDAP server connection** — authenticates users against AWS Simple AD on port 389, with bind credentials from a Kubernetes Secret.
+- **LDAP server connection** — authenticates users against the in-cluster OpenLDAP directory on port 636 (LDAPS), with bind credentials from a Kubernetes Secret.
 - **User attribute mapping** — maps LDAP attributes (`mail`, `cn`, `uid`) to JWT claims (`sub`, `name`, `email`).
 - **Grant types** — `authorization_code` + `refresh_token` for Use Case 2; CIBA for Use Case 3.
 
@@ -46,13 +106,14 @@ After `vault` and `verify_access` are healthy (verified in the previous steps), 
 bash infrastructure/scripts/configure-workshop.sh
 ```
 
-This script runs five steps:
+This script runs six steps:
 
-1. **vault-init.sh** — initializes and unseals Vault (idempotent — skips if already initialized).
-2. **vault-configure.sh** — wires up Vault auth methods, secrets engines, and policies.
-3. **ivia-configure.sh** — verifies IVIA is serving OIDC discovery and has the expected clients.
-4. **create-simple-ad-users.sh** — provisions Oscar and Adriana in AWS Simple AD (idempotent — skips if users exist).
-5. **seed-banking-db.sh** — seeds the banking database with test data for Use Case 2.
+1. **kubectl config** — runs `aws eks update-kubeconfig` to point kubectl at the workshop cluster.
+2. **vault-init.sh** — initializes and unseals Vault (idempotent — skips if already initialized).
+3. **vault-configure.sh** — wires up Vault auth methods, secrets engines, and policies.
+4. **ivia-configure.sh** — verifies IVIA is serving OIDC discovery and has the expected clients.
+5. **verify OpenLDAP user** — confirms the workshop user (`oscar`) was seeded into the in-cluster OpenLDAP directory by the IVIA autoconf job.
+6. **seed-banking-db.sh** — seeds the banking database with test data for Use Case 2.
 
 ## Step 3 — Verify Vault auth methods
 
@@ -147,69 +208,9 @@ Expected output includes:
 | vault-configure.sh | Vault policies | 3 (uc1/uc2/uc3) |
 | vault-configure.sh | Audit device | 1 (file, PVC) |
 | verify_access config.yaml | OAuth 2.0 clients | 2 (agent-uc2, workshop_agent) |
-| verify_access config.yaml | LDAP server connection | 1 (Simple AD) |
+| verify_access config.yaml | LDAP server connection | 1 (in-cluster OpenLDAP) |
 | verify_access config.yaml | User attribute mappings | 3 (sub, email, name) |
-| create-simple-ad-users.sh | AD user accounts | 2 (Oscar, Adriana) |
-
-## The OIDC seam — how it works at runtime
-
-```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#d0e2ff',
-  'primaryTextColor': '#161616',
-  'primaryBorderColor': '#0f62fe',
-  'lineColor': '#0f62fe',
-  'secondaryColor': '#bae6ff',
-  'tertiaryColor': '#f4f4f4',
-  'noteBkgColor': '#e8daff',
-  'noteTextColor': '#161616',
-  'noteBorderColor': '#8a3ffc',
-  'actorBkg': '#d0e2ff',
-  'actorBorder': '#0f62fe',
-  'actorTextColor': '#161616',
-  'signalColor': '#161616',
-  'signalTextColor': '#161616',
-  'labelBoxBkgColor': '#d0e2ff',
-  'labelBoxBorderColor': '#0f62fe',
-  'labelTextColor': '#161616',
-  'loopTextColor': '#161616',
-  'activationBorderColor': '#0f62fe',
-  'activationBkgColor': '#edf5ff',
-  'sequenceNumberColor': '#ffffff'
-}}}%%
-sequenceDiagram
-    autonumber
-    actor Oscar as Employee (Oscar)
-    participant ALB as IVIA ALB
-    participant IVIA as IVIA OIDC Provider
-    participant AD as Simple AD
-    participant Agent as Agent Workload
-    participant Vault as Vault jwt auth
-
-    rect rgba(208, 226, 255, 0.3)
-    Note over Oscar,AD: User authentication via LDAP
-    Oscar->>ALB: Login request
-    ALB->>IVIA: Forward
-    IVIA->>AD: LDAP bind — authenticate Oscar
-    AD-->>IVIA: Bind success
-    IVIA-->>Oscar: JWT issued<br/>(sub=oscar@cdlbank.com, aud=agent-uc2)
-    end
-
-    rect rgba(186, 230, 255, 0.3)
-    Note over Agent,Vault: OIDC seam — JWT becomes Vault credential (OBJ-3)
-    Agent->>Vault: POST /v1/auth/jwt/login<br/>{jwt: IVIA token, role: "uc2"}
-    Vault->>IVIA: Verify JWT signature against JWKS
-    IVIA-->>Vault: Signature valid
-    Vault->>Vault: Check bound_claims: {aud=agent-uc2}<br/>Evaluate uc2-agent-policy
-    end
-
-    rect rgba(232, 218, 255, 0.3)
-    Note over Vault,Vault: Dynamic credential vend
-    Vault-->>Agent: Dynamic PostgreSQL credential (TTL 1h)<br/>+ sets app.current_user_sub = oscar@cdlbank.com
-    end
-```
-
-The `sub` claim from the JWT flows through Vault into the Postgres session variable that activates Row-Level Security — each user sees only their own data, enforced at the database layer.
+| IVIA autoconf job | OpenLDAP user accounts | 1 (Oscar) |
 
 :::expand{header="Platform Track — Why declarative IVIA configuration?"}
 

@@ -29,7 +29,7 @@ Total time: ~25-35 minutes (EKS ~12 min, RDS ~10 min including pgaudit reboot, B
 
 ## Step 3 — Run configure-workshop.sh
 
-After the apply completes, run the post-deploy configuration script. This configures kubectl, initializes and configures Vault, verifies IVIA, provisions Simple AD users, and seeds the banking database:
+After the apply completes, run the post-deploy configuration script. This configures kubectl, initializes and configures Vault, verifies IVIA (the workshop user is seeded into the in-cluster OpenLDAP directory by the IVIA autoconf job), and seeds the banking database:
 
 ```bash
 bash infrastructure/scripts/configure-workshop.sh
@@ -47,9 +47,9 @@ When the apply runs, Terraform deploys the modules in dependency order:
 
 1. **audit** + **vpc** + **bedrock_kb_aoss** — apply in parallel (no inter-dependencies)
 2. **eks** — depends on `vpc` + `audit`
-3. **addons** + **rds** + **simple_ad** — depend on `eks` (Simple AD shares the VPC)
+3. **addons** + **rds** — depend on `eks`
 4. **bedrock_kb_index** — depends on `bedrock_kb_aoss`
-5. **vault** + **verify_access** — depend on `eks` + `addons` (ALB webhook ready) + `simple_ad` (LDAP)
+5. **vault** + **verify_access** — depend on `eks` + `addons` (ALB webhook ready)
 6. **vault_config** — depends on Vault running
 7. **uc1_agent** + **uc2_app** — depend on `vault_config`
 
@@ -81,12 +81,6 @@ When the apply completes, note these outputs — you will need them in the next 
 
 ::::expand{header="addons — External cluster addons"}
 - cert-manager, external-dns, AWS Load Balancer Controller (via eks-blueprints-addons)
-::::
-
-::::expand{header="simple_ad — Employee identity directory"}
-- AWS Simple AD (Small, `workshop.internal` domain) deployed in 2 private subnets
-- Security group rule allowing LDAP (port 389) from EKS nodes to Simple AD
-- Users (Oscar, Adriana) provisioned post-deploy by `create-simple-ad-users.sh`
 ::::
 
 ::::expand{header="rds — PostgreSQL 17 with audit logging"}

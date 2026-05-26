@@ -14,7 +14,7 @@ IBM Verify Identity Access (IVIA) runs as a **self-contained seven-pod stack** i
 | `iviaruntime` | `icr.io/ivia/ivia-runtime:11.0.2.0` | AAC Runtime — Advanced Access Control authentication engine |
 | `iviaop` | `icr.io/ivia/ivia-oidc-provider:25.10` | OIDC Provider — OAuth 2.0 token issuance, JWKS, CIBA, mapping rules |
 | `iviadsc` | `icr.io/ivia/ivia-dsc:11.0.2.0` | Distributed Session Cache — db-backed session store |
-| `openldap` | `icr.io/isva/verify-access-openldap:10.0.6.0` | In-cluster LDAP directory (LDAPS `:636`) — federated user registry (Oscar, Adriana) |
+| `openldap` | `icr.io/isva/verify-access-openldap:10.0.6.0` | In-cluster LDAP directory (LDAPS `:636`) — federated user registry (Oscar, Jaime) |
 | `postgresql` | `icr.io/ivia/ivia-postgresql:11.0.2.0` | In-cluster PostgreSQL HVDB (`:5432`) — IVIA runtime DB, sessions, cluster store |
 
 **Traffic routing:** The WRP is the single internet-facing entry point for all browser-based flows (CIBA consent, authorization_code login). Machine-to-machine flows (CIBA bc-authorize, token exchange, ROPC) bypass WRP and hit the OIDC Provider directly via its internal ClusterIP service.

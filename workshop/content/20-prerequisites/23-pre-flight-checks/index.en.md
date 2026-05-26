@@ -46,10 +46,6 @@ The script also verifies these service quotas in `us-west-2`:
 | AOSS indexing OCUs | 2 | `L-50FA809B` |
 | AOSS search OCUs | 2 | `L-4E98D4EB` |
 
-:::alert{header="AWS Simple AD" type="info"}
-The workshop deploys one AWS Simple AD directory. The default account limit is 10 directories, which is not tracked via the Service Quotas API. If your account already has 10 directories, delete an unused one or request a limit increase via AWS Support.
-:::
-
 If any quota is insufficient, the script prints the exact `aws service-quotas request-service-quota-increase` command. You can also check manually:
 
 ```bash

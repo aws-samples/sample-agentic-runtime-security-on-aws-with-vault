@@ -7,13 +7,13 @@ weight: 12
 
 ![Workshop Architecture](/static/images/architecture-overview.svg)
 
-IBM Verify Identity Access owns the user-identity plane: OAuth, OIDC, CIBA, and the JWT signing key. IVIA authenticates users against your organization's Active Directory (AWS Simple AD in this workshop) via LDAP. HashiCorp Vault owns the workload-identity plane and the credential-vending plane: Kubernetes auth method bound to the EKS OIDC provider, `jwt` auth method bound to IVIA's OIDC discovery URL, and dynamic Postgres + AWS secrets engines. The two systems meet at a single seam — Vault's `jwt` auth trusts IVIA's OIDC discovery URL — which is where user intent gets converted into a Vault-vended credential.
+IBM Verify Identity Access owns the user-identity plane: OAuth, OIDC, CIBA, and the JWT signing key. IVIA authenticates users against your organization's directory (an in-cluster OpenLDAP directory in this workshop) via LDAP. HashiCorp Vault owns the workload-identity plane and the credential-vending plane: Kubernetes auth method bound to the EKS OIDC provider, `jwt` auth method bound to IVIA's OIDC discovery URL, and dynamic Postgres + AWS secrets engines. The two systems meet at a single seam — Vault's `jwt` auth trusts IVIA's OIDC discovery URL — which is where user intent gets converted into a Vault-vended credential.
 
 ### Responsibility split
 
 | Plane | Owner | Scope |
 |---|---|---|
-| **User identity** | IBM Verify Identity Access | OAuth ROPC/PKCE, CIBA, JWT signing, JWKS endpoint, LDAP authentication against Simple AD |
+| **User identity** | IBM Verify Identity Access | OAuth ROPC/PKCE, CIBA, JWT signing, JWKS endpoint, LDAP authentication against in-cluster OpenLDAP |
 | **Workload identity** | HashiCorp Vault | Kubernetes auth (ServiceAccount JWT), JWT auth (IVIA-issued id_token), policy-bound tokens |
 | **Credential vending** | HashiCorp Vault | Dynamic Postgres credentials (per-use-case roles, TTL 5–15 min), AWS STS assumed_role for Bedrock |
 | **Data isolation** | PostgreSQL RLS | `app.current_user_sub` session variable activates row-level security per authenticated user |
@@ -42,7 +42,7 @@ Plan on roughly 3 hours end-to-end if you run with a pre-provisioned Workshop St
 - A **3-node EKS cluster** (Kubernetes 1.33) with three deployed Strands agents, each with its own ServiceAccount and NetworkPolicy.
 - A **3-node Vault Raft HA cluster** with KMS auto-unseal, Kubernetes + JWT auth methods, and dynamic Postgres + AWS secrets engines.
 - **IBM Verify Identity Access (IVIA)** — self-hosted OIDC provider with OAuth clients, PKCE enforcement, and CIBA support.
-- **AWS Simple AD** — lightweight managed Active Directory pre-populated with two employees (Oscar, Adriana), authenticated by IVIA via LDAP.
+- **In-cluster OpenLDAP** — IVIA's user registry, seeded with the workshop user (Oscar) by the autoconf job, authenticated by IVIA via LDAP.
 - **Amazon RDS PostgreSQL 17** with pgaudit, Row-Level Security policies, and Vault-managed dynamic credentials.
 - **Amazon Bedrock Knowledge Base** with Nova Pro inference and Nova 2 Multimodal Embeddings, backed by OpenSearch Serverless.
 - An **Athena workgroup** with the cross-plane audit correlation query joining IVIA decision logs, Vault audit logs, and RDS pgaudit logs.

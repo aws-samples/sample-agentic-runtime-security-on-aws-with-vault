@@ -70,7 +70,7 @@ Expected output:
 {
   "time": "2026-05-12T10:15:00.123Z",
   "lease_id": "database/creds/uc2-personal-readonly/v-jwt-uc2-personal-readonly-AbCd1234Ef56-1234567890",
-  "sub": "oscar@cdlbank.com"
+  "sub": "oscar"
 }
 ```
 
@@ -125,7 +125,7 @@ Expected output:
 
 To correlate the revocation event back to Oscar's identity, join it with the earlier issuance entry using the `lease_id` as the join key. In Phase 6 this join is performed in Athena — here you can observe it manually:
 
-- **Issuance entry** (Step 2): `lease_id = "...AbCd1234..."`, `sub = "oscar@cdlbank.com"`, `time = 10:15:00`
+- **Issuance entry** (Step 2): `lease_id = "...AbCd1234..."`, `sub = "oscar"`, `time = 10:15:00`
 - **Revocation entry** (Step 5): `revoked_lease = "...AbCd1234..."`, `time = 10:22:34`
 
 The same lease ID links both events. Duration: 7 minutes 34 seconds of active credential lifetime, then explicit revocation.

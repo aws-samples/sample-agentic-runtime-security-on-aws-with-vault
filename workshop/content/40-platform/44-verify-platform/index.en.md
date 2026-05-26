@@ -51,8 +51,8 @@ If any check fails, the script prints a `Fix:` hint inline. Address the issue an
 At this point the workshop platform layer is fully operational:
 
 - **Vault 2.0 Raft HA** — 3 pods, KMS auto-unseal, Kubernetes + JWT auth methods, database and AWS secrets engines, audit device.
-- **IBM IVIA 11.0.2** — OIDC provider with LDAP authentication against AWS Simple AD, OAuth clients for all use cases, ALB Ingress.
-- **AWS Simple AD** — Lightweight managed Active Directory with pre-provisioned workshop users (Oscar, Adriana) for OAuth and CIBA flows.
+- **IBM IVIA 11.0.2** — self-contained OIDC provider stack with LDAP authentication against an in-cluster OpenLDAP directory, OAuth clients for all use cases, ALB Ingress.
+- **In-cluster OpenLDAP** — IVIA's user registry (LDAPS :636), seeded with the workshop user (Oscar) by the autoconf job, backing the OAuth and CIBA flows.
 - **OIDC seam** — Vault `jwt` auth trusts IVIA's OIDC discovery URL; user JWTs from IVIA become Vault-vended dynamic credentials.
 
 Proceed to the use case modules to see these components in action.

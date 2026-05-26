@@ -110,4 +110,4 @@ A complete row demonstrates that:
 3. The `db_credential_ttl` carries the integer lease TTL in seconds (300 = 5 minutes) the agent observed when Vault issued the per-refund database credential — proof the credential expires shortly after the write, not a standing one.
 4. The `vault_bound_claim_may_act` column shows the exact service account that was the actor — provable, not assumed.
 
-This is the answer to the question the CDL Bank demo poses: **"Who authorized this action, through which agent, against what system, and can we prove the credentials have since expired?"**
+This is the answer to the question the OscarVault International (OVI) demo poses: **"Who authorized this action, through which agent, against what system, and can we prove the credentials have since expired?"**

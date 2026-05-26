@@ -20,8 +20,8 @@ The workshop's deliberate stop point: it teaches **the 5 control objectives at t
 Continue to **[Platform — Vault and Verify Access](../../40-platform/)**. The Platform module will:
 
 - Install HashiCorp Vault on EKS (3 Raft pods, one per AZ) with auto-unseal via a separate KMS key.
-- Install IBM Verify Identity Access on EKS with LDAP authentication against AWS Simple AD, fronted by an ALB Ingress (provisioned by the Load Balancer Controller you just deployed).
+- Install IBM Verify Identity Access on EKS with LDAP authentication against an in-cluster OpenLDAP directory, fronted by an ALB Ingress (provisioned by the Load Balancer Controller you just deployed).
 - Wire fluent-bit DaemonSets to ship Vault audit + IVIA decision logs into the **already-pre-created** `/workshop/vault-audit` and `/workshop/ivia-decision` log groups by ARN.
 - Configure the Vault `jwt` auth method to trust IVIA's OIDC discovery URL — the OIDC seam where user intent becomes a Vault-vended credential.
 
-The audit-correlation contract you just deployed is the foundation every later module joins against. By the end of Use Case 3, a single Athena query in workgroup `workshop` will JOIN all five log streams on `trace-id` and answer "which user authorized which action against which AWS API?" — the load-bearing Use Case 3 deliverable.
+The audit-correlation contract you just deployed is the foundation every later module joins against. By the end of Use Case 3, a single Athena query in workgroup `workshop` will JOIN the three audit planes (IVIA decision, Vault audit, RDS pgaudit) on `request_id` and answer "which user authorized which action against which database write?" — the load-bearing Use Case 3 deliverable.
