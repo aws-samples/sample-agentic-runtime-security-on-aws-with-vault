@@ -1,71 +1,64 @@
 ---
-title: 'Bootstrap HCP Terraform'
+title: 'Obtain IVIA Licenses'
 weight: 22
 ---
 
-The `bootstrap.sh` script sets up your HCP Terraform environment in a single command. HCP Terraform is used for **state management only** — all Terraform plans and applies run locally on your machine.
+IBM Verify Identity Access (IVIA) 11.0.2 runs self-hosted on EKS as the OIDC provider and CIBA authorization server for all three use cases. Before you can deploy the Platform module, you need two licensing artifacts: an IBM Container Registry entitlement key that allows Kubernetes to pull the IVIA container image, and a 90-day trial activation certificate that unlocks the IVIA server.
 
-## What Gets Created
+Obtain both secrets before running `terraform -chdir=infrastructure apply` — deploying without them causes the IVIA pod to fail at `ImagePullBackOff` or at license validation.
 
-| Resource | Where | Purpose |
-|----------|-------|---------|
-| **EC2 Spot Service-Linked Role** | AWS IAM | Required for on-demand/spot instance management |
-| **HCP Terraform Project** | HCP Terraform | Project to organize the Workspace and variable set |
-| **Variable Set** (`agentic-runtime-stacks-config`) | HCP Terraform | Sensitive variables only (`icr_entitlement_key`, `simple_ad_admin_password`) |
-| **HCP Terraform Workspace** (`agentic-runtime-security`) | HCP Terraform | Local execution mode — HCP stores state only, applies run on your machine |
+## Secret 1 — IBM Container Registry Entitlement Key
 
-## Local Execution with Remote State
+The IVIA container image is hosted in the IBM Container Registry (`icr.io`). Kubernetes must authenticate to pull it. The entitlement key is a long-lived token tied to your IBM Cloud account.
 
-The workshop uses **HCP Terraform local execution** mode. This means:
+<!-- TODO(ICR-KEY-URL): user to supply canonical IBM Cloud URL + steps -->
 
-- Terraform plans and applies run **on your local machine** — not on HCP Terraform workers.
-- HCP Terraform stores the state file remotely, providing locking, versioning, and team visibility.
-- Your local AWS credentials (from `aws configure` or environment variables) are used for authentication.
-- Only sensitive variables (`icr_entitlement_key`, `simple_ad_admin_password`) are stored in the HCP Terraform variable set.
+**Where to obtain:** _TBD — see workshop maintainer_
 
-:::alert{header="HCP Terraform Standard tier required" type="warning"}
-HCP Terraform's free tier is end-of-life on 2026-03-31. The workspace + variable set features require the Standard tier. Upgrade at `https://app.terraform.io/app/<your-org>/settings/billing` before running `bootstrap.sh`.
+**Where to place it:** Add the key to `infrastructure/terraform.tfvars`:
+
+```hcl
+icr_entitlement_key = "<your-entitlement-key>"
+```
+
+The key has no expiry. Keep it out of version control — `infrastructure/terraform.tfvars` is already listed in `.gitignore`.
+
+:::alert{header="ImagePullBackOff symptom" type="warning"}
+If the IVIA pod shows `ImagePullBackOff` after deploy, the entitlement key is missing or incorrect. Update `icr_entitlement_key` in `infrastructure/terraform.tfvars` and re-run `terraform -chdir=infrastructure apply`.
 :::
 
-## Run Bootstrap
+## Secret 2 — IVIA Trial Activation Certificate
+
+IVIA requires a signed trial certificate to activate its OIDC and CIBA features. The certificate is a 90-day trial tied to your IBM account — no purchase required.
+
+**Where to obtain:** Request the trial at `https://isva-trial.verify.ibm.com/`
+
+You will receive a file named `ISAM-Trial-HashiCorp.cer`. The certificate in the repository is valid until **2026-08-07**. If you are running the workshop after that date, request a fresh certificate from the URL above.
+
+**Where to place it:** Copy the file to:
+
+```
+infrastructure/modules/verify_access/base_layer/ISAM-Trial-HashiCorp.cer
+```
+
+Terraform reads this file during `verify_access` module apply. The IVIA autoconf job imports it automatically — no manual LMI interaction is required.
+
+:::alert{header="Trial certificate expiry" type="info"}
+The trial certificate has a 90-day validity window. Check the `Not After` date before the workshop: `openssl x509 -in infrastructure/modules/verify_access/base_layer/ISAM-Trial-HashiCorp.cer -noout -dates`
+:::
+
+## Verify Both Secrets Are in Place
+
+Before continuing to the Deploy Foundation module, confirm both artifacts exist:
 
 ```bash
-bash infrastructure/scripts/bootstrap.sh <YOUR_HCP_ORG>
+# Entitlement key set in tfvars
+grep -q 'icr_entitlement_key' infrastructure/terraform.tfvars && echo "ICR key: SET" || echo "ICR key: MISSING"
+
+# Trial certificate present
+[ -f infrastructure/modules/verify_access/base_layer/ISAM-Trial-HashiCorp.cer ] \
+  && echo "Trial cert: PRESENT" \
+  || echo "Trial cert: MISSING"
 ```
 
-The script is **idempotent** — safe to re-run. It will skip resources that already exist and update the variable set to match current values.
-
-## Preview Mode
-
-To see what would be created without making any changes:
-
-```bash
-bash infrastructure/scripts/bootstrap.sh <YOUR_HCP_ORG> --dry-run
-```
-
-## Verify Bootstrap Results
-
-The script verifies each resource as it runs — every step is idempotent and prints a green checkmark when the resource exists or was created successfully. When all steps complete, you will see:
-
-```
-===============================================================================
- Bootstrap Complete
-===============================================================================
-
-  Organization:  <YOUR_HCP_ORG>
-  Project:       Agentic Runtime Security
-  Variable Set:  agentic-runtime-stacks-config
-  Workspace:     agentic-runtime-security
-  Exec Mode:     local
-  Region:        us-west-2
-```
-
-What was created:
-- EC2 Spot Service-Linked Role (if it did not already exist)
-- HCP Terraform Project, Variable Set (sensitive vars), and Workspace (local execution)
-
-If any step fails, the script stops with a red error and a remediation hint. Fix the issue and re-run — idempotency means completed steps are skipped.
-
-## IBM Verify Identity Access licensing
-
-IBM Verify Identity Access 11.0.2 is deployed self-hosted on EKS in the Platform module. Licensing details are documented in the [IVIA licensing guide](https://www.ibm.com/docs/en/sva/11.0.0). For workshop delivery, the trial entitlement is sufficient.
+Both lines must print the positive result before you proceed to [Deploy Foundation](../../30-deploy-foundation/).

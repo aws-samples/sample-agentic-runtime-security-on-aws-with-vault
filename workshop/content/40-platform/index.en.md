@@ -31,7 +31,7 @@ kubectl get nodes
 
 All three nodes should be in `Ready` state. If any nodes are `NotReady`, revisit the foundation phase before continuing.
 
-The `icr_entitlement_key` is set in the HCP Terraform variable set during bootstrap. If the IVIA pod shows `ImagePullBackOff`, verify the key is correct in the HCP UI.
+The `icr_entitlement_key` is set in `infrastructure/terraform.tfvars`. If the IVIA pod shows `ImagePullBackOff`, verify the key value in that file.
 
 ## Estimated deployment time
 
