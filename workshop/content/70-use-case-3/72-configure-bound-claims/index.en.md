@@ -67,11 +67,11 @@ path "database/creds/uc3-refund-writer" {
 }
 ```
 
-The Kubernetes auth role `uc3` (separate from the JWT role) permits the UC3 agent's service account to authenticate and obtain a Vault token for the initial CIBA initiation flow. The JWT role `uc3-jwt` is used for the delegated token exchange result.
+The Kubernetes auth role `uc3` (separate from the JWT role) permits the Use Case 3 agent's service account to authenticate and obtain a Vault token for the initial CIBA initiation flow. The JWT role `uc3-jwt` is used for the delegated token exchange result.
 :::
 
 :::expand{header="Agent Dev Track — Using the time-boxed credentials"}
-After Vault login succeeds, the UC3 agent reads DB credentials and uses them for a single database operation:
+After Vault login succeeds, the Use Case 3 agent reads DB credentials and uses them for a single database operation:
 
 ```python
 # auth.py — exchange delegated JWT for Vault token, then fetch DB creds
