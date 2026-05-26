@@ -18,7 +18,7 @@ Definitive playbook for tearing down and redeploying the IBM Verify Identity Acc
 
 **Namespace:** `verify-access`
 **Terraform module:** `module.ivia` (source: `./modules/verify_access`)
-**HCP Terraform workspace:** `agentic-runtime-security`
+**State:** local (`infrastructure/terraform.tfstate`)
 
 ---
 
@@ -87,10 +87,10 @@ If a previous apply was interrupted, state will be locked:
 cd infrastructure
 
 # The error message includes the Lock ID:
-TF_CLOUD_ORGANIZATION=devopsoscar terraform force-unlock <LOCK_ID>
+terraform force-unlock <LOCK_ID>
 ```
 
-If CLI unlock fails, go to https://app.terraform.io → workspace `agentic-runtime-security` → Settings → Locking → Force Unlock.
+State is stored locally (`infrastructure/terraform.tfstate`). If the lock file is stale, you can also delete `.terraform.tfstate.lock.info` directly.
 
 ---
 
@@ -100,7 +100,7 @@ If CLI unlock fails, go to https://app.terraform.io → workspace `agentic-runti
 cd infrastructure
 
 # Destroy only the IVIA module — leaves EKS, RDS, Vault, etc. intact
-TF_CLOUD_ORGANIZATION=devopsoscar terraform destroy -target=module.ivia -auto-approve
+terraform destroy -target=module.ivia -auto-approve
 ```
 
 This cleanly removes all IVIA resources from EKS and Terraform state:
@@ -183,8 +183,8 @@ kubectl wait --for=delete namespace/verify-access --timeout=120s 2>/dev/null || 
 cd infrastructure
 
 # Remove all IVIA resources from state
-TF_CLOUD_ORGANIZATION=devopsoscar terraform state list | grep 'module.ivia' | while read resource; do
-  TF_CLOUD_ORGANIZATION=devopsoscar terraform state rm "$resource"
+terraform state list | grep 'module.ivia' | while read resource; do
+  terraform state rm "$resource"
 done
 ```
 
@@ -224,7 +224,7 @@ grep ivia_activated terraform.tfvars
 Then apply:
 
 ```bash
-TF_CLOUD_ORGANIZATION=devopsoscar terraform apply -target=module.ivia -auto-approve
+terraform apply -target=module.ivia -auto-approve
 ```
 
 Verify base components are healthy:
@@ -309,7 +309,7 @@ grep ivia_activated terraform.tfvars
 Then apply:
 
 ```bash
-TF_CLOUD_ORGANIZATION=devopsoscar terraform apply -target=module.ivia -auto-approve
+terraform apply -target=module.ivia -auto-approve
 ```
 
 This deploys the **WRP**, **autoconf job**, and **ALB ingress**. The autoconf job runs 18 steps in strict sequence:
@@ -336,7 +336,7 @@ curl -s "http://$WRP_HOST/isvaop/oauth2/.well-known/openid-configuration" | jq .
 
 ```bash
 cd infrastructure
-TF_CLOUD_ORGANIZATION=devopsoscar terraform apply -auto-approve
+terraform apply -auto-approve
 ```
 
 Deploys in dependency order: EKS → Addons → RDS → Vault → Simple AD → IVIA → Vault Config → UC agents.
