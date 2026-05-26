@@ -9,13 +9,15 @@
 		HeaderNav,
 		HeaderNavItem,
 		HeaderUtilities,
-		HeaderGlobalAction,
+		HeaderAction,
 		Content
 	} from 'carbon-components-svelte';
-	import Logout from 'carbon-icons-svelte/lib/Logout.svelte';
+	import UserAvatarMenu from '$lib/UserAvatarMenu.svelte';
 	import type { LayoutData } from './$types';
 
 	let { data, children }: { data: LayoutData; children: import('svelte').Snippet } = $props();
+
+	let userMenuOpen = $state(false);
 
 	function logout() {
 		window.location.href = '/logout';
@@ -29,7 +31,34 @@
 			<HeaderNavItem href="/dashboard" text="Dashboard" data-sveltekit-reload />
 		</HeaderNav>
 		<HeaderUtilities>
-			<HeaderGlobalAction aria-label="Logout" title="Logout" icon={Logout} on:click={logout} />
+			<!--
+				HeaderAction (carbon-components-svelte ^0.107.1):
+				  - `icon` named slot renders the trigger button content (the round avatar photo)
+				  - Default slot renders the dropdown panel (display name + logout)
+				  - bind:isOpen two-way binds the open/close state
+			-->
+			<HeaderAction
+				bind:isOpen={userMenuOpen}
+				aria-label={data.displayName || 'User menu'}
+				preventCloseOnClickOutside={false}
+			>
+				<svelte:fragment slot="icon">
+					<UserAvatarMenu displayName={data.displayName} sub={data.sub} />
+				</svelte:fragment>
+				<svelte:fragment slot="closeIcon">
+					<UserAvatarMenu displayName={data.displayName} sub={data.sub} />
+				</svelte:fragment>
+
+				<!-- Dropdown panel: display name + logout -->
+				<div class="user-menu-panel">
+					{#if data.displayName}
+						<p class="user-menu-name">{data.displayName}</p>
+					{/if}
+					<button class="user-menu-logout bx--btn bx--btn--ghost" onclick={logout} type="button">
+						Log out
+					</button>
+				</div>
+			</HeaderAction>
 		</HeaderUtilities>
 	</Header>
 {/if}
@@ -37,3 +66,26 @@
 <Content>
 	{@render children()}
 </Content>
+
+<style>
+	.user-menu-panel {
+		padding: 1rem;
+		min-width: 200px;
+		display: flex;
+		flex-direction: column;
+		gap: 0.75rem;
+	}
+
+	.user-menu-name {
+		margin: 0;
+		font-size: 0.875rem;
+		font-weight: 600;
+		color: var(--cds-text-01, #161616);
+		word-break: break-all;
+	}
+
+	.user-menu-logout {
+		align-self: flex-start;
+		padding: 0.5rem 0;
+	}
+</style>
