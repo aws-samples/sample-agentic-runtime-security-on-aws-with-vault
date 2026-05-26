@@ -81,7 +81,7 @@ Terraform generates a plan showing the `uc1_agent` module resources. Review the 
 
 The `uc1_agent` module is applied after `vault_config` (Vault Kubernetes auth role and policy must exist before pod startup). During apply the following resources are created:
 
-1. `kubernetes_namespace.uc1` — namespace for all UC1 resources
+1. `kubernetes_namespace.uc1` — namespace for all Use Case 1 resources
 2. `kubernetes_service_account.uc1_retriever` — the `uc1-retriever-sa` identity
 3. `kubernetes_config_map.uc1_agent_config` — non-secret env vars (Vault address, RDS host, KB ID)
 4. `kubernetes_deployment.uc1_agent` — agent pod

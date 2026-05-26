@@ -47,7 +47,7 @@ Obtain a Vault token using the `uc2-personal` policy and attempt to read a Use C
 UC2_TOKEN=$(kubectl exec -n vault vault-0 -- \
   vault token create -policy=uc2-personal -ttl=5m -field=token 2>/dev/null)
 
-# Attempt to read UC3 write-capable credentials
+# Attempt to read Use Case 3 write-capable credentials
 kubectl exec -n vault vault-0 -- sh -c \
   "VAULT_TOKEN='${UC2_TOKEN}' vault read database/creds/uc3-refund-writer"
 ```

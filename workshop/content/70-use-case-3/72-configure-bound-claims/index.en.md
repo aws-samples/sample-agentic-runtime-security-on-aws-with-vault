@@ -15,7 +15,7 @@ resource "vault_jwt_auth_backend_role" "uc3_jwt" {
   role_type      = "jwt"
   bound_audiences = ["agent-uc3"]
 
-  # RFC 8693 delegation enforcement: the actor must be the UC3 service account
+  # RFC 8693 delegation enforcement: the actor must be the Use Case 3 service account
   bound_claims = {
     "may_act/sub" = "service-account:agent-uc3"
     # RFC 9396 RAR enforcement: only refund_approval type unlocks write creds
