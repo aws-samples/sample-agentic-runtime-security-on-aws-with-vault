@@ -181,7 +181,7 @@ resource "vault_database_secret_backend_role" "uc3_refund_writer" {
 
 ################################################################################
 # AWS secrets engine — CONF-04
-# assumed_role credential_type; Bedrock reader role bound to bedrock:InvokeModel
+# assumed_role credential_type; Bedrock reader role bound to InvokeModel + Retrieve
 ################################################################################
 
 resource "vault_aws_secret_backend" "this" {
@@ -203,7 +203,8 @@ resource "vault_aws_secret_backend_role" "bedrock_reader" {
         Effect = "Allow"
         Action = [
           "bedrock:InvokeModel",
-          "bedrock:InvokeModelWithResponseStream"
+          "bedrock:InvokeModelWithResponseStream",
+          "bedrock:Retrieve"
         ]
         Resource = "*"
       }
