@@ -57,10 +57,3 @@ sequenceDiagram
     S3->>Athena: Glue crawler → audit_correlation VIEW
     Note over Athena: SELECT * FROM audit_correlation WHERE request_id = '...'<br/>→ one row answers all 5 objectives
 ```
-
-## Sub-modules
-
-1. **[CIBA Out-of-Band Approval](71-ciba-approval-flow/)** — How IVIA handles the backchannel approval and token exchange
-2. **[Vault Bound Claims Enforcement](72-configure-bound-claims/)** — How `bound_claims` enforces `may_act` and `authorization_details`
-3. **[The Bypass Test](73-bypass-test/)** — Forged JWT rejection proof (run `verify-uc3.sh --bypass`)
-4. **[Three-Plane Audit Correlation](74-three-plane-audit/)** — The Athena query that joins all three audit planes by `request_id`
