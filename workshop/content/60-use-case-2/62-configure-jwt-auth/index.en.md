@@ -33,8 +33,8 @@ Key fields:
 
 | Field | Value | Meaning |
 |---|---|---|
-| `oidc_discovery_url` | `https://isvaop.verify-access.svc.cluster.local:8436/oauth2` | IVIA's in-cluster OIDC discovery URL. Vault fetches JWKS from this endpoint to validate JWT signatures. |
-| `bound_issuer` | `https://isvaop.verify-access.svc.cluster.local:8436/...` | JWT `iss` claim must match this value. |
+| `oidc_discovery_url` | `https://iviaop.verify-access.svc.cluster.local:8436/oauth2` | IVIA's in-cluster OIDC discovery URL. Vault fetches JWKS from this endpoint to validate JWT signatures. |
+| `bound_issuer` | `https://iviaop.verify-access.svc.cluster.local:8436/...` | JWT `iss` claim must match this value. |
 | `default_role` | _(empty)_ | Role must be specified explicitly on each login call. |
 
 Vault uses the `oidc_discovery_url` to fetch IVIA's public signing keys (JWKS) and cache them for JWT signature validation. The in-cluster URL keeps the validation traffic inside the cluster — no external DNS required.
@@ -166,7 +166,7 @@ resource "vault_jwt_auth_backend_role" "uc2_jwt" {
 }
 ```
 
-The `bound_audiences` check is the critical guard: Vault rejects any JWT whose `aud` claim does not include `agent-uc2`. This means tokens issued for IVIA's other OAuth clients (e.g., the UC3 CIBA client) cannot be used to obtain `uc2-personal` credentials.
+The `bound_audiences` check is the critical guard: Vault rejects any JWT whose `aud` claim does not include `agent-uc2`. This means tokens issued for IVIA's other OAuth clients (e.g., the Use Case 3 CIBA client) cannot be used to obtain `uc2-personal` credentials.
 
 IVIA JWKS validation happens at the `jwt` auth backend level, not at the role level. Vault fetches IVIA's JWKS from the `oidc_discovery_url` and caches the signing keys. Each incoming JWT is verified against these cached keys before the role's `bound_audiences` check runs.
 

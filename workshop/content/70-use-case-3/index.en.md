@@ -24,7 +24,7 @@ The diagram below shows how `request_id` moves from the agent through CIBA appro
 %%{init: {"theme": "base", "themeVariables": {"primaryColor": "#0f62fe", "primaryTextColor": "#161616", "primaryBorderColor": "#0043ce", "lineColor": "#525252", "secondaryColor": "#f4f4f4", "tertiaryColor": "#e0e0e0", "noteBkgColor": "#d9fbfb", "noteTextColor": "#161616", "noteBorderColor": "#3ddbd9"}}}%%
 sequenceDiagram
     autonumber
-    participant Agent as UC3 Agent<br/>(banking-app)
+    participant Agent as Use Case 3 Agent<br/>(banking-app)
     participant IVIA as IBM Verify<br/>(IVIA / CIBA)
     participant User as Authorized User<br/>(browser approval)
     participant TE as Token Exchange<br/>(IVIA RFC 8693)

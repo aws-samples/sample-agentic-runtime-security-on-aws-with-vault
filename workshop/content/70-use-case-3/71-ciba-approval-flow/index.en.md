@@ -71,7 +71,7 @@ IVIA returns a delegated JWT containing:
 The delegated JWT is what the agent presents to Vault. Vault's `bound_claims` enforce that **both** `may_act.sub` and `authorization_details[0].type` match before issuing any DB credentials.
 
 :::expand{header="Platform Track — IVIA CIBA Configuration"}
-The IVIA CIBA client (`agent-uc3`) is configured in the `isva_config` Terraform module:
+The IVIA CIBA client (`agent-uc3`) is configured in the `verify_access` Terraform module:
 
 - `grant_types`: `["urn:openid:params:grant-type:ciba", "urn:ietf:params:oauth:grant-type:token-exchange"]`
 - `backchannel_user_code_parameter_supported`: `true` (binding_message enforcement)
@@ -116,7 +116,7 @@ for _ in range(24):
         break
 ```
 
-`IVIA_BASE` points to the OIDC Provider ClusterIP (`https://isvaop.verify-access.svc.cluster.local:8436/oauth2`). The banking-app backend exposes `GET /api/ciba/pending/{auth_req_id}` to surface the consent URL to the agent.
+`IVIA_BASE` points to the OIDC Provider ClusterIP (`https://iviaop.verify-access.svc.cluster.local:8436/oauth2`). The banking-app backend exposes `GET /api/ciba/pending/{auth_req_id}` to surface the consent URL to the agent.
 :::
 
 ## Verification
@@ -133,7 +133,7 @@ kubectl logs -n banking-app -l app=uc3-agent --tail=50
 # Confirm IVIA CIBA endpoint is reachable from vault pod (direct ClusterIP path)
 kubectl exec -n vault vault-0 -- sh -c \
   "wget -q -O - --no-check-certificate \
-  'https://isvaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration'" \
+  'https://iviaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration'" \
   | jq '.backchannel_authentication_endpoint'
 ```
 

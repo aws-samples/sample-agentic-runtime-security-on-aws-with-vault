@@ -42,7 +42,7 @@ The forged tokens are rejected by Vault for two independent reasons, either of w
 | Layer | Mechanism | What It Enforces |
 |---|---|---|
 | JWT signature | JWKS validation against IVIA's RS256 public keys | Only IVIA-signed tokens are accepted — HS256 self-signed tokens are always rejected |
-| `bound_claims` | `may_act/sub` must match `service-account:agent-uc3` | Only the UC3 service account can be the actor in a delegated token |
+| `bound_claims` | `may_act/sub` must match `service-account:agent-uc3` | Only the Use Case 3 service account can be the actor in a delegated token |
 | `bound_claims` | `authorization_details/0/type` must equal `refund_approval` | Only tokens explicitly authorizing a refund unlock the `uc3-refund-writer` DB role |
 
 The signature layer and the claim layer are both enforced. A real attacker would need to compromise IVIA's private signing key AND present a token with the correct service account AND the correct authorization type — all simultaneously.
