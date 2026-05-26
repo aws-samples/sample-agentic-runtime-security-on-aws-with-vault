@@ -104,7 +104,7 @@ if [[ "$DRY_RUN" == true ]]; then
     echo ""
     echo "  ${ECR_URI}"
     echo ""
-    print_info "Set in your HCP Terraform workspace variables:"
+    print_info "Set in infrastructure/terraform.tfvars:"
     echo "  uc1_agent_image = \"${ECR_URI}\""
     exit 0
 fi
@@ -135,5 +135,5 @@ print_pass "UC1 agent image built and pushed"
 echo ""
 echo "  ${ECR_URI}"
 echo ""
-print_info "Set in your HCP Terraform workspace variables:"
+print_info "Set in infrastructure/terraform.tfvars:"
 echo "  uc1_agent_image = \"${ECR_URI}\""

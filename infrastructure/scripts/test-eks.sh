@@ -66,7 +66,7 @@ if [ "$status" = "ACTIVE" ]; then
     print_pass "Cluster status: ACTIVE"
 else
     print_fail "Cluster status: ${status}" \
-        "Run: aws eks describe-cluster --name ${CLUSTER_NAME} --region ${REGION}. If 'ResourceNotFoundException', the cluster does not exist — verify the workspace run completed in HCP Terraform UI."
+        "Run: aws eks describe-cluster --name ${CLUSTER_NAME} --region ${REGION}. If 'ResourceNotFoundException', the cluster does not exist — verify terraform apply completed without errors."
 fi
 
 # 2. kubectl get nodes — require >= 2 Ready

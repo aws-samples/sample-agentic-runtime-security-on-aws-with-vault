@@ -86,7 +86,7 @@ command -v jq &>/dev/null || { print_fail "jq is required"; exit 1; }
 print_pass "CLI tools available"
 
 kubectl get namespace "$NAMESPACE" &>/dev/null || {
-    print_fail "Namespace '${NAMESPACE}' not found. Deploy uc2_app via HCP Terraform workspace run first."; exit 1
+    print_fail "Namespace '${NAMESPACE}' not found. Deploy uc2_app via 'terraform apply' first."; exit 1
 }
 print_pass "Namespace '${NAMESPACE}' exists"
 

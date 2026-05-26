@@ -2,20 +2,17 @@
 # bedrock_kb_index Module — AOSS vector index via CloudFormation.
 #
 # WHY CLOUDFORMATION (not the opensearch provider):
-#   HCP Terraform Stacks authenticates the AWS provider via OIDC web
-#   identity (assume_role_with_web_identity). The opensearch-project/
-#   opensearch provider 2.2.0 does not expose the equivalent web-identity
-#   block, and HCP Stacks has no mechanism to share the AWS provider's
-#   resolved credentials with another provider. The opensearch provider's
-#   AWS SDK Go default chain finds nothing on the runner — apply fails
-#   with NoCredentialProviders. Pinning to a newer opensearch provider is
-#   blocked by Pitfall B3 (later 2.x versions broke AOSS sigv4 signing).
+#   The opensearch-project/opensearch provider 2.2.0 does not share the
+#   AWS provider's resolved credentials — its AWS SDK Go default chain
+#   resolves separately, which can fail with NoCredentialProviders in
+#   environments where ambient credentials are scoped. Pinning to a newer
+#   opensearch provider is blocked by Pitfall B3 (later 2.x versions broke
+#   AOSS sigv4 signing).
 #
-#   The canonical Stacks-native answer (per HCP Stacks identity_token docs
-#   + AWS CloudFormation reference): create the index via
+#   The simpler answer: create the index via
 #   AWS::OpenSearchServerless::Index inside an aws_cloudformation_stack
-#   resource, driven by the already-OIDC-authenticated aws.main provider.
-#   Same OIDC identity, no second credential chain to bridge.
+#   resource, driven by the already-authenticated aws.main provider.
+#   Single credential chain, no bridging required.
 #
 # Pitfalls preserved:
 #   B2 — AOSS does NOT auto-create the index for KB; we declare it here.
@@ -50,7 +47,7 @@ resource "aws_cloudformation_stack" "kb_index" {
 
   template_body = yamlencode({
     AWSTemplateFormatVersion = "2010-09-09"
-    Description              = "OpenSearch Serverless vector index for the Bedrock Knowledge Base (workshop-managed via HCP Terraform Stacks)"
+    Description              = "OpenSearch Serverless vector index for the Bedrock Knowledge Base (managed by Terraform)"
 
     Resources = {
       KnowledgeBaseIndex = {

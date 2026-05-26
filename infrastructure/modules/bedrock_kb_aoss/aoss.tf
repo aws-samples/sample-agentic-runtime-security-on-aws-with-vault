@@ -33,7 +33,7 @@ terraform {
 data "aws_caller_identity" "this" {}
 
 # data.aws_caller_identity.this.arn returns the assumed-role STS ARN at
-# apply time (e.g. arn:aws:sts::ACCOUNT:assumed-role/hcp-stacks-deploy/SESSION).
+# apply time (e.g. arn:aws:sts::ACCOUNT:assumed-role/ROLE_NAME/SESSION).
 # AOSS data-access policies match Principal against the underlying IAM role
 # ARN, NOT the STS session ARN. Use aws_iam_session_context to resolve the
 # session back to the role ARN that issued it.
