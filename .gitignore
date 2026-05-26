@@ -26,14 +26,6 @@ Thumbs.db
 # Claude
 .claude/
 
-# HCP Setup (infrastructure/scripts/hcp-setup — contains account-specific values)
-# Note: *.tfvars above already covers terraform.tfvars globally.
-# These explicit paths are intentionally redundant for clarity and safety.
-infrastructure/scripts/hcp-setup/terraform.tfvars
-infrastructure/scripts/hcp-setup/terraform.tfstate
-infrastructure/scripts/hcp-setup/terraform.tfstate.backup
-infrastructure/scripts/hcp-setup/.terraform/
-infrastructure/scripts/hcp-setup/.terraform.lock.hcl
 
 # Debug logs
 logs/
