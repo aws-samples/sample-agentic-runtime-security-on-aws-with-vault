@@ -19,6 +19,7 @@ The user's identity (JWT) is established per-request and never stored.
 import json
 import logging
 import os
+import re
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
@@ -125,8 +126,9 @@ async def chat(request: Request, body: ChatRequest):
             # Invoke the Strands agent
             response = _agent(message)
 
-            # Stream the response
-            content = str(response)
+            # Stream the response. Strip any <thinking>...</thinking> chain-of-thought
+            # the model emits so it never leaks into the chat UI (mirrors uc3-agent).
+            content = re.sub(r'<thinking>.*?</thinking>\s*', '', str(response), flags=re.DOTALL)
             yield f"data: {json.dumps({'role': 'ai', 'content': content, 'type': 'delta'})}\n\n"
             yield f"data: {json.dumps({'type': 'end'})}\n\n"
 
