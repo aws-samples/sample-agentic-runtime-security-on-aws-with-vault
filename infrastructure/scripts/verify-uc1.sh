@@ -190,14 +190,23 @@ fi
 #-------------------------------------------------------------------------------
 query_result=$(kubectl exec -n "${UC1_NAMESPACE}" deploy/uc1-agent -- \
     python3 -c '
-import urllib.request, urllib.error, json
-body = json.dumps({"query": "Using the knowledge base, summarize the employee PTO policy."}).encode()
+import urllib.request, urllib.error, json, re
+body = json.dumps({"query": "Using the knowledge base, summarize the employee PTO policy including accrual by tenure."}).encode()
 req = urllib.request.Request("http://localhost:8080/query", data=body,
                             headers={"Content-Type": "application/json"})
+# Phrases the model emits when the KB retrieve returned nothing. A non-empty
+# answer that is really one of these is NOT a working retrieval — it is the
+# empty-index cop-out that previously let this check pass falsely.
+FAIL_RE = re.compile(r"(unable to find|could ?n.?t find|not (?:available|indexed|find)|no (?:information|results|relevant)|reach(?:ing)? out to .*HR|consult .*HR)", re.I)
 try:
     r = urllib.request.urlopen(req, timeout=120)
     ans = (json.loads(r.read()).get("answer") or "").strip()
-    print("OK" if ans else "EMPTY_ANSWER")
+    if not ans:
+        print("EMPTY_ANSWER")
+    elif FAIL_RE.search(ans):
+        print("NO_KB_CONTENT")
+    else:
+        print("OK")
 except urllib.error.HTTPError as e:
     print("HTTP_%d:%s" % (e.code, e.read().decode("utf-8", "replace")[:300]))
 except Exception as e:
@@ -205,9 +214,12 @@ except Exception as e:
 ' 2>/dev/null || echo "EXEC_FAIL")
 if [ "${query_result}" = "OK" ]; then
     print_pass "Agent /query end-to-end: KB retrieve + Nova Pro answer returned"
+elif [ "${query_result}" = "NO_KB_CONTENT" ]; then
+    print_fail "Agent /query end-to-end (KB empty)" \
+        "Agent answered but retrieved NOTHING from the Knowledge Base (model said it could not find the policy). The corpus is in S3 but the vector index is empty — run: ./sync-bedrock-kb.sh"
 else
     print_fail "Agent /query end-to-end" \
-        "POST /query returned no answer (result: ${query_result}). Needs bedrock:Retrieve on the KB, the DB_*/REGION env vars in uc1-config, and Nova Pro access. Check: kubectl logs -n ${UC1_NAMESPACE} deploy/uc1-agent --tail=50"
+        "POST /query returned no usable answer (result: ${query_result}). Needs bedrock:Retrieve on the KB, the DB_*/REGION env vars in uc1-config, KB ingestion (./sync-bedrock-kb.sh), and Nova Pro access. Check: kubectl logs -n ${UC1_NAMESPACE} deploy/uc1-agent --tail=50"
 fi
 
 # Summary is printed automatically by the common-checks.sh EXIT trap

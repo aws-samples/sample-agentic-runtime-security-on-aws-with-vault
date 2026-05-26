@@ -22,8 +22,8 @@ Note the `username` and `password`. Then:
 
 ```bash
 # Get the RDS host from the MCP server ConfigMap
-RDS_HOST=$(kubectl get configmap uc2-mcp-config -n banking-app \
-  -o jsonpath='{.data.RDS_HOST}')
+RDS_HOST=$(kubectl get configmap banking-mcp-config -n banking-app \
+  -o jsonpath='{.data.RDS_ADDRESS}')
 
 # Exec into the MCP Server pod and run a select
 kubectl exec -n banking-app deploy/banking-mcp-server -- \
@@ -86,9 +86,9 @@ kubectl exec -n banking-app deploy/banking-mcp-server -- \
 Expected output:
 
 ```
-    polname     | polcmd |  polroles   |              policy_expr
-----------------+--------+-------------+-----------------------------------------
- accounts_rls   | r      | {uc2_per..} | (user_sub = current_setting('app.current_user_sub', true))
+    polname      | polcmd | polroles |              policy_expr
+-----------------+--------+----------+-----------------------------------------
+ user_accounts   | r      | {}       | (user_sub = current_setting('app.current_user_sub', true))
 (1 row)
 ```
 
@@ -136,8 +136,9 @@ Expected summary output:
 [PASS] Agent /health endpoint: healthy
 [PASS] IVIA JWKS endpoint reachable (2 key(s) returned)
 [PASS] Active Vault lease exists for uc2-personal-readonly (1 lease(s))
+[PASS] OAuth discovery: IVIA /.well-known/openid-configuration returns valid JSON
 
-13 check(s) passed, 0 failed.
+14 check(s) passed, 0 failed.
 ```
 
 :::expand{header="Platform Track — RLS policy SQL and session variable pattern"}
@@ -151,15 +152,18 @@ ALTER TABLE banking.transactions ENABLE ROW LEVEL SECURITY;
 
 -- Policy: each user sees only their own rows
 -- current_setting('app.current_user_sub', true) returns NULL if not set (safe default)
-CREATE POLICY accounts_rls ON banking.accounts
+CREATE POLICY user_accounts ON banking.accounts
   FOR SELECT
-  TO uc2_personal_readonly
   USING (user_sub = current_setting('app.current_user_sub', true));
 
-CREATE POLICY transactions_rls ON banking.transactions
+CREATE POLICY user_transactions ON banking.transactions
   FOR SELECT
-  TO uc2_personal_readonly
-  USING (user_sub = current_setting('app.current_user_sub', true));
+  USING (
+    account_id IN (
+      SELECT id FROM banking.accounts
+      WHERE user_sub = current_setting('app.current_user_sub', true)
+    )
+  );
 ```
 
 The `uc2_personal_readonly` permanent Postgres role is the grant vehicle. The ephemeral Vault-vended credentials are created `IN ROLE uc2_personal_readonly`, inheriting SELECT but not INSERT/UPDATE/DELETE.
@@ -220,7 +224,8 @@ Key design choices:
 
 ---
 
-:::alert{header="What Would Have Failed" type="warning"}
+### What Would Have Failed
+
 **Without workload identity for the MCP Server (OBJ-1 failure):** If the MCP Server pod used the `default` ServiceAccount instead of `uc2-mcp-server-sa`, Vault's Kubernetes auth role binding would reject its startup token request. The MCP Server could not authenticate to Vault with its workload identity, and the fallback jwt auth login path would be the only auth option — creating a situation where the workload identity layer is bypassed entirely. Vault's `bound_service_account_names = ["uc2-mcp-server-sa"]` is the gating check.
 
 **Without user JWT (OBJ-3 failure):** If the Banking Agent called the MCP Server tools without forwarding the user's JWT, the MCP Server would have no user identity to present to Vault's jwt auth. The design choice to make the Vault jwt auth the only path to DB credentials means "no JWT" directly translates to "no DB access" — the agent cannot act on behalf of no one.
@@ -228,4 +233,3 @@ Key design choices:
 **With shared DB credentials (OBJ-2 failure):** If a single long-lived Postgres password were used for all users, Row-Level Security would still filter rows (because `app.current_user_sub` would still be set), but a compromised credential would give an attacker access to all users' data by simply setting a different `app.current_user_sub` value. JIT credentials limit each credential to a 15-minute window and a specific Vault token entity — a stolen credential self-destructs and the Vault audit log records which user's jwt login it was issued for.
 
 **Without audit logging (OBJ-5 failure):** The Vault audit log entry for `auth/jwt/login` carries `token_meta.sub = "oscar"`. The subsequent `database/creds/uc2-personal-readonly` entry carries the same `lease_id` that can be joined to the Postgres pgaudit log in CloudWatch. Without Vault audit logging, there is no starting point to attribute a specific SELECT query to a specific user identity — the data access event becomes unattributable.
-:::

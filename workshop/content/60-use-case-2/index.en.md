@@ -43,20 +43,10 @@ All three pods run in the `banking-app` namespace. Separate ALB Ingress exposes 
 
 ## Prerequisites
 
-You must have completed the **Platform** module (Phase 3) before starting here. Specifically:
+You must have completed the **Deploy Foundation** module before starting here. Specifically:
 
 - `vault` — Vault HA cluster running and initialized
 - `vault_config` — Kubernetes auth backend, jwt auth backend (pointing to IVIA OIDC discovery), `uc2-personal` policy, `uc2` Kubernetes auth role, `uc2-jwt` JWT auth role, and `uc2-personal-readonly` database credentials role configured
 - `verify_access` — IVIA OIDC provider deployed with `agent-uc2` OAuth client (PKCE required, authorization_code grant) configured declaratively via config.yaml
 - `uc2_app` — Banking UI, Banking Agent, and MCP Server deployed via local Terraform (`terraform -chdir=infrastructure apply`)
 - `seed-banking-db.sh` — Banking schema, RLS policies, and test data seeded into RDS (run post-deploy)
-
-## Sub-Modules
-
-| Module | What You Do |
-|---|---|
-| [OAuth Authorization Code + PKCE Flow](./61-oauth-pkce-flow/) | Understand the PKCE flow, log in as Oscar or Jaime, and inspect the JWT claims in the banking app |
-| [Vault JWT Authentication](./62-configure-jwt-auth/) | Inspect the Vault jwt auth role and policy, trace the token exchange from user JWT to DB credential |
-| [Verify Per-User Data Access](./63-verify-user-access/) | Confirm per-user data isolation with RLS, run verify-uc2.sh, review the threat-model callout |
-| [Scope Enforcement (Layer 2)](./64-scope-enforcement/) | Demonstrate Vault policy denial of write roles and Postgres INSERT rejection |
-| [Credential Revocation](./65-credential-revocation/) | Observe the active lease, log out, confirm lease revocation, and find the audit log event |

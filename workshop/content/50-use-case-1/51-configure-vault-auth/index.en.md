@@ -1,11 +1,11 @@
 ---
 title: 'Configure Vault Auth for Use Case 1'
-weight: 52
+weight: 51
 ---
 
 ## Overview
 
-The Vault Kubernetes auth method, database secrets engine role, AWS secrets engine role, and access policy for Use Case 1 were all configured by the `vault_config` Terraform module in Phase 3 (applied via local Terraform (`terraform -chdir=infrastructure apply`)). **You do not need to reconfigure anything in this module.**
+The Vault Kubernetes auth method, database secrets engine role, AWS secrets engine role, and access policy for Use Case 1 were all configured by the `vault_config` Terraform module in the Deploy Foundation module (applied via local Terraform (`terraform -chdir=infrastructure apply`)). **You do not need to reconfigure anything in this module.**
 
 This page explains what was configured and why — understanding the Vault trust chain is essential before you observe credential issuance in the next module.
 
@@ -36,7 +36,7 @@ bound_service_account_names         [uc1-retriever-sa]
 bound_service_account_namespaces    [uc1]
 policies                            [uc1-readonly]
 token_ttl                           1h
-token_max_ttl                       24h
+token_max_ttl                       2h
 token_type                          default
 ```
 
@@ -121,11 +121,15 @@ Expected output:
 ```
 Key                      Value
 ---                      -----
-db_name                  workshop-postgres
+db_name                  workshop-pg
 default_ttl              15m
-max_ttl                  1h
-creation_statements      CREATE ROLE "{{name}}" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}' IN ROLE uc1_reader;
-revocation_statements    DROP ROLE IF EXISTS "{{name}}";
+max_ttl                  30m
+creation_statements      ["CREATE ROLE \"{{name}}\" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}';"
+                          "GRANT SELECT ON ALL TABLES IN SCHEMA public TO \"{{name}}\";"
+                          "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO \"{{name}}\";"]
+revocation_statements    ["REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM \"{{name}}\";"
+                          "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM \"{{name}}\";"
+                          "DROP ROLE IF EXISTS \"{{name}}\";"]
 ```
 
 The 15-minute TTL means each Postgres credential issued to the agent is valid for exactly 15 minutes. After expiry, Vault executes the `revocation_statements` to drop the dynamically created role from Postgres automatically.

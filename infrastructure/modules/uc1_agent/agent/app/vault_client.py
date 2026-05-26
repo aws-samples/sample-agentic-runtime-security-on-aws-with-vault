@@ -56,6 +56,20 @@ class VaultClient:
             },
         )
 
+    def _ensure_authenticated(self) -> None:
+        """Re-login if the pod's Vault token has expired.
+
+        The agent logs in once at startup, but the Vault token has a finite TTL.
+        Without this guard the token silently expires and every subsequent JIT
+        credential request fails with hvac.exceptions.Forbidden — which the model
+        then narrates as "I couldn't find it" instead of a real error. The
+        projected SA JWT on disk is auto-rotated by Kubernetes, so a fresh login
+        always succeeds. Mirrors the banking-app agent's proven re-auth pattern.
+        """
+        if not self.client.is_authenticated():
+            logger.info("vault_token_expired_relogin")
+            self.login()
+
     def get_db_credentials(self, role_name: str = "uc1-readonly") -> dict:
         """Issue JIT Postgres credentials from the Vault database secrets engine (OBJ-2).
 
@@ -68,6 +82,7 @@ class VaultClient:
         Returns:
             dict with keys: username, password, lease_id, lease_duration.
         """
+        self._ensure_authenticated()
         response = self.client.secrets.database.generate_credentials(name=role_name)
         creds = {
             "username": response["data"]["username"],
@@ -99,6 +114,7 @@ class VaultClient:
         Returns:
             boto3.Session configured with the ephemeral STS credentials.
         """
+        self._ensure_authenticated()
         response = self.client.read("aws/sts/bedrock-reader")
         data = response["data"]
         session = boto3.Session(

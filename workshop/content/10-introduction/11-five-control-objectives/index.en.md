@@ -16,7 +16,7 @@ This workshop focuses on five control objectives for agentic systems:
 The workshop walks through three use cases in strict topological order — Use Case 3 is a strict superset of Use Case 1 + Use Case 2.
 
 :::expand{header="Use Case 1 — Non-personalized read-only retrieval"}
-A Strands agent runs in EKS with its own ServiceAccount (`uc1-retriever-sa`). Vault's Kubernetes auth method validates the SA's JWT against the EKS OIDC provider, binds it to the `uc1-readonly` role (TTL 15m), and issues just-in-time read-only Postgres credentials and scoped Bedrock STS credentials. **Demonstrates Objectives 1, 2, 5.**
+A Strands agent runs in EKS with its own ServiceAccount (`uc1-retriever-sa`). Vault's Kubernetes auth method validates the SA's JWT against the EKS OIDC provider, binds it to the `uc1` auth role (token TTL 1h, carrying the `uc1-readonly` policy), and issues just-in-time read-only Postgres credentials via `database/creds/uc1-readonly` (credential TTL 15 min) and scoped Bedrock STS credentials. **Demonstrates Objectives 1, 2, 5.**
 :::
 
 :::expand{header="Use Case 2 — OAuth personalized read-only"}

@@ -468,7 +468,7 @@ phase_uc1() {
     if [ "$DRY_RUN" = true ]; then
         print_info "[DRY-RUN] Would build+push UC1 agent image (build-uc1-agent.sh)"
         print_info "[DRY-RUN] Would update uc1_agent_image in terraform.tfvars"
-        print_info "[DRY-RUN] Would run terraform apply, then verify-uc1.sh"
+        print_info "[DRY-RUN] Would run terraform apply, ingest KB (sync-bedrock-kb.sh), then verify-uc1.sh"
         return 0
     fi
 
@@ -538,7 +538,18 @@ phase_uc1() {
         print_warn "UC1 agent pod not Running after 120s — verify-uc1.sh will report details"
     fi
 
-    # Step 5: Verify
+    # Step 5: Ingest the Bedrock Knowledge Base corpus.
+    # Creating the KB data sources (Terraform) does NOT embed the S3 corpus into
+    # the vector index — an explicit ingestion job is required, or the agent's
+    # retrieve_from_knowledge_base tool returns zero passages. Idempotent.
+    step_header "Ingesting Bedrock Knowledge Base corpus (sync-bedrock-kb.sh)..."
+    bash "$SCRIPT_DIR/sync-bedrock-kb.sh" || {
+        print_error "sync-bedrock-kb.sh failed — KB will be empty and verify-uc1 Check 9 will fail"
+        return 1
+    }
+    print_success "Knowledge Base corpus ingested"
+
+    # Step 6: Verify
     pause_if_interactive "About to verify UC1 deployment"
     bash "$SCRIPT_DIR/verify-uc1.sh" 2>&1 || print_warn "UC1 verification had warnings"
     print_success "UC1 verification complete"

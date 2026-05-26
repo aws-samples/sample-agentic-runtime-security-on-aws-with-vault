@@ -1,9 +1,9 @@
 # eks
 
-Phase 2 root module call that builds the EKS 1.33 control plane, a managed
+Phase 2 root module call that builds the EKS 1.34 control plane, a managed
 node group, EKS Access Entries, and 5 managed addons (with Pod Identity for
 the two addons that need IAM). This is the source of truth for **INFR-02**
-(Kubernetes 1.33 cluster + managed node group + control-plane logs + Access
+(Kubernetes 1.34 cluster + managed node group + control-plane logs + Access
 Entries) and **INFR-05** (workshop-attendee `kubectl` one-liner).
 
 ## Overview
@@ -25,7 +25,7 @@ ALB controller, cert-manager, and external-dns.
 
 | Decision                                         | Value                                                                                          |
 | ------------------------------------------------ | ---------------------------------------------------------------------------------------------- |
-| Kubernetes version                               | **1.33** (latest GA at workshop time)                                                          |
+| Kubernetes version                               | **1.34** (latest GA at workshop time)                                                          |
 | Node management                                  | Managed node group only — **Karpenter is OUT of scope**                                        |
 | Node group sizing                                | m5.xlarge × **desired=3 / min=2 / max=5**, AL2023, on-demand                                   |
 | Control-plane log types                          | All 5: `api`, `audit`, `authenticator`, `controllerManager`, `scheduler`                       |

@@ -140,11 +140,11 @@ kubectl get ingress -n banking-app banking-ui-ingress \
 Open the URL in a browser:
 
 ```
-http://<ALB_HOSTNAME>/
+https://<ALB_HOSTNAME>/
 ```
 
-:::alert{header="HTTP only — lab environment" type="info"}
-The ALB uses HTTP (not HTTPS) because ALB-generated hostnames cannot be registered in Route 53 for ACM certificate issuance. In a production deployment, use HTTPS with a custom domain and `secure: true` cookie flags.
+:::alert{header="HTTPS with HTTP redirect — lab environment" type="info"}
+The Banking UI ALB listens on both HTTP (port 80) and HTTPS (port 443). HTTP requests are automatically redirected to HTTPS (ssl-redirect annotation). The certificate is an ACM-issued cert bound to the ingress. Your browser may show a certificate warning if the cert uses an ALB-generated hostname — accept it to proceed.
 :::
 
 ## Step 2 — Sign in at the IVIA login page

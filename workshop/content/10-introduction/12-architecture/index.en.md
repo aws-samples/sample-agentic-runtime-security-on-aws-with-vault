@@ -22,24 +22,9 @@ IBM Verify Identity Access owns the user-identity plane: OAuth, OIDC, CIBA, and 
 
 Verify never sees the database. Vault never authenticates an end user. Each system is the source of truth for one trust plane, and the boundary between them is a single, auditable, OIDC-mediated seam.
 
-## How the workshop is structured
-
-The workshop is organized into progressive modules, executed in order:
-
-1. **Introduction** — The problem, five control objectives, architecture overview (you are here).
-2. **Prerequisites** — Environment setup, IVIA licenses, and pre-flight checks.
-3. **Deploy Foundation** — VPC, EKS cluster, RDS PostgreSQL, Bedrock Knowledge Base — all deployed via local Terraform.
-4. **Platform — Vault and Verify Access** — Self-hosted Vault and IVIA on EKS, including OIDC discovery seam configuration and secrets engine wiring.
-5. **Use Case 1** — Non-personalized read-only Strands agent; Vault Kubernetes auth method; JIT Postgres + Bedrock credentials.
-6. **Use Case 2** — OAuth Authorization Code + PKCE; Vault `jwt` auth method; per-user database GRANTs; Kubernetes NetworkPolicy egress controls.
-7. **Use Case 3 + Audit** — CIBA out-of-band approval; `may_act` and `authorization_details` enforcement via `bound_claims`; bypass test; Athena three-plane correlation query.
-8. **Cleanup** — Ordered tear-down and resource verification.
-
-Plan on roughly 3 hours end-to-end if you run with a pre-provisioned Workshop Studio account. If you're running locally, add 30–45 minutes for pre-flight quota requests and Bedrock model approval.
-
 ## What you'll have at the end
 
-- A **3-node EKS cluster** (Kubernetes 1.33) with three deployed Strands agents, each with its own ServiceAccount and NetworkPolicy.
+- A **5-node EKS cluster** (min 3 / desired 5 / max 7, Kubernetes 1.34) with three deployed Strands agents, each with its own ServiceAccount and NetworkPolicy.
 - A **3-node Vault Raft HA cluster** with KMS auto-unseal, Kubernetes + JWT auth methods, and dynamic Postgres + AWS secrets engines.
 - **IBM Verify Identity Access (IVIA)** — self-hosted OIDC provider with OAuth clients, PKCE enforcement, and CIBA support.
 - **In-cluster OpenLDAP** — IVIA's user registry, seeded with the workshop user (Oscar) by the autoconf job, authenticated by IVIA via LDAP.

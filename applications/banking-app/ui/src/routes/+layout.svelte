@@ -25,7 +25,10 @@
 </script>
 
 {#if data.accessToken}
-	<Header companyName="OscarVault" platformName="International (OVI)" href="/dashboard">
+	<Header href="/dashboard">
+		<svelte:fragment slot="company">
+			<img src="/oscarvault-logo-white.svg" alt="OscarVault International (OVI)" class="brand-logo" />
+		</svelte:fragment>
 		<span class="header-tagline">Agentic Runtime Security Workshop</span>
 		<HeaderNav>
 			<HeaderNavItem href="/dashboard" text="Dashboard" data-sveltekit-reload />
@@ -87,5 +90,12 @@
 	.user-menu-logout {
 		align-self: flex-start;
 		padding: 0.5rem 0;
+	}
+
+	/* OscarVault logo in the header brand link — sized to the 3rem nav bar. */
+	.brand-logo {
+		height: 2.25rem;
+		width: auto;
+		display: block;
 	}
 </style>

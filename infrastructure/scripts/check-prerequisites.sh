@@ -3,7 +3,7 @@
 # Workshop Pre-Flight (consolidated)
 #
 # Single entry-point that:
-#   1. Installs missing CLI prereqs (kubectl 1.33.x, helm 3.12+, terraform 1.10+,
+#   1. Installs missing CLI prereqs (kubectl 1.34.x, helm 3.12+, terraform 1.10+,
 #      vault 1.21.x, aws v2, jq, yq) — macOS Homebrew or Linux apt/yum
 #   2. Verifies Amazon Bedrock model access (us.amazon.nova-pro-v1:0
 #      Amazon Nova Pro cross-region inference profile) in us-west-2 via
@@ -137,7 +137,7 @@ run() {
 echo -e "${BLUE}=== Install CLI tools ===${NC}"
 
 # Tool versions (matches PREF-05 documentation)
-KUBECTL_MAJOR_MINOR="1.33"
+KUBECTL_MAJOR_MINOR="1.34"
 AWS_CLI_MAJOR="2"
 
 # Per-section gate (only matters in --interactive mode; auto-yes otherwise)

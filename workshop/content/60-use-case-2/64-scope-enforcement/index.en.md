@@ -30,10 +30,6 @@ path "database/creds/uc2-personal-readonly" {
 path "sys/leases/renew" {
   capabilities = ["update"]
 }
-
-path "sys/leases/revoke" {
-  capabilities = ["update"]
-}
 ```
 
 Note: there is no path for any Use Case 3 write-capable role (e.g., `database/creds/uc3-refund-writer`). The policy grants `read` on exactly one database credential path.
@@ -102,8 +98,8 @@ Record the `username` and `password` values.
 ### Step 2.2 — Attempt INSERT with those credentials
 
 ```bash
-RDS_HOST=$(kubectl get configmap uc2-mcp-config -n banking-app \
-  -o jsonpath='{.data.RDS_HOST}')
+RDS_HOST=$(kubectl get configmap banking-mcp-config -n banking-app \
+  -o jsonpath='{.data.RDS_ADDRESS}')
 
 kubectl exec -n banking-app deploy/banking-mcp-server -- \
   sh -c "PGPASSWORD='<password>' psql -h ${RDS_HOST} -U <username> -d workshop \

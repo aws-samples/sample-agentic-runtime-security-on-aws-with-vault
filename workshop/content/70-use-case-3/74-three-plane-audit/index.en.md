@@ -62,7 +62,7 @@ The `audit_correlation` VIEW was created automatically during Use Case 3 deploym
 REQUEST_ID=$(aws logs filter-log-events \
   --log-group-name /workshop/agent-trace \
   --region "${AWS_REGION}" \
-  --filter-pattern "{ $.event_type = \"refund_approved\" }" \
+  --filter-pattern "{ $.message = \"process_refund_success\" }" \
   --query 'events[0].message' \
   --output text | jq -r .request_id)
 echo "request_id: ${REQUEST_ID}"
@@ -85,7 +85,7 @@ WHERE request_id = '${REQUEST_ID}'
 REQUEST_ID=$(aws logs filter-log-events \
   --log-group-name /workshop/agent-trace \
   --region "${AWS_REGION}" \
-  --filter-pattern "{ $.event_type = \"refund_approved\" }" \
+  --filter-pattern "{ $.message = \"process_refund_success\" }" \
   --query 'events[0].message' \
   --output text | jq -r .request_id)
 

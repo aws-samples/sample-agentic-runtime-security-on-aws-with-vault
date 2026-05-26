@@ -3,13 +3,7 @@ title: 'Deploy Foundation'
 weight: 30
 ---
 
-In this module you deploy the entire AWS foundation via `terraform apply` — VPC, EKS cluster, RDS PostgreSQL, Bedrock Knowledge Base, and the audit-correlation substrate. Work through the sub-modules in the left navigation in order.
-
-## Reference architecture
-
-![Reference architecture](/static/images/architecture-overview.svg)
-
-The eleven Terraform modules wire together in dependency order. Three (`audit`, `vpc`, `bedrock_kb_aoss`) have no inter-module dependencies — they apply in parallel. The others layer on top: `eks` depends on `vpc` + `audit`; `rds` depends on `vpc` + `audit` + `eks`; `bedrock_kb_index` depends on `bedrock_kb_aoss`; `addons` depends on `eks`.
+In this module you run the single `terraform apply` that provisions the entire workshop stack — VPC, EKS cluster, RDS PostgreSQL, Bedrock Knowledge Base, the audit-correlation substrate, and the in-cluster platform backbone (**HashiCorp Vault** + **IBM Verify Identity Access**). The later Platform and Use Case modules verify and configure what this apply deploys; they do not run their own `terraform apply`. Work through the sub-modules in the left navigation in order.
 
 ## Pre-flight check
 

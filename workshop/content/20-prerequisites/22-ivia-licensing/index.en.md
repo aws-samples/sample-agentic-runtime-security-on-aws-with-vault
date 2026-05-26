@@ -3,7 +3,7 @@ title: 'Obtain IVIA Licenses'
 weight: 22
 ---
 
-IBM Verify Identity Access (IVIA) 11.0.2 runs self-hosted on EKS as the OIDC provider and CIBA authorization server for all three use cases. Before you can deploy the Platform module, you need two licensing artifacts: an IBM Container Registry entitlement key that allows Kubernetes to pull the IVIA container image, and a 90-day trial activation certificate that unlocks the IVIA server.
+IBM Verify Identity Access (IVIA) 11.0.2 runs self-hosted on EKS as the OIDC provider and CIBA authorization server for all three use cases. Before you deploy in the Deploy Foundation module, you need two licensing artifacts: an IBM Container Registry entitlement key that allows Kubernetes to pull the IVIA container image, and a 90-day trial activation certificate that unlocks the IVIA server.
 
 Obtain both secrets before running `terraform -chdir=infrastructure apply` — deploying without them causes the IVIA pod to fail at `ImagePullBackOff` or at license validation.
 
@@ -23,9 +23,7 @@ icr_entitlement_key = "<your-entitlement-key>"
 
 The key has no expiry. Keep it out of version control — `infrastructure/terraform.tfvars` is already listed in `.gitignore`.
 
-:::alert{header="ImagePullBackOff symptom" type="warning"}
-If the IVIA pod shows `ImagePullBackOff` after deploy, the entitlement key is missing or incorrect. Update `icr_entitlement_key` in `infrastructure/terraform.tfvars` and re-run `terraform -chdir=infrastructure apply`.
-:::
+**ImagePullBackOff symptom** — If the IVIA pod shows `ImagePullBackOff` after deploy, the entitlement key is missing or incorrect. Update `icr_entitlement_key` in `infrastructure/terraform.tfvars` and re-run `terraform -chdir=infrastructure apply`.
 
 ## Secret 2 — IVIA Trial Activation Certificate
 

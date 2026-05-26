@@ -10,7 +10,29 @@ CIBA (OpenID Connect Client-Initiated Backchannel Authentication) lets an automa
 ## CIBA Consent Flow Through WRP
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {'primaryColor': '#0f62fe', 'primaryTextColor': '#161616', 'lineColor': '#525252', 'noteBkgColor': '#d4bbff', 'noteTextColor': '#161616'}}}%%
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#d0e2ff',
+  'primaryTextColor': '#161616',
+  'primaryBorderColor': '#0f62fe',
+  'lineColor': '#0f62fe',
+  'secondaryColor': '#bae6ff',
+  'tertiaryColor': '#f4f4f4',
+  'noteBkgColor': '#e8daff',
+  'noteTextColor': '#161616',
+  'noteBorderColor': '#8a3ffc',
+  'actorBkg': '#d0e2ff',
+  'actorBorder': '#0f62fe',
+  'actorTextColor': '#161616',
+  'signalColor': '#161616',
+  'signalTextColor': '#161616',
+  'labelBoxBkgColor': '#d0e2ff',
+  'labelBoxBorderColor': '#0f62fe',
+  'labelTextColor': '#161616',
+  'loopTextColor': '#161616',
+  'activationBorderColor': '#0f62fe',
+  'activationBkgColor': '#edf5ff',
+  'sequenceNumberColor': '#ffffff'
+}}}%%
 sequenceDiagram
     autonumber
     participant Agent as Use Case 3 Agent
@@ -59,13 +81,12 @@ The CIBA **backchannel** (bc-authorize and token poll) is machine-to-machine —
 
 The CIBA access token proves the user approved, but it does not prove *which agent* is acting. Token Exchange (RFC 8693) produces a delegated JWT that carries both.
 
-The Use Case 3 agent exchanges:
-- `subject_token` = the CIBA-issued user access token (proves user identity)
-- `actor_token` = the agent's own Kubernetes service account JWT (proves agent identity)
+The Use Case 3 agent presents only the user's token, authenticated as a **separate** OAuth client (`uc3-actor`) via HTTP Basic — IVIA rejects a client exchanging its own token (`FBTAQ5207E`), so no `actor_token` is sent:
+- `subject_token` = the CIBA-issued user access token (proves user identity + consent)
 
 IVIA returns a delegated JWT containing:
 - `sub` = the user (`oscar`)
-- `may_act.sub` = the agent's service account identity (`service-account:agent-uc3`)
+- `may_act.sub` = `uc3-actor` — injected server-side by the `isvaop_pretoken` mapping rule on the token-exchange grant (proves delegation)
 - `authorization_details` = `[{"type": "refund_approval", "amount": 50.00, "currency": "USD"}]`
 
 The delegated JWT is what the agent presents to Vault. Vault's `bound_claims` enforce that **both** `may_act.sub` and `authorization_details[0].type` match before issuing any DB credentials.
@@ -75,9 +96,9 @@ The IVIA CIBA client (`agent-uc3`) is configured in the `verify_access` Terrafor
 
 - `grant_types`: `["urn:openid:params:grant-type:ciba", "urn:ietf:params:oauth:grant-type:token-exchange"]`
 - `backchannel_user_code_parameter_supported`: `true` (binding_message enforcement)
-- `token_endpoint_auth_method`: `client_secret_post`
+- `token_endpoint_auth_method`: `client_secret_basic`
 
-The IVIA token exchange endpoint at `/token` accepts `actor_token_type=urn:ietf:params:oauth:token-type:jwt` (Kubernetes SA JWT) and `subject_token_type=urn:ietf:params:oauth:token-type:access_token`.
+The IVIA token exchange endpoint at `/token` is called with `subject_token_type=urn:ietf:params:oauth:token-type:access_token` (the CIBA user token). The `uc3-actor` client authenticates via HTTP Basic — no `actor_token` is sent; the `may_act` delegation claim is injected by the `isvaop_pretoken` rule on the token-exchange grant.
 
 The `notifyuser` mapping rule uses `InternalAuthenticator` (not `ExternalAuthenticator`). `notifyuser` calls `ciba.getUserAuthorizeEndpoint()` to obtain the consent URL (an internal URL that embeds a `transactionID` distinct from the `auth_req_id`), then HTTP-POSTs `{auth_req_id, consent_url}` to the banking-app backend at `/api/ciba/pending`. The agent's `initiate_refund` tool reads it back by `auth_req_id` and surfaces the URL to the user.
 :::
@@ -87,7 +108,7 @@ The Use Case 3 agent implements CIBA polling in `applications/uc3-agent/app/agen
 
 ```python
 # Initiate CIBA (direct to OIDC Provider ClusterIP — bypasses WRP)
-resp = requests.post(f"{IVIA_BASE}/bc-authorize", data={
+resp = requests.post(f"{IVIA_BASE}/ciba", data={
     "client_id": CLIENT_ID,
     "client_secret": CLIENT_SECRET,
     "login_hint": user_sub,
