@@ -62,7 +62,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="CDL Bank Agent — UC2",
+    title="OscarVault Agent — UC2",
     description="Personalized banking agent with OAuth + Vault JWT auth",
     version="1.0.0",
     lifespan=lifespan,

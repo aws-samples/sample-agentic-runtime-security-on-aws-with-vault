@@ -45,7 +45,7 @@ seed-banking-db.sh — Banking Database Seed
 Seeds the RDS PostgreSQL database with:
   - Banking schema (accounts + transactions tables)
   - Row-Level Security (RLS) policies for per-user data isolation
-  - Test data for Oscar and Adriana
+  - Test data for Oscar and Jaime
 
 Usage:
   $(basename "$0") [--dry-run] [--region <region>] [--help]
@@ -174,4 +174,4 @@ kubectl run "$SEED_POD_NAME" \
     }
 
 print_pass "Database seeded successfully"
-print_pass "Banking schema + RLS policies + test data for Oscar and Adriana"
+print_pass "Banking schema + RLS policies + test data for Oscar and Jaime"

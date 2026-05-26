@@ -10,7 +10,7 @@
   and forwarded to the agent pod via Authorization: Bearer header.
   The agent never stores tokens — each request is independently authenticated.
 
-  Test users: Oscar and Adriana
+  Test users: Oscar and Jaime
 -->
 <script lang="ts">
 	import type { PageData } from './$types';

@@ -759,7 +759,7 @@ def build_uc3_agent(vault_client=None, session_id: str = "default") -> Agent:
     session_manager = FileSessionManager(session_id=session_id, storage_dir="/tmp/uc3-sessions")
 
     system_prompt = (
-        "You are the CDL Bank Refund Assistant.\n\n"
+        "You are the OscarVault Refund Assistant.\n\n"
         "WORKFLOW — follow these steps exactly:\n"
         "1. When the user asks for a refund, call the list_transactions tool.\n"
         "2. Present results as a numbered list: description, amount, merchant, date.\n"

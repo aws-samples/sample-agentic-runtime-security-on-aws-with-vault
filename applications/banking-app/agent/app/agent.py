@@ -184,8 +184,8 @@ def build_uc2_agent(vault_client=None) -> Agent:
     bedrock_model = BedrockModel(**model_kwargs)
 
     system_prompt = (
-        "You are the CDL Bank AI Assistant for the Agentic Runtime Security workshop. "
-        "You help authenticated users (Oscar and Adriana) with their banking queries. "
+        "You are the OscarVault International (OVI) AI Assistant for the Agentic Runtime Security workshop. "
+        "You help authenticated users (Oscar and Jaime) with their banking queries. "
         "\n\n"
         "SECURITY MODEL:\n"
         "- Your identity is established via Kubernetes Service Account JWT + Vault (OBJ-1).\n"

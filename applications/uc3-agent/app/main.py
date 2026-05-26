@@ -69,7 +69,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="CDL Bank Agent — UC3",
+    title="OscarVault Agent — UC3",
     description="Privileged-action agent with CIBA + RFC 8693 token exchange + Vault jwt auth",
     version="1.0.0",
     lifespan=lifespan,
