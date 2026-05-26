@@ -5,7 +5,7 @@ weight: 65
 
 ## Overview
 
-In this module you observe the full credential lifecycle for a UC2 session: active lease issuance, explicit revocation triggered by user logout, and the audit log event that records the revocation with the user's `sub` claim. This demonstrates how session end cascades from the browser to Vault to the Postgres role — no manual cleanup required.
+In this module you observe the full credential lifecycle for a Use Case 2 session: active lease issuance, explicit revocation triggered by user logout, and the audit log event that records the revocation with the user's `sub` claim. This demonstrates how session end cascades from the browser to Vault to the Postgres role — no manual cleanup required.
 
 ## Step 1 — Establish a session and issue credentials
 
@@ -162,7 +162,7 @@ Vault supports two credential termination paths:
 | TTL expiry | Vault's internal lease expiry timer fires | `lease_expired` event | Yes — Vault calls `DROP ROLE` |
 | Explicit revocation | `POST /v1/sys/leases/revoke` | `sys/leases/revoke` response | Yes — immediate |
 
-In UC2 the explicit revocation path is used: the MCP Server calls Vault's revoke API when the user logs out. This is preferable to relying on TTL expiry because:
+In Use Case 2 the explicit revocation path is used: the MCP Server calls Vault's revoke API when the user logs out. This is preferable to relying on TTL expiry because:
 
 1. **Immediate effect**: The Postgres role is dropped within milliseconds of logout. A 15-minute TTL could leave a valid credential active for up to 15 minutes after the user session ends.
 2. **Audit clarity**: The explicit revocation event in the Vault audit log records the exact time of session end — useful for security incident investigations.

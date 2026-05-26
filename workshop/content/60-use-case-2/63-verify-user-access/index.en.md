@@ -5,7 +5,7 @@ weight: 63
 
 ## Overview
 
-In this module you log in as Oscar and then as Jaime and confirm that each user sees only their own accounts and transactions. You then inspect the PostgreSQL Row-Level Security (RLS) policy that enforces per-user isolation at the database layer and run `verify-uc2.sh` to validate all UC2 end-to-end success criteria.
+In this module you log in as Oscar and then as Jaime and confirm that each user sees only their own accounts and transactions. You then inspect the PostgreSQL Row-Level Security (RLS) policy that enforces per-user isolation at the database layer and run `verify-uc2.sh` to validate all Use Case 2 end-to-end success criteria.
 
 ## Step 1 — Log in as Oscar, inspect accounts
 
@@ -102,7 +102,7 @@ Run the end-to-end verification script:
 bash infrastructure/scripts/verify-uc2.sh
 ```
 
-The script checks all UC2 success criteria:
+The script checks all Use Case 2 success criteria:
 
 | Check | What It Validates |
 |---|---|
