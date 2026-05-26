@@ -1,9 +1,9 @@
 -- ===========================================================================
--- Banking Schema — CDL Bank Workshop Seed Data
+-- Banking Schema — OscarVault International (OVI) Workshop Seed Data
 --
 -- Creates banking schema with accounts + transactions tables, Row-Level
 -- Security (RLS) policies keyed on app.current_user_sub, and test data
--- for Oscar and Adriana.
+-- for Oscar and Jaime.
 --
 -- Usage: psql -U vault_root -d workshop -f seed.sql
 -- Idempotent: uses IF NOT EXISTS + ON CONFLICT DO NOTHING throughout.
@@ -81,18 +81,18 @@ CREATE POLICY user_transactions ON banking.transactions
   );
 
 -- ---------------------------------------------------------------------------
--- Test users: Oscar and Adriana
+-- Test users: Oscar and Jaime
 -- user_sub values match IVIA JWT sub claims used in ivia-configure.sh.
 -- ---------------------------------------------------------------------------
 
 INSERT INTO banking.accounts (id, user_sub, user_name, account_number, account_type, balance, currency)
 VALUES
   -- Oscar
-  ('a1000000-0000-0000-0000-000000000001', 'oscar', 'Oscar Medina', 'CDL-CHK-100001', 'checking', 4250.00, 'USD'),
-  ('a1000000-0000-0000-0000-000000000002', 'oscar', 'Oscar Medina', 'CDL-SAV-100002', 'savings',  18750.50, 'USD'),
-  -- Adriana
-  ('a2000000-0000-0000-0000-000000000001', 'adriana', 'Adriana Medina', 'CDL-CHK-200001', 'checking', 7830.25, 'USD'),
-  ('a2000000-0000-0000-0000-000000000002', 'adriana', 'Adriana Medina', 'CDL-SAV-200002', 'savings',  32100.00, 'USD')
+  ('a1000000-0000-0000-0000-000000000001', 'oscar', 'Oscar Goldman', 'OVI-CHK-100001', 'checking', 4250.00, 'USD'),
+  ('a1000000-0000-0000-0000-000000000002', 'oscar', 'Oscar Goldman', 'OVI-SAV-100002', 'savings',  18750.50, 'USD'),
+  -- Jaime
+  ('a2000000-0000-0000-0000-000000000001', 'jaime', 'Jaime Sommers', 'OVI-CHK-200001', 'checking', 7830.25, 'USD'),
+  ('a2000000-0000-0000-0000-000000000002', 'jaime', 'Jaime Sommers', 'OVI-SAV-200002', 'savings',  32100.00, 'USD')
 ON CONFLICT (account_number) DO NOTHING;
 
 -- ---------------------------------------------------------------------------
@@ -104,31 +104,31 @@ VALUES
   -- Oscar checking
   ('a1000000-0000-0000-0000-000000000001', 'debit',  -52.40, 'Grocery run',           'Whole Foods Market',     'groceries'),
   ('a1000000-0000-0000-0000-000000000001', 'debit',  -18.99, 'Streaming subscription', 'Netflix',                'entertainment'),
-  ('a1000000-0000-0000-0000-000000000001', 'credit', 3500.00, 'Payroll deposit',        'CDL Bank Payroll',       'income'),
+  ('a1000000-0000-0000-0000-000000000001', 'credit', 3500.00, 'Payroll deposit',        'OscarVault Payroll',     'income'),
   ('a1000000-0000-0000-0000-000000000001', 'debit',  -120.00, 'Electric bill',          'Pacific Gas & Electric', 'utilities'),
   ('a1000000-0000-0000-0000-000000000001', 'debit',  -45.00, 'Restaurant dinner',      'The Slanted Door',       'dining'),
   -- Oscar savings
   ('a1000000-0000-0000-0000-000000000002', 'credit', 500.00,  'Transfer from checking', 'Internal Transfer',      'transfer'),
-  ('a1000000-0000-0000-0000-000000000002', 'credit', 12.50,   'Interest earned',        'CDL Bank',               'interest'),
-  ('a1000000-0000-0000-0000-000000000002', 'credit', 1000.00, 'Year-end bonus deposit', 'CDL Bank Payroll',       'income')
+  ('a1000000-0000-0000-0000-000000000002', 'credit', 12.50,   'Interest earned',        'OscarVault',             'interest'),
+  ('a1000000-0000-0000-0000-000000000002', 'credit', 1000.00, 'Year-end bonus deposit', 'OscarVault Payroll',     'income')
 ON CONFLICT DO NOTHING;
 
 -- ---------------------------------------------------------------------------
--- Test transactions — Adriana (checking: a2000000-…-01, savings: a2000000-…-02)
+-- Test transactions — Jaime (checking: a2000000-…-01, savings: a2000000-…-02)
 -- ---------------------------------------------------------------------------
 
 INSERT INTO banking.transactions (account_id, transaction_type, amount, description, merchant, category)
 VALUES
-  -- Adriana checking
+  -- Jaime checking
   ('a2000000-0000-0000-0000-000000000001', 'debit',  -88.30, 'Pharmacy',               'CVS Pharmacy',           'health'),
-  ('a2000000-0000-0000-0000-000000000001', 'credit', 4200.00, 'Payroll deposit',        'CDL Bank Payroll',       'income'),
+  ('a2000000-0000-0000-0000-000000000001', 'credit', 4200.00, 'Payroll deposit',        'OscarVault Payroll',     'income'),
   ('a2000000-0000-0000-0000-000000000001', 'debit',  -65.00, 'Monthly gym membership', 'Equinox',                'fitness'),
   ('a2000000-0000-0000-0000-000000000001', 'debit',  -210.00, 'Airfare booking',        'United Airlines',        'travel'),
   ('a2000000-0000-0000-0000-000000000001', 'debit',  -34.99, 'Books',                  'Amazon',                 'shopping'),
-  -- Adriana savings
+  -- Jaime savings
   ('a2000000-0000-0000-0000-000000000002', 'credit', 800.00,  'Transfer from checking', 'Internal Transfer',      'transfer'),
-  ('a2000000-0000-0000-0000-000000000002', 'credit', 24.75,   'Interest earned',        'CDL Bank',               'interest'),
-  ('a2000000-0000-0000-0000-000000000002', 'credit', 2000.00, 'Savings goal deposit',   'CDL Bank',               'savings'),
+  ('a2000000-0000-0000-0000-000000000002', 'credit', 24.75,   'Interest earned',        'OscarVault',             'interest'),
+  ('a2000000-0000-0000-0000-000000000002', 'credit', 2000.00, 'Savings goal deposit',   'OscarVault',             'savings'),
   ('a2000000-0000-0000-0000-000000000002', 'debit',  -500.00, 'Emergency fund draw',    'Internal Transfer',      'transfer')
 ON CONFLICT DO NOTHING;
 

@@ -5,7 +5,7 @@ weight: 63
 
 ## Overview
 
-In this module you log in as Oscar and then as Adriana and confirm that each user sees only their own accounts and transactions. You then inspect the PostgreSQL Row-Level Security (RLS) policy that enforces per-user isolation at the database layer and run `verify-uc2.sh` to validate all UC2 end-to-end success criteria.
+In this module you log in as Oscar and then as Jaime and confirm that each user sees only their own accounts and transactions. You then inspect the PostgreSQL Row-Level Security (RLS) policy that enforces per-user isolation at the database layer and run `verify-uc2.sh` to validate all UC2 end-to-end success criteria.
 
 ## Step 1 — Log in as Oscar, inspect accounts
 
@@ -28,7 +28,7 @@ RDS_HOST=$(kubectl get configmap uc2-mcp-config -n banking-app \
 # Exec into the MCP Server pod and run a select
 kubectl exec -n banking-app deploy/banking-mcp-server -- \
   sh -c "PGPASSWORD='<password>' psql -h ${RDS_HOST} -U <username> -d workshop \
-  -c \"SET app.current_user_sub = 'oscar@cdlbank.com'; SELECT account_number, balance FROM banking.accounts;\""
+  -c \"SET app.current_user_sub = 'oscar'; SELECT account_number, balance FROM banking.accounts;\""
 ```
 
 Expected output — only Oscar's rows:
@@ -36,30 +36,31 @@ Expected output — only Oscar's rows:
 ```
  account_number |  balance
 ----------------+-----------
- CDL-OA-001     | 12450.00
- CDL-OA-002     |  3100.00
+ OVI-CHK-100001 | 4250.00
+ OVI-SAV-100002 | 18750.50
 (2 rows)
 ```
 
-## Step 2 — Switch to Adriana, confirm data isolation
+## Step 2 — Switch to Jaime, confirm data isolation
 
-Log out and log in as `adriana`. Navigate to the **Accounts** page. You should see Adriana's accounts only — no rows from Oscar's data.
+Log out and log in as `jaime`. Navigate to the **Accounts** page. You should see Jaime's accounts only — no rows from Oscar's data.
 
-Run the same manual query with `app.current_user_sub = 'adriana@cdlbank.com'`:
+Run the same manual query with `app.current_user_sub = 'jaime'`:
 
 ```bash
 kubectl exec -n banking-app deploy/banking-mcp-server -- \
   sh -c "PGPASSWORD='<password>' psql -h ${RDS_HOST} -U <username> -d workshop \
-  -c \"SET app.current_user_sub = 'adriana@cdlbank.com'; SELECT account_number, balance FROM banking.accounts;\""
+  -c \"SET app.current_user_sub = 'jaime'; SELECT account_number, balance FROM banking.accounts;\""
 ```
 
-Expected output — only Adriana's rows:
+Expected output — only Jaime's rows:
 
 ```
  account_number |  balance
 ----------------+-----------
- CDL-AA-001     |  8750.00
-(1 row)
+ OVI-CHK-200001 |  7830.25
+ OVI-SAV-200002 | 32100.00
+(2 rows)
 ```
 
 ## Step 3 — Inspect the Row-Level Security policy
@@ -167,11 +168,11 @@ How the session variable activates RLS:
 
 ```sql
 -- The MCP Server runs this before every SELECT query:
-SET app.current_user_sub = 'oscar@cdlbank.com';
+SET app.current_user_sub = 'oscar';
 
 -- PostgreSQL evaluates the RLS predicate for every row:
 WHERE user_sub = current_setting('app.current_user_sub', true)
--- → WHERE user_sub = 'oscar@cdlbank.com'
+-- → WHERE user_sub = 'oscar'
 ```
 
 The `true` argument to `current_setting` tells Postgres to return `NULL` rather than raise an error if the setting is not configured — this is the safe default that returns zero rows instead of all rows when the session variable is missing.
@@ -207,7 +208,7 @@ MCP Server  POST /mcp
   return accounts                          ← MCP tool response
     ↓
 Banking Agent formats response
-  → "You have 2 accounts: CDL-OA-001 ($12,450) and CDL-OA-002 ($3,100)"
+  → "You have 2 accounts: OVI-CHK-100001 ($4,250) and OVI-SAV-100002 ($18,750)"
 ```
 
 Key design choices:
@@ -226,5 +227,5 @@ Key design choices:
 
 **With shared DB credentials (OBJ-2 failure):** If a single long-lived Postgres password were used for all users, Row-Level Security would still filter rows (because `app.current_user_sub` would still be set), but a compromised credential would give an attacker access to all users' data by simply setting a different `app.current_user_sub` value. JIT credentials limit each credential to a 15-minute window and a specific Vault token entity — a stolen credential self-destructs and the Vault audit log records which user's jwt login it was issued for.
 
-**Without audit logging (OBJ-5 failure):** The Vault audit log entry for `auth/jwt/login` carries `token_meta.sub = "oscar@cdlbank.com"`. The subsequent `database/creds/uc2-personal-readonly` entry carries the same `lease_id` that can be joined to the Postgres pgaudit log in CloudWatch. Without Vault audit logging, there is no starting point to attribute a specific SELECT query to a specific user identity — the data access event becomes unattributable.
+**Without audit logging (OBJ-5 failure):** The Vault audit log entry for `auth/jwt/login` carries `token_meta.sub = "oscar"`. The subsequent `database/creds/uc2-personal-readonly` entry carries the same `lease_id` that can be joined to the Postgres pgaudit log in CloudWatch. Without Vault audit logging, there is no starting point to attribute a specific SELECT query to a specific user identity — the data access event becomes unattributable.
 :::
