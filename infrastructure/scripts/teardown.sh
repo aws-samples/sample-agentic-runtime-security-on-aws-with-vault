@@ -197,24 +197,23 @@ phase_k8s_cleanup() {
     fi
 
     # === Phase 7 cleanup: explicit verify-access object sweep ===
-    # Delete LBC-managed Services (NLB) and Ingresses (ALB) FIRST so the AWS LBC
-    # can reconcile their target groups before we yank the namespace.
+    # Issue the LBC-managed Service/Ingress deletes NON-BLOCKING (--wait=false).
+    # Do NOT let kubectl block on the ingress.k8s.aws/resources finalizer here:
+    # in FULL mode `terraform destroy` runs first and may already have torn out
+    # the LB controller's NAT egress + pod-identity, leaving the controller a
+    # live pod with no route or creds to the AWS APIs. A plain `kubectl delete
+    # ingress` (default --wait) would then hang FOREVER waiting for a finalizer
+    # the severed controller can never strip. We instead delete the ALBs/NLBs
+    # directly via the AWS CLI below (which works from the operator's machine),
+    # then force-clear the finalizers so the objects — and their namespaces —
+    # drain cleanly. Order: release LBs -> clear finalizers -> drain namespaces.
     print_info "Sweeping verify-access namespace objects (LB-managed first)..."
-    kubectl delete -n verify-access --ignore-not-found service iviaconfig-nlb 2>/dev/null || true
-    kubectl delete -n verify-access --ignore-not-found ingress ivia-wrp 2>/dev/null || true
-    # Give LBC ~30s to release the NLB/ALB before namespace delete
-    sleep 30
+    kubectl delete -n verify-access --ignore-not-found --wait=false service iviaconfig-nlb 2>/dev/null || true
+    kubectl delete -n verify-access --ignore-not-found --wait=false ingress ivia-wrp 2>/dev/null || true
 
-    # Delete workshop namespaces (vault, verify-access, uc1, etc.) so any LB
-    # Services in them get torn down by the LB controller.
-    for ns in vault verify-access uc1 banking-app; do
-        if kubectl get namespace "$ns" &>/dev/null; then
-            print_info "Deleting namespace $ns..."
-            kubectl delete namespace "$ns" --ignore-not-found --timeout=120s 2>/dev/null || true
-        fi
-    done
-
-    # Force-delete any LBs still in the cluster's VPC.
+    # Force-delete every ALB/NLB in the cluster's VPC. This is what actually
+    # releases the ENIs that block VPC/subnet/IGW deletion, and it does not
+    # depend on the in-cluster controller being reachable.
     local vpc_id
     vpc_id=$(aws eks describe-cluster --name "$DEFAULT_CLUSTER" --region "$REGION" \
         --query 'cluster.resourcesVpcConfig.vpcId' --output text 2>/dev/null)
@@ -228,6 +227,28 @@ phase_k8s_cleanup() {
             aws elbv2 delete-load-balancer --load-balancer-arn "$arn" --region "$REGION" &>/dev/null || true
         done
     fi
+
+    # Force-remove the AWS-LBC finalizer from any Ingress still stuck Terminating.
+    # The controller normally strips ingress.k8s.aws/resources after it deletes
+    # the ALB; if it is network-severed it never will. Now that the ALB is gone,
+    # clear the finalizer ourselves (mirror of the stuck-PVC handling below) so
+    # the namespace delete loop completes instead of blocking on a zombie object.
+    for ns in vault verify-access uc1 banking-app; do
+        for ing in $(kubectl get ingress -n "$ns" -o name 2>/dev/null); do
+            print_info "Clearing stuck finalizer on $ns/$ing"
+            kubectl patch "$ing" -n "$ns" --type=merge \
+                -p '{"metadata":{"finalizers":null}}' &>/dev/null || true
+        done
+    done
+
+    # Now drain the workshop namespaces — the LB objects are released and their
+    # finalizers cleared, so these complete instead of hanging.
+    for ns in vault verify-access uc1 banking-app; do
+        if kubectl get namespace "$ns" &>/dev/null; then
+            print_info "Deleting namespace $ns..."
+            kubectl delete namespace "$ns" --ignore-not-found --timeout=120s 2>/dev/null || true
+        fi
+    done
 }
 
 #===============================================================================
@@ -994,6 +1015,39 @@ sweep_orphan_target_groups() {
     done
 }
 
+# Sweep the self-signed ALB-wildcard cert imported into ACM. tls_self_signed_cert
+# .workshop_tls (root main.tf) is imported as the *.<region>.elb.amazonaws.com
+# cert backing the banking-ui / ivia-wrp ALB HTTPS:443 listeners. ACM is NOT
+# VPC-scoped, so the VPC teardown never touches it and it lingers after destroy
+# (confirmed gap). Delete any workshop-TAGGED cert matching that domain; a cert
+# still InUseBy a live LB cannot be deleted and is skipped (ALBs are gone by the
+# time this runs). We require the Workshop tag so we never nuke an unrelated
+# wildcard cert that happens to share the regional ELB domain.
+sweep_acm_certs() {
+    local certs
+    certs=$(aws acm list-certificates --region "$REGION" \
+        --query "CertificateSummaryList[?DomainName=='*.${REGION}.elb.amazonaws.com'].CertificateArn" \
+        --output text 2>/dev/null)
+    if [[ -z "$certs" || "$certs" == "None" ]]; then
+        print_info "ACM certs (workshop ALB wildcard): none"
+        return 0
+    fi
+    for arn in $certs; do
+        [[ -z "$arn" || "$arn" == "None" ]] && continue
+        local tagged
+        tagged=$(aws acm list-tags-for-certificate --certificate-arn "$arn" --region "$REGION" \
+            --query "Tags[?Key=='${WORKSHOP_TAG_KEY}' && Value=='${WORKSHOP_TAG_VAL}'].Value" \
+            --output text 2>/dev/null)
+        if [[ -z "$tagged" || "$tagged" == "None" ]]; then
+            print_info "ACM cert ${arn##*/} not workshop-tagged — skipping"
+            continue
+        fi
+        echo -n "    Deleting ACM cert ${arn##*/}... "
+        aws acm delete-certificate --certificate-arn "$arn" --region "$REGION" &>/dev/null \
+            && echo -e "${GREEN}done${NC}" || echo -e "${RED}failed (still in use?)${NC}"
+    done
+}
+
 sweep_vpc_enis() {
     local vpc=$1
     local in_use waited=0
@@ -1263,6 +1317,10 @@ phase_aws_sweep() {
     step_header "Orphan target groups (workshop-named, no VPC)"
     sweep_orphan_target_groups || true
 
+    # ACM cert is not VPC-scoped — sweep it independently of the VPC loop.
+    step_header "ACM cert (self-signed ALB wildcard)"
+    sweep_acm_certs || true
+
     print_success "AWS sweep complete"
 }
 
@@ -1296,6 +1354,20 @@ phase_verify_zero_residuals() {
         --query 'cluster.name' --output text 2>/dev/null || true)
     [[ "$eks_cluster" == "None" ]] && eks_cluster=""
     _check "EKS cluster" "$eks_cluster"
+
+    # ACM cert (self-signed ALB wildcard, workshop-tagged)
+    local acm=""
+    for arn in $(aws acm list-certificates --region "$REGION" \
+            --query "CertificateSummaryList[?DomainName=='*.${REGION}.elb.amazonaws.com'].CertificateArn" \
+            --output text 2>/dev/null); do
+        [[ -z "$arn" || "$arn" == "None" ]] && continue
+        local t
+        t=$(aws acm list-tags-for-certificate --certificate-arn "$arn" --region "$REGION" \
+            --query "Tags[?Key=='${WORKSHOP_TAG_KEY}' && Value=='${WORKSHOP_TAG_VAL}'].Value" \
+            --output text 2>/dev/null)
+        [[ -n "$t" && "$t" != "None" ]] && acm="$acm ${arn##*/}"
+    done
+    _check "ACM certs (workshop ALB wildcard)" "$(echo "$acm" | xargs)"
 
     # RDS instances
     local rds
