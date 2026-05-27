@@ -25,6 +25,7 @@ terraform {
     random     = { source = "hashicorp/random", version = "~> 3.0" }
     tls        = { source = "hashicorp/tls", version = "~> 4.0" }
     time       = { source = "hashicorp/time", version = "~> 0.9" }
+    archive    = { source = "hashicorp/archive", version = "~> 2.4" }
   }
 }
 
@@ -800,6 +801,21 @@ resource "kubernetes_config_map" "iviaop_config" {
   binary_data = {
     "templates.zip" = filebase64("${path.module}/iviaop-config/templates.zip")
   }
+
+  # provider.yml and clients.yml are created here with PLACEHOLDER ALB hostnames
+  # (issuer-patched-at-root.invalid / placeholder.invalid), then overwritten
+  # out-of-band by the root-module kubernetes_config_map_v1_data.iviaop_clients_patch
+  # with the real ALB issuer + redirect_uri once the ALBs exist. Without this
+  # ignore_changes the base resource would revert the patched real values back to
+  # the placeholders on every apply — perpetual drift, and a stray apply would
+  # break the live OIDC issuer (iviaop would advertise *.invalid and the banking
+  # login redirect would dead-end). The patch owns these two keys after creation.
+  lifecycle {
+    ignore_changes = [
+      data["provider.yml"],
+      data["clients.yml"],
+    ]
+  }
 }
 
 #-------------------------------------------------------------------------------
@@ -1323,6 +1339,17 @@ resource "kubernetes_config_map" "base_layer" {
 # Python tool sees one flat /base_layer directory.
 #-------------------------------------------------------------------------------
 
+# OscarVault-branded WebSEAL management pages, zipped at plan time. The source
+# tree (base_layer/management-pages/management/C/login.html) stays reviewable in
+# git; archive_file produces the binary reverse_proxy.zip the WebSEAL
+# `management_root` import expects (zip rooted at management/C/...). Output lands
+# in a gitignored build dir, NOT under base_layer/ (would pollute the fileset).
+data "archive_file" "ivia_management_pages" {
+  type        = "zip"
+  source_dir  = "${path.module}/base_layer/management-pages"
+  output_path = "${path.module}/.terraform-build/reverse_proxy.zip"
+}
+
 resource "kubernetes_secret" "base_layer_p12" {
   metadata {
     name      = "ivia-base-layer-p12"
@@ -1332,6 +1359,9 @@ resource "kubernetes_secret" "base_layer_p12" {
   type = "Opaque"
   binary_data = {
     "iviawrprp1.p12" = filebase64("${path.module}/base_layer/iviawrprp1.p12")
+    # Branded login page bundle — flat name matches `management_root` in
+    # base_layer.yaml; the autoconf init container copies it into /base_layer.
+    "reverse_proxy.zip" = filebase64(data.archive_file.ivia_management_pages.output_path)
   }
 }
 
@@ -1345,9 +1375,13 @@ resource "kubernetes_secret" "base_layer_p12" {
 
 locals {
   base_layer_files = sort(tolist(fileset("${path.module}/base_layer", "*")))
-  base_layer_hash = sha256(join("", [
-    for f in local.base_layer_files : filesha256("${path.module}/base_layer/${f}")
-  ]))
+  base_layer_hash = sha256(join("", concat(
+    [for f in local.base_layer_files : filesha256("${path.module}/base_layer/${f}")],
+    # fileset("base_layer","*") is top-level only, so the management-pages/ subtree
+    # is invisible to it. Fold in the zip's content hash so editing login.html
+    # forces the autoconf Job to recreate and re-import the page.
+    [data.archive_file.ivia_management_pages.output_sha256]
+  )))
 }
 
 #-------------------------------------------------------------------------------

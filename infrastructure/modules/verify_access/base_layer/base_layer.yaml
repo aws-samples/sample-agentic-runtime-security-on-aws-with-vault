@@ -116,6 +116,11 @@ webseal:
       ssl: "yes"
       port: 636
       key_file: "lmi_trust_store"
+    # OscarVault-branded WebSEAL hosted login page. Zip is rooted at
+    # management/C/login.html and delivered into /base_layer by the autoconf
+    # init container (see kubernetes_secret.base_layer_p12 + archive_file).
+    management_root:
+    - "reverse_proxy.zip"
     junctions:
     - junction_point: "/isvaop"
       description: "Verify Identiy Access OIDC OP Container"

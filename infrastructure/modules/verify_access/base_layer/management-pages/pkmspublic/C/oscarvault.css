@@ -1,0 +1,118 @@
+/*
+ * OscarVault International (OVI) — Carbon Design System (g10) login theme.
+ *
+ * Served from %PKMSPUBLIC% (same-origin) so it is allowed by the WebSEAL login
+ * Content-Security-Policy (default-src 'self'). It is linked AFTER default.css
+ * in login.html, so these rules win the cascade. Inline <style> cannot be used
+ * here — the CSP has no 'unsafe-inline', so any inline style block is dropped.
+ *
+ * Reproduces Carbon tokens by hand (no component library on this page) to match
+ * the OscarVault banking UI. default.css ships a dark theme + an absolutely
+ * positioned login box; we override both to a flat white canvas + Carbon tile.
+ */
+
+html, body {
+  background: #ffffff !important;
+  background-image: none !important;
+  background-color: #ffffff !important;
+  font-family: 'IBM Plex Sans', 'Helvetica Neue', Helvetica, Arial, sans-serif !important;
+}
+.content { background: #ffffff !important; }
+
+/* Blue 60 top rule — Carbon brand accent. */
+.ov-accent { height: 4px; background: #0f62fe; width: 100%; }
+.ov-brand {
+  display: flex; align-items: center; justify-content: center;
+  gap: 0.75rem; padding: 3rem 1rem 1rem;
+}
+.ov-brand svg { display: block; height: 52px; width: auto; }
+
+/* Carbon tile — flat white surface, subtle border, no rounded corners. Pulled
+   out of default.css's absolute centering into normal flow, below the logo. */
+.message-container {
+  position: static !important;
+  left: auto !important; top: auto !important;
+  width: 25rem; max-width: 90%;
+  margin: 0 auto 3rem !important;
+  padding: 2.5rem 3rem 3rem;
+  color: #161616 !important;
+  background-color: #ffffff !important;
+  border: 1px solid #e0e0e0;
+  box-sizing: border-box;
+}
+/* Carbon heading-04 (productive). */
+.message-container h2 {
+  color: #161616;
+  font-size: 1.75rem; line-height: 2.25rem; font-weight: 400;
+  margin: 0 0 2rem;
+}
+
+/* Carbon label-01. */
+.message-container label {
+  display: block;
+  font-size: 0.75rem; line-height: 1rem; font-weight: 400;
+  color: #525252; margin: 0 0 0.5rem;
+}
+
+/* Carbon text input — field-01 fill, single strong bottom border, 2px Blue 60
+   focus outline. */
+.message-container input[type="text"],
+.message-container input[type="password"] {
+  width: 100%; height: 2.5rem;
+  background: #f4f4f4 !important;
+  color: #161616;
+  border: none !important;
+  border-bottom: 1px solid #8d8d8d !important;
+  border-radius: 0 !important;
+  padding: 0 1rem !important;
+  margin: 0 0 1.5rem !important;
+  font-size: 0.875rem;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+.message-container input[type="text"]:focus,
+.message-container input[type="password"]:focus {
+  outline: 2px solid #0f62fe !important;
+  outline-offset: -2px;
+  border-bottom-color: transparent !important;
+}
+
+/* Carbon primary button — Blue 60, 48px, square, full width. */
+.submitButton, .button-1 {
+  float: none !important;
+  display: block !important;
+  width: 100% !important; min-width: 0 !important;
+  height: 3rem;
+  background: #0f62fe !important;
+  border: none !important;
+  color: #ffffff !important;
+  font-size: 0.875rem; font-weight: 400; font-family: inherit;
+  text-align: center;
+  padding: 0 1rem !important;
+  cursor: pointer;
+}
+.submitButton:hover, .button-1:hover {
+  background: #0353e9 !important;
+  color: #ffffff !important;
+}
+.submitButton:focus, .button-1:focus {
+  outline: 2px solid #0f62fe; outline-offset: -3px;
+  box-shadow: inset 0 0 0 1px #ffffff;
+}
+
+/* Carbon subtle divider between the password and OIDC sign-in options. */
+.message-container hr {
+  border: none; border-top: 1px solid #e0e0e0;
+  margin: 1.5rem 0;
+}
+
+/* Footer carries only a clock; keep it on the white canvas with muted Carbon
+   helper-text styling instead of default.css's dark fixed bar. */
+.footer {
+  position: static !important;
+  background: transparent !important;
+  color: #8d8d8d !important;
+  height: auto !important;
+  padding: 1rem 0 2rem; text-align: center;
+}
+.footer #clock { float: none !important; font-size: 0.875rem !important; top: 0 !important; }

@@ -44,11 +44,44 @@ if [ "${ready:-0}" -lt 1 ]; then
 fi
 print_success "Deployment ${WRP_DEPLOY}: ${ready}/1 Ready"
 
-# --- 2. WRP rolled out at least once (post-autoconf restart trace) ---
-restart_count=$(kubectl get pods -n "${IVIA_NS}" -l app=iviawrprp1 \
-  -o jsonpath='{.items[0].status.containerStatuses[0].restartCount}' 2>/dev/null || echo 0)
-if [ "${restart_count:-0}" -lt 1 ]; then
-  print_warn "${WRP_DEPLOY} pod restartCount=${restart_count}. If autoconf just ran but the pod was never restarted, run: kubectl rollout restart deploy/${WRP_DEPLOY} -n ${IVIA_NS}"
+# --- 2. Cycle the WRP pod so it pulls the published autoconf snapshot ---
+# The autoconf Job imports junctions/stanzas AND the OscarVault-branded login
+# page into the LMI config, then calls deploy_pending_changes. In container mode
+# IVIA reports "server needs restarting" but does NOT restart the WRP itself
+# (restart_instance is gated on is_docker()==False; container.k8s_deployments
+# auto-restart is disabled — SDK 0.3.34 bug). A running WRP keeps serving its
+# stale boot-time snapshot until its pod is recreated and config-pulls again.
+#
+# We DELETE the pod (not `kubectl rollout restart`): rollout restart patches the
+# deployment's pod-template `restartedAt` annotation, which Terraform manages and
+# would then report as perpetual drift. Deleting the pod leaves the deployment
+# spec untouched — the ReplicaSet recreates it, the fresh pod config-pulls the
+# published snapshot, and `terraform plan` stays clean. Idempotent.
+print_info "Cycling ${WRP_DEPLOY} pod to pull the published autoconf snapshot..."
+kubectl delete pod -n "${IVIA_NS}" -l app=iviawrprp1 --wait=true
+# Wait for the ReplicaSet's replacement pod to become Ready (poll past the brief
+# gap where no pod exists yet).
+for _ in $(seq 1 60); do
+  ready=$(kubectl get pods -n "${IVIA_NS}" -l app=iviawrprp1 \
+    -o jsonpath='{.items[*].status.containerStatuses[0].ready}' 2>/dev/null)
+  [ "${ready}" = "true" ] && break
+  sleep 5
+done
+if [ "${ready:-}" != "true" ]; then
+  print_error "${WRP_DEPLOY} replacement pod did not become Ready within 300s"
+  exit 1
+fi
+print_success "${WRP_DEPLOY} pod recreated — now serving the latest published config"
+
+# --- 2b. Verify the served login page is the OscarVault-branded build ---
+WRP_POD=$(kubectl get pods -n "${IVIA_NS}" -l app=iviawrprp1 \
+  -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+LOGIN_PATH="/var/pdweb/rp1/server-root/lib/management/C/login.html"
+if kubectl exec -n "${IVIA_NS}" "${WRP_POD}" -- grep -q "OscarVault" "${LOGIN_PATH}" 2>/dev/null; then
+  print_success "Login page is OscarVault-branded (management_root import served)"
+else
+  print_error "Login page is NOT branded — autoconf management_root import did not land. Fix: re-run terraform apply (autoconf Job) then re-run this script."
+  exit 1
 fi
 
 # --- 3. OIDC discovery via WRP exec curl (CONTEXT exit gate) ---

@@ -40,7 +40,7 @@ The script prints a pass/fail summary for each configuration step. All steps mus
 `configure-workshop.sh` is safe to re-run at any point. If a step fails, fix the root cause and re-run — already-completed steps are skipped or produce the same outcome.
 :::
 
-## What Happens During Apply
+## What is Provisioned
 
 You don't sequence this yourself; Terraform's dependency graph handles ordering. Broadly, resources flow through these waves:
 
@@ -57,45 +57,3 @@ When the apply completes, note these outputs — you will need them in the next 
 - `kubectl_config_command` — the `aws eks update-kubeconfig` one-liner
 - `kb_id` — the Bedrock KB ID for ingestion
 - `rds_endpoint` — the PostgreSQL connection endpoint
-
-## Module Reference
-
-::::expand{header="audit — Encryption and observability foundation"}
-- Workshop CMK (`alias/workshop-data`) — encrypts all storage across all modules
-- CloudWatch log groups — `/workshop/vault-audit`, `/workshop/ivia-decision`, `/workshop/agent-trace` (KMS-encrypted, 7-day retention)
-- Glue catalog database `workshop_logs` + Athena workgroup `workshop`
-::::
-
-::::expand{header="vpc — Network substrate"}
-- VPC `10.1.0.0/16`, 3 public + 3 private subnets across 3 AZs
-- Single NAT Gateway, S3 gateway endpoint
-- 6 interface endpoints: `bedrock-runtime`, `bedrock-agent-runtime`, `logs`, `sts`, `secretsmanager`, `kms`
-::::
-
-::::expand{header="eks — Kubernetes cluster and managed addons"}
-- Kubernetes 1.34 cluster, 5 × m5.xlarge managed node group (min 3 / desired 5 / max 7, AL2023)
-- 5 control-plane log types, EKS Access Entry for your `admin_principal_arn`
-- 5 managed addons: `vpc-cni`, `coredns`, `kube-proxy`, `eks-pod-identity-agent`, `aws-ebs-csi-driver`
-::::
-
-::::expand{header="addons — External cluster addons"}
-- cert-manager, external-dns, AWS Load Balancer Controller (via eks-blueprints-addons)
-::::
-
-::::expand{header="rds — PostgreSQL 17 with audit logging"}
-- PostgreSQL 17 (`db.t3.medium`), pgaudit + connection logging, storage-encrypted with workshop CMK
-- Master password managed by Secrets Manager, security group admits `:5432` from EKS only
-
-**Note:** `shared_preload_libraries = pgaudit` is a static parameter group setting — RDS reboots at apply time (~10 min).
-::::
-
-::::expand{header="bedrock_kb_aoss — Knowledge Base infrastructure (us-east-1)"}
-- KB CMK, AOSS VECTORSEARCH collection `workshop-kb`, 3 AOSS policies
-- IAM service role (5 inline policies), S3 corpus + multimodal buckets
-- 8 synthetic markdown files across 3 domains (HR, customers, finance)
-::::
-
-::::expand{header="bedrock_kb_index — Knowledge Base and data sources (us-east-1)"}
-- OpenSearch index (Nova 2 Embeddings, 1024-dim, k-NN L2)
-- Bedrock Knowledge Base `workshop-kb`, 3 data sources
-::::
