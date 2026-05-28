@@ -34,11 +34,79 @@ from strands.models import BedrockModel
 from strands.session import FileSessionManager
 
 from . import ciba_store
+from .auth import _AUTHENTICATED_SUB
 
 logger = logging.getLogger(__name__)
 
 # Module-level vault client reference (set by build_uc3_agent)
 _vault_client = None
+
+
+class RefundAuthorizationError(Exception):
+    """Raised when the authenticated user does not own the targeted account.
+
+    Defense-in-depth check that fires INDEPENDENTLY inside both initiate_refund
+    and complete_refund. Must be raised (not returned) so the LLM cannot observe
+    the failure as a normal tool result and act on it.
+    """
+
+
+def _check_account_owner(
+    account_id: str, authenticated_sub: str, request_id: str, tool_name: str
+) -> None:
+    """Verify the authenticated user owns the targeted account.
+
+    Issues a fresh short-lived Vault uc3-readonly DB credential and runs a
+    single SELECT against banking.accounts. Mismatch (or missing account) →
+    RefundAuthorizationError with refund_authz_denied structured log.
+
+    Args:
+        account_id: The account_id the LLM/caller wants to act on.
+        authenticated_sub: The verified IVIA id_token `sub` from ContextVar.
+        request_id: Audit-correlation UUID for the current refund flow.
+        tool_name: "initiate_refund" or "complete_refund" — log field.
+
+    Raises:
+        RefundAuthorizationError: on mismatch OR missing-account (no info
+            leak between the two cases).
+    """
+    global _vault_client
+    if _vault_client is None:
+        raise RuntimeError("UC3 vault client not initialized")
+
+    creds = _vault_client.get_readonly_credentials()
+    with psycopg2.connect(
+        host=creds["host"],
+        port=creds["port"],
+        dbname=creds["dbname"],
+        user=creds["username"],
+        password=creds["password"],
+        cursor_factory=psycopg2.extras.RealDictCursor,
+    ) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT user_sub
+                FROM banking.accounts
+                WHERE id = %s
+                LIMIT 1
+                """,
+                (account_id,),
+            )
+            row = cur.fetchone()
+
+    if row is None or row["user_sub"] != authenticated_sub:
+        logger.warning(
+            "refund_authz_denied",
+            extra={
+                "request_id": request_id,
+                "authenticated_sub": authenticated_sub,
+                "requested_account_id": account_id,
+                "requested_account_owner_sub": row["user_sub"] if row else None,
+                "tool": tool_name,
+            },
+        )
+        raise RefundAuthorizationError("refund_authz_denied")
 
 # IVIA configuration from env vars
 IVIA_BASE_URL = os.getenv("IVIA_BASE_URL", "https://iviaop.verify-access.svc.cluster.local:8436")
@@ -395,9 +463,11 @@ def initiate_refund(
     transaction_id: str,
     amount: float,
     currency: str,
-    login_hint: str = "oscar",
 ) -> dict:
     """Initiate a CIBA consent request for a privileged refund (step 1 of 2).
+
+    Identity is sourced from the verified id_token's `sub` claim (set by
+    main.py via _AUTHENTICATED_SUB ContextVar). The LLM has no input here.
 
     Sends bc-authorize to IVIA with Rich Authorization Request (RFC 9396)
     details. Returns immediately with auth_req_id and consent marker so the
@@ -411,12 +481,17 @@ def initiate_refund(
         transaction_id: Original transaction being refunded.
         amount: Refund amount (positive float).
         currency: ISO 4217 currency code (e.g. "USD").
-        login_hint: Username/email for CIBA targeting (default: "oscar").
 
     Returns:
         Dict with auth_req_id, request_id, and consent status.
     """
     request_id = str(uuid.uuid4())
+    authenticated_sub = _AUTHENTICATED_SUB.get()
+    _check_account_owner(
+        account_id, authenticated_sub, request_id, "initiate_refund"
+    )
+    # Local — sent on the CIBA wire to IVIA; NOT exposed to LLM.
+    login_hint = authenticated_sub
 
     logger.info(
         "initiate_refund_started",
@@ -482,7 +557,6 @@ def initiate_refund(
         "transaction_id": transaction_id,
         "amount": amount,
         "currency": currency,
-        "login_hint": login_hint,
         "user_code": user_code,
         "consent_url": consent_url,
         "consent_marker": f"CIBA_CONSENT:auth_req_id={auth_req_id}|request_id={request_id}|user_code={user_code}|details={rar_desc}|consent_url={consent_url}",
@@ -497,9 +571,11 @@ def complete_refund(
     transaction_id: str,
     amount: float,
     currency: str,
-    login_hint: str = "oscar",
 ) -> dict:
     """Complete a refund after CIBA consent is granted (step 2 of 2).
+
+    Identity is sourced from the verified id_token's `sub` claim (ContextVar).
+    The LLM has no input here.
 
     Polls IVIA for consent approval, then executes:
       1. CIBA token poll (user already approved via banking UI)
@@ -514,7 +590,6 @@ def complete_refund(
         transaction_id: Original transaction being refunded.
         amount: Refund amount (positive float).
         currency: ISO 4217 currency code (e.g. "USD").
-        login_hint: Username/email who approved (default: "oscar").
 
     Returns:
         Dict with refund_id, request_id, status, and audit fields.
@@ -522,6 +597,11 @@ def complete_refund(
     global _vault_client
     if _vault_client is None:
         raise RuntimeError("UC3 vault client not initialized")
+
+    authenticated_sub = _AUTHENTICATED_SUB.get()
+    _check_account_owner(
+        account_id, authenticated_sub, request_id, "complete_refund"
+    )
 
     logger.info(
         "complete_refund_started",
@@ -533,7 +613,7 @@ def complete_refund(
     write_creds = _vault_client.get_refund_credentials(delegated_jwt, request_id)
 
     refund_id = str(uuid.uuid4())
-    approved_by = login_hint
+    approved_by = authenticated_sub
     created_at = datetime.now(timezone.utc)
 
     logger.info(
