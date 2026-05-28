@@ -13,11 +13,15 @@
 		Content
 	} from 'carbon-components-svelte';
 	import UserAvatarMenu from '$lib/UserAvatarMenu.svelte';
+	import { getPersona } from '$lib/personas';
 	import type { LayoutData } from './$types';
 
 	let { data, children }: { data: LayoutData; children: import('svelte').Snippet } = $props();
 
 	let userMenuOpen = $state(false);
+
+	let persona = $derived(getPersona(data.sub));
+	let displayName = $derived(persona?.fullName ?? data.displayName);
 
 	function logout() {
 		window.location.href = '/logout';
@@ -32,6 +36,7 @@
 		<span class="header-tagline">Agentic Runtime Security Workshop</span>
 		<HeaderNav>
 			<HeaderNavItem href="/dashboard" text="Dashboard" data-sveltekit-reload />
+			<HeaderNavItem href="/about-me" text="About Me" data-sveltekit-reload />
 		</HeaderNav>
 		<HeaderUtilities>
 			<!--
@@ -42,20 +47,20 @@
 			-->
 			<HeaderAction
 				bind:isOpen={userMenuOpen}
-				aria-label={data.displayName || 'User menu'}
+				aria-label={displayName || 'User menu'}
 				preventCloseOnClickOutside={false}
 			>
 				<svelte:fragment slot="icon">
-					<UserAvatarMenu displayName={data.displayName} sub={data.sub} />
+					<UserAvatarMenu displayName={displayName} sub={data.sub} />
 				</svelte:fragment>
 				<svelte:fragment slot="closeIcon">
-					<UserAvatarMenu displayName={data.displayName} sub={data.sub} />
+					<UserAvatarMenu displayName={displayName} sub={data.sub} />
 				</svelte:fragment>
 
-				<!-- Dropdown panel: display name + logout -->
+				<!-- Dropdown panel: persona full name + logout -->
 				<div class="user-menu-panel">
-					{#if data.displayName}
-						<p class="user-menu-name">{data.displayName}</p>
+					{#if displayName}
+						<p class="user-menu-name">{displayName}</p>
 					{/if}
 					<button class="user-menu-logout bx--btn bx--btn--ghost" onclick={logout} type="button">
 						Log out

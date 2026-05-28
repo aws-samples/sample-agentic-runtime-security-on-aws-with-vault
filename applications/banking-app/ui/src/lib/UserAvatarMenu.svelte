@@ -12,7 +12,7 @@
 	 *   sub          — decoded sub from the id_token ('oscar' | 'jaime' | '')
 	 */
 
-	import { UserAvatar } from 'carbon-icons-svelte';
+	import UserAvatar from 'carbon-icons-svelte/lib/UserAvatar.svelte';
 	import oscarAvatar from '$lib/assets/avatars/oscar.jpeg';
 	import jaimeAvatar from '$lib/assets/avatars/jaime.webp';
 
