@@ -117,9 +117,13 @@ aws ecr get-login-password --region "${REGION}" | \
 }
 print_pass "ECR login successful"
 
-print_info "Building uc1-agent (--platform linux/amd64)..."
+print_info "Building uc1-agent (--platform linux/amd64, --no-cache)..."
+# --no-cache: always rebuild every layer so source/dep changes can never be
+# masked by a stale Docker layer cache. Paired with the deployment's
+# imagePullPolicy: Always so the cluster always pulls the freshly pushed :latest.
 docker buildx build \
     --platform linux/amd64 \
+    --no-cache \
     --load \
     --tag "${ECR_URI}" \
     --file "${AGENT_DIR}/Dockerfile" \
