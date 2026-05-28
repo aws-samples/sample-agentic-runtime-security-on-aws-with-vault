@@ -541,8 +541,12 @@ resource "null_resource" "iviaop_rollout_restart" {
     iviaop_config_sha256 = sha256("${local.iviaop_provider_yml_resolved}${local.iviaop_clients_yml_resolved}")
   }
 
+  # Point kubectl at this cluster first — during `terraform apply` the attendee's
+  # kubeconfig has not been configured yet (configure-workshop.sh runs post-apply),
+  # so a bare `kubectl` cannot resolve the API endpoint. update-kubeconfig is
+  # idempotent and derives cluster name/region from module outputs (no literals).
   provisioner "local-exec" {
-    command = "kubectl rollout restart deploy/iviaop -n verify-access && kubectl rollout status deploy/iviaop -n verify-access --timeout=180s"
+    command = "aws eks update-kubeconfig --region ${var.region} --name ${module.eks.cluster_name} && kubectl rollout restart deploy/iviaop -n verify-access && kubectl rollout status deploy/iviaop -n verify-access --timeout=180s"
   }
 
   depends_on = [kubernetes_config_map_v1_data.iviaop_clients_patch]

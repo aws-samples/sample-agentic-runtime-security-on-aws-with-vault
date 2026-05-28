@@ -15,6 +15,7 @@
 
 ## Code conventions
 
+- **Every script MUST be idempotent and safe to re-run end-to-end — no exceptions.** This is non-negotiable and applies especially to `configure-workshop.sh` and the whole deploy flow: a second `bash configure-workshop.sh` (or any deploy/build/seed script) must succeed without errors, manual cleanup, or "already exists" failures, skipping or re-converging already-done work. New steps you add inherit this rule — design re-runnability in from the start, never as an afterthought. Provide `--skip-*` flags for slow re-runnable steps where it helps.
 - Atomic commits per logical change; explicit `git add <path>` (never `git add .` / `-A`).
 - Terraform fmt clean; modules carry README.md as authoritative module documentation.
 - Helm provider pinned **2.17** (NOT 3.x — Pitfall H1).
