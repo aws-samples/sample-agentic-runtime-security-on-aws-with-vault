@@ -454,19 +454,20 @@ module "uc2_app" {
 module "uc3_agent" {
   source = "./modules/uc3_agent"
 
-  namespace          = "banking-app"
-  vault_endpoint     = "http://vault.vault.svc.cluster.local:8200"
-  ivia_base_url      = "https://${module.ivia.ivia_service_endpoint}:8436"
-  ivia_client_id     = "agent-uc3"
-  ivia_client_secret = module.ivia.ivia_client_secret
-  ivia_external_url  = "https://${module.ivia.ivia_ingress_hostname}"
-  db_host            = module.rds.address
-  db_name            = "workshop"
-  uc3_agent_image    = var.uc3_agent_image
-  bedrock_model_id   = var.bedrock_model_id
-  region             = var.region
-  rds_cidr           = module.vpc.vpc_cidr
-  tags               = var.tags
+  namespace              = "banking-app"
+  vault_endpoint         = "http://vault.vault.svc.cluster.local:8200"
+  ivia_base_url          = "https://${module.ivia.ivia_service_endpoint}:8436"
+  ivia_client_id         = "agent-uc3"
+  ivia_id_token_audience = "agent-uc2"
+  ivia_client_secret     = module.ivia.ivia_client_secret
+  ivia_external_url      = "https://${module.ivia.ivia_ingress_hostname}"
+  db_host                = module.rds.address
+  db_name                = "workshop"
+  uc3_agent_image        = var.uc3_agent_image
+  bedrock_model_id       = var.bedrock_model_id
+  region                 = var.region
+  rds_cidr               = module.vpc.vpc_cidr
+  tags                   = var.tags
 
   depends_on = [module.vault, module.rds, module.ivia, module.uc2_app]
 }
