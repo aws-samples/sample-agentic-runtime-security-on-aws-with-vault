@@ -29,7 +29,7 @@ Expected — all 8 checks `PASS`:
 
 If any check fails, the script prints a `Fix:` hint inline. Address the issue and re-run.
 
-:::collapsible{header="What the script verifies"}
+::::expand{header="What the script verifies"}
 | Check | Command used | Pass condition |
 |---|---|---|
 | Vault pods running (3 of 3) | `kubectl get pods -n vault -l app.kubernetes.io/name=vault` | 3 pods in `Running` state |
@@ -40,4 +40,4 @@ If any check fails, the script prints a `Fix:` hint inline. Address the issue an
 | IVIA OIDC discovery: issuer reachable | `curl -sk https://iviaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration` | `issuer` field non-empty |
 | cert-manager pods running | `kubectl get pods -n cert-manager` | at least 1 pod `Running` |
 | AWS Load Balancer Controller running | `kubectl get pods -n kube-system -l app.kubernetes.io/name=aws-load-balancer-controller` | at least 1 pod `Running` |
-:::
+::::

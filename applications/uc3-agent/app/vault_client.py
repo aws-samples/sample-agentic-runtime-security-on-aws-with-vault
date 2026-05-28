@@ -19,9 +19,12 @@ agent's own workload identity).
 
 import logging
 import os
+from datetime import datetime, timedelta, timezone
 
 import boto3
 import hvac
+from botocore.credentials import RefreshableCredentials
+from botocore.session import get_session as _get_botocore_session
 
 logger = logging.getLogger(__name__)
 
@@ -34,8 +37,10 @@ class UC3VaultClient:
       2. Call login() at pod startup — establishes workload identity token.
       3. Call get_readonly_credentials() for lookup_transaction tool.
       4. Call get_refund_credentials(delegated_jwt, request_id) for process_refund tool.
-      5. Call get_bedrock_credentials() for Bedrock STS creds.
-      6. Call refresh_sts_if_needed() before each Bedrock call.
+      5. Call get_bedrock_credentials() / get_logs_credentials() — both return
+         boto3.Session backed by RefreshableCredentials, so no per-call refresh
+         dance is needed: botocore re-issues the Vault lease transparently as
+         the previous one approaches expiry.
     """
 
     SA_JWT_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
@@ -44,7 +49,6 @@ class UC3VaultClient:
         self._addr = vault_addr
         self._role = vault_role
         self._client = hvac.Client(url=vault_addr)
-        self._sts_session: boto3.Session | None = None
 
     def login(self) -> None:
         """Authenticate using the Kubernetes Service Account JWT (OBJ-1).
@@ -161,75 +165,81 @@ class UC3VaultClient:
             "lease_duration": db_response.get("lease_duration"),
         }
 
-    def get_bedrock_credentials(self) -> boto3.Session:
-        """Obtain ephemeral Bedrock STS credentials from Vault aws secrets engine (OBJ-2).
+    def _build_refreshing_session(self, vault_aws_role: str, log_event: str) -> boto3.Session:
+        """Build a boto3.Session backed by RefreshableCredentials over a Vault STS role.
 
-        Uses the agent's workload identity token to read aws/sts/bedrock-reader.
+        Shared between get_bedrock_credentials() and get_logs_credentials() — both
+        read short-lived `aws/sts/<role>` leases and want botocore to re-mint them
+        transparently as the previous lease approaches expiry. Without this, every
+        STS lease silently expires after its TTL and downstream AWS calls return
+        ExpiredTokenException (OBJ-2 — no standing privileges, but no breakage either).
 
-        Returns:
-            boto3.Session with Vault-issued STS credentials.
+        Args:
+            vault_aws_role: The Vault aws/sts/<role> path suffix (e.g., "bedrock-reader").
+            log_event: Structured log event name to emit on each lease issuance.
         """
         region = os.getenv("REGION", "us-west-2")
-        response = self._client.read("aws/sts/bedrock-reader")
-        data = response["data"]
-        session = boto3.Session(
-            aws_access_key_id=data["access_key"],
-            aws_secret_access_key=data["secret_key"],
-            aws_session_token=data["security_token"],
-            region_name=region,
+        vault_path = f"aws/sts/{vault_aws_role}"
+
+        def _refresh() -> dict:
+            if not self._client.is_authenticated():
+                logger.info("uc3_vault_token_expired_relogin")
+                self.login()
+            response = self._client.read(vault_path)
+            data = response["data"]
+            lease_seconds = int(response.get("lease_duration") or 900)
+            expiry = datetime.now(timezone.utc) + timedelta(seconds=lease_seconds)
+            logger.info(
+                log_event,
+                extra={
+                    "vault_aws_role": vault_aws_role,
+                    "lease_id": response.get("lease_id", "n/a"),
+                    "lease_seconds": lease_seconds,
+                    "region": region,
+                },
+            )
+            return {
+                "access_key": data["access_key"],
+                "secret_key": data["secret_key"],
+                "token": data["security_token"],
+                "expiry_time": expiry.isoformat(),
+            }
+
+        creds = RefreshableCredentials.create_from_metadata(
+            metadata=_refresh(),
+            refresh_using=_refresh,
+            method="vault-aws-sts",
         )
-        self._sts_session = session
-        logger.info(
-            "uc3_bedrock_sts_credentials_issued",
-            extra={
-                "vault_aws_role": "bedrock-reader",
-                "lease_id": response.get("lease_id", "n/a"),
-                "region": region,
-            },
+        botocore_session = _get_botocore_session()
+        botocore_session._credentials = creds
+        botocore_session.set_config_variable("region", region)
+        return boto3.Session(botocore_session=botocore_session, region_name=region)
+
+    def get_bedrock_credentials(self) -> boto3.Session:
+        """Obtain a boto3.Session with auto-refreshing Bedrock STS creds (OBJ-2).
+
+        Returns a session backed by botocore RefreshableCredentials over Vault's
+        aws/sts/bedrock-reader role — botocore re-issues the lease transparently
+        as the previous one approaches expiry, so the agent can run for the pod's
+        full lifetime without hitting ExpiredTokenException.
+        """
+        return self._build_refreshing_session(
+            vault_aws_role="bedrock-reader",
+            log_event="uc3_bedrock_sts_credentials_issued",
         )
-        return session
 
     def get_logs_credentials(self) -> boto3.Session:
-        """Obtain ephemeral CloudWatch Logs STS credentials from Vault (OBJ-2).
-
-        Mirrors get_bedrock_credentials: reads aws/sts/uc3-logs-writer using the
-        agent's workload-identity Vault token and returns a short-lived boto3
-        session scoped (server-side) to logs:PutLogEvents + logs:CreateLogStream
-        on the single /workshop/ivia-decision log group. The agent holds NO
-        standing AWS identity — these creds expire with the Vault lease.
+        """Obtain a boto3.Session with auto-refreshing CloudWatch Logs STS creds (OBJ-2).
 
         Used by the Branch-B ivia_decisions anchor emission (CONTEXT Delta-6).
-
-        Returns:
-            boto3.Session with Vault-issued STS credentials.
+        Session is server-side-scoped to logs:PutLogEvents + logs:CreateLogStream
+        on the single /workshop/ivia-decision log group. The agent holds NO
+        standing AWS identity — leases are short-lived and rotated transparently.
         """
-        region = os.getenv("REGION", "us-west-2")
-        response = self._client.read("aws/sts/uc3-logs-writer")
-        data = response["data"]
-        session = boto3.Session(
-            aws_access_key_id=data["access_key"],
-            aws_secret_access_key=data["secret_key"],
-            aws_session_token=data["security_token"],
-            region_name=region,
+        return self._build_refreshing_session(
+            vault_aws_role="uc3-logs-writer",
+            log_event="uc3_logs_sts_credentials_issued",
         )
-        logger.info(
-            "uc3_logs_sts_credentials_issued",
-            extra={
-                "vault_aws_role": "uc3-logs-writer",
-                "lease_id": response.get("lease_id", "n/a"),
-                "region": region,
-            },
-        )
-        return session
-
-    def refresh_sts_if_needed(self) -> boto3.Session | None:
-        """Refresh Bedrock STS credentials if authenticated.
-
-        Returns a fresh boto3.Session or None if not authenticated.
-        """
-        if self.is_authenticated():
-            return self.get_bedrock_credentials()
-        return self._sts_session
 
     def is_authenticated(self) -> bool:
         """Return True if the cached Vault token is still valid."""

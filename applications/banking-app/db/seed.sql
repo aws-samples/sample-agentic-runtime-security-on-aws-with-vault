@@ -99,38 +99,40 @@ ON CONFLICT (account_number) DO NOTHING;
 -- Test transactions — Oscar (checking: a1000000-…-01, savings: a1000000-…-02)
 -- ---------------------------------------------------------------------------
 
-INSERT INTO banking.transactions (account_id, transaction_type, amount, description, merchant, category)
+-- id values are explicit UUID literals (matching the account-id pattern) so
+-- ON CONFLICT (id) DO NOTHING makes this INSERT idempotent across re-runs.
+INSERT INTO banking.transactions (id, account_id, transaction_type, amount, description, merchant, category)
 VALUES
   -- Oscar checking
-  ('a1000000-0000-0000-0000-000000000001', 'debit',  -52.40, 'Grocery run',           'Whole Foods Market',     'groceries'),
-  ('a1000000-0000-0000-0000-000000000001', 'debit',  -18.99, 'Streaming subscription', 'Netflix',                'entertainment'),
-  ('a1000000-0000-0000-0000-000000000001', 'credit', 3500.00, 'Payroll deposit',        'OscarVault Payroll',     'income'),
-  ('a1000000-0000-0000-0000-000000000001', 'debit',  -120.00, 'Electric bill',          'Pacific Gas & Electric', 'utilities'),
-  ('a1000000-0000-0000-0000-000000000001', 'debit',  -45.00, 'Restaurant dinner',      'The Slanted Door',       'dining'),
+  ('b1000001-0000-0000-0000-000000000001', 'a1000000-0000-0000-0000-000000000001', 'debit',  -52.40, 'Grocery run',           'Whole Foods Market',     'groceries'),
+  ('b1000001-0000-0000-0000-000000000002', 'a1000000-0000-0000-0000-000000000001', 'debit',  -18.99, 'Streaming subscription', 'Netflix',                'entertainment'),
+  ('b1000001-0000-0000-0000-000000000003', 'a1000000-0000-0000-0000-000000000001', 'credit', 3500.00, 'Payroll deposit',        'OscarVault Payroll',     'income'),
+  ('b1000001-0000-0000-0000-000000000004', 'a1000000-0000-0000-0000-000000000001', 'debit',  -120.00, 'Electric bill',          'Pacific Gas & Electric', 'utilities'),
+  ('b1000001-0000-0000-0000-000000000005', 'a1000000-0000-0000-0000-000000000001', 'debit',  -45.00, 'Restaurant dinner',      'The Slanted Door',       'dining'),
   -- Oscar savings
-  ('a1000000-0000-0000-0000-000000000002', 'credit', 500.00,  'Transfer from checking', 'Internal Transfer',      'transfer'),
-  ('a1000000-0000-0000-0000-000000000002', 'credit', 12.50,   'Interest earned',        'OscarVault',             'interest'),
-  ('a1000000-0000-0000-0000-000000000002', 'credit', 1000.00, 'Year-end bonus deposit', 'OscarVault Payroll',     'income')
-ON CONFLICT DO NOTHING;
+  ('b1000002-0000-0000-0000-000000000001', 'a1000000-0000-0000-0000-000000000002', 'credit', 500.00,  'Transfer from checking', 'Internal Transfer',      'transfer'),
+  ('b1000002-0000-0000-0000-000000000002', 'a1000000-0000-0000-0000-000000000002', 'credit', 12.50,   'Interest earned',        'OscarVault',             'interest'),
+  ('b1000002-0000-0000-0000-000000000003', 'a1000000-0000-0000-0000-000000000002', 'credit', 1000.00, 'Year-end bonus deposit', 'OscarVault Payroll',     'income')
+ON CONFLICT (id) DO NOTHING;
 
 -- ---------------------------------------------------------------------------
 -- Test transactions — Jaime (checking: a2000000-…-01, savings: a2000000-…-02)
 -- ---------------------------------------------------------------------------
 
-INSERT INTO banking.transactions (account_id, transaction_type, amount, description, merchant, category)
+INSERT INTO banking.transactions (id, account_id, transaction_type, amount, description, merchant, category)
 VALUES
   -- Jaime checking
-  ('a2000000-0000-0000-0000-000000000001', 'debit',  -88.30, 'Pharmacy',               'CVS Pharmacy',           'health'),
-  ('a2000000-0000-0000-0000-000000000001', 'credit', 4200.00, 'Payroll deposit',        'OscarVault Payroll',     'income'),
-  ('a2000000-0000-0000-0000-000000000001', 'debit',  -65.00, 'Monthly gym membership', 'Equinox',                'fitness'),
-  ('a2000000-0000-0000-0000-000000000001', 'debit',  -210.00, 'Airfare booking',        'United Airlines',        'travel'),
-  ('a2000000-0000-0000-0000-000000000001', 'debit',  -34.99, 'Books',                  'Amazon',                 'shopping'),
+  ('b2000001-0000-0000-0000-000000000001', 'a2000000-0000-0000-0000-000000000001', 'debit',  -88.30, 'Pharmacy',               'CVS Pharmacy',           'health'),
+  ('b2000001-0000-0000-0000-000000000002', 'a2000000-0000-0000-0000-000000000001', 'credit', 4200.00, 'Payroll deposit',        'OscarVault Payroll',     'income'),
+  ('b2000001-0000-0000-0000-000000000003', 'a2000000-0000-0000-0000-000000000001', 'debit',  -65.00, 'Monthly gym membership', 'Equinox',                'fitness'),
+  ('b2000001-0000-0000-0000-000000000004', 'a2000000-0000-0000-0000-000000000001', 'debit',  -210.00, 'Airfare booking',        'United Airlines',        'travel'),
+  ('b2000001-0000-0000-0000-000000000005', 'a2000000-0000-0000-0000-000000000001', 'debit',  -34.99, 'Books',                  'Amazon',                 'shopping'),
   -- Jaime savings
-  ('a2000000-0000-0000-0000-000000000002', 'credit', 800.00,  'Transfer from checking', 'Internal Transfer',      'transfer'),
-  ('a2000000-0000-0000-0000-000000000002', 'credit', 24.75,   'Interest earned',        'OscarVault',             'interest'),
-  ('a2000000-0000-0000-0000-000000000002', 'credit', 2000.00, 'Savings goal deposit',   'OscarVault',             'savings'),
-  ('a2000000-0000-0000-0000-000000000002', 'debit',  -500.00, 'Emergency fund draw',    'Internal Transfer',      'transfer')
-ON CONFLICT DO NOTHING;
+  ('b2000002-0000-0000-0000-000000000001', 'a2000000-0000-0000-0000-000000000002', 'credit', 800.00,  'Transfer from checking', 'Internal Transfer',      'transfer'),
+  ('b2000002-0000-0000-0000-000000000002', 'a2000000-0000-0000-0000-000000000002', 'credit', 24.75,   'Interest earned',        'OscarVault',             'interest'),
+  ('b2000002-0000-0000-0000-000000000003', 'a2000000-0000-0000-0000-000000000002', 'credit', 2000.00, 'Savings goal deposit',   'OscarVault',             'savings'),
+  ('b2000002-0000-0000-0000-000000000004', 'a2000000-0000-0000-0000-000000000002', 'debit',  -500.00, 'Emergency fund draw',    'Internal Transfer',      'transfer')
+ON CONFLICT (id) DO NOTHING;
 
 -- ---------------------------------------------------------------------------
 -- Refunds table (UC3 — CIBA privileged write)

@@ -196,21 +196,24 @@ rds_host=$(kubectl get configmap banking-mcp-config -n "${BANKING_NAMESPACE}" \
 if [ -n "${db_username}" ] && [ "${db_username}" != "null" ] && [ -n "${rds_host}" ]; then
     psql_pod="verify-uc2-psql-$$"
     kubectl delete pod "${psql_pod}" -n default --ignore-not-found --wait=true &>/dev/null
+    # Use a real seeded user_sub ('oscar') so RLS lets us prove the SELECT actually
+    # returns the user's rows. A bogus sub would silently return 0 rows and still
+    # appear to "pass" — which would mean this check verifies nothing.
     kubectl run "${psql_pod}" -n default --restart=Never \
         --image=postgres:17-alpine --env="PGPASSWORD=${db_password}" \
         --command -- psql -h "${rds_host}" -U "${db_username}" -d workshop \
-            -c "SET app.current_user_sub = 'test-verify-script'; SELECT count(*) FROM banking.accounts;" \
+            -c "SET app.current_user_sub = 'oscar'; SELECT count(*) FROM banking.accounts;" \
             --no-password --tuples-only &>/dev/null
     kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/"${psql_pod}" -n default --timeout=60s &>/dev/null || true
     select_result=$(kubectl logs "${psql_pod}" -n default 2>/dev/null || echo "PSQL_FAILED")
     kubectl delete pod "${psql_pod}" -n default --ignore-not-found &>/dev/null
 
-    if echo "${select_result}" | grep -qE "^[[:space:]]*[0-9]+"; then
-        row_count=$(echo "${select_result}" | grep -E "^[[:space:]]*[0-9]+" | tr -d ' ')
-        print_pass "DB read: SELECT from banking.accounts returned ${row_count} row(s)"
+    row_count=$(echo "${select_result}" | grep -oE "^[[:space:]]*[0-9]+" | tr -d ' ' | head -n1)
+    if [ -n "${row_count}" ] && [ "${row_count}" -ge 2 ]; then
+        print_pass "DB read: SELECT from banking.accounts returned ${row_count} row(s) for user 'oscar' (>= 2 expected)"
     else
         print_fail "DB read: SELECT from banking.accounts" \
-            "SELECT failed with JIT creds — RDS host: ${rds_host}, user: ${db_username}. Error: ${select_result}. Verify RLS policy and uc2_personal_readonly Postgres role GRANTs."
+            "SELECT did not return >= 2 rows for user 'oscar' — RDS host: ${rds_host}, user: ${db_username}. Got: '${select_result}'. Verify the seed.sql has Oscar's accounts loaded and the uc2-personal-readonly Postgres role has SELECT on banking.accounts."
     fi
 else
     print_warn "DB read check skipped — missing DB credentials or RDS host (ConfigMap banking-mcp-config)"

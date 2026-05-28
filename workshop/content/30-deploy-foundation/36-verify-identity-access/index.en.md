@@ -7,7 +7,7 @@ IBM Verify Identity Access (IVIA) runs as a self-contained seven-pod stack in th
 
 ![IBM Verify Identity Access — self-contained seven-pod stack on EKS](/static/images/ivia-stack.svg)
 
-:::collapsible{header="Pod reference — what each pod does"}
+::::expand{header="Pod reference — what each pod does"}
 | Pod | Role |
 |-----|------|
 | `iviaconfig` | Local Management Interface (LMI) — single source of truth, publishes configuration snapshots |
@@ -17,7 +17,7 @@ IBM Verify Identity Access (IVIA) runs as a self-contained seven-pod stack in th
 | `iviadsc` | Distributed Session Cache — session store |
 | `openldap` | In-cluster LDAP directory (LDAPS `:636`) — user registry (Oscar, Jaime) |
 | `postgresql` | In-cluster PostgreSQL HVDB (`:5432`) — IVIA runtime DB, sessions, cluster store |
-:::
+::::
 
 ## Step 1 — Confirm all pods are Running
 
@@ -102,17 +102,14 @@ Expected:
 
 ## Step 4 — Confirm internal OIDC discovery
 
-Vault and agent workloads reach the OIDC Provider via its ClusterIP service. Verify from inside the cluster:
+Vault and agent workloads reach the OIDC Provider via its ClusterIP service. Verify from inside the cluster (the `--quiet` flag keeps `kubectl run`'s pod-lifecycle messages out of the `jq` pipe):
 
 ```bash
-kubectl run oidc-check --image=curlimages/curl --rm -i --restart=Never \
-  -n verify-access -- \
-  curl -sk https://iviaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration \
-  | jq .issuer
+kubectl run oidc-check --image=curlimages/curl --rm -i --restart=Never --quiet -n verify-access -- curl -sk https://iviaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration </dev/null | jq .issuer
 ```
 
-Expected:
+Expected — the **same** canonical issuer Step 3 returned, even though you reached the provider over its internal ClusterIP. The OIDC Provider always advertises the one public WRP issuer, which is exactly what lets Vault validate IVIA-issued tokens against a single `bound_issuer`:
 
 ```
-"https://iviaop.verify-access.svc.cluster.local:8436/oauth2"
+"https://<wrp-alb-hostname>"
 ```

@@ -5,142 +5,96 @@ weight: 65
 
 ## Overview
 
-In this module you observe the full credential lifecycle for a Use Case 2 session: active lease issuance, explicit revocation triggered by user logout, and the audit log event that records the revocation with the user's `sub` claim. This demonstrates how session end cascades from the browser to Vault to the Postgres role — no manual cleanup required.
+In this module you observe the full credential lifecycle for a Use Case 2 session: a Postgres credential is issued, used to confirm its existence, then explicitly revoked, and you verify three things in succession — (a) the Postgres role is gone, (b) Vault's active-leases list no longer contains your lease, (c) both the issuance and the revocation appear in the audit log keyed by `lease_id`.
 
-## Step 1 — Establish a session and issue credentials
+**The production code path** is `POST /v1/sys/leases/revoke` against Vault. An MCP server, banking-agent, or any session-end handler calls that endpoint when a session terminates. In this page you exercise the same API directly via the `vault lease revoke` CLI — identical mechanism, no UI dependency, immediate evidence.
 
-Log in to the Banking UI as Oscar. Navigate to the Accounts page to trigger at least one MCP Server tool call (which issues a DB credential via Vault). Then list the active leases for the `uc2-personal-readonly` credential path.
-
-Listing active leases requires a Vault root token (the `uc2-personal` policy does not have `sys/leases/lookup` access — that path is reserved for admins to demonstrate the lifecycle without granting the MCP Server list-lease visibility):
+Load the Vault root token once at the start of the page — several admin-only paths (`database/creds/...`, `sys/leases/...`) are unreachable from the `uc2-personal` policy and require the root token for inspection:
 
 ```bash
-# Set your Vault root token (from vault-init.sh output)
-export VAULT_ROOT_TOKEN="<your-root-token>"
-
-kubectl exec -n vault vault-0 -- \
-  sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' \
-  vault list sys/leases/lookup/database/creds/uc2-personal-readonly"
+export VAULT_ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)
 ```
 
-Expected output — at least one active lease:
+## Step 1 — Issue a fresh credential and capture the lease_id
 
-```
-Keys
-----
-v-jwt-uc2-personal-readonly-AbCd1234Ef56-1234567890
-```
-
-Note the lease ID. It encodes the role name and a timestamp. This lease corresponds to Oscar's current session.
-
-To see the lease details (TTL countdown):
+This block reads a credential, prints the `lease_id` and Postgres `username`, and exports them into your shell so subsequent steps pick them up automatically — no copy-paste required:
 
 ```bash
-kubectl exec -n vault vault-0 -- \
-  sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' \
-  vault lease lookup database/creds/uc2-personal-readonly/v-jwt-uc2-personal-readonly-AbCd1234Ef56-1234567890"
+CREDS_JSON=$(kubectl exec -n vault vault-0 -- \
+  sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read database/creds/uc2-personal-readonly -format=json")
+
+export LEASE_ID=$(echo "$CREDS_JSON" | jq -r .lease_id)
+export PG_USER=$(echo "$CREDS_JSON" | jq -r .data.username)
+
+echo "LEASE_ID=$LEASE_ID"
+echo "PG_USER=$PG_USER"
 ```
 
 Expected output:
 
 ```
-Key         Value
----         -----
-expire_time  2026-05-12T10:30:00.000Z
-issue_time   2026-05-12T10:15:00.000Z
-last_renewal <nil>
-ttl          14m59s
+LEASE_ID=database/creds/uc2-personal-readonly/7oGTYoP3ASqa87UbpFGlylEp
+PG_USER=v-root-uc2-pers-IwaMUs8kxzRLvjsvSjwO-1780000048
 ```
 
-The `ttl` is counting down from 15 minutes. If no explicit revocation occurs, Vault will automatically revoke the credential at `expire_time` by dropping the ephemeral Postgres role.
+You now hold the credential's full `lease_id` and the ephemeral Postgres role name. Keep this shell session for the rest of the page — the exports are how `LEASE_ID` and `PG_USER` flow into later commands.
 
-## Step 2 — Find the corresponding Vault audit log entry
+## Step 2 — Confirm the Postgres role exists
 
-In a separate terminal, search the Vault audit log for the issuance event linked to this lease:
+The Vault dynamic secrets engine just created `${PG_USER}` as a real Postgres role. Pull the RDS master credentials from AWS Secrets Manager and run a transient `postgres:16-alpine` pod to confirm:
 
 ```bash
-kubectl logs -n vault vault-0 --tail=100 \
-  | grep '"type":"response"' \
-  | jq 'select(.request.path == "database/creds/uc2-personal-readonly")' \
-  | jq '{time: .time, lease_id: .response.data.lease_id, sub: .auth.metadata.sub}'
+SECRET_ID=$(aws secretsmanager list-secrets --region us-west-2 \
+  --query 'SecretList[?contains(Name,`rds!db`)].Name | [0]' --output text)
+MASTER_USER=$(aws secretsmanager get-secret-value --region us-west-2 --secret-id "${SECRET_ID}" \
+  --query SecretString --output text | jq -r '.username')
+MASTER_PASS=$(aws secretsmanager get-secret-value --region us-west-2 --secret-id "${SECRET_ID}" \
+  --query SecretString --output text | jq -r '.password')
+RDS_HOST=$(kubectl get configmap banking-mcp-config -n banking-app -o jsonpath='{.data.RDS_ADDRESS}')
+
+kubectl run pg-role-before --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
+  --env="PGPASSWORD=${MASTER_PASS}" \
+  --command -- psql -h "${RDS_HOST}" -U "${MASTER_USER}" -d workshop \
+    -c "SELECT rolname FROM pg_roles WHERE rolname='${PG_USER}';"
 ```
 
-Expected output:
+Expected output — exactly one row, your fresh ephemeral role:
 
-```json
-{
-  "time": "2026-05-12T10:15:00.123Z",
-  "lease_id": "database/creds/uc2-personal-readonly/v-jwt-uc2-personal-readonly-AbCd1234Ef56-1234567890",
-  "sub": "oscar"
-}
+```
+                     rolname
+-------------------------------------------------
+ v-root-uc2-pers-IwaMUs8kxzRLvjsvSjwO-1780000048
+(1 row)
+
+pod "pg-role-before" deleted
 ```
 
-The `sub` field confirms the issuance was tied to Oscar's user identity — extracted from the JWT during the `auth/jwt/login` step. This is OBJ-5 audit evidence: the audit log links user identity (`sub`) to the specific credential (`lease_id`) issued for that session.
+## Step 3 — Revoke the lease (the production code path)
 
-## Step 3 — Log out (trigger credential revocation)
-
-Click **Logout** in the Banking UI. The SvelteKit `/logout` server route:
-
-1. Calls the Banking Agent's `POST /logout` endpoint with the session JWT.
-2. The Banking Agent forwards the revocation request to the MCP Server.
-3. The MCP Server calls `POST /v1/sys/leases/revoke` with the active lease ID and the Vault token from the session.
-4. Vault revokes the lease and drops the ephemeral Postgres role.
-5. The SvelteKit session is cleared.
-
-## Step 4 — Confirm the lease is gone
-
-After logout, re-run the lease list command:
+Call the same Vault API a production session-end handler would call:
 
 ```bash
 kubectl exec -n vault vault-0 -- \
-  sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' \
-  vault list sys/leases/lookup/database/creds/uc2-personal-readonly"
-```
-
-Expected output (after revocation):
-
-```
-No value found at sys/leases/lookup/database/creds/uc2-personal-readonly/
-```
-
-The lease list is empty. Oscar's ephemeral Postgres role no longer exists.
-
-## Step 5 — Find the revocation event in the Vault audit log
-
-```bash
-kubectl logs -n vault vault-0 --tail=200 \
-  | grep '"type":"response"' \
-  | jq 'select(.request.path | startswith("sys/leases/revoke"))' \
-  | jq '{time: .time, path: .request.path, revoked_lease: .request.data.lease_id}'
+  sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault lease revoke '${LEASE_ID}'"
 ```
 
 Expected output:
 
-```json
-{
-  "time": "2026-05-12T10:22:34.567Z",
-  "path": "sys/leases/revoke",
-  "revoked_lease": "database/creds/uc2-personal-readonly/v-jwt-uc2-personal-readonly-AbCd1234Ef56-1234567890"
-}
+```
+All revocation operations queued successfully!
 ```
 
-To correlate the revocation event back to Oscar's identity, join it with the earlier issuance entry using the `lease_id` as the join key. In Phase 6 this join is performed in Athena — here you can observe it manually:
+Vault has queued the revocation. Internally Vault now runs the `revocation_statements` configured on the `uc2-personal-readonly` role against Postgres — the symmetric `REVOKE`s that undo every `GRANT` from the role's `creation_statements`, followed by `DROP ROLE IF EXISTS`. This happens within milliseconds.
 
-- **Issuance entry** (Step 2): `lease_id = "...AbCd1234..."`, `sub = "oscar"`, `time = 10:15:00`
-- **Revocation entry** (Step 5): `revoked_lease = "...AbCd1234..."`, `time = 10:22:34`
+## Step 4 — Confirm the Postgres role is gone
 
-The same lease ID links both events. Duration: 7 minutes 34 seconds of active credential lifetime, then explicit revocation.
-
-## Step 6 — Verify Postgres role is gone
-
-The Vault dynamic secrets engine drops the Postgres role on revocation. Confirm it no longer exists:
+Re-run the role check. The lease's ephemeral Postgres role should be gone:
 
 ```bash
-RDS_HOST=$(kubectl get configmap uc2-mcp-config -n banking-app \
-  -o jsonpath='{.data.RDS_HOST}')
-
-kubectl exec -n banking-app deploy/banking-mcp-server -- \
-  sh -c "PGPASSWORD='<admin_password>' psql -h ${RDS_HOST} -U vault_root -d workshop \
-  -c \"SELECT rolname FROM pg_roles WHERE rolname LIKE 'v-jwt-uc2-personal-readonly-%';\""
+kubectl run pg-role-after --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
+  --env="PGPASSWORD=${MASTER_PASS}" \
+  --command -- psql -h "${RDS_HOST}" -U "${MASTER_USER}" -d workshop \
+    -c "SELECT rolname FROM pg_roles WHERE rolname='${PG_USER}';"
 ```
 
 Expected output:
@@ -149,72 +103,219 @@ Expected output:
  rolname
 ---------
 (0 rows)
+
+pod "pg-role-after" deleted
 ```
 
-The ephemeral role is gone. Any session that was connected with that credential has been disconnected (the next query on the connection returns an authentication error).
+Zero rows. The ephemeral role has been dropped. Any open Postgres connection that was using this credential is now broken at its next query — `password authentication failed`. **This is the credential-revocation enforcement payoff: the moment the lease is revoked, the database access it granted is physically impossible.** No grace period, no rollback path, no orphan role left behind.
 
-:::expand{header="Platform Track — Vault lease lifecycle: TTL vs explicit revocation"}
+## Step 5 — Confirm your lease is no longer in Vault's active-leases list
+
+The lease-list lookup is the operator's view of "what credentials are currently issued and still considered live by Vault." Run it and grep for your specific lease suffix — it should NOT be present:
+
+```bash
+LEASE_SUFFIX=${LEASE_ID##*/}
+
+kubectl exec -n vault vault-0 -- \
+  sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' \
+  vault list sys/leases/lookup/database/creds/uc2-personal-readonly" 2>&1 \
+  | grep -F "${LEASE_SUFFIX}" \
+  && echo "FAIL: lease ${LEASE_SUFFIX} is still active" \
+  || echo "PASS: lease ${LEASE_SUFFIX} is no longer in the active-leases list"
+```
+
+Expected output:
+
+```
+PASS: lease 7oGTYoP3ASqa87UbpFGlylEp is no longer in the active-leases list
+```
+
+The pipeline uses `grep -F` to look for your lease suffix in the listing. If it is found, you'd see `FAIL:`; if not, you see `PASS:`. After Step 3 revoked the lease, Vault removed it from the lookup table — so the `PASS:` line is the expected outcome.
+
+:::expand{header="What does the raw listing look like?"}
+
+To see the underlying Vault output that the pipeline above is filtering, run the inner command without the grep:
+
+```bash
+kubectl exec -n vault vault-0 -- \
+  sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' \
+  vault list sys/leases/lookup/database/creds/uc2-personal-readonly" 2>&1
+```
+
+Two possible outputs:
+
+- **No other sessions active** — `No value found at sys/leases/lookup/database/creds/uc2-personal-readonly` plus `command terminated with exit code 2`. The exit code is Vault's CLI convention for "empty list", not a real error. On a freshly-deployed workshop cluster with only your terminal session, this is what you'll see.
+- **Other sessions still alive** — a `Keys / ---- / <suffix1> / <suffix2> ...` table listing every other live lease. Your `${LEASE_SUFFIX}` will not appear in it. Other suffixes belong to credentials issued by `verify-uc2.sh`, your prior Auth-Code login on page 62 Step 5, or other attendees on the same cluster.
+
+Either way, your specific revoked lease is absent — that's the point Step 5's grep check above confirms unambiguously.
+:::
+
+## Step 6 — Find the issuance event in the audit log (Athena)
+
+The Vault audit device streams every API request and response into S3 via Firehose. Cross-reference the lease you just revoked with the lifecycle events recorded for it.
+
+:::alert{type="warning" header="Firehose buffer: ~1 minute lag"}
+Firehose buffers audit records for up to 60 seconds before writing them to S3. If the Athena queries below return fewer rows than you expect, wait 60 seconds and re-run them.
+:::
+
+Define a small helper to submit a query, wait for completion, and pretty-print the result as an aligned table (empty fields render as `-`):
+
+```bash
+athena_query() {
+  local Q="$1"
+  local QID=$(aws athena start-query-execution --region us-west-2 --work-group workshop \
+    --query-string "$Q" --query 'QueryExecutionId' --output text)
+  for i in $(seq 1 30); do
+    STATE=$(aws athena get-query-execution --region us-west-2 --query-execution-id "$QID" \
+      --query 'QueryExecution.Status.State' --output text)
+    [ "$STATE" = "SUCCEEDED" ] && break
+    [ "$STATE" = "FAILED" ] && { aws athena get-query-execution --region us-west-2 \
+      --query-execution-id "$QID" --query 'QueryExecution.Status.StateChangeReason' --output text; return 1; }
+    sleep 2
+  done
+  aws athena get-query-results --region us-west-2 --query-execution-id "$QID" --output json \
+    | jq -r '.ResultSet.Rows[] | [.Data[] | (.VarCharValue // "" | if . == "" then "-" else . end)] | @tsv' \
+    | column -t -s $'\t'
+}
+```
+
+Find the most recent issuance events for `uc2-personal-readonly`, including the `user_sub` and `role` from the JWT auth claim mappings (the `substr(timestamp, 1, 19)` trims nanoseconds for readable display — second precision is plenty for audit correlation):
+
+```bash
+athena_query "SELECT
+  substr(timestamp, 1, 19) AS time,
+  auth.metadata['user_sub'] AS user_sub,
+  auth.metadata['role'] AS jwt_role,
+  auth.display_name
+FROM workshop_logs.vault_audit
+WHERE type = 'response'
+  AND request.path = 'database/creds/uc2-personal-readonly'
+ORDER BY timestamp DESC
+LIMIT 10;"
+```
+
+Expected output — one row per recent issuance:
+
+```
+time                 user_sub  jwt_role  display_name
+2026-05-28T20:37:37  -         -         root
+2026-05-28T20:27:29  -         -         root
+2026-05-28T19:24:22  jaime     uc2-jwt   jwt-jaime
+...
+```
+
+Two row patterns appear:
+
+- **`display_name=root`** — the credential was issued via the Vault root token (the inspection commands on the previous pages, including your Step 1 above). `user_sub` and `jwt_role` show as `-` (the helper renders empty fields as `-`) because root-token issuance carries no user identity.
+- **`display_name=jwt-<sub>`** — the credential was issued via `auth/jwt/login` from a real user JWT. `user_sub` and `jwt_role` come from the JWT's `sub` claim (mapped by the `claim_mappings` you saw on the `uc2-jwt` role in [page 62](../62-configure-jwt-auth/)). This is the OBJ-5 audit evidence: every JWT-issued credential carries the originating user's identity into the audit trail.
+
+## Step 7 — Find the revocation event for the lease you revoked
+
+The revocation event lives at the path `sys/leases/revoke/<lease_id>`. Query for the specific lease you captured in Step 1:
+
+```bash
+athena_query "SELECT
+  substr(timestamp, 1, 19) AS time,
+  request.path AS revoke_path,
+  auth.display_name AS revoked_by
+FROM workshop_logs.vault_audit
+WHERE type = 'response'
+  AND request.path = 'sys/leases/revoke/${LEASE_ID}'
+ORDER BY timestamp DESC
+LIMIT 5;"
+```
+
+Expected output — one row showing your revocation:
+
+```
+time                 revoke_path                                                                      revoked_by
+2026-05-28T20:37:37  sys/leases/revoke/database/creds/uc2-personal-readonly/UagCrQXfhwPqP16v1wk2fJ1U  root
+```
+
+What this proves:
+
+- **`revoke_path` ends with your captured `LEASE_ID`** — the audit log records the exact lease the revoke API call targeted.
+- **`time`** — the moment Vault executed the revocation; on a real incident response timeline this is the "session terminated" anchor.
+- **`revoked_by=root`** — in this demo you invoked the API as the root token. In a production flow this would be the service-account-bound Vault token the MCP server uses (`display_name=token-uc2-mcp-server-sa` or similar) — exactly identifying the workload that ended the session.
+
+**The audit-trail story is now closed:** Step 6 ties the original credential to a user identity (`user_sub`); Step 7 ties the revocation to the same `lease_id`. Anyone analysing the audit log can reconstruct "Oscar logged in at 19:24, got `lease_id` X, the MCP server revoked X at 20:19" — start-to-end attribution for a single session.
+
+:::expand{header="Platform Track — Vault lease lifecycle: explicit revoke vs TTL expiry"}
 
 Vault supports two credential termination paths:
 
 | Path | Trigger | Audit log entry | Postgres role removal |
 |---|---|---|---|
-| TTL expiry | Vault's internal lease expiry timer fires | `lease_expired` event | Yes — Vault calls `DROP ROLE` |
-| Explicit revocation | `POST /v1/sys/leases/revoke` | `sys/leases/revoke` response | Yes — immediate |
+| Explicit revocation | `POST /v1/sys/leases/revoke` (this page) | `sys/leases/revoke/<lease_id>` response | Vault runs `revocation_statements` immediately — role dropped within ms |
+| TTL expiry | Vault's internal lease expiry timer fires at `lease_duration` | `expired` event | Same `revocation_statements` — role dropped at lease expiry |
 
-In Use Case 2 the explicit revocation path is used: the MCP Server calls Vault's revoke API when the user logs out. This is preferable to relying on TTL expiry because:
+The workshop uses **explicit revocation** as the primary path because:
 
-1. **Immediate effect**: The Postgres role is dropped within milliseconds of logout. A 15-minute TTL could leave a valid credential active for up to 15 minutes after the user session ends.
-2. **Audit clarity**: The explicit revocation event in the Vault audit log records the exact time of session end — useful for security incident investigations.
-3. **OBJ-5 completeness**: The audit trail has a defined start (jwt/login → creds issuance) and end (explicit revocation) — a complete session lifecycle record.
+1. **Immediate effect.** With a 15-minute `default_ttl`, relying on TTL alone could leave a valid credential live for up to 15 minutes after a real session ends. Explicit revoke closes the window in milliseconds.
+2. **Audit-trail clarity.** The explicit revocation event records the exact moment of session end, attributable to whichever workload called the API. TTL expiry events come from Vault itself with no calling identity.
+3. **Defense in depth.** The TTL still acts as a safety net — if the calling workload crashes before issuing the revocation, the credential dies at `T+15m` automatically.
 
-The TTL is still configured as a safety net: if the MCP Server crashes before issuing the revocation call, the credential automatically expires at `T+15m`. Defense-in-depth: revocation as first preference, TTL expiry as fallback.
-
-Vault's dynamic secrets engine executes these Postgres statements on revocation:
+**The `revocation_statements` Vault executes against Postgres are deliberately the inverse of `creation_statements`:**
 
 ```sql
--- On credential issuance (vault read database/creds/uc2-personal-readonly)
-CREATE ROLE "v-jwt-uc2-personal-readonly-AbCd1234" 
-  WITH LOGIN PASSWORD '<random>'
-  VALID UNTIL '<now + 15m>'
-  IN ROLE uc2_personal_readonly;
+-- creation (vault read database/creds/uc2-personal-readonly):
+CREATE ROLE "{{name}}" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}';
+ALTER ROLE "{{name}}" SET search_path TO banking, public;
+GRANT USAGE ON SCHEMA banking TO "{{name}}";
+GRANT SELECT ON ALL TABLES IN SCHEMA banking TO "{{name}}";
+ALTER DEFAULT PRIVILEGES IN SCHEMA banking GRANT SELECT ON TABLES TO "{{name}}";
 
--- On revocation (explicit or TTL expiry)
-REVOKE uc2_personal_readonly FROM "v-jwt-uc2-personal-readonly-AbCd1234";
-DROP ROLE IF EXISTS "v-jwt-uc2-personal-readonly-AbCd1234";
+-- revocation (vault lease revoke <lease_id>):
+REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA banking FROM "{{name}}";
+REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA banking FROM "{{name}}";
+REVOKE USAGE ON SCHEMA banking FROM "{{name}}";
+ALTER DEFAULT PRIVILEGES IN SCHEMA banking REVOKE SELECT ON TABLES FROM "{{name}}";
+DROP ROLE IF EXISTS "{{name}}";
 ```
 
-The `REVOKE ... FROM` step removes the role membership (removing GRANTs) before the DROP — Postgres requires this ordering when the role owns objects via inheritance.
+The `ALTER DEFAULT PRIVILEGES REVOKE` line matches the `ALTER DEFAULT PRIVILEGES GRANT` from issuance. Without that exact mirror, `DROP ROLE` would fail with `cannot be dropped because some objects depend on it` (the GRANT leaves a `pg_default_acl` dependent row that the symmetric REVOKE clears). Symmetric construction means every credential issued is also fully cleanly destroyable — no orphan roles, no escalation surface left behind.
 :::
 
-:::expand{header="Agent Developer Track — How UI logout triggers Vault lease revocation"}
+:::expand{header="Agent Developer Track — calling /v1/sys/leases/revoke from a production session-end handler"}
 
-The logout flow traverses three services:
+In a production agent, the session-end handler calls Vault's revoke API directly. Here is the same flow expressed in TypeScript (the same pattern the banking-app MCP server would use on logout or token expiry):
 
-```
-Browser: Click Logout
-    ↓
-SvelteKit /logout server route
-  POST /api/logout → Banking Agent { jwt: "<session_jwt>", lease_id: "<lease_id>" }
-    ↓
-Banking Agent  POST /logout
-  MCPClient.call_tool("revoke_credentials", { jwt, lease_id })
-    ↓
-MCP Server  handler: "revoke_credentials"
-  // Re-authenticate to Vault to get a token with revoke capability
-  const vaultToken = await vaultClient.loginWithK8sSa();  // k8s auth (workload identity)
-  await fetch(`${VAULT_ADDR}/v1/sys/leases/revoke`, {
+```typescript
+async function revokeLeaseOnSessionEnd(leaseId: string): Promise<void> {
+  // Re-authenticate with the workload's k8s ServiceAccount token (not the
+  // user's JWT) — keeps the revoke path working even if the user's JWT has
+  // already expired by the time the session-end handler runs.
+  const vaultToken = await vaultClient.loginWithK8sSA('uc2-mcp-server-sa');
+
+  const resp = await fetch(`${VAULT_ADDR}/v1/sys/leases/revoke`, {
     method: 'POST',
-    headers: { 'X-Vault-Token': vaultToken },
-    body: JSON.stringify({ lease_id: params.lease_id }),
+    headers: {
+      'X-Vault-Token': vaultToken,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ lease_id: leaseId }),
   });
-    ↓
-SvelteKit /logout server route
-  session.destroy()
-  redirect('/') 
+
+  if (!resp.ok) {
+    // Log but don't throw — the lease will still TTL-expire as a safety net.
+    console.warn(`Revoke failed for ${leaseId}: ${resp.status}`);
+  }
+}
 ```
 
-Why does the MCP Server use k8s auth (not jwt auth) for the revocation call? The `uc2-personal` policy — which is what a `jwt/login` provides — grants `sys/leases/revoke` capability. However, using the workload identity (k8s auth) for the revocation call keeps the logout path independent of whether the user's JWT is still valid. If the JWT has expired before the user clicks logout (e.g., they left the tab open for hours), the k8s auth path still works. The MCP Server's `uc2-mcp-server-sa` Kubernetes ServiceAccount is always available as the workload identity credential.
+**Why workload identity (k8s auth) and not the user's JWT for the revoke?** The user's JWT might have already expired (browser tab idle for hours, refresh token gone). The MCP server's Kubernetes ServiceAccount is always available — its `uc2-mcp-server-sa` token authenticates to Vault via the `uc2` k8s auth role. The `uc2-personal` policy grants `update` on `sys/leases/revoke` exactly for this purpose.
 
-The `lease_id` is stored in the SvelteKit server session (server-side, not in a cookie). The Banking UI server-side session tracks: `{ jwt, sub, lease_id }`. This state is set at the `/callback` route and cleared at `/logout`.
+**Where does the `lease_id` come from?** The MCP server stored it in its per-request context the moment it issued the credential (the `lease_id` field returned from `vault read database/creds/uc2-personal-readonly`). On session end the handler revokes whatever leases it tracked. Session state is server-side only — the browser never sees a `lease_id`.
+
+The audit-log query in Step 7 is exactly the operator's tool for confirming that a production session-end handler is calling this API as expected: the revocation events should appear with `display_name=token-uc2-mcp-server-sa` (the workload identity) and a `lease_id` that joins back to a user JWT issuance from the same time window.
 :::
+
+---
+
+### What Would Have Failed
+
+**Without explicit revocation (TTL-only design):** A credential issued at `T+0` would remain valid for up to 15 minutes after a user closes their browser tab. If the credential were leaked (clipboard, log line, memory dump), the attacker would have a 15-minute window of valid access regardless of whether the legitimate session is still alive. Explicit revocation closes the window in milliseconds — leakage windows shrink from minutes to "the time between the leak and the session-end signal".
+
+**Without symmetric `revocation_statements`:** If `creation_statements` adds a `GRANT` or `ALTER DEFAULT PRIVILEGES` but `revocation_statements` doesn't remove the symmetric counterpart, `DROP ROLE` aborts with a dependent-object error. Vault marks the lease "failed to revoke" and retries forever — the orphan Postgres role accumulates with each revocation attempt, and the lease never closes cleanly. Symmetric construction (every GRANT has a matching REVOKE) is what guarantees the lifecycle ends.
+
+**Without audit logging of the revoke API:** The Step 7 query becomes impossible. The revocation event exists in operational reality (the role is gone, the lease lookup fails) but there's no immutable record of *who* terminated the session *when*. For OBJ-5 (audit attribution) the revoke event is as important as the issuance event — together they bracket exactly the window of credential validity that an incident investigation would need to know about.

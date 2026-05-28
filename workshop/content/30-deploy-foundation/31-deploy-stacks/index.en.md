@@ -5,21 +5,27 @@ weight: 31
 
 Terraform state is stored locally under `infrastructure/terraform.tfstate`. In this step, you run `terraform apply` locally to deploy all foundation infrastructure, then run `configure-workshop.sh` to complete post-deploy configuration.
 
-## Step 1 — Run terraform apply
+## Step 1 — Initialize Terraform
 
-Run the apply from the `infrastructure/` directory:
+Initialize the working directory to download providers and modules. Run this once before your first apply:
 
 ```bash
-terraform -chdir=infrastructure apply
+terraform -chdir=infrastructure init
 ```
 
-Terraform generates a plan showing ~80-120 resource additions. Review the plan, then type `yes` to confirm.
+## Step 2 — Run terraform apply
+
+```bash
+terraform -chdir=infrastructure apply -auto-approve
+```
+
+Terraform provisions ~80-120 resources. `-auto-approve` skips the interactive confirmation.
 
 :::alert{header="First deploy timing" type="info"}
 Total time: ~25-35 minutes (EKS ~12 min, RDS ~10 min including pgaudit reboot, Bedrock KB ~3 min, addons ~5 min). The apply runs locally but provisions AWS resources remotely — timing depends on AWS API response times, not your machine.
 :::
 
-## Step 2 — Run configure-workshop.sh
+## Step 3 — Run configure-workshop.sh
 
 After the apply completes, run the post-deploy configuration script. It performs six steps in order:
 

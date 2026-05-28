@@ -25,8 +25,14 @@ This is not RFC 8693 Token Exchange — Vault's `jwt` auth method is the token e
 
 ## Step 1 — Inspect the jwt auth backend configuration
 
+The inspection commands in Steps 1–4 read privileged Vault paths, so load the root token first (written to `~/vault-init.json` during deploy). It is passed into the pod on each `kubectl exec`:
+
 ```bash
-kubectl exec -n vault vault-0 -- vault read auth/jwt/config
+export VAULT_ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)
+```
+
+```bash
+kubectl exec -n vault vault-0 -- sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read auth/jwt/config"
 ```
 
 Key fields:
@@ -42,7 +48,7 @@ Vault uses the `jwks_url` to fetch IVIA's public signing keys and cache them for
 ## Step 2 — Inspect the uc2-jwt role
 
 ```bash
-kubectl exec -n vault vault-0 -- vault read auth/jwt/role/uc2-jwt
+kubectl exec -n vault vault-0 -- sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read auth/jwt/role/uc2-jwt"
 ```
 
 Expected output (key fields):
@@ -70,32 +76,42 @@ Explanation of each field:
 ## Step 3 — Inspect the uc2-personal policy
 
 ```bash
-kubectl exec -n vault vault-0 -- vault policy read uc2-personal
+kubectl exec -n vault vault-0 -- sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault policy read uc2-personal"
 ```
 
 Expected output:
 
 ```hcl
-# uc2-personal — scoped policy for per-user read-only banking access
+# UC2: Personal-data agent policy (ENFC-02)
+# Allows: kubernetes + jwt auth login, database creds (R/O), AWS (Bedrock) STS creds
+# database/creds/uc2-personal-readonly only — no write DB roles accessible
 path "database/creds/uc2-personal-readonly" {
   capabilities = ["read"]
 }
-
+path "aws/sts/bedrock-reader" {
+  capabilities = ["read", "update"]
+}
+path "auth/token/lookup-self" {
+  capabilities = ["read"]
+}
 path "sys/leases/renew" {
   capabilities = ["update"]
 }
-
-path "sys/leases/revoke" {
-  capabilities = ["update"]
-}
 ```
+
+What each path grants:
+
+- `database/creds/uc2-personal-readonly` — fetch per-user JIT Postgres credentials (the core UC2 capability).
+- `aws/sts/bedrock-reader` — fetch Vault-vended AWS STS credentials so the agent can call Amazon Bedrock without a standing IAM identity (OBJ-2).
+- `auth/token/lookup-self` — let the agent inspect its own Vault token (TTL, policies) — standard hygiene for observability.
+- `sys/leases/renew` — extend an in-flight DB credential lease before it expires.
 
 Note what is absent: no path for `database/creds/uc3-refund-writer` or any write-capable credential role. This policy isolation is ENFC-02 at the Vault layer.
 
 ## Step 4 — Verify the database credentials role
 
 ```bash
-kubectl exec -n vault vault-0 -- vault read database/roles/uc2-personal-readonly
+kubectl exec -n vault vault-0 -- sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read database/roles/uc2-personal-readonly"
 ```
 
 Expected output (key fields):
@@ -105,7 +121,7 @@ Key                    Value
 ---                    -----
 db_name                workshop-pg
 default_ttl            15m
-max_ttl                1h
+max_ttl                30m
 creation_statements    ["CREATE ROLE \"{{name}}\" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}';",
                         "ALTER ROLE \"{{name}}\" SET search_path TO banking,public;",
                         "GRANT USAGE ON SCHEMA banking TO \"{{name}}\";",
@@ -117,7 +133,16 @@ Each ephemeral role is created with login credentials scoped to the banking sche
 
 ## Step 5 — Perform a live jwt login (demo)
 
-To confirm the jwt auth backend is working, perform a login using a pre-obtained JWT. In the browser, open the developer tools and inspect the `Authorization` header on any API call from the Banking UI to the Banking Agent. Copy the bearer token value.
+To confirm the jwt auth backend is working, perform a login using a pre-obtained JWT.
+
+The Banking UI is a SvelteKit app that keeps the user's IVIA-issued JWT in an HttpOnly cookie named `id_token` (server-side proxy at `/api/chat` injects the `Authorization: Bearer <jwt>` header into upstream calls to the Banking Agent — that header is never visible in the browser's Network tab).
+
+To grab the JWT yourself:
+
+1. Sign in to the Banking UI as `oscar` or `jaime`.
+2. Open Chrome DevTools (F12) → **Application** tab.
+3. Storage → Cookies → click the workshop hostname.
+4. Find the row `id_token` and copy the **Value** column.
 
 Then run:
 
@@ -131,24 +156,40 @@ kubectl exec -n vault vault-0 -- \
 Expected output:
 
 ```
-Key                  Value
----                  -----
-token                hvs.CAEIQ...
-token_accessor       abcde12345
-token_duration       1h
-token_policies       [uc2-personal default]
-token_meta_sub       oscar
+Key                    Value
+---                    -----
+token                  hvs.CAES...
+token_accessor         <opaque>
+token_duration         1h
+token_renewable        true
+token_policies         [default uc2-personal]
+identity_policies      []
+policies               [default uc2-personal]
+token_meta_role        uc2-jwt
+token_meta_user_sub    oscar      # (or `jaime` — whichever user you grabbed)
 ```
 
-The `token_meta_sub` field confirms Vault extracted the `sub` claim from the JWT. Now use that Vault token to fetch DB credentials:
+The `token_meta_user_sub` field confirms Vault extracted the `sub` claim from the JWT and exposed it as metadata (the `user_sub` key name comes from the `claim_mappings` you saw on the `uc2-jwt` role in Step 2). Now use that Vault token to fetch DB credentials:
 
 ```bash
-VAULT_TOKEN="hvs.CAEIQ..."
+VAULT_TOKEN="hvs.CAES..."   # paste the token value from the previous output
 kubectl exec -n vault vault-0 -- sh -c \
   "VAULT_TOKEN=${VAULT_TOKEN} vault read database/creds/uc2-personal-readonly"
 ```
 
-You will see a Postgres username and password with a 15-minute TTL. This is the credential the MCP Server uses for your session.
+Expected output:
+
+```
+Key                Value
+---                -----
+lease_id           database/creds/uc2-personal-readonly/<opaque>
+lease_duration     15m
+lease_renewable    true
+password           <ephemeral>
+username           v-jwt-<user>-uc2-pers-<random>-<timestamp>
+```
+
+You see a Postgres username and password with a 15-minute TTL. The username is the proof that Vault bound this credential to your identity: `v-jwt-` (issued via jwt auth) + the first chars of your IVIA `sub` claim + `uc2-pers` (the role name) + a unique suffix. The MCP Server uses exactly this credential for your session.
 
 :::expand{header="Platform Track — Vault jwt auth role configuration and IVIA OIDC wiring"}
 
