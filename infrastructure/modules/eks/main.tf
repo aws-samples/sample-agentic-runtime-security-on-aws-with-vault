@@ -35,7 +35,7 @@
 
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
-  version = "~> 20.37"
+  version = "= 20.37.2"
 
   cluster_name    = var.cluster_name
   cluster_version = "1.34"
@@ -85,7 +85,7 @@ module "eks" {
   # nodes need CNI + Pod Identity agent before they reach Ready (Pitfall E1).
   cluster_addons = {
     vpc-cni = {
-      most_recent    = true
+      addon_version  = "v1.21.2-eksbuild.2"
       before_compute = true
       pod_identity_association = [{
         role_arn        = module.vpc_cni_pod_identity.iam_role_arn
@@ -93,17 +93,17 @@ module "eks" {
       }]
     }
     coredns = {
-      most_recent = true
+      addon_version = "v1.13.2-eksbuild.10"
     }
     kube-proxy = {
-      most_recent = true
+      addon_version = "v1.34.6-eksbuild.11"
     }
     eks-pod-identity-agent = {
-      most_recent    = true
+      addon_version  = "v1.3.10-eksbuild.3"
       before_compute = true
     }
     aws-ebs-csi-driver = {
-      most_recent = true
+      addon_version = "v1.60.0-eksbuild.1"
       pod_identity_association = [{
         role_arn        = module.ebs_csi_pod_identity.iam_role_arn
         service_account = "ebs-csi-controller-sa"

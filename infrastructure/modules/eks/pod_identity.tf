@@ -27,7 +27,7 @@
 
 module "vpc_cni_pod_identity" {
   source  = "terraform-aws-modules/eks-pod-identity/aws"
-  version = "~> 1.12"
+  version = "= 1.12.1"
 
   name                      = "${var.cluster_name}-vpc-cni"
   attach_aws_vpc_cni_policy = true
@@ -47,7 +47,7 @@ module "vpc_cni_pod_identity" {
 
 module "ebs_csi_pod_identity" {
   source  = "terraform-aws-modules/eks-pod-identity/aws"
-  version = "~> 1.12"
+  version = "= 1.12.1"
 
   name                      = "${var.cluster_name}-ebs-csi"
   attach_aws_ebs_csi_policy = true
