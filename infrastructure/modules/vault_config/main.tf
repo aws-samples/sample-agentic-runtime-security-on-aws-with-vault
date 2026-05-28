@@ -146,6 +146,14 @@ resource "vault_database_secret_backend_role" "uc2_personal_readonly" {
     "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA banking FROM \"{{name}}\";",
     "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA banking FROM \"{{name}}\";",
     "REVOKE USAGE ON SCHEMA banking FROM \"{{name}}\";",
+    # Mirror of the creation_statement's ALTER DEFAULT PRIVILEGES GRANT — undoes the
+    # pg_default_acl row that the GRANT left behind. Without this matching REVOKE,
+    # DROP ROLE fails because the default-ACL entry is a dependent object. We use the
+    # symmetric REVOKE rather than DROP OWNED BY because RDS master (vault_root) is
+    # rds_superuser, not a true PG superuser, and is not a member of the ephemeral role
+    # — so DROP OWNED BY aborts with SQLSTATE 42501 ("permission denied to drop
+    # objects: Only roles with privileges of role X may drop objects owned by it").
+    "ALTER DEFAULT PRIVILEGES IN SCHEMA banking REVOKE SELECT ON TABLES FROM \"{{name}}\";",
     "DROP ROLE IF EXISTS \"{{name}}\";"
   ]
 }
@@ -175,6 +183,11 @@ resource "vault_database_secret_backend_role" "uc3_refund_writer" {
     "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA banking FROM \"{{name}}\";",
     "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA banking FROM \"{{name}}\";",
     "REVOKE USAGE ON SCHEMA banking FROM \"{{name}}\";",
+    # uc3-refund-writer's creation_statements do NOT include ALTER DEFAULT PRIVILEGES,
+    # so there is no pg_default_acl dependent row to clean up here — the three REVOKEs
+    # above are sufficient before DROP ROLE. See uc2_personal_readonly for the case
+    # where a creation_statements ALTER DEFAULT PRIVILEGES requires a symmetric REVOKE
+    # in revocation_statements.
     "DROP ROLE IF EXISTS \"{{name}}\";"
   ]
 }
