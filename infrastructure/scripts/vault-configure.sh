@@ -197,6 +197,17 @@ TFVARS
   ok "terraform.tfvars written (mode 600, vault_token only)"
 
   # Port-forward
+  # Idempotency: a stale or manual `kubectl port-forward ... 8200` (e.g. left
+  # running from a workshop walkthrough step) holds the port and makes our
+  # forward fail to bind. Kill any existing listener on 8200, then start fresh.
+  STALE_PF=$(lsof -tiTCP:8200 -sTCP:LISTEN 2>/dev/null || true)
+  if [[ -n "$STALE_PF" ]]; then
+    info "Port 8200 already bound (PID(s): $(echo "$STALE_PF" | tr '\n' ' ')) — killing stale port-forward"
+    # shellcheck disable=SC2086
+    kill $STALE_PF 2>/dev/null || true
+    sleep 1
+  fi
+
   info "Starting port-forward to Vault (8200)..."
   kubectl port-forward svc/vault 8200:8200 -n vault &>/dev/null &
   VAULT_PF_PID=$!

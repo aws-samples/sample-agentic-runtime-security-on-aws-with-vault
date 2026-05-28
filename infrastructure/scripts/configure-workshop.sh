@@ -2,13 +2,15 @@
 #===============================================================================
 # configure-workshop.sh — Post-Deploy Workshop Configuration
 #
-# Run after HCP workspace apply converges. Configures the full workshop
+# Run after `terraform apply` converges. Configures the full workshop
 # environment in sequence:
 #   Step 1: Configure kubectl (aws eks update-kubeconfig)
-#   Step 2: Initialize Vault (vault-init.sh)
-#   Step 3: Configure Vault (vault-configure.sh)
-#   Step 4: Configure IVIA (ivia-configure.sh)
-#   Step 5: Seed banking DB (seed-banking-db.sh)
+#   Step 2: Build & push application images (build-images.sh) + roll Deployments
+#   Step 3: Initialize Vault (vault-init.sh)
+#   Step 4: Configure Vault (vault-configure.sh)
+#   Step 5: Configure IVIA (ivia-configure.sh)
+#   Step 6: Verify OpenLDAP user 'oscar' seeded by IVIA autoconf
+#   Step 7: Seed banking DB (seed-banking-db.sh)
 #
 # Idempotent — safe to re-run. Each step self-verifies its result.
 # Missing sub-scripts are skipped with a warning (not a fatal error).
@@ -19,6 +21,7 @@
 #   --region REGION          AWS region (default: parsed from terraform.tfvars)
 #   --cluster-name NAME      EKS cluster name (default: parsed from terraform.tfvars)
 #   --skip-vault-init        Skip Vault initialization (Vault already initialized)
+#   --skip-build             Skip image build+push (images already in ECR)
 #   --dry-run                Print planned actions without executing
 #   --help                   Show this help message
 #
@@ -26,7 +29,8 @@
 #   - AWS CLI configured with valid credentials
 #   - kubectl installed
 #   - Vault CLI installed
-#   - HCP workspace apply complete (EKS cluster + Vault pods running)
+#   - Docker running (Step 2 builds the application images)
+#   - terraform apply complete (EKS cluster + Vault pods running, ECR repos created)
 #
 # Examples:
 #   # Full post-deploy configuration
@@ -37,6 +41,9 @@
 #
 #   # Skip vault-init if Vault is already initialized
 #   ./configure-workshop.sh --skip-vault-init
+#
+#   # Skip image builds on a re-run when images are already pushed
+#   ./configure-workshop.sh --skip-build
 #
 #   # Preview what would be done
 #   ./configure-workshop.sh --dry-run
@@ -58,16 +65,28 @@ source "${SCRIPT_DIR}/common-checks.sh"
 REGION=""
 CLUSTER_NAME=""
 SKIP_VAULT_INIT=false
+SKIP_BUILD=false
 DRY_RUN=false
 
 # Vault port-forward PID (cleaned up on exit)
 VAULT_PF_PID=""
 
+# Application Deployments rolled after images are pushed (Step 2). Format:
+# "<namespace>:<deployment>". These are created by `terraform apply` and sit in
+# ImagePullBackOff until their images exist in ECR.
+APP_DEPLOYMENTS=(
+    "uc1:uc1-agent"
+    "banking-app:banking-ui"
+    "banking-app:banking-agent"
+    "banking-app:banking-mcp-server"
+    "banking-app:uc3-agent"
+)
+
 #-------------------------------------------------------------------------------
 # Usage
 #-------------------------------------------------------------------------------
 usage() {
-    sed -n '2,44p' "$0"
+    sed -n '2,51p' "$0"
     exit 0
 }
 
@@ -80,6 +99,7 @@ while [[ $# -gt 0 ]]; do
         --region)           REGION="$2"; shift ;;
         --cluster-name)     CLUSTER_NAME="$2"; shift ;;
         --skip-vault-init)  SKIP_VAULT_INIT=true ;;
+        --skip-build)       SKIP_BUILD=true ;;
         --dry-run)          DRY_RUN=true ;;
         -*) echo "Unknown option: $1"; usage ;;
     esac
@@ -188,6 +208,7 @@ echo ""
 print_info "Region:       ${REGION}"
 print_info "Cluster:      ${CLUSTER_NAME}"
 print_info "Skip Vault init: ${SKIP_VAULT_INIT}"
+print_info "Skip image build: ${SKIP_BUILD}"
 if [[ "$DRY_RUN" = true ]]; then
     print_warn "DRY-RUN mode — no changes will be made"
 fi
@@ -222,44 +243,81 @@ else
 fi
 
 #===============================================================================
-# STEP 2: Initialize Vault (skip if --skip-vault-init)
+# STEP 2: Build & push application images, then roll the Deployments
+#
+# `terraform apply` creates the ECR repositories and the application
+# Deployments, but does NOT build the container images — so the pods come up
+# in ImagePullBackOff. This step builds+pushes every image (build-images.sh)
+# and then rolls each Deployment so kubelet pulls the freshly pushed image
+# immediately instead of waiting out its CrashLoop/ImagePull backoff.
 #===============================================================================
 echo ""
-echo -e "${YELLOW}> Step 2: Initialize Vault${NC}"
+echo -e "${YELLOW}> Step 2: Build & push application images${NC}"
+
+if [[ "$SKIP_BUILD" = true ]]; then
+    print_info "Step 2: Image build skipped (--skip-build)"
+    PASSES+=("Step 2: Build & push application images (skipped)")
+elif [[ "$DRY_RUN" = true ]]; then
+    print_info "[DRY-RUN] Would run: build-images.sh --region ${REGION}"
+    print_info "[DRY-RUN] Would roll Deployments: ${APP_DEPLOYMENTS[*]}"
+    print_pass "Step 2: Build & push application images (dry-run)"
+else
+    if _run_subscript "Step 2: build-images" \
+            "${SCRIPT_DIR}/build-images.sh" \
+            --region "${REGION}"; then
+        # Roll each app Deployment so it pulls the just-pushed image now.
+        rolled=0
+        for entry in "${APP_DEPLOYMENTS[@]}"; do
+            ns="${entry%%:*}"
+            dep="${entry#*:}"
+            if kubectl --context workshop get deploy "$dep" -n "$ns" >/dev/null 2>&1; then
+                kubectl --context workshop rollout restart "deploy/${dep}" -n "$ns" >/dev/null 2>&1 \
+                    && rolled=$((rolled + 1))
+            fi
+        done
+        print_pass "Step 2: Build & push application images (${rolled} Deployment(s) rolled)"
+    fi
+fi
+
+#===============================================================================
+# STEP 3: Initialize Vault (skip if --skip-vault-init)
+#===============================================================================
+echo ""
+echo -e "${YELLOW}> Step 3: Initialize Vault${NC}"
 
 if [[ "$SKIP_VAULT_INIT" = true ]]; then
-    print_info "Step 2: Vault init skipped (--skip-vault-init)"
-    PASSES+=("Step 2: Initialize Vault (skipped)")
+    print_info "Step 3: Vault init skipped (--skip-vault-init)"
+    PASSES+=("Step 3: Initialize Vault (skipped)")
 elif [[ "$DRY_RUN" = true ]]; then
     print_info "[DRY-RUN] Would run: vault-init.sh"
-    print_pass "Step 2: Initialize Vault (dry-run)"
+    print_pass "Step 3: Initialize Vault (dry-run)"
 else
-    if _run_subscript "Step 2: vault-init" "${SCRIPT_DIR}/vault-init.sh"; then
+    if _run_subscript "Step 3: vault-init" "${SCRIPT_DIR}/vault-init.sh"; then
         # vault-init.sh verifies status internally and exits 0 on success
         # Verify via kubectl exec (no port-forward needed)
         vault_sealed=$(kubectl --context workshop exec -n vault vault-0 -- \
             vault status -format=json 2>/dev/null \
             | jq -r '.sealed' 2>/dev/null || echo "true")
         if [[ "$vault_sealed" = "false" ]]; then
-            print_pass "Step 2: Initialize Vault (initialized, unsealed)"
+            print_pass "Step 3: Initialize Vault (initialized, unsealed)"
         else
-            print_fail "Step 2: Initialize Vault" \
+            print_fail "Step 3: Initialize Vault" \
                 "Vault sealed or unreachable. Check: kubectl exec -n vault vault-0 -- vault status"
         fi
     fi
 fi
 
 #===============================================================================
-# STEP 3: Configure Vault (vault-configure.sh)
+# STEP 4: Configure Vault (vault-configure.sh)
 #===============================================================================
 echo ""
-echo -e "${YELLOW}> Step 3: Configure Vault${NC}"
+echo -e "${YELLOW}> Step 4: Configure Vault${NC}"
 
 if [[ "$DRY_RUN" = true ]]; then
     print_info "[DRY-RUN] Would run: vault-configure.sh"
-    print_pass "Step 3: Configure Vault (dry-run)"
+    print_pass "Step 4: Configure Vault (dry-run)"
 else
-    if _run_subscript "Step 3: vault-configure" "${SCRIPT_DIR}/vault-configure.sh"; then
+    if _run_subscript "Step 4: vault-configure" "${SCRIPT_DIR}/vault-configure.sh"; then
         # Verify: vault auth list should show kubernetes/ and jwt/
         kubectl --context workshop port-forward svc/vault -n vault 8200:8200 \
             >/dev/null 2>&1 &
@@ -275,16 +333,16 @@ else
                 K8S_ENABLED=$(echo "$AUTH_LIST" | jq -r 'keys[] | select(. == "kubernetes/")' 2>/dev/null || echo "")
                 JWT_ENABLED=$(echo "$AUTH_LIST" | jq -r 'keys[] | select(. == "jwt/")' 2>/dev/null || echo "")
                 if [[ -n "$K8S_ENABLED" ]] && [[ -n "$JWT_ENABLED" ]]; then
-                    print_pass "Step 3: Configure Vault (kubernetes/ and jwt/ auth methods enabled)"
+                    print_pass "Step 4: Configure Vault (kubernetes/ and jwt/ auth methods enabled)"
                 else
-                    print_fail "Step 3: Configure Vault — auth methods missing" \
+                    print_fail "Step 4: Configure Vault — auth methods missing" \
                         "kubernetes=${K8S_ENABLED:-MISSING} jwt=${JWT_ENABLED:-MISSING}. Re-run: ${SCRIPT_DIR}/vault-configure.sh"
                 fi
             else
-                print_warn "Step 3: Could not verify Vault auth — root token not found in ~/vault-init.json"
+                print_warn "Step 4: Could not verify Vault auth — root token not found in ~/vault-init.json"
             fi
         else
-            print_warn "Step 3: Could not verify Vault auth via port-forward"
+            print_warn "Step 4: Could not verify Vault auth via port-forward"
         fi
         if [[ -n "$VAULT_PF_PID" ]] && kill -0 "$VAULT_PF_PID" 2>/dev/null; then
             kill "$VAULT_PF_PID" 2>/dev/null || true
@@ -294,16 +352,16 @@ else
 fi
 
 #===============================================================================
-# STEP 4: Configure IVIA (ivia-configure.sh)
+# STEP 5: Configure IVIA (ivia-configure.sh)
 #===============================================================================
 echo ""
-echo -e "${YELLOW}> Step 4: Configure IVIA${NC}"
+echo -e "${YELLOW}> Step 5: Configure IVIA${NC}"
 
 if [[ "$DRY_RUN" = true ]]; then
     print_info "[DRY-RUN] Would run: ivia-configure.sh"
-    print_pass "Step 4: Configure IVIA (dry-run)"
+    print_pass "Step 5: Configure IVIA (dry-run)"
 else
-    if _run_subscript "Step 4: ivia-configure" "${SCRIPT_DIR}/ivia-configure.sh"; then
+    if _run_subscript "Step 5: ivia-configure" "${SCRIPT_DIR}/ivia-configure.sh"; then
         # Verify: IVIA health endpoint responds
         IVIA_HEALTH=""
         if kubectl --context workshop get pods -n verify-access --no-headers 2>/dev/null | grep -q Running; then
@@ -318,50 +376,50 @@ else
             kill "$_IVIA_PF_PID" 2>/dev/null || true
         fi
         if [[ -n "$IVIA_HEALTH" ]]; then
-            print_pass "Step 4: Configure IVIA (OIDC issuer: ${IVIA_HEALTH})"
+            print_pass "Step 5: Configure IVIA (OIDC issuer: ${IVIA_HEALTH})"
         else
-            print_warn "Step 4: Could not verify IVIA OIDC health endpoint (IVIA may still be starting)"
+            print_warn "Step 5: Could not verify IVIA OIDC health endpoint (IVIA may still be starting)"
         fi
     fi
 fi
 
 #===============================================================================
-# STEP 5: Verify OpenLDAP user 'oscar' seeded by IVIA autoconf
+# STEP 6: Verify OpenLDAP user 'oscar' seeded by IVIA autoconf
 #===============================================================================
 # User 'oscar' is seeded into the in-cluster OpenLDAP automatically by IVIA
 # autoconf (webseal.pdadmin.users in modules/verify_access/base_layer/base_layer.yaml).
 # This step verifies the seed succeeded.
 echo ""
-echo -e "${YELLOW}> Step 5: Verify OpenLDAP user 'oscar' seeded${NC}"
+echo -e "${YELLOW}> Step 6: Verify OpenLDAP user 'oscar' seeded${NC}"
 
 if [[ "$DRY_RUN" = true ]]; then
     print_info "[DRY-RUN] Would query in-cluster OpenLDAP for cn=oscar"
-    print_pass "Step 5: OpenLDAP user check (dry-run)"
+    print_pass "Step 6: OpenLDAP user check (dry-run)"
 else
     LDAP_PW=$(kubectl get secret openldap-creds -n verify-access -o jsonpath='{.data.admin_password}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
     if [ -n "${LDAP_PW}" ] && kubectl exec -n verify-access deploy/openldap -- \
             ldapsearch -x -H ldapi:/// -D "cn=admin,dc=ibm,dc=com" -w "${LDAP_PW}" \
             -b "dc=ibm,dc=com" "(cn=oscar)" dn 2>/dev/null | grep -q '^dn:'; then
-        print_pass "Step 5: OpenLDAP user 'oscar' present (seeded by IVIA autoconf)"
+        print_pass "Step 6: OpenLDAP user 'oscar' present (seeded by IVIA autoconf)"
     else
-        print_warn "Step 5: OpenLDAP user 'oscar' NOT found — re-run terraform apply or inspect ivia-autoconf job logs"
+        print_warn "Step 6: OpenLDAP user 'oscar' NOT found — re-run terraform apply or inspect ivia-autoconf job logs"
     fi
 fi
 
 #===============================================================================
-# STEP 6: Seed Banking DB (seed-banking-db.sh)
+# STEP 7: Seed Banking DB (seed-banking-db.sh)
 #===============================================================================
 echo ""
-echo -e "${YELLOW}> Step 6: Seed Banking DB${NC}"
+echo -e "${YELLOW}> Step 7: Seed Banking DB${NC}"
 
 if [[ "$DRY_RUN" = true ]]; then
     print_info "[DRY-RUN] Would run: seed-banking-db.sh --region ${REGION}"
-    print_pass "Step 6: Seed Banking DB (dry-run)"
+    print_pass "Step 7: Seed Banking DB (dry-run)"
 else
-    if _run_subscript "Step 6: seed-banking-db" \
+    if _run_subscript "Step 7: seed-banking-db" \
             "${SCRIPT_DIR}/seed-banking-db.sh" \
             --region "${REGION}"; then
-        print_pass "Step 6: Seed Banking DB (script verified successfully)"
+        print_pass "Step 7: Seed Banking DB (script verified successfully)"
     fi
 fi
 
