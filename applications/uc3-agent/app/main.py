@@ -37,6 +37,7 @@ from pydantic import BaseModel
 from . import ciba_store
 from .agent import build_uc3_agent
 from .vault_client import UC3VaultClient
+from .auth import verify_id_token, _AUTHENTICATED_SUB, AuthenticationError
 
 logging.basicConfig(
     level=logging.INFO,
@@ -90,8 +91,23 @@ class ChatRequest(BaseModel):
 
 
 @app.post("/chat")
-async def chat(body: ChatRequest):
+async def chat(request: Request, body: ChatRequest):
     """Accept a user message and return an SSE agent response.
+
+    Identity boundary: extracts the IVIA-issued id_token from
+    `Authorization: Bearer <id_token>`, verifies it cryptographically (sig +
+    iss + aud + exp, RS256 allowlist) via `auth.verify_id_token`, and sets the
+    request-scoped `_AUTHENTICATED_SUB` ContextVar to the verified `sub` claim
+    BEFORE invoking the Strands agent. The to_thread worker propagates the
+    contextvars Context to the worker thread, so downstream refund tools can
+    read `_AUTHENTICATED_SUB.get()` to learn the authenticated user — identity
+    NEVER flows in as an LLM-controllable parameter (OBJ-3).
+
+    Failure modes:
+      - 503: vault client not initialized / re-auth failed (infra fault).
+      - 401: Authorization header missing / malformed / empty token / id_token
+        verification failed. Response body is GENERIC — the structured warning
+        in `auth.py` records the actual failure category.
 
     Builds a fresh Agent per request with:
       - Fresh Vault STS creds (never expired)
@@ -107,23 +123,50 @@ async def chat(body: ChatRequest):
         except Exception as exc:
             raise HTTPException(status_code=503, detail=f"Vault re-auth failed: {exc}")
 
+    # Identity boundary — extract + verify the IVIA id_token BEFORE building
+    # the agent. 401 responses are kept generic to avoid info leak about which
+    # claim failed; the structured log in auth.py carries the failure reason.
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.lower().startswith("bearer "):
+        raise HTTPException(
+            status_code=401,
+            detail="Authorization: Bearer <id_token> header required",
+        )
+    id_token = auth_header[7:].strip()
+    if not id_token:
+        raise HTTPException(status_code=401, detail="Empty id_token in Authorization header")
+
+    try:
+        verified_sub = verify_id_token(id_token)
+    except AuthenticationError as exc:
+        raise HTTPException(status_code=401, detail="id_token verification failed") from exc
+
     agent = build_uc3_agent(vault_client=_vault_client, session_id=body.sessionId)
     message = body.message
 
     async def generate():
+        # Bind the verified sub for the entire SSE stream lifetime. The set
+        # MUST happen before the to_thread(agent, message) call below —
+        # to_thread uses contextvars.copy_context() so the worker thread (and the Strands
+        # tool callbacks running in it) inherit this value. Reset in finally
+        # so the ContextVar is unbound before the request task is reused for
+        # another caller on the same uvicorn worker (defense in depth).
+        ctx_token = _AUTHENTICATED_SUB.set(verified_sub)
         try:
             yield f"data: {json.dumps({'role': 'ai', 'content': 'Processing your request...', 'type': 'tool_planning'})}\n\n"
+            try:
+                response = await asyncio.to_thread(agent, message)
+                content = re.sub(r'<thinking>.*?</thinking>\s*', '', str(response), flags=re.DOTALL)
 
-            response = await asyncio.to_thread(agent, message)
-            content = re.sub(r'<thinking>.*?</thinking>\s*', '', str(response), flags=re.DOTALL)
+                yield f"data: {json.dumps({'role': 'ai', 'content': content, 'type': 'delta'})}\n\n"
+                yield f"data: {json.dumps({'type': 'end'})}\n\n"
 
-            yield f"data: {json.dumps({'role': 'ai', 'content': content, 'type': 'delta'})}\n\n"
-            yield f"data: {json.dumps({'type': 'end'})}\n\n"
-
-        except Exception as exc:
-            logger.error("uc3_agent_error: %s | user_message: %s", str(exc), message)
-            yield f"data: {json.dumps({'type': 'error', 'content': str(exc)})}\n\n"
-            yield f"data: {json.dumps({'type': 'end'})}\n\n"
+            except Exception as exc:
+                logger.error("uc3_agent_error: %s | user_message: %s", str(exc), message)
+                yield f"data: {json.dumps({'type': 'error', 'content': str(exc)})}\n\n"
+                yield f"data: {json.dumps({'type': 'end'})}\n\n"
+        finally:
+            _AUTHENTICATED_SUB.reset(ctx_token)
 
     return StreamingResponse(
         generate(),
