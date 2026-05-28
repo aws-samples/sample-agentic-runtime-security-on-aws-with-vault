@@ -11,13 +11,16 @@ This page explains what was configured and why — understanding the Vault trust
 
 ## Step 1 — Inspect the Vault role binding
 
-Export the Vault address so `vault` CLI commands work from your local machine (via `kubectl port-forward` or an ALB endpoint):
+Point the `vault` CLI at Vault and authenticate with the root token so the reads below are permitted (without `VAULT_TOKEN` the CLI sends no credential and Vault returns `403 permission denied`):
 
 ```bash
 export VAULT_ADDR=http://localhost:8200
 
 # If you need to port-forward:
 kubectl port-forward -n vault svc/vault 8200:8200 &
+
+# Authenticate the local CLI with the root token written during Vault init
+export VAULT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)
 ```
 
 Read the Kubernetes auth role that binds `uc1-retriever-sa` to the `uc1-readonly` policy:
