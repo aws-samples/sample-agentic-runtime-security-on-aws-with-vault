@@ -11,88 +11,110 @@ In this module you log in as Oscar and then as Jaime and confirm that each user 
 
 Open the Banking UI URL in your browser and log in as `oscar`. Navigate to the **Accounts** page. You should see accounts belonging to Oscar only.
 
-To confirm from the cluster, exec into the MCP Server pod and run a query using the Vault-vended credentials for Oscar's session:
+To confirm from the cluster, run a query using Vault-vended credentials with Oscar's RLS session variable set.
+
+This block issues a fresh credential, prints the `username` / `password` so you can see what Vault gave you, and exports them (along with `RDS_HOST`) into your shell so the psql commands further down pick them up automatically — no copy-paste required:
 
 ```bash
-# Get a Vault-vended credential manually (root token required)
-kubectl exec -n vault vault-0 -- vault read database/creds/uc2-personal-readonly
+export VAULT_ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)
+
+CREDS_JSON=$(kubectl exec -n vault vault-0 -- \
+  sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read database/creds/uc2-personal-readonly -format=json")
+
+# Show what Vault issued (so you can confirm it's a v-root-uc2-pers-... role)
+echo "$CREDS_JSON" | jq '{username: .data.username, password: .data.password}'
+
+# Capture for Step 1.2 and Step 2 — no copy-paste needed
+export PG_USER=$(echo "$CREDS_JSON" | jq -r '.data.username')
+export PG_PASS=$(echo "$CREDS_JSON" | jq -r '.data.password')
+export RDS_HOST=$(kubectl get configmap banking-mcp-config -n banking-app -o jsonpath='{.data.RDS_ADDRESS}')
 ```
 
-Note the `username` and `password`. Then:
+:::alert{type="warning" header="Credential TTL: 15 minutes"}
+The credential issued above lives for **15 minutes** (`default_ttl`). If you take longer than that before running the psql command in Step 1.2 / Step 2, you will see `psql: error: FATAL: password authentication failed`. Re-run the whole block above — `PG_USER` and `PG_PASS` get re-exported automatically.
+:::
+
+Now spawn a transient `postgres:16-alpine` pod, run the SELECT as Oscar, and let it auto-delete (no psql binary lives in any workshop pod — this is the cluster-side equivalent of the MCP server's per-request connect → SET → SELECT pattern):
 
 ```bash
-# Get the RDS host from the MCP server ConfigMap
-RDS_HOST=$(kubectl get configmap banking-mcp-config -n banking-app \
-  -o jsonpath='{.data.RDS_ADDRESS}')
-
-# Exec into the MCP Server pod and run a select
-kubectl exec -n banking-app deploy/banking-mcp-server -- \
-  sh -c "PGPASSWORD='<password>' psql -h ${RDS_HOST} -U <username> -d workshop \
-  -c \"SET app.current_user_sub = 'oscar'; SELECT account_number, balance FROM banking.accounts;\""
+kubectl run pg-client-oscar --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
+  --env="PGPASSWORD=${PG_PASS}" \
+  --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop \
+    -c "SET app.current_user_sub = 'oscar'; SELECT account_number, balance FROM banking.accounts;"
 ```
 
 Expected output — only Oscar's rows:
 
 ```
- account_number |  balance
-----------------+-----------
- OVI-CHK-100001 | 4250.00
+SET
+ account_number | balance
+----------------+----------
+ OVI-CHK-100001 |  4250.00
  OVI-SAV-100002 | 18750.50
 (2 rows)
+
+pod "pg-client-oscar" deleted
 ```
 
 ## Step 2 — Switch to Jaime, confirm data isolation
 
 Log out and log in as `jaime`. Navigate to the **Accounts** page. You should see Jaime's accounts only — no rows from Oscar's data.
 
-Run the same manual query with `app.current_user_sub = 'jaime'`:
+Run the same manual query with `app.current_user_sub = 'jaime'` (you can reuse the same Vault-vended credential — RLS isolation is driven entirely by the session variable, not by the Postgres user):
 
 ```bash
-kubectl exec -n banking-app deploy/banking-mcp-server -- \
-  sh -c "PGPASSWORD='<password>' psql -h ${RDS_HOST} -U <username> -d workshop \
-  -c \"SET app.current_user_sub = 'jaime'; SELECT account_number, balance FROM banking.accounts;\""
+kubectl run pg-client-jaime --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
+  --env="PGPASSWORD=${PG_PASS}" \
+  --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop \
+    -c "SET app.current_user_sub = 'jaime'; SELECT account_number, balance FROM banking.accounts;"
 ```
 
 Expected output — only Jaime's rows:
 
 ```
- account_number |  balance
-----------------+-----------
+SET
+ account_number | balance
+----------------+----------
  OVI-CHK-200001 |  7830.25
  OVI-SAV-200002 | 32100.00
 (2 rows)
+
+pod "pg-client-jaime" deleted
 ```
 
 ## Step 3 — Inspect the Row-Level Security policy
 
-Connect to RDS as the `vault_root` user (or another admin user) and inspect the RLS policy:
+The RLS policy lives in the `pg_policy` system catalog. Reading it requires admin access (the `uc2-personal-readonly` Vault-vended role is non-superuser and cannot query `pg_policy`). The RDS master credentials are stored in AWS Secrets Manager — pull them and run a SELECT against the catalog from a transient `postgres:16-alpine` pod:
 
 ```bash
-kubectl exec -n vault vault-0 -- \
-  vault read database/creds/uc2-personal-readonly -format=json | jq -r '.data'
-```
+SECRET_ID=$(aws secretsmanager list-secrets --region us-west-2 \
+  --query 'SecretList[?contains(Name,`rds!db`)].Name | [0]' --output text)
+MASTER_USER=$(aws secretsmanager get-secret-value --region us-west-2 --secret-id "${SECRET_ID}" \
+  --query SecretString --output text | jq -r '.username')
+MASTER_PASS=$(aws secretsmanager get-secret-value --region us-west-2 --secret-id "${SECRET_ID}" \
+  --query SecretString --output text | jq -r '.password')
 
-Then on RDS:
-
-```bash
-kubectl exec -n banking-app deploy/banking-mcp-server -- \
-  sh -c "PGPASSWORD='<admin_password>' psql -h ${RDS_HOST} -U vault_root -d workshop \
-  -c 'SELECT polname, polcmd, polroles, pg_get_expr(polqual, polrelid) AS policy_expr
-      FROM pg_policy
-      JOIN pg_class ON pg_class.oid = pg_policy.polrelid
-      WHERE pg_class.relname = '\''accounts'\'';'"
+kubectl run pg-client-policy --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
+  --env="PGPASSWORD=${MASTER_PASS}" \
+  --command -- psql -h "${RDS_HOST}" -U "${MASTER_USER}" -d workshop \
+    -c "SELECT polname, polcmd, polroles, pg_get_expr(polqual, polrelid) AS policy_expr
+        FROM pg_policy
+        JOIN pg_class ON pg_class.oid = pg_policy.polrelid
+        WHERE pg_class.relname = 'accounts';"
 ```
 
 Expected output:
 
 ```
-    polname      | polcmd | polroles |              policy_expr
------------------+--------+----------+-----------------------------------------
- user_accounts   | r      | {}       | (user_sub = current_setting('app.current_user_sub', true))
+    polname    | polcmd | polroles |                               policy_expr
+---------------+--------+----------+--------------------------------------------------------------------------
+ user_accounts | r      | {0}      | ((user_sub)::text = current_setting('app.current_user_sub'::text, true))
 (1 row)
+
+pod "pg-client-policy" deleted
 ```
 
-The `policy_expr` column shows the RLS predicate: `user_sub = current_setting('app.current_user_sub', true)`. Every `SELECT` on `banking.accounts` is automatically filtered by this predicate. If `app.current_user_sub` is not set, `current_setting(..., true)` returns `NULL` and no rows are returned — a safe default.
+The `policy_expr` column shows the RLS predicate (PostgreSQL has normalised the column reference to `(user_sub)::text` and the setting name to `'app.current_user_sub'::text` — same semantic). Every `SELECT` on `banking.accounts` is automatically filtered by this predicate. If `app.current_user_sub` is not set, `current_setting(..., true)` returns `NULL` and no rows are returned — a safe default. The `polroles = {0}` value is Postgres's convention in `pg_policy` for "applies to every role" — the policy is not scoped to a specific role list, so any non-superuser role that touches the table is subject to it (the master `vault_root` role bypasses RLS because it is a superuser, which is why Step 3 reads `pg_policy` successfully).
 
 ## Step 4 — Run verify-uc2.sh
 
@@ -113,32 +135,37 @@ The script checks all Use Case 2 success criteria:
 | Vault k8s role binding | `auth/kubernetes/role/uc2` bound to `uc2-mcp-server-sa` |
 | Vault jwt role | `auth/jwt/role/uc2-jwt` exists with `bound_audiences=[agent-uc2]` |
 | JIT DB creds issuable | `database/creds/uc2-personal-readonly` returns username + password |
-| DB read works | SELECT from `banking.accounts` returns rows with JIT creds |
+| DB read works | SELECT from `banking.accounts` with `app.current_user_sub = 'oscar'` returns ≥ 2 rows |
 | ENFC-02 enforced | INSERT with JIT creds returns `ERROR: permission denied for table` |
 | ENFC-03 enforced | Egress curl from MCP pod to external URL times out (NetworkPolicy blocks) |
 | Agent /health | Banking Agent returns `{"status":"healthy"}` |
 | IVIA JWKS reachable | JWKS endpoint returns at least one signing key |
-| Active lease exists | At least one active lease for `uc2-personal-readonly` (with VAULT_ROOT_TOKEN) |
+| Active lease exists | At least one active lease for `uc2-personal-readonly` |
+| OAuth discovery | IVIA OIDC Provider `/.well-known/openid-configuration` reachable via the WRP ALB |
 
-Expected summary output:
+Expected summary output (counts in parentheses — leases, keys — vary per run):
 
 ```
-[PASS] Banking UI pod Running (1 pod(s) in banking-app)
-[PASS] Banking Agent pod Running (1 pod(s) in banking-app)
-[PASS] MCP Server pod Running (1 pod(s) in banking-app)
-[PASS] ServiceAccount uc2-mcp-server-sa exists in banking-app
-[PASS] Vault k8s auth role uc2 bound to uc2-mcp-server-sa
-[PASS] Vault jwt auth role uc2-jwt exists (bound_audiences contains agent-uc2)
-[PASS] JIT DB creds issuance: username=v-jwt-uc2-personal-readonly-AbCd1234
-[PASS] DB read: SELECT from banking.accounts returned 2 row(s)
-[PASS] ENFC-02: INSERT rejected by PostgreSQL (permission denied for table)
-[PASS] ENFC-03: NetworkPolicy egress blocked from MCP server pod
-[PASS] Agent /health endpoint: healthy
-[PASS] IVIA JWKS endpoint reachable (2 key(s) returned)
-[PASS] Active Vault lease exists for uc2-personal-readonly (1 lease(s))
-[PASS] OAuth discovery: IVIA /.well-known/openid-configuration returns valid JSON
+  ℹ INFO Use Case 2 — OAuth Personalized Read-Only verification
 
-14 check(s) passed, 0 failed.
+  ✓ PASS Banking UI pod Running (1 pod(s) in banking-app)
+  ✓ PASS Banking Agent pod Running (1 pod(s) in banking-app)
+  ✓ PASS MCP Server pod Running (1 pod(s) in banking-app)
+  ✓ PASS ServiceAccount uc2-mcp-server-sa exists in banking-app
+  ✓ PASS Vault k8s auth role uc2 bound to uc2-mcp-server-sa
+  ✓ PASS Vault jwt auth role uc2-jwt exists (bound_audiences contains agent-uc2)
+  ✓ PASS JIT DB creds issuance: username=v-root-uc2-pers-<random>-<timestamp>
+  ✓ PASS DB read: SELECT from banking.accounts returned 2 row(s) for user 'oscar' (>= 2 expected)
+  ✓ PASS ENFC-02: INSERT rejected by PostgreSQL (permission denied for table)
+  ✓ PASS ENFC-03: NetworkPolicy egress blocked from MCP server pod (external curl timed out)
+  ✓ PASS Agent /health endpoint: healthy
+  ✓ PASS IVIA JWKS endpoint reachable (N key(s) returned) — OAuth pre-check passed
+  ✓ PASS Active Vault lease exists for uc2-personal-readonly (N lease(s))
+  ✓ PASS OAuth discovery: IVIA OIDC Provider reachable (issuer=https://<wrp-alb-host>)
+
+===============================================================================
+ ✓ 14 check(s) passed
+===============================================================================
 ```
 
 :::expand{header="Platform Track — RLS policy SQL and session variable pattern"}
@@ -166,7 +193,18 @@ CREATE POLICY user_transactions ON banking.transactions
   );
 ```
 
-The `uc2_personal_readonly` permanent Postgres role is the grant vehicle. The ephemeral Vault-vended credentials are created `IN ROLE uc2_personal_readonly`, inheriting SELECT but not INSERT/UPDATE/DELETE.
+There is no permanent `uc2_personal_readonly` Postgres role. Each Vault-vended credential is its own freshly-created Postgres role with the SELECT grants applied directly to it by Vault's database secrets engine. The `creation_statements` you saw in Step 4 of the previous page are run by Vault every time `vault read database/creds/uc2-personal-readonly` is called:
+
+```sql
+-- runs once per credential issuance
+CREATE ROLE "{{name}}" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}';
+ALTER ROLE  "{{name}}" SET search_path TO banking, public;
+GRANT USAGE ON SCHEMA banking TO "{{name}}";
+GRANT SELECT ON ALL TABLES IN SCHEMA banking TO "{{name}}";
+ALTER DEFAULT PRIVILEGES IN SCHEMA banking GRANT SELECT ON TABLES TO "{{name}}";
+```
+
+Three consequences flow from this direct-GRANT-no-inheritance design: (1) every credential's privileges are auditable on its own role — there is no shared parent role to inspect; (2) when the credential's lease expires, Vault's `revocation_statements` drop the role and all grants disappear with it; (3) INSERT / UPDATE / DELETE were never granted, so they cannot be acquired by privilege escalation — there is no parent role to GRANT through.
 
 How the session variable activates RLS:
 
