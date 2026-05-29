@@ -96,7 +96,15 @@ def _init_jwks_client() -> None:
     resp = httpx.get(disc_url, verify=IVIA_CA_BUNDLE, timeout=10.0)
     resp.raise_for_status()
     disc = resp.json()
-    _JWKS_CLIENT = PyJWKClient(disc["jwks_uri"], ssl_context=ssl.create_default_context(cafile=IVIA_CA_BUNDLE))
+    # Split-horizon OIDC: discovery advertises the EXTERNAL WRP-ALB issuer +
+    # jwks_uri (correct — the token's `iss` is that public URL). But the ALB
+    # terminates TLS with a self-signed cert the in-cluster agent doesn't trust,
+    # so we fetch the same JWKS from the INTERNAL iviaop service (derived only
+    # from trusted IVIA_BASE_URL, never from token input) over the CA bundle we
+    # already mount. `_OIDC_ISSUER` stays the EXTERNAL value so the `iss` check
+    # remains strict against the public issuer.
+    internal_jwks_uri = f"{IVIA_BASE_URL}/oauth2/jwks"
+    _JWKS_CLIENT = PyJWKClient(internal_jwks_uri, ssl_context=ssl.create_default_context(cafile=IVIA_CA_BUNDLE))
     _OIDC_ISSUER = disc["issuer"]
 
 
