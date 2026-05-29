@@ -139,6 +139,16 @@ A complete row demonstrates that:
 1. The same `request_id` appears in the IVIA decision log (user approved), the Vault audit log (agent authenticated with bound claims enforced), and the pgaudit log (data was written to `banking.refunds`).
 2. The `approval_time`, `vault_auth_time`, and `db_write_time` columns show a linear causal chain — approval before auth before write.
 3. The `db_credential_ttl` carries the integer lease TTL in seconds (300 = 5 minutes) the agent observed when Vault issued the per-refund database credential — proof the credential expires shortly after the write, not a standing one.
-4. The `vault_bound_claim_may_act` column shows the exact service account that was the actor — provable, not assumed.
+4. The `vault_bound_claim_may_act` and `vault_bound_claim_rar_type` columns show the exact actor (`uc3-actor`) and RAR type (`refund_approval`) Vault **enforced** at auth time — provable, not assumed.
 
-This is the answer to the question the OscarVault International (OVI) demo poses: **"Who authorized this action, through which agent, against what system, and can we prove the credentials have since expired?"**
+:::alert{header="How the approved amount is proven — consent-bound by correlation" type="info"}
+The amount the user approved (e.g. `$88.30`) is **not** a column in this VIEW, and it is **not** a Vault-enforced token claim — ISVAOP 25.10 does not expose the consent-time RAR amount at the token-exchange stage (see the [Vault Bound Claims](../72-configure-bound-claims/) page). Instead the amount is **consent-bound by the shared `request_id`**: there is exactly **one** CIBA approval and exactly **one** `banking.refunds` write under that `request_id`, and the refund row itself carries the amount. Because the correlation row proves a strict 1:1 binding between the user's out-of-band approval and a single, time-boxed, bound-claim-gated DB write, the amount written **is** the amount approved — an agent cannot write a different or additional amount under that approval without breaking the correlation. To read the dollar figure directly, look at the `banking.refunds` row for that `request_id`:
+
+```sql
+SELECT request_id, refund_id, account_id, transaction_id, amount, currency, approved_by, created_at
+FROM banking.refunds
+WHERE request_id = '${REQUEST_ID}';
+```
+:::
+
+This is the answer to the question the OscarVault International (OVI) demo poses: **"Who authorized this action, through which agent, against what system, for what class of action, and can we prove the credentials have since expired?"**

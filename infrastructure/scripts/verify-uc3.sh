@@ -27,9 +27,14 @@
 #   12. UC3 agent chat: "I need a refund" returns transaction list
 #   13. UC3 agent chat: multi-turn session — selecting a transaction is acknowledged
 #
-# Bypass mode (--bypass):
-#   14. Forge JWT with wrong may_act.sub — Vault must reject (403)
-#   15. Forge JWT with wrong authorization_details type — Vault must reject (403)
+# Bypass mode (--bypass) — two GENUINE negative tests, classified by reason:
+#   14. Untrusted-signer control: an HS256 self-forged JWT must be rejected at
+#       Vault's signature layer (Vault trusts only IVIA's RS256 JWKS).
+#   15. Bound-claim enforcement: a REAL IVIA-signed uc3-actor client_credentials
+#       token (valid RS256 + aud=uc3-actor, but NO may_act delegation) must be
+#       rejected at the /may_act/sub bound_claim — proving bound_claims actually
+#       gate access, not just the signature. A skip or infra error is a HARD FAIL,
+#       never a silent pass.
 #
 # Usage:
 #   ./verify-uc3.sh [--bypass] [--help]
@@ -88,9 +93,10 @@ Normal mode checks (19 total):
   12. UC3 agent chat: "I need a refund" returns transaction list
   13. UC3 agent chat: multi-turn session — selecting a transaction is acknowledged
 
-Bypass mode (--bypass) adds:
-  14. Forge JWT with wrong may_act.sub — Vault must return 403
-  15. Forge JWT with wrong authorization_details type — Vault must return 403
+Bypass mode (--bypass) adds two genuine negative tests:
+  14. Untrusted-signer control — HS256 self-forged JWT rejected at signature layer
+  15. Bound-claim enforcement — real IVIA-signed uc3-actor token (no may_act)
+      rejected at the /may_act/sub bound_claim (skip/infra error = HARD FAIL)
 
 Env-var overrides:
   BANKING_NAMESPACE   (default: banking-app)
@@ -146,22 +152,54 @@ else
 fi
 echo ""
 
+# classify_forged_login — turn a `vault write auth/jwt/login` attempt into a
+# PASS/FAIL verdict by REASON, so the bypass test can never silently pass on an
+# infrastructure error or an unexpected failure. Four outcomes:
+#   1. rc==0 or a client_token came back  → Vault ACCEPTED the token = HARD FAIL
+#      (the gate we are testing did not fire).
+#   2. output matches the EXPECTED rejection reason ($5) → genuine rejection = PASS.
+#   3. output matches a known infra failure (couldn't reach/exec Vault) → HARD FAIL
+#      (NOT proof of rejection — we never observed the gate).
+#   4. rejected, but for an unrecognized reason → HARD FAIL (cannot confirm the
+#      signature/bound_claim gate fired; surface the raw output for triage).
+# Args: $1 label  $2 vault-output  $3 rc  $4 pass-msg  $5 expected-reason-regex
+classify_forged_login() {
+    local label="$1" out="$2" rc="$3" pass_msg="$4" expect="$5"
+
+    if [ "${rc}" -eq 0 ] || echo "${out}" | grep -q '"client_token"'; then
+        print_fail "${label}: Vault ACCEPTED a token it must reject" \
+            "A token that should have been denied logged in successfully — the uc3-jwt role's signature validation or bound_claims are not enforcing. Output: ${out:0:300}. Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault read auth/jwt/role/uc3-jwt"
+        return
+    fi
+
+    if echo "${out}" | grep -qiE "${expect}"; then
+        print_pass "${pass_msg}"
+        return
+    fi
+
+    if echo "${out}" | grep -qiE 'unable to connect|unable to upgrade connection|connection refused|i/o timeout|no such host|dial tcp|error executing command|no such file|container not found|couldn'\''t find|could not find|the server doesn'\''t have a resource'; then
+        print_fail "${label}: could not reach Vault to run the test (infra error, NOT proof of rejection)" \
+            "The login command failed for an infrastructure reason, so this is NOT evidence the gate rejected the token. Output: ${out:0:300}"
+        return
+    fi
+
+    print_fail "${label}: login was rejected, but NOT for the expected reason — cannot confirm the gate fired" \
+        "Expected a rejection matching /${expect}/. Got: ${out:0:300}. Verify the uc3-jwt role config (signature algs + bound_claims)."
+}
+
 if [ "${BYPASS_MODE}" = true ]; then
     #---------------------------------------------------------------------------
-    # Bypass check 12 — Forge JWT with wrong may_act.sub
+    # Bypass Check 14 — Untrusted-signer control (HS256 self-forged JWT)
     #
-    # Uses PyJWT to create an HS256-signed JWT (IVIA uses RS256/ES256 from JWKS;
-    # Vault's JWKS validation will reject any HS256 token). The claim content
-    # includes a wrong may_act.sub to demonstrate the two-layer rejection:
-    #   1. JWT signature invalid (HS256 not trusted by IVIA JWKS)
-    #   2. may_act.sub does not match the bound_claim pattern
-    # Either layer alone is sufficient; both provide defense-in-depth.
+    # An attacker who mints their own JWT cannot sign it with IVIA's private key,
+    # so they fall back to a symmetric secret (HS256). Vault's uc3-jwt role trusts
+    # ONLY IVIA's RS256 JWKS, so the token dies at the signature layer before any
+    # claim is even read. This is the baseline "you can't forge your way in"
+    # control; the bound_claim teeth are exercised by Check 15.
     #---------------------------------------------------------------------------
-    print_info "Bypass Check 12: Forge JWT with wrong may_act.sub"
+    print_info "Bypass Check 14: Untrusted-signer control — HS256 self-forged JWT must be rejected at the signature layer"
 
-    # Check PyJWT is available inside the vault pod (it ships with Vault's Python helper)
-    # We use kubectl exec to run python3 inside a debug pod
-    FORGED_JWT_WRONG_MAYACT=""
+    FORGED_HS256_JWT=""
     forge_pod="verify-uc3-forge-$$"
     kubectl delete pod "${forge_pod}" -n default --ignore-not-found --wait=true &>/dev/null
 
@@ -172,77 +210,83 @@ import jwt, time
 payload = {
     'sub': 'attacker',
     'iss': '${IVIA_ISSUER}',
-    'aud': 'agent-uc3',
+    'aud': 'uc3-actor',
     'exp': int(time.time()) + 3600,
-    'may_act': {'sub': 'service-account:wrong-agent'}
+    'may_act': {'sub': 'uc3-actor'}
 }
 print(jwt.encode(payload, 'forged-secret', algorithm='HS256'))
 \"" &>/dev/null
     kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/"${forge_pod}" -n default --timeout=120s &>/dev/null || true
-    FORGED_JWT_WRONG_MAYACT=$(kubectl logs "${forge_pod}" -n default 2>/dev/null | tail -1)
+    FORGED_HS256_JWT=$(kubectl logs "${forge_pod}" -n default 2>/dev/null | tail -1)
     kubectl delete pod "${forge_pod}" -n default --ignore-not-found &>/dev/null
 
-    if [ -n "${FORGED_JWT_WRONG_MAYACT}" ] && [ "${FORGED_JWT_WRONG_MAYACT}" != "Error" ]; then
-        # Present the forged JWT to Vault — expect 403 (rejected)
-        vault_response=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
-            sh -c "${VAULT_EXEC} vault write auth/jwt/login role=uc3-jwt jwt='${FORGED_JWT_WRONG_MAYACT}' -format=json 2>&1" \
-            2>/dev/null || echo "REJECTED")
-
-        if echo "${vault_response}" | grep -qiE "403|permission denied|invalid|REJECTED|no permission|Code: 403"; then
-            print_pass "Bypass Check 12 PASSED: Vault rejected forged may_act.sub — HS256 token not trusted by JWKS (signature validation + may_act.sub bound_claim enforcement)"
-        else
-            print_fail "Bypass Check 12: Vault accepted forged may_act.sub" \
-                "Vault DID NOT reject the forged JWT with wrong may_act.sub — bound_claims enforcement may be misconfigured. Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault read auth/jwt/role/uc3-jwt"
-        fi
+    if [ -z "${FORGED_HS256_JWT}" ] || [ "${FORGED_HS256_JWT}" = "Error" ]; then
+        # A skip is a HARD FAIL — we cannot claim the gate works if we never tested it.
+        print_fail "Bypass Check 14: could not generate the HS256 forgery (PyJWT pod failed) — test NOT run, cannot claim the signature gate works" \
+            "Confirm the python:3.12-slim image is pullable in this cluster, then re-run. Check: kubectl run ${forge_pod} -n default --image=python:3.12-slim --restart=Never -- sh -c 'pip install PyJWT'"
     else
-        print_warn "Bypass Check 12 skipped — could not generate forged JWT (PyJWT pod failed). Check Docker image availability."
+        hs256_out=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
+            sh -c "${VAULT_EXEC} vault write auth/jwt/login role=uc3-jwt jwt='${FORGED_HS256_JWT}' -format=json" 2>&1)
+        hs256_rc=$?
+        classify_forged_login \
+            "Bypass Check 14" "${hs256_out}" "${hs256_rc}" \
+            "Bypass Check 14 PASSED: Vault rejected the HS256 self-forged JWT at the signature layer (trusts only IVIA's RS256 JWKS) — an attacker cannot forge their way in" \
+            'unexpected signature algorithm|error verifying token signature|signature is invalid|invalid signature|no known key|failed to verify'
     fi
 
     echo ""
 
     #---------------------------------------------------------------------------
-    # Bypass check 13 — Forge JWT with wrong authorization_details type
+    # Bypass Check 15 — Bound-claim enforcement (real IVIA-signed token, no may_act)
+    #
+    # The teeth. Mint a GENUINE uc3-actor client_credentials token from IVIA: it is
+    # RS256-signed by IVIA's real key and carries aud=uc3-actor, so it sails past
+    # Vault's signature + audience checks. But a plain client_credentials grant has
+    # NO may_act delegation claim (that is injected only during the token-exchange
+    # by the isvaop_pretoken rule). Vault's uc3-jwt role REQUIRES bound_claim
+    # /may_act/sub=uc3-actor, so this token must be rejected at the bound_claim —
+    # proving bound_claims actually gate access, not merely the signature.
     #---------------------------------------------------------------------------
-    print_info "Bypass Check 13: Forge JWT with wrong authorization_details type"
+    print_info "Bypass Check 15: Bound-claim enforcement — real IVIA-signed uc3-actor token (no may_act) must be rejected at /may_act/sub"
 
-    FORGED_JWT_WRONG_RAR=""
-    forge_pod2="verify-uc3-forge2-$$"
-    kubectl delete pod "${forge_pod2}" -n default --ignore-not-found --wait=true &>/dev/null
+    # The uc3-actor client shares ${ivia_client_secret} (clients.yml.tftpl) and the
+    # agent reuses it (agent.py IVIA_ACTOR_CLIENT_SECRET defaults to IVIA_CLIENT_SECRET).
+    # Source it from the agent's ConfigMap — the single place it is materialized.
+    ivia_secret=$(kubectl get configmap uc3-agent-config -n "${BANKING_NAMESPACE}" \
+        -o jsonpath='{.data.IVIA_CLIENT_SECRET}' 2>/dev/null || echo "")
 
-    kubectl run "${forge_pod2}" -n default --restart=Never \
-        --image=python:3.12-slim \
-        --command -- sh -c "pip install PyJWT --quiet 2>/dev/null && python3 -c \"
-import jwt, time
-payload = {
-    'sub': 'attacker',
-    'iss': '${IVIA_ISSUER}',
-    'aud': 'agent-uc3',
-    'exp': int(time.time()) + 3600,
-    'may_act': {'sub': 'service-account:agent-uc3'},
-    'authorization_details': [{'type': 'transfer_approval'}]
-}
-print(jwt.encode(payload, 'forged-secret', algorithm='HS256'))
-\"" &>/dev/null
-    kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/"${forge_pod2}" -n default --timeout=120s &>/dev/null || true
-    FORGED_JWT_WRONG_RAR=$(kubectl logs "${forge_pod2}" -n default 2>/dev/null | tail -1)
-    kubectl delete pod "${forge_pod2}" -n default --ignore-not-found &>/dev/null
-
-    if [ -n "${FORGED_JWT_WRONG_RAR}" ] && [ "${FORGED_JWT_WRONG_RAR}" != "Error" ]; then
-        vault_response2=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
-            sh -c "${VAULT_EXEC} vault write auth/jwt/login role=uc3-jwt jwt='${FORGED_JWT_WRONG_RAR}' -format=json 2>&1" \
-            2>/dev/null || echo "REJECTED")
-
-        if echo "${vault_response2}" | grep -qiE "403|permission denied|invalid|REJECTED|no permission|Code: 403"; then
-            print_pass "Bypass Check 13 PASSED: Vault rejected wrong authorization_details type — HS256 token not trusted by JWKS (even if may_act.sub matched, authorization_details.type must equal refund_approval)"
-        else
-            print_fail "Bypass Check 13: Vault accepted wrong authorization_details type" \
-                "Vault DID NOT reject the forged JWT with wrong authorization_details type — bound_claims on authorization_details may be misconfigured. Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault read auth/jwt/role/uc3-jwt"
-        fi
+    if [ -z "${ivia_secret}" ]; then
+        print_fail "Bypass Check 15: could not read IVIA_CLIENT_SECRET from ConfigMap uc3-agent-config — cannot mint the real uc3-actor token" \
+            "Confirm the uc3_agent module applied. Check: kubectl get configmap uc3-agent-config -n ${BANKING_NAMESPACE} -o jsonpath='{.data.IVIA_CLIENT_SECRET}'"
     else
-        print_warn "Bypass Check 13 skipped — could not generate forged JWT (PyJWT pod failed). Check Docker image availability."
+        cc_mint_pod="uc3-actor-mint-$$"
+        kubectl delete pod "${cc_mint_pod}" -n "${BANKING_NAMESPACE}" --ignore-not-found --wait=true &>/dev/null
+        cc_mint_raw=$(kubectl run "${cc_mint_pod}" --rm -i --restart=Never \
+            -n "${BANKING_NAMESPACE}" --image=curlimages/curl -- \
+            curl -sk --max-time 20 -X POST "${IVIA_ISSUER}/token" \
+            -u "uc3-actor:${ivia_secret}" \
+            -H 'Content-Type: application/x-www-form-urlencoded' \
+            -d "grant_type=client_credentials&scope=openid" \
+            2>/dev/null || echo "")
+        UC3_ACTOR_TOKEN=$(echo "${cc_mint_raw}" | grep -o '"access_token":"[^"]*"' | cut -d'"' -f4 || echo "")
+
+        if [ -z "${UC3_ACTOR_TOKEN}" ]; then
+            print_fail "Bypass Check 15: could not mint a real uc3-actor client_credentials token from IVIA — test NOT run, cannot claim the bound_claim gate works" \
+                "Confirm uc3-actor allows client_credentials (clients.yml) and IVIA runtime is up. Mint response: ${cc_mint_raw:0:300}"
+        else
+            actor_out=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
+                sh -c "${VAULT_EXEC} vault write auth/jwt/login role=uc3-jwt jwt='${UC3_ACTOR_TOKEN}' -format=json" 2>&1)
+            actor_rc=$?
+            classify_forged_login \
+                "Bypass Check 15" "${actor_out}" "${actor_rc}" \
+                "Bypass Check 15 PASSED: Vault accepted the token's RS256 signature + aud=uc3-actor but REJECTED it at the /may_act/sub bound_claim (no may_act delegation present) — bound_claims are enforced, not just the signature" \
+                'claim .*may_act.* (is )?missing|missing .*may_act|invalid bound claim|claim "/may_act/sub"|error validating claims'
+        fi
     fi
 
-    # Summary is printed automatically by the common-checks.sh EXIT trap
+    # Summary is printed automatically by the common-checks.sh EXIT trap.
+    # Keep a terminating exit so bypass mode does not fall through into the
+    # normal-mode checks (the trap still overrides the code with the real result).
     exit 0
 fi
 
