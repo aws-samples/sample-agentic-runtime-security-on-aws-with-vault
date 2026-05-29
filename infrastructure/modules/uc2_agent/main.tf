@@ -146,10 +146,9 @@ locals {
     # The /callback handler POSTs to IVIA_BASE_URL (in-cluster DNS, HTTPS)
     # for the authorization code → token exchange. iviaop presents a
     # self-signed certificate (httpserverkey/httpservercert) that is not
-    # trusted by Node's default CA bundle. Workshop-only: disable TLS
-    # verification on outbound Node fetches. Production should mount the
-    # iviaop cert via NODE_EXTRA_CA_CERTS instead.
-    NODE_TLS_REJECT_UNAUTHORIZED = "0"
+    # trusted by Node's default CA bundle. TLS verification is enabled;
+    # the iviaop CA cert is trusted via NODE_EXTRA_CA_CERTS mounted from
+    # the ivia-oidc-ca Secret at /etc/ssl/ivia/iviaop.pem.
   }
 }
 
@@ -208,6 +207,27 @@ resource "kubernetes_config_map" "banking_mcp_config" {
 }
 
 ################################################################################
+# 8a. Secret — ivia-oidc-ca (iviaop self-signed CA for NODE_EXTRA_CA_CERTS)
+#
+# The banking-ui Node.js process trusts the iviaop self-signed certificate via
+# NODE_EXTRA_CA_CERTS=/etc/ssl/ivia/iviaop.pem, which is backed by this Secret.
+# TLS is verified; no insecure runtime overrides are needed.
+################################################################################
+
+resource "kubernetes_secret" "ivia_oidc_ca" {
+  metadata {
+    name      = "ivia-oidc-ca"
+    namespace = kubernetes_namespace.banking_app.metadata[0].name
+  }
+
+  data = {
+    "iviaop.pem" = var.ivia_oidc_ca_pem
+  }
+
+  depends_on = [kubernetes_namespace.banking_app]
+}
+
+################################################################################
 # 8. Deployment — banking-ui (SvelteKit OAuth PKCE)
 ################################################################################
 
@@ -263,6 +283,17 @@ resource "kubernetes_deployment" "banking_ui" {
             }
           }
 
+          env {
+            name  = "NODE_EXTRA_CA_CERTS"
+            value = "/etc/ssl/ivia/iviaop.pem"
+          }
+
+          volume_mount {
+            name       = "ivia-ca"
+            mount_path = "/etc/ssl/ivia"
+            read_only  = true
+          }
+
           resources {
             requests = {
               cpu    = "250m"
@@ -292,6 +323,13 @@ resource "kubernetes_deployment" "banking_ui" {
             period_seconds        = 30
           }
         }
+
+        volume {
+          name = "ivia-ca"
+          secret {
+            secret_name = kubernetes_secret.ivia_oidc_ca.metadata[0].name
+          }
+        }
       }
     }
   }
@@ -299,6 +337,7 @@ resource "kubernetes_deployment" "banking_ui" {
   depends_on = [
     kubernetes_service_account.uc2_ui_sa,
     kubernetes_config_map.banking_ui_config,
+    kubernetes_secret.ivia_oidc_ca,
   ]
 }
 

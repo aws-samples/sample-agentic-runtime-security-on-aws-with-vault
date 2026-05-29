@@ -116,6 +116,8 @@ LOGGING_NAMESPACE="${LOGGING_NAMESPACE:-logging}"
 VAULT_NAMESPACE="${VAULT_NAMESPACE:-vault}"
 VAULT_POD="${VAULT_POD:-vault-0}"
 IVIA_ISSUER="${IVIA_ISSUER:-https://iviaop.verify-access.svc.cluster.local:8436/oauth2}"
+# source of truth: infrastructure/modules/verify_access/base_layer/base_layer.yaml (pdadmin.users)
+JAIME_PASSWORD="${JAIME_PASSWORD:-WorkshopUser1!}"
 
 # Resolve AWS region from terraform.tfvars (canonical-region contract)
 _TFVARS="${SCRIPT_DIR}/../../infrastructure/terraform.tfvars"
@@ -648,24 +650,58 @@ else
 fi
 
 #-------------------------------------------------------------------------------
-# Check 12 — UC3 agent chat: list_transactions returns transaction data
+# Pre-check 12/13 — Mint a real IVIA id_token for jaime via ROPC
 #
-# POST to UC3 agent /chat with "I need a refund" and verify the response
-# contains transaction details (proves the full flow: Vault creds → DB query).
+# Checks 12 and 13 POST to the authenticated /chat endpoint (post-07.6 the
+# agent requires Authorization: Bearer <id_token>). Mint a real id_token via
+# ROPC (grant_type=password) before running the chat checks.
+# -k is intentional here: this is the verify harness talking directly to the
+# in-cluster IVIA over a non-proxied path; the production agent code itself
+# uses the mounted CA (IVIA_CA_BUNDLE), not the verify harness.
 #-------------------------------------------------------------------------------
-chat_session="verify-$$-$(date +%s)"
-chat_response=$(kubectl run uc3-chat-test-$$ --rm -i --restart=Never -n "${BANKING_NAMESPACE}" \
+IVIA_ID_TOKEN=""
+token_mint_pod="uc3-token-mint-$$"
+kubectl delete pod "${token_mint_pod}" -n "${BANKING_NAMESPACE}" --ignore-not-found --wait=true &>/dev/null
+
+token_mint_raw=$(kubectl run "${token_mint_pod}" --rm -i --restart=Never \
+    -n "${BANKING_NAMESPACE}" \
     --image=curlimages/curl -- \
-    curl -s --max-time 30 -X POST http://uc3-agent-svc:8080/chat \
-    -H 'Content-Type: application/json' \
-    -d "{\"message\":\"I need a refund\",\"sessionId\":\"${chat_session}\"}" \
+    curl -sk --max-time 20 -X POST "${IVIA_ISSUER}/token" \
+    -H 'Content-Type: application/x-www-form-urlencoded' \
+    -d "grant_type=password&username=jaime&password=${JAIME_PASSWORD}&client_id=agent-uc2&scope=openid" \
     2>/dev/null || echo "")
 
-if echo "${chat_response}" | grep -qi "transaction\|amount\|merchant"; then
-    print_pass "UC3 agent chat: list_transactions returns transaction data"
+IVIA_ID_TOKEN=$(echo "${token_mint_raw}" | grep -o '"id_token":"[^"]*"' | cut -d'"' -f4 || echo "")
+
+if [ -z "${IVIA_ID_TOKEN}" ]; then
+    print_fail "Pre-check 12/13: could not mint IVIA id_token via ROPC — check IVIA ROPC/passwordGrant is enabled and JAIME_PASSWORD is correct. Token mint response: ${token_mint_raw:0:300}"
+fi
+
+#-------------------------------------------------------------------------------
+# Check 12 — UC3 agent chat: list_transactions returns transaction data
+#
+# Proves the AUTHENTICATED read path: jaime's id_token → /chat 200 →
+# list_transactions → jaime's data returned (Vault uc3-readonly creds + DB).
+# A 401 here means the id_token was rejected by auth.py (JWKS/aud/iss check).
+#-------------------------------------------------------------------------------
+chat_session="verify-$$-$(date +%s)"
+if [ -n "${IVIA_ID_TOKEN}" ]; then
+    chat_response=$(kubectl run uc3-chat-test-$$ --rm -i --restart=Never -n "${BANKING_NAMESPACE}" \
+        --image=curlimages/curl -- \
+        curl -s --max-time 30 -X POST http://uc3-agent-svc:8080/chat \
+        -H 'Content-Type: application/json' \
+        -H "Authorization: Bearer ${IVIA_ID_TOKEN}" \
+        -d "{\"message\":\"I need a refund\",\"sessionId\":\"${chat_session}\"}" \
+        2>/dev/null || echo "")
+
+    if echo "${chat_response}" | grep -qi "transaction\|amount\|merchant"; then
+        print_pass "UC3 agent chat: list_transactions returns transaction data (authenticated)"
+    else
+        print_fail "UC3 agent chat: list_transactions did not return transaction data" \
+            "Expected response containing transaction details. A 401 means the id_token was rejected (auth.py JWKS/aud/iss). Got: ${chat_response:0:200}. Check: kubectl logs deployment/uc3-agent -n ${BANKING_NAMESPACE}"
+    fi
 else
-    print_fail "UC3 agent chat: list_transactions did not return transaction data" \
-        "Expected response containing transaction details. Got: ${chat_response:0:200}. Check: kubectl logs deployment/uc3-agent -n ${BANKING_NAMESPACE}"
+    print_fail "Check 12 skipped — id_token mint failed (see pre-check error above)"
 fi
 
 #-------------------------------------------------------------------------------
@@ -674,18 +710,23 @@ fi
 # Send a follow-up message selecting transaction #1 on the same sessionId.
 # The agent should acknowledge the selection (proves session state works).
 #-------------------------------------------------------------------------------
-select_response=$(kubectl run uc3-chat-sel-$$ --rm -i --restart=Never -n "${BANKING_NAMESPACE}" \
-    --image=curlimages/curl -- \
-    curl -s --max-time 30 -X POST http://uc3-agent-svc:8080/chat \
-    -H 'Content-Type: application/json' \
-    -d "{\"message\":\"Refund transaction 1\",\"sessionId\":\"${chat_session}\"}" \
-    2>/dev/null || echo "")
+if [ -n "${IVIA_ID_TOKEN}" ]; then
+    select_response=$(kubectl run uc3-chat-sel-$$ --rm -i --restart=Never -n "${BANKING_NAMESPACE}" \
+        --image=curlimages/curl -- \
+        curl -s --max-time 30 -X POST http://uc3-agent-svc:8080/chat \
+        -H 'Content-Type: application/json' \
+        -H "Authorization: Bearer ${IVIA_ID_TOKEN}" \
+        -d "{\"message\":\"Refund transaction 1\",\"sessionId\":\"${chat_session}\"}" \
+        2>/dev/null || echo "")
 
-if echo "${select_response}" | grep -qi "refund\|confirm\|approve\|CIBA\|consent\|process"; then
-    print_pass "UC3 agent chat: multi-turn session — agent acknowledged transaction selection"
+    if echo "${select_response}" | grep -qi "refund\|confirm\|approve\|CIBA\|consent\|process"; then
+        print_pass "UC3 agent chat: multi-turn session — agent acknowledged transaction selection"
+    else
+        print_fail "UC3 agent chat: multi-turn session did not acknowledge selection" \
+            "Expected response referencing refund/confirm/CIBA. Got: ${select_response:0:200}. Check: kubectl logs deployment/uc3-agent -n ${BANKING_NAMESPACE}"
+    fi
 else
-    print_fail "UC3 agent chat: multi-turn session did not acknowledge selection" \
-        "Expected response referencing refund/confirm/CIBA. Got: ${select_response:0:200}. Check: kubectl logs deployment/uc3-agent -n ${BANKING_NAMESPACE}"
+    print_fail "Check 13 skipped — id_token mint failed (see pre-check error above)"
 fi
 
 #-------------------------------------------------------------------------------

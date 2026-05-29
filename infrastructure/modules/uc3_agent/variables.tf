@@ -95,3 +95,14 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "ivia_id_token_audience" {
+  description = "IVIA OAuth client_id whose authorization-code flow minted the id_token forwarded by banking-ui to the uc3-agent /chat endpoint. Used as the 'aud' claim allowlist when verifying the bearer token. Default matches the banking-ui's OAuth client (var.ivia_client_id of the uc2_agent module)."
+  type        = string
+  default     = "agent-uc2"
+}
+
+variable "ivia_oidc_ca_pem" {
+  description = "iviaop self-signed CA PEM the agent trusts on outbound IVIA TLS calls. Mounted at /etc/ssl/ivia/iviaop.pem; consumed by auth.py and agent.py via IVIA_CA_BUNDLE env var."
+  type        = string
+}

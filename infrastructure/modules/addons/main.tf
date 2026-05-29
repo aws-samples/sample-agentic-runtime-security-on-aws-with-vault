@@ -42,7 +42,7 @@ terraform {
 
 module "eks_blueprints_addons" {
   source  = "aws-ia/eks-blueprints-addons/aws"
-  version = "~> 1.0"
+  version = "= 1.23.0"
 
   cluster_name      = var.cluster_name
   cluster_endpoint  = var.cluster_endpoint

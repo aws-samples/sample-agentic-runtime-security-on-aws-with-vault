@@ -121,6 +121,11 @@ variable "ivia_client_secret" {
   default     = ""
 }
 
+variable "ivia_oidc_ca_pem" {
+  description = "iviaop self-signed CA PEM to trust on outbound Node.js fetches. Mounted as a K8s Secret and referenced via NODE_EXTRA_CA_CERTS at /etc/ssl/ivia/iviaop.pem."
+  type        = string
+}
+
 variable "tags" {
   description = "AWS resource tags propagated to taggable resources (informational — Kubernetes resources do not support AWS tags)."
   type        = map(string)

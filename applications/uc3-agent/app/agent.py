@@ -8,13 +8,16 @@ Security architecture (OBJ-1 through OBJ-5):
   OBJ-3: Privileged write is gated on user's CIBA consent (may_act claim in JWT).
           Agent identity present as actor_token in RFC 8693 exchange.
   OBJ-4: Vault policy enforces uc3-refund-writer access ONLY with delegated JWT.
-          Read-only creds (uc3-readonly) cannot INSERT into banking.refunds.
+          Read-only creds use the least-privilege uc3-readonly Vault role, which
+          carries SELECT-only grants on banking.transactions, banking.accounts, and
+          banking.refunds — it genuinely cannot INSERT into banking.refunds.
   OBJ-5: request_id UUID threaded through IVIA binding_message, RDS refunds,
           and structured agent logs for three-plane audit correlation.
 
 Tools:
   list_transactions    — read-only SELECT recent transactions (K8s auth creds)
-  process_refund       — full CIBA + exchange + write flow (delegated jwt auth creds)
+  initiate_refund      — full CIBA + exchange + write flow (delegated jwt auth creds)
+  complete_refund      — completes refund after CIBA consent received
   check_refund_status  — read-only SELECT from banking.refunds by refund_id
 """
 
@@ -34,11 +37,88 @@ from strands.models import BedrockModel
 from strands.session import FileSessionManager
 
 from . import ciba_store
+from .auth import _AUTHENTICATED_SUB
 
 logger = logging.getLogger(__name__)
 
 # Module-level vault client reference (set by build_uc3_agent)
 _vault_client = None
+
+
+class RefundAuthorizationError(Exception):
+    """Raised when the authenticated user does not own the targeted account.
+
+    Defense-in-depth check that fires INDEPENDENTLY inside both initiate_refund
+    and complete_refund. Must be raised (not returned) so the LLM cannot observe
+    the failure as a normal tool result and act on it.
+    """
+
+
+def _check_account_owner(
+    account_id: str, authenticated_sub: str, request_id: str, tool_name: str
+) -> None:
+    """Verify the authenticated user owns the targeted account.
+
+    Issues a fresh short-lived Vault uc3-readonly DB credential and runs a
+    single SELECT against banking.accounts. Mismatch (or missing account) →
+    RefundAuthorizationError with refund_authz_denied structured log.
+
+    Args:
+        account_id: The account_id the LLM/caller wants to act on.
+        authenticated_sub: The verified IVIA id_token `sub` from ContextVar.
+        request_id: Audit-correlation UUID for the current refund flow.
+        tool_name: "initiate_refund" or "complete_refund" — log field.
+
+    Raises:
+        RefundAuthorizationError: on mismatch OR missing-account (no info
+            leak between the two cases).
+    """
+    global _vault_client
+    if _vault_client is None:
+        raise RuntimeError("UC3 vault client not initialized")
+
+    creds = _vault_client.get_readonly_credentials()
+    with psycopg2.connect(
+        host=creds["host"],
+        port=creds["port"],
+        dbname=creds["dbname"],
+        user=creds["username"],
+        password=creds["password"],
+        cursor_factory=psycopg2.extras.RealDictCursor,
+    ) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT set_config('app.current_user_sub', %s, false)",
+                (authenticated_sub,),
+            )
+            cur.execute(
+                """
+                SELECT user_sub
+                FROM banking.accounts
+                WHERE id = %s
+                LIMIT 1
+                """,
+                (account_id,),
+            )
+            row = cur.fetchone()
+
+    if row is None or row["user_sub"] != authenticated_sub:
+        logger.warning(
+            "refund_authz_denied tool=%s authenticated_sub=%s requested_account_id=%s requested_account_owner_sub=%s request_id=%s",
+            tool_name,
+            authenticated_sub,
+            account_id,
+            row["user_sub"] if row else None,
+            request_id,
+            extra={
+                "request_id": request_id,
+                "authenticated_sub": authenticated_sub,
+                "requested_account_id": account_id,
+                "requested_account_owner_sub": row["user_sub"] if row else None,
+                "tool": tool_name,
+            },
+        )
+        raise RefundAuthorizationError("refund_authz_denied")
 
 # IVIA configuration from env vars
 IVIA_BASE_URL = os.getenv("IVIA_BASE_URL", "https://iviaop.verify-access.svc.cluster.local:8436")
@@ -47,6 +127,10 @@ IVIA_CLIENT_SECRET = os.getenv("IVIA_CLIENT_SECRET", "")
 IVIA_EXTERNAL_URL = os.getenv("IVIA_EXTERNAL_URL", "")
 IVIA_ACTOR_CLIENT_ID = os.getenv("IVIA_ACTOR_CLIENT_ID", "uc3-actor")
 IVIA_ACTOR_CLIENT_SECRET = os.getenv("IVIA_ACTOR_CLIENT_SECRET", IVIA_CLIENT_SECRET)
+# Path to the iviaop self-signed CA PEM mounted at /etc/ssl/ivia/iviaop.pem.
+# All outbound IVIA TLS calls (CIBA bc-authorize, token poll, token exchange)
+# verify against this file — TLS verification is never disabled in this module.
+IVIA_CA_BUNDLE = os.getenv("IVIA_CA_BUNDLE", "/etc/ssl/ivia/iviaop.pem")
 
 # CIBA polling config
 CIBA_POLL_INTERVAL_SECONDS = 5
@@ -114,7 +198,7 @@ def _initiate_ciba(login_hint: str, authorization_details: list, request_id: str
         },
     )
 
-    with httpx.Client(verify=False, timeout=30.0) as client:
+    with httpx.Client(verify=IVIA_CA_BUNDLE, timeout=30.0) as client:
         resp = client.post(
             bc_authorize_url,
             data=payload,
@@ -184,7 +268,7 @@ def _poll_ciba(auth_req_id: str, request_id: str) -> str:
             "auth_req_id": auth_req_id,
         }
 
-        with httpx.Client(verify=False, timeout=30.0) as client:
+        with httpx.Client(verify=IVIA_CA_BUNDLE, timeout=30.0) as client:
             resp = client.post(
                 token_url,
                 data=payload,
@@ -292,7 +376,7 @@ def _token_exchange(ciba_token: str, request_id: str) -> str:
         },
     )
 
-    with httpx.Client(verify=False, timeout=30.0) as client:
+    with httpx.Client(verify=IVIA_CA_BUNDLE, timeout=30.0) as client:
         resp = client.post(
             token_url,
             data=payload,
@@ -333,10 +417,11 @@ def _token_exchange(ciba_token: str, request_id: str) -> str:
 
 @tool
 def list_transactions() -> list:
-    """List recent transactions across all accounts (read-only).
+    """List the authenticated user's recent transactions (read-only).
 
-    Uses Vault K8s auth credentials to SELECT from banking.transactions.
-    Returns the most recent transactions so the user can select one for a refund.
+    Scoped to the verified id_token `sub` via JOIN on banking.accounts.user_sub.
+    The LLM has no input into the user-filter — identity flows from the
+    _AUTHENTICATED_SUB ContextVar set by main.py /chat.
 
     Returns:
         List of dicts with transaction details: id, account_id, amount,
@@ -346,11 +431,14 @@ def list_transactions() -> list:
     if _vault_client is None:
         raise RuntimeError("UC3 vault client not initialized")
 
+    authenticated_sub = _AUTHENTICATED_SUB.get()
+
     creds = _vault_client.get_readonly_credentials()
 
     logger.info(
-        "list_transactions_called",
-        extra={"vault_role": "uc3-readonly"},
+        "list_transactions_called vault_role=uc3-readonly authenticated_sub=%s",
+        authenticated_sub,
+        extra={"vault_role": "uc3-readonly", "authenticated_sub": authenticated_sub},
     )
 
     try:
@@ -364,6 +452,10 @@ def list_transactions() -> list:
         ) as conn:
             with conn.cursor() as cur:
                 cur.execute(
+                    "SELECT set_config('app.current_user_sub', %s, false)",
+                    (authenticated_sub,),
+                )
+                cur.execute(
                     """
                     SELECT t.id, t.account_id, t.amount::float,
                            t.description, t.transaction_type, t.merchant,
@@ -372,9 +464,11 @@ def list_transactions() -> list:
                            a.account_type
                     FROM banking.transactions t
                     JOIN banking.accounts a ON a.id = t.account_id
+                    WHERE a.user_sub = %s
                     ORDER BY t.created_at DESC
                     LIMIT 20
-                    """
+                    """,
+                    (authenticated_sub,),
                 )
                 rows = cur.fetchall()
     except Exception as exc:
@@ -395,9 +489,11 @@ def initiate_refund(
     transaction_id: str,
     amount: float,
     currency: str,
-    login_hint: str = "oscar",
 ) -> dict:
     """Initiate a CIBA consent request for a privileged refund (step 1 of 2).
+
+    Identity is sourced from the verified id_token's `sub` claim (set by
+    main.py via _AUTHENTICATED_SUB ContextVar). The LLM has no input here.
 
     Sends bc-authorize to IVIA with Rich Authorization Request (RFC 9396)
     details. Returns immediately with auth_req_id and consent marker so the
@@ -411,12 +507,17 @@ def initiate_refund(
         transaction_id: Original transaction being refunded.
         amount: Refund amount (positive float).
         currency: ISO 4217 currency code (e.g. "USD").
-        login_hint: Username/email for CIBA targeting (default: "oscar").
 
     Returns:
         Dict with auth_req_id, request_id, and consent status.
     """
     request_id = str(uuid.uuid4())
+    authenticated_sub = _AUTHENTICATED_SUB.get()
+    _check_account_owner(
+        account_id, authenticated_sub, request_id, "initiate_refund"
+    )
+    # Local — sent on the CIBA wire to IVIA; NOT exposed to LLM.
+    login_hint = authenticated_sub
 
     logger.info(
         "initiate_refund_started",
@@ -482,7 +583,6 @@ def initiate_refund(
         "transaction_id": transaction_id,
         "amount": amount,
         "currency": currency,
-        "login_hint": login_hint,
         "user_code": user_code,
         "consent_url": consent_url,
         "consent_marker": f"CIBA_CONSENT:auth_req_id={auth_req_id}|request_id={request_id}|user_code={user_code}|details={rar_desc}|consent_url={consent_url}",
@@ -497,9 +597,11 @@ def complete_refund(
     transaction_id: str,
     amount: float,
     currency: str,
-    login_hint: str = "oscar",
 ) -> dict:
     """Complete a refund after CIBA consent is granted (step 2 of 2).
+
+    Identity is sourced from the verified id_token's `sub` claim (ContextVar).
+    The LLM has no input here.
 
     Polls IVIA for consent approval, then executes:
       1. CIBA token poll (user already approved via banking UI)
@@ -514,7 +616,6 @@ def complete_refund(
         transaction_id: Original transaction being refunded.
         amount: Refund amount (positive float).
         currency: ISO 4217 currency code (e.g. "USD").
-        login_hint: Username/email who approved (default: "oscar").
 
     Returns:
         Dict with refund_id, request_id, status, and audit fields.
@@ -522,6 +623,11 @@ def complete_refund(
     global _vault_client
     if _vault_client is None:
         raise RuntimeError("UC3 vault client not initialized")
+
+    authenticated_sub = _AUTHENTICATED_SUB.get()
+    _check_account_owner(
+        account_id, authenticated_sub, request_id, "complete_refund"
+    )
 
     logger.info(
         "complete_refund_started",
@@ -533,7 +639,7 @@ def complete_refund(
     write_creds = _vault_client.get_refund_credentials(delegated_jwt, request_id)
 
     refund_id = str(uuid.uuid4())
-    approved_by = login_hint
+    approved_by = authenticated_sub
     created_at = datetime.now(timezone.utc)
 
     logger.info(
@@ -555,6 +661,17 @@ def complete_refund(
         password=write_creds["password"],
     ) as conn:
         with conn.cursor() as cur:
+            # RLS WITH CHECK gate: banking.refunds is FORCE ROW LEVEL SECURITY and the
+            # refund_insert_own policy verifies account_id belongs to
+            # current_setting('app.current_user_sub'). Set it transaction-local (SET
+            # LOCAL semantics — third arg true) BEFORE the INSERT so the check can
+            # confirm ownership. authenticated_sub is the verified id_token sub and
+            # _check_account_owner already proved it owns account_id; the GUC is RLS
+            # request-context, not the security boundary (defense-in-depth).
+            cur.execute(
+                "SELECT set_config('app.current_user_sub', %s, true)",
+                (authenticated_sub,),
+            )
             # OBJ-5 PLANE-A: thread request_id into the pgaudit STATEMENT field via
             # an inline SQL comment. pgaudit (log='write') captures the full statement
             # text verbatim, so the audit_correlation VIEW can regexp-extract this
@@ -676,10 +793,13 @@ def complete_refund(
 
 @tool
 def check_refund_status(refund_id: str) -> dict:
-    """Check the status of an existing refund by refund_id.
+    """Check the status of a refund owned by the authenticated user.
 
     Uses Vault K8s auth credentials (uc3-readonly role) to SELECT from
-    banking.refunds. No CIBA required — this is a read-only status check.
+    banking.refunds JOIN banking.accounts. No CIBA required — read-only.
+    Identity comes from _AUTHENTICATED_SUB ContextVar; refund_id is the only
+    LLM-controllable argument.  A refund belonging to another user returns the
+    same not-found shape — no cross-user information disclosure.
 
     Args:
         refund_id: UUID of the refund to look up.
@@ -687,16 +807,23 @@ def check_refund_status(refund_id: str) -> dict:
     Returns:
         Dict with refund details: refund_id, account_id, amount, currency,
         approved_by, request_id, status, created_at.
+        {"error": "Refund <id> not found"} if not found or owned by another user.
     """
     global _vault_client
     if _vault_client is None:
         raise RuntimeError("UC3 vault client not initialized")
 
+    authenticated_sub = _AUTHENTICATED_SUB.get()
+
     creds = _vault_client.get_readonly_credentials()
 
     logger.info(
         "check_refund_status_called",
-        extra={"refund_id": refund_id, "vault_role": "uc3-readonly"},
+        extra={
+            "refund_id": refund_id,
+            "vault_role": "uc3-readonly",
+            "authenticated_sub": authenticated_sub,
+        },
     )
 
     with psycopg2.connect(
@@ -709,15 +836,21 @@ def check_refund_status(refund_id: str) -> dict:
     ) as conn:
         with conn.cursor() as cur:
             cur.execute(
+                "SELECT set_config('app.current_user_sub', %s, false)",
+                (authenticated_sub,),
+            )
+            cur.execute(
                 """
-                SELECT refund_id, account_id, transaction_id,
-                       amount::float, currency, approved_by, request_id,
-                       created_at AT TIME ZONE 'UTC' AS created_at
-                FROM banking.refunds
-                WHERE refund_id = %s
+                SELECT r.refund_id, r.account_id, r.transaction_id,
+                       r.amount::float, r.currency, r.approved_by, r.request_id,
+                       r.created_at AT TIME ZONE 'UTC' AS created_at
+                FROM banking.refunds r
+                JOIN banking.accounts a ON a.id = r.account_id
+                WHERE r.refund_id = %s
+                  AND a.user_sub = %s
                 LIMIT 1
                 """,
-                (refund_id,),
+                (refund_id, authenticated_sub),
             )
             row = cur.fetchone()
 
@@ -796,7 +929,7 @@ def build_uc3_agent(vault_client=None, session_id: str = "default") -> Agent:
         extra={
             "model_id": model_id,
             "region": region,
-            "tools": ["list_transactions", "process_refund", "check_refund_status"],
+            "tools": ["list_transactions", "initiate_refund", "complete_refund", "check_refund_status"],
         },
     )
     return agent
