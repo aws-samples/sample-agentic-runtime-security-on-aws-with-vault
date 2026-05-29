@@ -1,10 +1,29 @@
 import type { RequestHandler } from '@sveltejs/kit';
 import { getConsent, removeConsent } from '$lib/ciba-store';
 
+/**
+ * Decode the `sub` claim from the second segment of a JWT.
+ * Returns null if the token is absent, malformed, or missing sub — caller must 401.
+ */
+function decodeJwtSub(token: string): string | null {
+	try {
+		const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
+		const sub = payload.sub as string | undefined;
+		return sub ?? null;
+	} catch {
+		return null;
+	}
+}
+
 export const POST: RequestHandler = async ({ request, cookies }) => {
 	const idToken = cookies.get('id_token');
 	if (!idToken) {
 		return new Response(JSON.stringify({ error: 'Not authenticated' }), { status: 401 });
+	}
+
+	const approverSub = decodeJwtSub(idToken);
+	if (!approverSub) {
+		return new Response(JSON.stringify({ error: 'Invalid or malformed id_token' }), { status: 401 });
 	}
 
 	const body = await request.json();
@@ -22,8 +41,8 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
 		);
 	}
 
-	process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
-
+	// NODE_EXTRA_CA_CERTS (mounted from ivia-oidc-ca Secret at /etc/ssl/ivia/iviaop.pem)
+	// provides TLS trust for outbound fetches to iviaop — no runtime flag needed.
 	const res = await fetch(consent.update_url, {
 		method: 'POST',
 		headers: {
@@ -33,9 +52,9 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
 		body: JSON.stringify({
 			status: 'success',
 			metadata: {
-				sAMAccountName: consent.user,
-				uid: consent.user,
-				sub: consent.user,
+				sAMAccountName: approverSub,
+				uid: approverSub,
+				sub: approverSub,
 			},
 		}),
 	});

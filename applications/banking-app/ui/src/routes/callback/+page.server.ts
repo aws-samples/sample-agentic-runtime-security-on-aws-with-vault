@@ -84,7 +84,7 @@ export const load: PageServerLoad = async ({ url, cookies }) => {
   cookies.set('access_token', tokens.access_token, {
     path: '/',
     httpOnly: true,
-    secure: false,
+    secure: true,
     sameSite: 'lax',
     maxAge
   });
@@ -93,7 +93,7 @@ export const load: PageServerLoad = async ({ url, cookies }) => {
     cookies.set('id_token', tokens.id_token, {
       path: '/',
       httpOnly: true,
-      secure: false,
+      secure: true,
       sameSite: 'lax',
       maxAge: 60 * 60 * 24
     });
@@ -103,7 +103,7 @@ export const load: PageServerLoad = async ({ url, cookies }) => {
     cookies.set('refresh_token', tokens.refresh_token, {
       path: '/',
       httpOnly: true,
-      secure: false,
+      secure: true,
       sameSite: 'lax',
       maxAge: 60 * 60 * 24 * 30
     });

@@ -439,6 +439,7 @@ module "uc2_app" {
   ivia_client_secret    = module.ivia.ivia_client_secret
   tls_certificate_arn   = local.tls_certificate_arn
   ivia_public_issuer    = "https://${module.ivia.ivia_ingress_hostname}"
+  ivia_oidc_ca_pem      = module.ivia.ivia_oidc_ca_pem
   tags                  = var.tags
 
   depends_on = [time_sleep.alb_webhook_ready]
