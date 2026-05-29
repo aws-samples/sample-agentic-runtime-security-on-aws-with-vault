@@ -97,7 +97,12 @@ def _check_account_owner(
 
     if row is None or row["user_sub"] != authenticated_sub:
         logger.warning(
-            "refund_authz_denied",
+            "refund_authz_denied tool=%s authenticated_sub=%s requested_account_id=%s requested_account_owner_sub=%s request_id=%s",
+            tool_name,
+            authenticated_sub,
+            account_id,
+            row["user_sub"] if row else None,
+            request_id,
             extra={
                 "request_id": request_id,
                 "authenticated_sub": authenticated_sub,
@@ -401,10 +406,11 @@ def _token_exchange(ciba_token: str, request_id: str) -> str:
 
 @tool
 def list_transactions() -> list:
-    """List recent transactions across all accounts (read-only).
+    """List the authenticated user's recent transactions (read-only).
 
-    Uses Vault K8s auth credentials to SELECT from banking.transactions.
-    Returns the most recent transactions so the user can select one for a refund.
+    Scoped to the verified id_token `sub` via JOIN on banking.accounts.user_sub.
+    The LLM has no input into the user-filter — identity flows from the
+    _AUTHENTICATED_SUB ContextVar set by main.py /chat.
 
     Returns:
         List of dicts with transaction details: id, account_id, amount,
@@ -414,11 +420,14 @@ def list_transactions() -> list:
     if _vault_client is None:
         raise RuntimeError("UC3 vault client not initialized")
 
+    authenticated_sub = _AUTHENTICATED_SUB.get()
+
     creds = _vault_client.get_readonly_credentials()
 
     logger.info(
-        "list_transactions_called",
-        extra={"vault_role": "uc3-readonly"},
+        "list_transactions_called vault_role=uc3-readonly authenticated_sub=%s",
+        authenticated_sub,
+        extra={"vault_role": "uc3-readonly", "authenticated_sub": authenticated_sub},
     )
 
     try:
@@ -440,9 +449,11 @@ def list_transactions() -> list:
                            a.account_type
                     FROM banking.transactions t
                     JOIN banking.accounts a ON a.id = t.account_id
+                    WHERE a.user_sub = %s
                     ORDER BY t.created_at DESC
                     LIMIT 20
-                    """
+                    """,
+                    (authenticated_sub,),
                 )
                 rows = cur.fetchall()
     except Exception as exc:
