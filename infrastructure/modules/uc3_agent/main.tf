@@ -91,6 +91,34 @@ resource "kubernetes_config_map" "uc3_agent" {
     DB_NAME                = var.db_name
     BEDROCK_MODEL_ID       = var.bedrock_model_id
     AWS_REGION             = var.region
+    # Least-privilege read role — the agent reads transactions/accounts/refunds
+    # via this Vault DB role which carries SELECT-only grants (cannot INSERT).
+    VAULT_DB_READONLY_PATH = "database/creds/uc3-readonly"
+    # iviaop self-signed CA bundle path — auth.py and agent.py verify all
+    # outbound IVIA TLS calls against this file (no verify=False).
+    IVIA_CA_BUNDLE = "/etc/ssl/ivia/iviaop.pem"
+  }
+}
+
+################################################################################
+# 2a. Secret — ivia-oidc-ca-uc3 (iviaop self-signed CA for IVIA_CA_BUNDLE)
+#
+# The uc3-agent Python process verifies all outbound IVIA TLS calls (CIBA
+# bc-authorize, token poll, token exchange, JWKS/discovery) against this CA
+# via IVIA_CA_BUNDLE=/etc/ssl/ivia/iviaop.pem — no verify=False in auth.py or
+# agent.py. Named ivia-oidc-ca-uc3 (not ivia-oidc-ca) to avoid collision with
+# the banking-ui Secret of the same base name in the banking-app namespace
+# (created by the uc2_agent module).
+################################################################################
+
+resource "kubernetes_secret" "ivia_oidc_ca" {
+  metadata {
+    name      = "ivia-oidc-ca-uc3"
+    namespace = var.namespace
+  }
+
+  data = {
+    "iviaop.pem" = var.ivia_oidc_ca_pem
   }
 }
 
@@ -151,6 +179,12 @@ resource "kubernetes_deployment" "uc3_agent" {
             }
           }
 
+          volume_mount {
+            name       = "ivia-ca"
+            mount_path = "/etc/ssl/ivia"
+            read_only  = true
+          }
+
           resources {
             requests = {
               cpu    = "250m"
@@ -180,6 +214,13 @@ resource "kubernetes_deployment" "uc3_agent" {
             period_seconds        = 30
           }
         }
+
+        volume {
+          name = "ivia-ca"
+          secret {
+            secret_name = kubernetes_secret.ivia_oidc_ca.metadata[0].name
+          }
+        }
       }
     }
   }
@@ -187,6 +228,7 @@ resource "kubernetes_deployment" "uc3_agent" {
   depends_on = [
     kubernetes_service_account.uc3_agent,
     kubernetes_config_map.uc3_agent,
+    kubernetes_secret.ivia_oidc_ca,
   ]
 }
 

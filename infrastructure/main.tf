@@ -468,6 +468,7 @@ module "uc3_agent" {
   bedrock_model_id       = var.bedrock_model_id
   region                 = var.region
   rds_cidr               = module.vpc.vpc_cidr
+  ivia_oidc_ca_pem       = module.ivia.ivia_oidc_ca_pem
   tags                   = var.tags
 
   depends_on = [module.vault, module.rds, module.ivia, module.uc2_app]

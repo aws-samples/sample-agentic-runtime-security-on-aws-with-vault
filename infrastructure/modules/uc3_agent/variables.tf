@@ -101,3 +101,8 @@ variable "ivia_id_token_audience" {
   type        = string
   default     = "agent-uc2"
 }
+
+variable "ivia_oidc_ca_pem" {
+  description = "iviaop self-signed CA PEM the agent trusts on outbound IVIA TLS calls. Mounted at /etc/ssl/ivia/iviaop.pem; consumed by auth.py and agent.py via IVIA_CA_BUNDLE env var."
+  type        = string
+}

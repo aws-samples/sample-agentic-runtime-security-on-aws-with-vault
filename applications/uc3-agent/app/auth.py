@@ -15,8 +15,8 @@ Security posture:
   - `_AUTHENTICATED_SUB` is declared with NO default, so `.get()` raises
     `LookupError` if a future refactor accidentally bypasses the verify call —
     a server-side bug surfaces as HTTP 500, not as a silent identity-spoof.
-  - TLS verify=False on the IVIA JWKS / discovery fetch matches the existing
-    in-cluster CIBA/token-exchange posture (CONTEXT.md "Deferred Idea 1").
+  - TLS: all outbound IVIA calls (JWKS/discovery fetch, CIBA, token exchange)
+    verify against the mounted iviaop.pem CA (IVIA_CA_BUNDLE env var).
 
 Required environment (read via `os.environ[...]` — fail loud at module import):
   - IVIA_BASE_URL: in-cluster IVIA OIDC endpoint, e.g.
@@ -59,6 +59,10 @@ except KeyError as exc:
         "auth.py: IVIA_BASE_URL and IVIA_ID_TOKEN_AUDIENCE env vars are required"
     ) from exc
 
+# Path to the iviaop self-signed CA PEM mounted at /etc/ssl/ivia/iviaop.pem.
+# All outbound IVIA TLS calls (discovery, JWKS) verify against this file.
+IVIA_CA_BUNDLE = os.getenv("IVIA_CA_BUNDLE", "/etc/ssl/ivia/iviaop.pem")
+
 
 # Single canonical source for the authenticated subject. NO default — `.get()`
 # raises LookupError when unset, which surfaces as HTTP 500 (server-side bug)
@@ -70,13 +74,6 @@ class AuthenticationError(Exception):
     """Raised on any id_token verification failure. Caller maps to HTTP 401."""
 
     pass
-
-
-# Preserve the existing in-cluster IVIA TLS posture (verify=False) used by the
-# CIBA and token-exchange helpers in agent.py — out of scope to tighten here.
-_INSECURE_SSL = ssl.create_default_context()
-_INSECURE_SSL.check_hostname = False
-_INSECURE_SSL.verify_mode = ssl.CERT_NONE
 
 
 # Lazy-init caches — populated on first verify_id_token() call. Module-level so
@@ -96,10 +93,10 @@ def _init_jwks_client() -> None:
     """
     global _JWKS_CLIENT, _OIDC_ISSUER
     disc_url = f"{IVIA_BASE_URL}/oauth2/.well-known/openid-configuration"
-    resp = httpx.get(disc_url, verify=False, timeout=10.0)
+    resp = httpx.get(disc_url, verify=IVIA_CA_BUNDLE, timeout=10.0)
     resp.raise_for_status()
     disc = resp.json()
-    _JWKS_CLIENT = PyJWKClient(disc["jwks_uri"], ssl_context=_INSECURE_SSL)
+    _JWKS_CLIENT = PyJWKClient(disc["jwks_uri"], ssl_context=ssl.create_default_context(cafile=IVIA_CA_BUNDLE))
     _OIDC_ISSUER = disc["issuer"]
 
 

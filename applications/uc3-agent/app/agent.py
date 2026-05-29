@@ -127,6 +127,10 @@ IVIA_CLIENT_SECRET = os.getenv("IVIA_CLIENT_SECRET", "")
 IVIA_EXTERNAL_URL = os.getenv("IVIA_EXTERNAL_URL", "")
 IVIA_ACTOR_CLIENT_ID = os.getenv("IVIA_ACTOR_CLIENT_ID", "uc3-actor")
 IVIA_ACTOR_CLIENT_SECRET = os.getenv("IVIA_ACTOR_CLIENT_SECRET", IVIA_CLIENT_SECRET)
+# Path to the iviaop self-signed CA PEM mounted at /etc/ssl/ivia/iviaop.pem.
+# All outbound IVIA TLS calls (CIBA bc-authorize, token poll, token exchange)
+# verify against this file — TLS verification is never disabled in this module.
+IVIA_CA_BUNDLE = os.getenv("IVIA_CA_BUNDLE", "/etc/ssl/ivia/iviaop.pem")
 
 # CIBA polling config
 CIBA_POLL_INTERVAL_SECONDS = 5
@@ -194,7 +198,7 @@ def _initiate_ciba(login_hint: str, authorization_details: list, request_id: str
         },
     )
 
-    with httpx.Client(verify=False, timeout=30.0) as client:
+    with httpx.Client(verify=IVIA_CA_BUNDLE, timeout=30.0) as client:
         resp = client.post(
             bc_authorize_url,
             data=payload,
@@ -264,7 +268,7 @@ def _poll_ciba(auth_req_id: str, request_id: str) -> str:
             "auth_req_id": auth_req_id,
         }
 
-        with httpx.Client(verify=False, timeout=30.0) as client:
+        with httpx.Client(verify=IVIA_CA_BUNDLE, timeout=30.0) as client:
             resp = client.post(
                 token_url,
                 data=payload,
@@ -372,7 +376,7 @@ def _token_exchange(ciba_token: str, request_id: str) -> str:
         },
     )
 
-    with httpx.Client(verify=False, timeout=30.0) as client:
+    with httpx.Client(verify=IVIA_CA_BUNDLE, timeout=30.0) as client:
         resp = client.post(
             token_url,
             data=payload,
