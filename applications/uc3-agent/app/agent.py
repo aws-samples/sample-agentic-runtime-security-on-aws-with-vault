@@ -661,6 +661,17 @@ def complete_refund(
         password=write_creds["password"],
     ) as conn:
         with conn.cursor() as cur:
+            # RLS WITH CHECK gate: banking.refunds is FORCE ROW LEVEL SECURITY and the
+            # refund_insert_own policy verifies account_id belongs to
+            # current_setting('app.current_user_sub'). Set it transaction-local (SET
+            # LOCAL semantics — third arg true) BEFORE the INSERT so the check can
+            # confirm ownership. authenticated_sub is the verified id_token sub and
+            # _check_account_owner already proved it owns account_id; the GUC is RLS
+            # request-context, not the security boundary (defense-in-depth).
+            cur.execute(
+                "SELECT set_config('app.current_user_sub', %s, true)",
+                (authenticated_sub,),
+            )
             # OBJ-5 PLANE-A: thread request_id into the pgaudit STATEMENT field via
             # an inline SQL comment. pgaudit (log='write') captures the full statement
             # text verbatim, so the audit_correlation VIEW can regexp-extract this
