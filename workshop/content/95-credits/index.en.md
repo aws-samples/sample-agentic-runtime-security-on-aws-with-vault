@@ -7,8 +7,9 @@ This workshop was made possible by the collaboration and expertise of the follow
 
 | Name | Role |
 |------|------|
-| [Matt Bretan](https://www.linkedin.com/in/mattbretan/) | Product Manager, IBM |
-| [Oscar Medina](https://www.linkedin.com/in/oscarmedina/) | Technical Field Strategy Director, HashiCorp/IBM |
+| [Oscar Medina](https://www.linkedin.com/in/oscarmedina/) | Author, Technical Field Strategy Director, HashiCorp/IBM |
+| [placeholder](https://www.linkedin.com/in/oscarmedina/) | Security Reviewer, HashiCorp/IBM |
+| [placeholder](https://www.linkedin.com/in/oscarmedina/) | Tester, HashiCorp/IBM |
 
 ---
 
