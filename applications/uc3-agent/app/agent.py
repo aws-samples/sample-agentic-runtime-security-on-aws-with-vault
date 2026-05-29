@@ -8,13 +8,16 @@ Security architecture (OBJ-1 through OBJ-5):
   OBJ-3: Privileged write is gated on user's CIBA consent (may_act claim in JWT).
           Agent identity present as actor_token in RFC 8693 exchange.
   OBJ-4: Vault policy enforces uc3-refund-writer access ONLY with delegated JWT.
-          Read-only creds (uc3-readonly) cannot INSERT into banking.refunds.
+          Read-only creds use the least-privilege uc3-readonly Vault role, which
+          carries SELECT-only grants on banking.transactions, banking.accounts, and
+          banking.refunds — it genuinely cannot INSERT into banking.refunds.
   OBJ-5: request_id UUID threaded through IVIA binding_message, RDS refunds,
           and structured agent logs for three-plane audit correlation.
 
 Tools:
   list_transactions    — read-only SELECT recent transactions (K8s auth creds)
-  process_refund       — full CIBA + exchange + write flow (delegated jwt auth creds)
+  initiate_refund      — full CIBA + exchange + write flow (delegated jwt auth creds)
+  complete_refund      — completes refund after CIBA consent received
   check_refund_status  — read-only SELECT from banking.refunds by refund_id
 """
 
@@ -84,6 +87,10 @@ def _check_account_owner(
         cursor_factory=psycopg2.extras.RealDictCursor,
     ) as conn:
         with conn.cursor() as cur:
+            cur.execute(
+                "SELECT set_config('app.current_user_sub', %s, false)",
+                (authenticated_sub,),
+            )
             cur.execute(
                 """
                 SELECT user_sub
@@ -441,6 +448,10 @@ def list_transactions() -> list:
         ) as conn:
             with conn.cursor() as cur:
                 cur.execute(
+                    "SELECT set_config('app.current_user_sub', %s, false)",
+                    (authenticated_sub,),
+                )
+                cur.execute(
                     """
                     SELECT t.id, t.account_id, t.amount::float,
                            t.description, t.transaction_type, t.merchant,
@@ -767,10 +778,13 @@ def complete_refund(
 
 @tool
 def check_refund_status(refund_id: str) -> dict:
-    """Check the status of an existing refund by refund_id.
+    """Check the status of a refund owned by the authenticated user.
 
     Uses Vault K8s auth credentials (uc3-readonly role) to SELECT from
-    banking.refunds. No CIBA required — this is a read-only status check.
+    banking.refunds JOIN banking.accounts. No CIBA required — read-only.
+    Identity comes from _AUTHENTICATED_SUB ContextVar; refund_id is the only
+    LLM-controllable argument.  A refund belonging to another user returns the
+    same not-found shape — no cross-user information disclosure.
 
     Args:
         refund_id: UUID of the refund to look up.
@@ -778,16 +792,23 @@ def check_refund_status(refund_id: str) -> dict:
     Returns:
         Dict with refund details: refund_id, account_id, amount, currency,
         approved_by, request_id, status, created_at.
+        {"error": "Refund <id> not found"} if not found or owned by another user.
     """
     global _vault_client
     if _vault_client is None:
         raise RuntimeError("UC3 vault client not initialized")
 
+    authenticated_sub = _AUTHENTICATED_SUB.get()
+
     creds = _vault_client.get_readonly_credentials()
 
     logger.info(
         "check_refund_status_called",
-        extra={"refund_id": refund_id, "vault_role": "uc3-readonly"},
+        extra={
+            "refund_id": refund_id,
+            "vault_role": "uc3-readonly",
+            "authenticated_sub": authenticated_sub,
+        },
     )
 
     with psycopg2.connect(
@@ -800,15 +821,21 @@ def check_refund_status(refund_id: str) -> dict:
     ) as conn:
         with conn.cursor() as cur:
             cur.execute(
+                "SELECT set_config('app.current_user_sub', %s, false)",
+                (authenticated_sub,),
+            )
+            cur.execute(
                 """
-                SELECT refund_id, account_id, transaction_id,
-                       amount::float, currency, approved_by, request_id,
-                       created_at AT TIME ZONE 'UTC' AS created_at
-                FROM banking.refunds
-                WHERE refund_id = %s
+                SELECT r.refund_id, r.account_id, r.transaction_id,
+                       r.amount::float, r.currency, r.approved_by, r.request_id,
+                       r.created_at AT TIME ZONE 'UTC' AS created_at
+                FROM banking.refunds r
+                JOIN banking.accounts a ON a.id = r.account_id
+                WHERE r.refund_id = %s
+                  AND a.user_sub = %s
                 LIMIT 1
                 """,
-                (refund_id,),
+                (refund_id, authenticated_sub),
             )
             row = cur.fetchone()
 
@@ -887,7 +914,7 @@ def build_uc3_agent(vault_client=None, session_id: str = "default") -> Agent:
         extra={
             "model_id": model_id,
             "region": region,
-            "tools": ["list_transactions", "process_refund", "check_refund_status"],
+            "tools": ["list_transactions", "initiate_refund", "complete_refund", "check_refund_status"],
         },
     )
     return agent
