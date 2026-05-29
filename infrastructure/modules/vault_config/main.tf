@@ -97,7 +97,7 @@ resource "vault_mount" "database" {
 resource "vault_database_secret_backend_connection" "pg" {
   backend           = vault_mount.database.path
   name              = "workshop-pg"
-  allowed_roles     = ["uc1-readonly", "uc2-personal-readonly", "uc3-refund-writer"]
+  allowed_roles     = ["uc1-readonly", "uc2-personal-readonly", "uc3-refund-writer", "uc3-readonly"]
   verify_connection = false
 
   postgresql {
@@ -165,6 +165,9 @@ resource "vault_database_secret_backend_role" "uc2_personal_readonly" {
 #   - SELECT on banking.transactions (read source records, no write)
 #   - SELECT + INSERT + UPDATE on banking.refunds (write approved refunds, no DELETE)
 #   - search_path set to banking,public so the role lands in the right schema by default
+# 07.7 hardening: the row-level-security bypass attribute was removed so this writer is
+# now bound by RLS policies like every other role. Defense-in-depth: the RLS WITH CHECK
+# policy added in Plan 03 enforces tenant isolation at the INSERT/UPDATE level.
 resource "vault_database_secret_backend_role" "uc3_refund_writer" {
   backend     = vault_mount.database.path
   name        = "uc3-refund-writer"
@@ -172,7 +175,7 @@ resource "vault_database_secret_backend_role" "uc3_refund_writer" {
   default_ttl = 300 # 5 minutes
   max_ttl     = 600 # 10 minutes
   creation_statements = [
-    "CREATE ROLE \"{{name}}\" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}' BYPASSRLS;",
+    "CREATE ROLE \"{{name}}\" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}';",
     "GRANT USAGE ON SCHEMA banking TO \"{{name}}\";",
     "GRANT SELECT ON banking.accounts TO \"{{name}}\";",
     "GRANT SELECT ON banking.transactions TO \"{{name}}\";",
@@ -188,6 +191,41 @@ resource "vault_database_secret_backend_role" "uc3_refund_writer" {
     # above are sufficient before DROP ROLE. See uc2_personal_readonly for the case
     # where a creation_statements ALTER DEFAULT PRIVILEGES requires a symmetric REVOKE
     # in revocation_statements.
+    "DROP ROLE IF EXISTS \"{{name}}\";"
+  ]
+}
+
+# uc3-readonly: SELECT-only on banking schema, 15-min TTL
+# Layer 2 enforcement (ENFC-02): read-path tenant isolation — no INSERT/UPDATE/DELETE.
+# No row-level-security bypass flag; RLS policies apply to every query this role executes.
+# search_path set to banking,public so the role lands in the banking schema by default.
+# Explicit GRANT on banking.refunds makes it clear this role can read (but not write) refunds.
+resource "vault_database_secret_backend_role" "uc3_readonly" {
+  backend     = vault_mount.database.path
+  name        = "uc3-readonly"
+  db_name     = vault_database_secret_backend_connection.pg.name
+  default_ttl = 900  # 15 minutes
+  max_ttl     = 1800 # 30 minutes
+  creation_statements = [
+    "CREATE ROLE \"{{name}}\" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}';",
+    "ALTER ROLE \"{{name}}\" SET search_path TO banking,public;",
+    "GRANT USAGE ON SCHEMA banking TO \"{{name}}\";",
+    "GRANT SELECT ON ALL TABLES IN SCHEMA banking TO \"{{name}}\";",
+    "ALTER DEFAULT PRIVILEGES IN SCHEMA banking GRANT SELECT ON TABLES TO \"{{name}}\";",
+    "GRANT SELECT ON banking.refunds TO \"{{name}}\";"
+  ]
+  revocation_statements = [
+    "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA banking FROM \"{{name}}\";",
+    "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA banking FROM \"{{name}}\";",
+    "REVOKE USAGE ON SCHEMA banking FROM \"{{name}}\";",
+    # Mirror of the creation_statement's ALTER DEFAULT PRIVILEGES GRANT — undoes the
+    # pg_default_acl row that the GRANT left behind. Without this matching REVOKE,
+    # DROP ROLE fails because the default-ACL entry is a dependent object. We use the
+    # symmetric REVOKE rather than DROP OWNED BY because RDS master (vault_root) is
+    # rds_superuser, not a true PG superuser, and is not a member of the ephemeral role
+    # — so DROP OWNED BY aborts with SQLSTATE 42501 ("permission denied to drop
+    # objects: Only roles with privileges of role X may drop objects owned by it").
+    "ALTER DEFAULT PRIVILEGES IN SCHEMA banking REVOKE SELECT ON TABLES FROM \"{{name}}\";",
     "DROP ROLE IF EXISTS \"{{name}}\";"
   ]
 }
@@ -312,9 +350,13 @@ resource "vault_policy" "uc3_refund_writer" {
 
   policy = <<-EOT
     # UC3: Refund-writer agent policy
-    # Allows: kubernetes + jwt auth login, database write creds, AWS (Bedrock) STS creds,
-    # AWS (CloudWatch logs) STS creds for the ivia_decisions anchor emission (OBJ-5)
+    # Allows: kubernetes + jwt auth login, database write creds, read-only creds,
+    # AWS (Bedrock) STS creds, AWS (CloudWatch logs) STS creds for the
+    # ivia_decisions anchor emission (OBJ-5)
     path "database/creds/uc3-refund-writer" {
+      capabilities = ["read"]
+    }
+    path "database/creds/uc3-readonly" {
       capabilities = ["read"]
     }
     path "aws/sts/bedrock-reader" {
