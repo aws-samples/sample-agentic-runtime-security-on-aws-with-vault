@@ -66,10 +66,14 @@ Use Case 3 enforces read isolation through three independent layers:
 
 Sign in to the banking application as Jaime and ask the Use Case 3 agent to list your transactions or check a refund status.
 
-1. Open the banking application URL and sign in as **jaime** using the IVIA login page.
+1. Open an **Incognito / Private browser window**, go to the banking application URL, and sign in as **jaime** using the IVIA login page.
 2. Navigate to the Use Case 3 chat interface and send the message: `List my recent transactions`.
 3. Confirm the response contains only Jaime's transaction records (amounts, merchants, account references).
-4. Sign out, sign in as **oscar**, and repeat the same query — confirm you see only Oscar's records and zero of Jaime's.
+4. Open a **fresh Incognito / Private window**, sign in as **oscar**, and repeat the same query — confirm you see only Oscar's records and zero of Jaime's.
+
+:::alert{type="info" header="Switch personas with Incognito, not Logout"}
+IVIA keeps its own SSO session cookie, so **Logout** in the banking app leaves you recognised by IVIA and re-opening the app jumps to the OAuth consent page rather than a fresh login. Use a separate Incognito / Private window per persona — each starts with an empty cookie jar and gives you a clean login.
+:::
 
 A refund lookup works the same way: ask `What is the status of refund <jaime-refund-id>` while signed in as Oscar — the agent returns "Refund not found" with no detail about Jaime's refund (no information disclosure).
 
@@ -146,7 +150,7 @@ The Postgres GRANT layer rejects the INSERT before the RLS policy is even evalua
 
 With a valid authenticated session as Jaime, ask the Use Case 3 agent to look up an account or refund that belongs to Oscar:
 
-1. Sign in as **jaime**.
+1. Sign in as **jaime** (use a fresh Incognito / Private window so you get a clean login — see the note in Section 1).
 2. In the Use Case 3 chat, send: `Check refund status for refund ID <oscar-refund-id>`.
 3. The agent returns: `{"error": "Refund <id> not found"}` — no detail about Oscar's refund is disclosed.
 
