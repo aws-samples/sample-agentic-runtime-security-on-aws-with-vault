@@ -1,0 +1,56 @@
+name: Content Problem
+description: A workshop page has a typo, a wrong or unclear instruction, a stale screenshot, or a broken link. (Not a runtime error — use the Bug template for that.)
+title: "[Content]: "
+labels: ["documentation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for **content** problems on a workshop page — wording, instructions, screenshots, links.
+        If a **command errored** or didn't work, use the Bug template instead.
+        **Search [open issues](../issues) first** to avoid duplicates.
+
+  - type: input
+    id: page
+    attributes:
+      label: Workshop page + section
+      description: The content path or page title and the specific section/step.
+      placeholder: "workshop/content/70-uc2-personalized/index.en.md — Step 2"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind of content problem
+      options:
+        - Typo / grammar
+        - Wrong instruction (steps don't match reality)
+        - Unclear / confusing
+        - Stale screenshot or diagram
+        - Broken link
+    validations:
+      required: true
+
+  - type: textarea
+    id: current
+    attributes:
+      label: What the page currently says
+      description: Quote the current text, or describe what's there now.
+    validations:
+      required: true
+
+  - type: textarea
+    id: suggested
+    attributes:
+      label: What it should say / suggested fix
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmations
+      options:
+        - label: I searched open issues and this is not a duplicate.
+          required: true

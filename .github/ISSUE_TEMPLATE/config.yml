@@ -1,0 +1,7 @@
+# Force every issue through a template (no blank issues).
+blank_issues_enabled: false
+contact_links:
+  - name: General feedback / questions (private testing Slack)
+    # TODO(maintainer): replace with the real private testing Slack channel invite/link.
+    url: https://ibm.enterprise.slack.com/archives/C0B6GLPTEQ6
+    about: Not a reproducible bug or content problem? Share general feedback, questions, or "this was confusing" in the private testing Slack channel — not as a GitHub issue.

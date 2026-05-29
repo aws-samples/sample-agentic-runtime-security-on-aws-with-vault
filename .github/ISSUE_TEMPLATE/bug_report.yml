@@ -1,0 +1,113 @@
+name: Bug / Something Not Working
+description: A workshop command errored, didn't match the expected output, or otherwise didn't work. Must be reproducible.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing the workshop.
+
+        **Before you file:**
+        - This is for things that **error or don't work** — and it must be **reproducible**. General feedback or "this was confusing" goes in the private testing Slack channel, not here.
+        - **Search [open issues](../issues) first** — if it's already filed, add your details there instead of opening a duplicate.
+        - **Redact secrets** before pasting anything: AWS account IDs, ARNs, access keys, JWTs / bearer tokens, private IPs.
+        - **Run the page, not your own commands** — each workshop page is the contract. Paste the exact command *as written on the page*. If the page's command fails, that IS the bug.
+
+  - type: input
+    id: page
+    attributes:
+      label: Workshop page + section
+      description: Where in the workshop did this happen? Give the content path or the page title and the step/section.
+      placeholder: "workshop/content/80-uc3-privileged/index.en.md — Step 4: Trigger CIBA refund"
+    validations:
+      required: true
+
+  - type: textarea
+    id: command
+    attributes:
+      label: Exact command you ran
+      description: Copy-paste it verbatim from the workshop page. Do not paraphrase or substitute your own command.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected output
+      description: What the workshop page said should happen.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual output / error (secrets redacted)
+      description: What you actually got. Paste the full error / output — but scrub account IDs, ARNs, tokens, and IPs first.
+      render: shell
+    validations:
+      required: true
+
+  - type: dropdown
+    id: region
+    attributes:
+      label: AWS region
+      description: Most of the workshop runs in us-west-2; Knowledge Base steps run in us-east-1.
+      options:
+        - us-west-2 (default)
+        - us-east-1 (Knowledge Base step)
+        - Other (note it in the diagnostics box)
+    validations:
+      required: true
+
+  - type: textarea
+    id: versions
+    attributes:
+      label: Tool versions
+      description: "Run and paste the output: `terraform version; kubectl version --client; aws --version; helm version --short; vault version`"
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics — logs, terraform output, browser console (secrets redacted)
+      description: Whatever is relevant to this failure — pod logs (`kubectl logs ...`), `terraform` output, browser console/network for UI issues. Attach screenshots for UI problems. Scrub secrets first.
+      render: shell
+
+  - type: dropdown
+    id: reproducibility
+    attributes:
+      label: Reproducibility
+      options:
+        - Every time, from a clean state
+        - Intermittent
+        - Happened once, could not reproduce
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - Blocker — cannot continue the workshop
+        - Major — a use case / step fails
+        - Minor — works with a workaround
+        - Cosmetic — visual / polish
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmations
+      options:
+        - label: I searched open issues and this is not a duplicate.
+          required: true
+        - label: I ran the exact command from the workshop page (no homemade substitute).
+          required: true
+        - label: I removed all secrets (account IDs, ARNs, access keys, tokens, private IPs) from everything I pasted.
+          required: true

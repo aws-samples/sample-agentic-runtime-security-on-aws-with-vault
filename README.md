@@ -10,7 +10,7 @@ This repository delivers a Workshop Studio site + reveal-md slide deck + Terrafo
 - **UC2 — OAuth personalized read-only:** OAuth Authorization Code + PKCE against IBM Verify Access establishes user identity; Vault `jwt` auth vends per-user-scoped credentials; Layer 2 + Layer 3 enforcement demonstrated (adds Objective 3)
 - **UC3 — CIBA privileged + three-plane audit correlation:** CIBA out-of-band approval; tokens carry `may_act` (RFC 8693) and `authorization_details` (RFC 9396 RAR) claims enforced by Vault `bound_claims`; time-boxed R/W credentials (TTL 5m); single Athena query joining IVIA decision logs + Vault audit + AWS CloudTrail by `request_id` (all 5 Objectives)
 
-The workshop mirrors the structure of [`eks-terraform-stacks`](https://github.com/aws-samples/eks-terraform-stacks): Workshop Studio site at `workshop/`, reveal-md slide deck at `slides.md`, Terraform Stacks IaC at `infrastructure/`.
+
 
 ## Architecture
 
@@ -18,7 +18,6 @@ The workshop mirrors the structure of [`eks-terraform-stacks`](https://github.co
 
 The reference architecture diagram (regenerated from Excalidraw source in `assets/`) shows the joint Verify + Vault responsibility split: IBM Verify owns human IAM (user authentication, OAuth, CIBA); HashiCorp Vault owns non-human IAM (workload identity, policy enforcement, JIT credential vending). All three agents (UC1/UC2/UC3) run as pods on a single EKS cluster alongside Vault (Raft 3-node, KMS auto-unseal) and IBM Verify Identity Access (Config Service + Runtime + DSC).
 
-Deeper diagrams (per-use-case flows, audit correlation) are produced in Phase 1 by the Excalidraw → SVG pipeline and embedded in `workshop/content/` and `slides.md`.
 
 ## Prerequisites
 
@@ -78,7 +77,7 @@ The cleanup story will cover the one-shot `infrastructure/scripts/teardown.sh` t
 .
 ├── README.md
 ├── LICENSE                          # MIT-0 (AWS Workshop Studio convention)
-├── TESTING.md                       # Workshop testing/verification guide
+├── TESTING.md                       # Tester role guide — how to test the workshop and file issues
 ├── slides.md                        # reveal-md slide deck
 ├── reveal-md.json                   # reveal-md theme + transition config
 ├── assets/                          # Excalidraw sources + exported SVGs (six diagrams)
