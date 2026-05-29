@@ -59,7 +59,17 @@ CREATE TABLE IF NOT EXISTS banking.transactions (
 -- Policies filter rows by user_sub = current_setting('app.current_user_sub').
 -- The MCP server calls SET LOCAL "app.current_user_sub" = '<sub>' on each
 -- connection before executing queries, which activates the RLS filter.
+--
+-- Idempotency prelude: disable FORCE on all three tables before INSERTs run.
+-- pg_class persists the FORCE flag across re-runs, so the owner's seed INSERTs
+-- would be blocked by RLS if FORCE were already set and the GUC is unset during
+-- seeding. The epilogue at the bottom of this file re-enables FORCE after all
+-- INSERTs have completed.
 -- ---------------------------------------------------------------------------
+
+ALTER TABLE IF EXISTS banking.accounts NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS banking.transactions NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS banking.refunds NO FORCE ROW LEVEL SECURITY;
 
 ALTER TABLE banking.accounts ENABLE ROW LEVEL SECURITY;
 
@@ -74,6 +84,28 @@ DROP POLICY IF EXISTS user_transactions ON banking.transactions;
 CREATE POLICY user_transactions ON banking.transactions
   FOR SELECT
   USING (
+    account_id IN (
+      SELECT id FROM banking.accounts
+      WHERE user_sub = current_setting('app.current_user_sub', true)
+    )
+  );
+
+ALTER TABLE banking.refunds ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS refund_select_own ON banking.refunds;
+CREATE POLICY refund_select_own ON banking.refunds
+  FOR SELECT
+  USING (
+    account_id IN (
+      SELECT id FROM banking.accounts
+      WHERE user_sub = current_setting('app.current_user_sub', true)
+    )
+  );
+
+DROP POLICY IF EXISTS refund_insert_own ON banking.refunds;
+CREATE POLICY refund_insert_own ON banking.refunds
+  FOR INSERT
+  WITH CHECK (
     account_id IN (
       SELECT id FROM banking.accounts
       WHERE user_sub = current_setting('app.current_user_sub', true)
@@ -140,8 +172,9 @@ ON CONFLICT (id) DO NOTHING;
 -- The UC3 agent (privileged actor) writes approved refund records here.
 -- Vault uc3-refund-writer role grants SELECT on banking.transactions and
 -- SELECT + INSERT + UPDATE on banking.refunds (no DELETE — audit preservation).
--- approved_by holds the Vault entity alias (agent service account) so the
--- write is attributable in the three-plane audit JOIN.
+-- approved_by holds the authenticated user's sub (set by the uc3-agent from the
+-- CIBA-validated authenticated_sub, established in 07.6) so the write is
+-- attributable in the three-plane audit JOIN.
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS banking.refunds (
@@ -159,3 +192,21 @@ CREATE TABLE IF NOT EXISTS banking.refunds (
 -- this column existed (CREATE TABLE IF NOT EXISTS above is a no-op on those).
 ALTER TABLE banking.refunds
   ADD COLUMN IF NOT EXISTS transaction_id UUID REFERENCES banking.transactions(id);
+
+-- ---------------------------------------------------------------------------
+-- Owner-bound RLS epilogue
+--
+-- Binds the table owner (vault_root) to the same RLS policies as any other
+-- role. Without this flag the table owner bypasses RLS entirely, defeating
+-- the tenant-isolation guarantee even when RLS is enabled.
+--
+-- MUST be placed here — AFTER all INSERT statements and self-healing DDL —
+-- because pg_class persists this flag: on a re-run the owner's INSERTs at
+-- seed-time would be blocked if FORCE were already set and app.current_user_sub
+-- is unset during seeding. The NO FORCE prelude at the top of this file
+-- guarantees safe re-entry; this epilogue restores the defence after seeding.
+-- ---------------------------------------------------------------------------
+
+ALTER TABLE banking.accounts FORCE ROW LEVEL SECURITY;
+ALTER TABLE banking.transactions FORCE ROW LEVEL SECURITY;
+ALTER TABLE banking.refunds FORCE ROW LEVEL SECURITY;
