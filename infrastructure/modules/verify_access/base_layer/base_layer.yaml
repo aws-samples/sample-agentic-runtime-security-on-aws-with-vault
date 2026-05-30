@@ -26,6 +26,12 @@ container:
   - name: "rt_profile_keys"
     signer_certificates:
     - "postgres.crt"
+    # DigiCert Global Root G3 — trust anchor for verifypushcreds.verify.ibm.com
+    # (IBM Verify push relay). Required so AAC runtime trusts the push provider's
+    # TLS chain. Live leaf chains to this root via the rotating
+    # "DigiCert Global G3 TLS ECC SHA384 2020 CA1" intermediate; trusting the
+    # root survives intermediate rotation. Verified live 2026-05-30.
+    - "DigiCertGlobalRootG3.crt"
   - name: "pdsrv"
     personal_certificates:
     - name: "WRP"

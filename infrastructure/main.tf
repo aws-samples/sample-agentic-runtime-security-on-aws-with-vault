@@ -368,12 +368,13 @@ resource "time_sleep" "alb_webhook_ready" {
 module "ivia" {
   source = "./modules/verify_access"
 
-  region                 = var.region
-  cluster_name           = module.eks.cluster_name
-  icr_entitlement_key    = var.icr_entitlement_key
-  node_security_group_id = module.eks.node_security_group_id
-  tls_certificate_arn    = local.tls_certificate_arn
-  tags                   = var.tags
+  region                       = var.region
+  cluster_name                 = module.eks.cluster_name
+  icr_entitlement_key          = var.icr_entitlement_key
+  ivia_mmfa_push_client_secret = var.ivia_mmfa_push_client_secret
+  node_security_group_id       = module.eks.node_security_group_id
+  tls_certificate_arn          = local.tls_certificate_arn
+  tags                         = var.tags
 
   depends_on = [time_sleep.alb_webhook_ready]
 }

@@ -8,8 +8,9 @@
 # terraform.tfvars is gitignored (contains account-specific values).
 # This .example file is the committed reference.
 #
-# SENSITIVE VARIABLES (icr_entitlement_key, simple_ad_admin_password) are
-# set directly in your local terraform.tfvars (gitignored, never committed).
+# SENSITIVE VARIABLES (icr_entitlement_key, simple_ad_admin_password,
+# ivia_mmfa_push_client_secret) are set directly in your local terraform.tfvars
+# (gitignored, never committed).
 # bootstrap.sh copies this file to terraform.tfvars as the starting point.
 #
 # CANONICAL REGION CONTRACT
@@ -66,4 +67,10 @@ ivia_trial_cert = "ISAM-Trial-HashiCorp.cer"
 # UC3 Agent image — set after ECR push (build-uc3-agent.sh).
 # Placeholder is fine for initial deploy; the e2e script updates this automatically.
 uc3_agent_image = "ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/uc3-agent:latest"
+
+# IBM Verify mobile-push (MMFA) — VerifyPushCreds API Key (= push provider Client
+# Secret for ISVA 10.0.3+). SENSITIVE: set the real value ONLY in your gitignored
+# terraform.tfvars, never here. Leave empty until Use Case 3 MMFA push is enabled;
+# when empty the 'ivia-mmfa-push' Secret is not created (no-op).
+# ivia_mmfa_push_client_secret = ""
 

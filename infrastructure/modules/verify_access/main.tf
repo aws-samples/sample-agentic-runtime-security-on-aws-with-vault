@@ -76,6 +76,29 @@ resource "kubernetes_secret" "dockerlogin" {
 }
 
 #-------------------------------------------------------------------------------
+# IBM Verify mobile-push (MMFA) provider credential. The VerifyPushCreds API Key
+# (= Client Secret for ISVA 10.0.3+) authenticates the AAC runtime to the IBM
+# Verify push relay (verifypushcreds.verify.ibm.com). Held as the named Secret
+# 'ivia-mmfa-push'; the AAC push_notification_providers config resolves it via
+# the autoconf `!secret verify-access/ivia-mmfa-push:imc_client_secret` syntax
+# (wired in a later increment). count gates creation on a supplied value so this
+# is a no-op until MMFA is configured.
+#-------------------------------------------------------------------------------
+
+resource "kubernetes_secret" "ivia_mmfa_push" {
+  count = var.ivia_mmfa_push_client_secret != "" ? 1 : 0
+  metadata {
+    name      = "ivia-mmfa-push"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels    = local.common_labels
+  }
+  type = "Opaque"
+  data = {
+    imc_client_secret = var.ivia_mmfa_push_client_secret
+  }
+}
+
+#-------------------------------------------------------------------------------
 # Cross-node LDAPS (TCP/636). pdconfig running on iviaruntime pod may schedule
 # on a different node than the openldap pod; the EKS node SG default ingress
 # rules do not include TCP/636 between same-SG nodes. Source = same SG (self).
@@ -1325,6 +1348,7 @@ resource "kubernetes_config_map" "base_layer" {
     "ISAM-Trial-HashiCorp.cer" = file("${path.module}/base_layer/ISAM-Trial-HashiCorp.cer")
     "iviaop.pem"               = file("${path.module}/base_layer/iviaop.pem")
     "ldap.crt"                 = file("${path.module}/base_layer/ldap.crt")
+    "DigiCertGlobalRootG3.crt" = file("${path.module}/base_layer/DigiCertGlobalRootG3.crt")
     "postgres.crt"             = tls_self_signed_cert.postgresql.cert_pem
     "req_openid_config.lua"    = file("${path.module}/base_layer/req_openid_config.lua")
     "rsp_openid_config.lua"    = file("${path.module}/base_layer/rsp_openid_config.lua")
@@ -1531,6 +1555,9 @@ resource "kubernetes_job_v1" "ivia_autoconf" {
     kubernetes_secret.ivia_secauthority_creds,
     kubernetes_config_map.base_layer,
     kubernetes_secret.base_layer_p12,
+    # MMFA push credential (count-gated; empty list when not configured). Ensures
+    # the secret exists before autoconf reads it via !secret in a later increment.
+    kubernetes_secret.ivia_mmfa_push,
   ]
 }
 
