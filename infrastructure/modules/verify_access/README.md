@@ -48,6 +48,46 @@ Services:
 - `ivia-wrp` Ingress (ALB, HTTP listener → HTTPS:9443 backend — for
   browser-facing CIBA flows). This is the ONLY internet-facing IVIA endpoint.
 
+## UC3 RAR enforcement model (what Vault enforces vs. what audit correlation proves)
+
+UC3's privileged refund chains RFC 8693 token-exchange with RFC 9396 Rich Authorization
+Requests (RAR). The honest, verified security model — recorded here because it shapes any
+future decision to switch CIBA providers:
+
+**Vault cryptographically enforces** (the `uc3-jwt` role's `bound_claims` on the exchanged
+JWT, in `vault_config`):
+- identity — `sub=jaime`, the human who approved via CIBA;
+- delegation — `/may_act/sub=uc3-actor` (RFC 8693: WHO may act);
+- RAR **type** — `/authorization_details/0/type=refund_approval` (WHAT class of action).
+
+**Audit correlation proves the amount.** Restating the architecture plainly: Vault
+cryptographically enforces identity (`sub=jaime`), delegation (`may_act=uc3-actor`), and
+RAR type (`refund_approval`). The amount/currency is consent-bound by three-plane audit
+correlation on `request_id` — the green 12-column / 0-blank `audit_correlation` row is the
+proof that the amount the user approved (e.g. $88.30) is the same amount that hit Vault and
+the DB. Vault couldn't numerically enforce an amount anyway (`bound_claims` are string/glob
+matches, not range checks), so amount-by-correlation is the correct control, not a
+consolation prize.
+
+**Why the amount is not a token claim (verified ISVAOP 25.10, 2026-05-29).** The
+consent-time RAR is not exposed to any mapping rule at the CIBA token mint or the
+token-exchange stage:
+- IBM `tasks-rar`: `authorization_details` is a context attribute only on the request that
+  CARRIES it (bc-authorize / authorize); it is returned as a token-RESPONSE field, not a
+  JWT claim; `strategy` (sha512) is an identifier hash, not a propagation switch.
+- IBM `js_ciba_mapping_rule`: the `ciba` object exposes no `authorization_details` accessor;
+  the `ciba.success(meta)` enrichment path is for the external check-status authenticator,
+  which UC3 does not use (UC3 uses `InternalAuthenticator`).
+- Live: jaime's CIBA access token (the token-exchange `subject_token`) decodes with no
+  `authorization_details`; the token-exchange pre-token context exposes no such attribute.
+
+So `refund_approval` — the genuine, allowlisted, only RAR type `agent-uc3` can request
+(provider `authorization_details_types_supported`) — is what the `isvaop_pretoken` rule
+stamps onto the exchanged token (`iviaop-config/rules.yaml`); the amount cannot be made a
+Vault-validated claim through documented means. If UC3 later adopts a CIBA provider that
+surfaces the consent-time RAR at token mint, the amount could additionally become an
+enforced claim; until then this is the documented ceiling for ISVAOP 25.10.
+
 ## Inputs
 
 | Variable | Purpose |

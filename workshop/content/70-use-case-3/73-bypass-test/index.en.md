@@ -16,39 +16,45 @@ cd infrastructure/scripts
 ./verify-uc3.sh --bypass
 ```
 
-The script generates two forged JWTs using PyJWT (running in a temporary Kubernetes pod) and presents each to Vault's `auth/jwt/login` endpoint.
+The script runs **two genuine negative tests**, each classified by the *reason* Vault rejected the login — so the test can never silently pass on an infrastructure error:
 
-**Expected output:**
+- **Check 14 (signature control):** forges an HS256 JWT (PyJWT, in a temporary pod) and presents it. Vault trusts only IVIA's RS256 JWKS, so it dies at the signature layer.
+- **Check 15 (bound-claim teeth):** mints a **genuine, IVIA-signed** `uc3-actor` `client_credentials` token. It sails past the RS256 signature and `aud=uc3-actor` checks, but a plain `client_credentials` grant has **no** `may_act` claim (that is injected only during token-exchange), so Vault rejects it at the `/may_act/sub` bound_claim. This proves the `bound_claims` actually gate access — not merely the signature.
+
+**Expected output** (captured from a live run):
 
 ```
-ℹ  Use Case 3 — CIBA Privileged verification — BYPASS TEST MODE
+  ℹ INFO Use Case 3 — CIBA Privileged verification — BYPASS TEST MODE
 
-ℹ  Bypass Check 12: Forge JWT with wrong may_act.sub
-✓  Bypass Check 12 PASSED: Vault rejected forged may_act.sub — HS256 token not
-   trusted by JWKS (signature validation + may_act.sub bound_claim enforcement)
+  ℹ INFO Bypass Check 14: Untrusted-signer control — HS256 self-forged JWT must be rejected at the signature layer
+  ✓ PASS Bypass Check 14 PASSED: Vault rejected the HS256 self-forged JWT at the signature layer (trusts only IVIA's RS256 JWKS) — an attacker cannot forge their way in
 
-ℹ  Bypass Check 13: Forge JWT with wrong authorization_details type
-✓  Bypass Check 13 PASSED: Vault rejected wrong authorization_details type —
-   HS256 token not trusted by JWKS (even if may_act.sub matched,
-   authorization_details.type must equal refund_approval)
+  ℹ INFO Bypass Check 15: Bound-claim enforcement — real IVIA-signed uc3-actor token (no may_act) must be rejected at /may_act/sub
+  ✓ PASS Bypass Check 15 PASSED: Vault accepted the token's RS256 signature + aud=uc3-actor but REJECTED it at the /may_act/sub bound_claim (no may_act delegation present) — bound_claims are enforced, not just the signature
 
-All checks passed.
+===============================================================================
+ ✓ 2 check(s) passed
+===============================================================================
 ```
 
 ## Two Layers of Rejection
 
-The forged tokens are rejected by Vault for two independent reasons, either of which would be sufficient:
+The two tests prove rejection at two independent layers, either of which is sufficient on its own:
 
 | Layer | Mechanism | What It Enforces |
 |---|---|---|
-| JWT signature | JWKS validation against IVIA's RS256 public keys | Only IVIA-signed tokens are accepted — HS256 self-signed tokens are always rejected |
-| `bound_claims` | `/may_act/sub = "*"` (glob) — any `may_act.sub` value in the JWT satisfies this check; the key constraint is that `may_act` must be present and the token must be IVIA-signed | Only properly delegated RFC 8693 tokens carry `may_act`; a raw CIBA token without delegation is rejected |
+| JWT signature | JWKS validation against IVIA's RS256 public keys | Only IVIA-signed tokens are accepted — HS256 self-signed tokens are always rejected (Check 14) |
+| `bound_claims` | `/may_act/sub = "uc3-actor"` AND `/authorization_details/0/type = "refund_approval"` (both EXACT, glob type, no wildcards) | Evaluated **only after** the signature passes: the token's claims must match exactly — `may_act.sub = uc3-actor` (delegation) AND `authorization_details[0].type = refund_approval` (RAR type). A genuine IVIA-signed token that lacks `may_act` — or carries a different RAR type — is rejected here even though its signature is valid (Check 15) |
 
-The signature layer and the claim layer are both enforced. A real attacker would need to compromise IVIA's RS256 private signing key in order to produce a token that passes JWKS validation — the bound_claim on `/may_act/sub` is an additional structural check that a raw (non-delegated) CIBA token lacks the `may_act` object entirely.
+Both layers are enforced. Check 14 proves you cannot forge your way past the signature; Check 15 proves the `bound_claims` have teeth — a real IVIA-signed token is still rejected when it lacks the required `may_act` delegation. A delegated token carrying any RAR `type` other than `refund_approval` is rejected the same way.
+
+:::alert{header="Why there is no negative test for a wrong RAR type" type="info"}
+The `/authorization_details/0/type` binding is enforced (you can see it on the live `uc3-jwt` role and in `vault_config/main.tf`), but the bypass script does not include a standalone negative test for it. To exercise it you would need a genuine IVIA-signed token that has `may_act` present **but** a different RAR type — and the only way to obtain a `may_act` claim is the token-exchange grant, which the `isvaop_pretoken` rule always stamps with `type=refund_approval`. There is no documented path in ISVAOP 25.10 to mint a token with `may_act` present and a forged type, so a faithful negative test is not feasible without compromising IVIA's signing key. The binding is real; the absence of a forge-based test is a property of the platform, not a gap in enforcement.
+:::
 
 ### Threat Model
 
-**What this protects against:** A rogue agent pod that obtains a user's CIBA access token (via network interception or a compromised secret) cannot use it to issue a refund. A raw CIBA access token has no `may_act` object, so the `/may_act/sub` bound_claim check fails — but more fundamentally, the forged HS256 token the bypass test generates is rejected first by JWKS signature validation: Vault trusts only tokens signed by IVIA's RS256 key pair. No DB credentials are ever issued.
+**What this protects against:** A rogue agent pod that obtains a user's CIBA access token (via network interception or a compromised secret) cannot use it to issue a refund. A raw CIBA access token has no `may_act` object, so the `/may_act/sub` bound_claim check fails (Check 15) — and a self-forged token is rejected even earlier, at JWKS signature validation, because Vault trusts only tokens signed by IVIA's RS256 key pair (Check 14). No DB credentials are ever issued.
 
 **What this does NOT protect against:** A compromised agent-uc3 pod with its service account JWT intact could initiate a CIBA flow and present the resulting delegated token to Vault. Mitigations for pod compromise (e.g., falco runtime rules, IRSA session policy restrictions) are out of scope for this workshop but represent the next layer of defense.
 
@@ -101,40 +107,58 @@ The `uc3-readonly` credential expires after 15 minutes. If you see `psql: FATAL:
 
 #### Step 2.2 — Confirm RLS scoping by sub
 
-Spawn a transient `postgres:16-alpine` pod, set the `app.current_user_sub` GUC to Jaime's sub, and count her transactions. Then repeat for Oscar's sub and observe the counts differ.
+The value RLS filters on is the IVIA `sub` claim, seeded as the plain strings `oscar` and `jaime` (`seed.sql`, column `banking.accounts.user_sub`). You do **not** need to look anything up in the IVIA LMI or decode an id_token — use those two values directly.
 
-Replace `<jaime-sub>` and `<oscar-sub>` with the IVIA `sub` values for each user (visible in the IVIA LMI user profile or from a decoded id_token):
+Spawn **one** transient `postgres:16-alpine` pod. In a single `psql` session, set the `app.current_user_sub` GUC to each user in turn and count their transactions. RLS returns only the rows owned by whichever `sub` is currently active:
 
 ```bash
-# Count Jaime's transactions
 kubectl run pg-rls-test --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${PG_PASS}" \
-  --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop \
-    -c "SELECT set_config('app.current_user_sub', '<jaime-sub>', false);
-        SELECT count(*) AS jaime_tx_count FROM banking.transactions;"
+  --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop -c "
+    SELECT set_config('app.current_user_sub','jaime',false);
+    SELECT 'jaime' AS acting_as, count(*) AS tx_count FROM banking.transactions;
+    SELECT set_config('app.current_user_sub','oscar',false);
+    SELECT 'oscar' AS acting_as, count(*) AS tx_count FROM banking.transactions;"
 ```
 
-```bash
-# Count Oscar's transactions — should differ from Jaime's count
-kubectl run pg-rls-test2 --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
-  --env="PGPASSWORD=${PG_PASS}" \
-  --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop \
-    -c "SELECT set_config('app.current_user_sub', '<oscar-sub>', false);
-        SELECT count(*) AS oscar_tx_count FROM banking.transactions;"
+**Expected output** — each `set_config` line echoes the `sub` it just activated, and the two `tx_count` rows differ (Jaime owns 9 transactions, Oscar owns 8):
+
+```
+ set_config
+------------
+ jaime
+(1 row)
+
+ acting_as | tx_count
+-----------+----------
+ jaime     |        9
+(1 row)
+
+ set_config
+------------
+ oscar
+(1 row)
+
+ acting_as | tx_count
+-----------+----------
+ oscar     |        8
+(1 row)
 ```
 
-Each query returns only the row count for the specified sub — cross-tenant rows are invisible. This is the RLS policy (`user_accounts` USING clause) enforcing isolation at the Postgres layer, independently of the agent.
+Each count includes only the active `sub`'s rows — cross-tenant rows are invisible. This is the RLS policy (the `USING (user_sub = current_setting('app.current_user_sub', true))` clause) enforcing isolation at the Postgres layer, independently of the agent. The pod is deleted automatically (`--rm`) when the query finishes.
 
 ### Section 3 — Least-Privilege: INSERT is Denied
 
 The `uc3-readonly` role carries `GRANT SELECT` only. The same credential used in Step 2.1 cannot write to the banking tables.
 
+The `INSERT` below names **only real `banking.refunds` columns** (`account_id, transaction_id, amount, approved_by, request_id` — see `seed.sql`), so it is schema-valid. That matters: Postgres checks table privileges *before* it evaluates column names, NOT NULL/foreign-key constraints, or RLS — so the **only** reason this can fail is the missing `INSERT` privilege. (A typo'd column would instead fail with a schema error and prove nothing.)
+
 ```bash
 kubectl run pg-insert-uc3 --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${PG_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop \
-    -c "INSERT INTO banking.refunds (account_id, amount, status, request_id)
-         VALUES ('00000000-0000-0000-0000-000000000000', 1.00, 'pending', gen_random_uuid());"
+    -c "INSERT INTO banking.refunds (account_id, transaction_id, amount, approved_by, request_id)
+         VALUES ('00000000-0000-0000-0000-000000000000', '00000000-0000-0000-0000-000000000000', 1.00, 'least-priv-test', gen_random_uuid());"
 ```
 
 Expected output:
@@ -144,16 +168,93 @@ ERROR:  permission denied for table refunds
 pod "pg-insert-uc3" deleted
 ```
 
-The Postgres GRANT layer rejects the INSERT before the RLS policy is even evaluated. This confirms that a bug in the agent code that accidentally attempted a write would fail closed at the database layer — Vault's `uc3-readonly` role has no write capability.
+`psql` exits non-zero, so `kubectl` may also print `pod "banking-app/pg-insert-uc3" terminated (Error)` — that is expected; the non-zero exit **is** the INSERT being correctly rejected.
 
-### Section 4 — Hostile Read Attempt
+The Postgres GRANT layer rejects the INSERT before the RLS policy (or any constraint) is even evaluated. This confirms that a bug in the agent code that accidentally attempted a write would fail closed at the database layer — Vault's `uc3-readonly` role has no write capability.
 
-With a valid authenticated session as Jaime, ask the Use Case 3 agent to look up an account or refund that belongs to Oscar:
+### Section 4 — Hostile Read Attempt (Owner Predicate)
 
-1. Sign in as **jaime** (use a fresh Incognito / Private window so you get a clean login — see the note in Section 1).
-2. In the Use Case 3 chat, send: `Check refund status for refund ID <oscar-refund-id>`.
-3. The agent returns: `{"error": "Refund <id> not found"}` — no detail about Oscar's refund is disclosed.
+RLS is not the only layer scoping refund reads. The `check_refund_status` tool adds an explicit **owner predicate** — it `JOIN banking.accounts` and requires `a.user_sub = <authenticated_sub>` — so a `refund_id` you do not own returns the **same** empty result as a non-existent one. The agent reports `{"error": "Refund <id> not found"}` either way, leaking nothing about another user's refunds. This section proves that predicate at the database layer with the `uc3-readonly` credential from Step 2.1, running the exact query the agent runs (`uc3-agent/app/agent.py`, `check_refund_status`).
 
-This demonstrates the owner-predicate defense-in-depth layer: `check_refund_status` includes `JOIN banking.accounts WHERE a.user_sub = <authenticated_sub>`, so a cross-user refund ID returns the same "not found" response as a non-existent ID — no information about the existence or value of Oscar's refunds leaks to Jaime.
+Refunds are **created by you** during the CIBA approval flow (page 71) — they are never seeded — so the IDs below are examples from one run; **yours will differ.**
 
-The same behavior applies to `list_transactions` and `_check_account_owner`: both set `app.current_user_sub` to the verified `sub` from the bearer token before querying, so RLS filters cross-tenant rows before they reach the agent.
+#### Step 4.1 — Find a refund you created
+
+A refund is visible only to its owner (RLS), so list refunds under each persona you ran a refund as:
+
+```bash
+kubectl run pg-find-refund --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
+  --env="PGPASSWORD=${PG_PASS}" \
+  --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop -c "
+    SELECT set_config('app.current_user_sub','oscar',false);
+    SELECT 'oscar' AS persona, refund_id, amount::float AS amount FROM banking.refunds;
+    SELECT set_config('app.current_user_sub','jaime',false);
+    SELECT 'jaime' AS persona, refund_id, amount::float AS amount FROM banking.refunds;"
+```
+
+**Example output** — one refund created as each persona (what you see depends on what you approved on page 71):
+
+```
+ persona |              refund_id               | amount
+---------+--------------------------------------+--------
+ oscar   | c2e9db60-f785-4498-b3a5-5109f99eae30 |     45
+(1 row)
+
+ persona |              refund_id               | amount
+---------+--------------------------------------+--------
+ jaime   | 2b2dd8b1-6724-4aa4-820a-c8a0301dbd34 |     65
+(1 row)
+```
+
+Pick **one** `refund_id`, note which persona owns it, and set three variables (paste **your** values):
+
+```bash
+export REFUND_ID=<a refund_id from the output above>
+export OWNER=<the persona it appeared under: oscar or jaime>
+export ATTACKER=<the other persona>
+```
+
+#### Step 4.2 — Cross-owner read returns nothing; owner read returns the row
+
+Run the exact owner-predicate JOIN `check_refund_status` executes — first as the **other** persona (the hostile reader), then as the **owner**:
+
+```bash
+kubectl run pg-owner-test --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
+  --env="PGPASSWORD=${PG_PASS}" \
+  --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop -c "
+    SELECT set_config('app.current_user_sub','${ATTACKER}',false);
+    SELECT 'hostile cross-owner read' AS test, r.refund_id, r.amount::float AS amount
+      FROM banking.refunds r
+      JOIN banking.accounts a ON a.id = r.account_id
+     WHERE r.refund_id = '${REFUND_ID}' AND a.user_sub = '${ATTACKER}';
+    SELECT set_config('app.current_user_sub','${OWNER}',false);
+    SELECT 'owner read' AS test, r.refund_id, r.amount::float AS amount
+      FROM banking.refunds r
+      JOIN banking.accounts a ON a.id = r.account_id
+     WHERE r.refund_id = '${REFUND_ID}' AND a.user_sub = '${OWNER}';"
+```
+
+**Expected output** — the hostile cross-owner read returns **0 rows**; the owner read returns the single row (this example used `OWNER=oscar`, `ATTACKER=jaime`, the $45 refund):
+
+```
+ set_config
+------------
+ jaime
+(1 row)
+
+ test | refund_id | amount
+------+-----------+--------
+(0 rows)
+
+ set_config
+------------
+ oscar
+(1 row)
+
+    test    |              refund_id               | amount
+------------+--------------------------------------+--------
+ owner read | c2e9db60-f785-4498-b3a5-5109f99eae30 |     45
+(1 row)
+```
+
+The cross-owner read returns zero rows because of the `AND a.user_sub = <authenticated_sub>` predicate — the same one `check_refund_status` applies on every call. That is why asking the agent for a refund you don't own returns `{"error": "Refund <id> not found"}` instead of another user's data: a cross-tenant refund is made indistinguishable from one that does not exist (no information disclosure). `list_transactions` and account lookups use the same pattern — they set `app.current_user_sub` to the verified `sub` from the bearer token before querying, so RLS filters cross-tenant rows before they ever reach the agent.

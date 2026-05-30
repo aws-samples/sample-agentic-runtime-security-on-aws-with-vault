@@ -85,11 +85,15 @@ The Use Case 3 agent presents only the user's token, authenticated as a **separa
 - `subject_token` = the CIBA-issued user access token (proves user identity + consent)
 
 IVIA returns a delegated JWT containing:
-- `sub` = the user (`oscar`)
+- `sub` = the approving user (the human who completed the CIBA consent — e.g. `jaime`)
 - `may_act.sub` = `uc3-actor` — injected server-side by the `isvaop_pretoken` mapping rule on the token-exchange grant (proves delegation)
-- `authorization_details` = `[{"type": "refund_approval", "amount": 50.00, "currency": "USD"}]`
+- `authorization_details` = `[{"type": "refund_approval"}]` — the RAR **type**, also stamped by `isvaop_pretoken`
 
-The delegated JWT is what the agent presents to Vault. Vault's `bound_claims` enforce that **both** `may_act.sub` and `authorization_details[0].type` match before issuing any DB credentials.
+The delegated JWT is what the agent presents to Vault. Vault's `bound_claims` enforce that **both** `may_act.sub` (= `uc3-actor`) and `authorization_details[0].type` (= `refund_approval`) match before issuing any DB credentials.
+
+:::alert{header="The approved amount is NOT a token claim — and that is correct" type="info"}
+The amount and currency the user approved at consent time (e.g. `$88.30 USD`) are **not** carried on the exchanged JWT. IBM Verify (ISVAOP 25.10) exposes the consent-time `authorization_details` only as a context attribute on the request that *carries* it (`bc-authorize`) and as a token-*response* field — it is **not** available to any mapping rule at the CIBA mint or the token-exchange stage, so it cannot be stamped as a Vault-validated claim. (Confirmed against the live system and IBM's `tasks-rar` / `js_ciba_mapping_rule` docs, 2026-05-29.) Vault `bound_claims` are string/glob matches and could not numerically enforce an amount in any case. The amount is instead **consent-bound by three-plane audit correlation on `request_id`** — covered on the [Three-Plane Audit Correlation](../74-three-plane-audit/) page. So the CIBA flow still fully works: the user's out-of-band approval is what produced the `subject_token`, and the forensic row proves the approved amount equals the amount written.
+:::
 
 :::expand{header="Platform Track — IVIA CIBA Configuration"}
 The IVIA CIBA client (`agent-uc3`) is configured in the `verify_access` Terraform module:

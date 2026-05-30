@@ -16,6 +16,10 @@ Use Case 3 extends the workshop stack with four interlocking controls that work 
 
 A single `request_id` (W3C `traceparent`) propagates through every plane and becomes the JOIN key in the three-plane Athena audit correlation query — the workshop's pedagogical money shot.
 
+:::alert{header="What Vault cryptographically enforces vs. what the audit proves" type="info"}
+Vault **cryptographically enforces** three things on the exchanged token before it issues any database credential: the **identity** (`sub` = the human who approved via CIBA), the **delegation** (`may_act.sub` = `uc3-actor`, RFC 8693 — *which agent* may act), and the **RAR type** (`authorization_details[0].type` = `refund_approval`, RFC 9396 — *what class* of action). The **amount/currency** the user approved is **consent-bound by three-plane audit correlation on `request_id`**, not by a token claim — IBM Verify (ISVAOP 25.10) does not surface the consent-time RAR to any mapping rule at the token-exchange stage, and Vault `bound_claims` are string/glob matches that cannot range-check a number anyway. The green, fully-populated `audit_correlation` row is the proof that the amount the user approved is the same amount that hit Vault and the database. This is the correct control, not a consolation prize — see `infrastructure/modules/verify_access/README.md`, "UC3 RAR enforcement model."
+:::
+
 ## Request Flow
 
 The diagram below shows how `request_id` moves from the agent through CIBA approval, token exchange, Vault JWT auth, the database write, and all three audit planes.
@@ -68,7 +72,7 @@ sequenceDiagram
     TE-->>Agent: delegated JWT with may_act + authorization_details
     Note over Agent,TE: isvaop_pretoken rule injects may_act.sub=uc3-actor<br/>JWT carries request_id + authorization_details.type=refund_approval
     Agent->>Vault: POST auth/jwt/login role=uc3-jwt jwt=delegated_JWT
-    Note over Vault: bound_claims: /may_act/sub=* (glob, any actor sub passes)<br/>authorization_details[0].type=refund_approval is claim_mapping metadata only — not enforced
+    Note over Vault: bound_claims (BOTH enforced): /may_act/sub=uc3-actor<br/>AND /authorization_details/0/type=refund_approval — wrong/missing either = denied
     Vault-->>Agent: Vault token
     Agent->>Vault: GET database/creds/uc3-refund-writer (TTL=5m)
     Vault-->>Agent: username + password (JIT, time-boxed)

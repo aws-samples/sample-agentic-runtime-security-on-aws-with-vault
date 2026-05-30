@@ -875,7 +875,7 @@ locals {
         vault.auth.display_name                                       AS vault_principal,
         vault.request.path                                            AS vault_path,
         vault.auth.metadata['may_act_sub']                            AS vault_bound_claim_may_act,
-        ivia.authorization_details[1].type                            AS vault_bound_claim_rar_type,
+        vault.auth.metadata['rar_type']                               AS vault_bound_claim_rar_type,
         regexp_extract(rds.line, '^([0-9-]+ [0-9:]+ UTC)', 1)        AS db_write_time,
         regexp_extract(rds.line, 'AUDIT: SESSION,[0-9]+,[0-9]+,([A-Z]+,[A-Z]+),', 1) AS db_command,
         ivia.db_credential_ttl                                        AS db_credential_ttl

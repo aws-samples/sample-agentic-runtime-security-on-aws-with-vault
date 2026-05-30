@@ -36,10 +36,10 @@ rules:
         * Copyright contributors to the IBM Security Verify Access OIDC Provider Resources project
         */
         importClass(Packages.com.tivoli.am.fim.trustserver.sts.utilities.IDMappingExtUtils);
-        
+
         IDMappingExtUtils.traceString("Starting CheckStatus JS");
         IDMappingExtUtils.traceString("Auth Request ID: " + ciba.getAuthRequestID());
-        
+
         /**
         * What is expected to be done here:
         * - Calling the configured check status endpoint to get the latest authentication status
@@ -50,7 +50,7 @@ rules:
         *   as this will be used as the 'sub' in id_token
         * - Send the status back using one of the method: pending(), failed() or success()
         */
-        if (ciba.getCheckStatusEndpoint() == "https://checkstatus.com?status=fail") { // for demo 
+        if (ciba.getCheckStatusEndpoint() == "https://checkstatus.com?status=fail") { // for demo
             ciba.failed(); // user rejected
         } else if (ciba.getCheckStatusEndpoint() == "https://checkstatus.com?status=pass") { // for demo
 
@@ -77,13 +77,32 @@ rules:
     - name: isvaop_pretoken
       content: |
         // pre_mappingrule_id — runs before every access token is minted. For the
-        // RFC 8693 token-exchange grant ONLY, inject the may_act delegation claim
-        // so Vault's uc3-jwt role (bound_claims {"/may_act/sub":"*"}) accepts the
-        // exchanged JWT. Gated on grant_type so authorization_code / CIBA /
-        // client_credentials tokens for the other use cases are left untouched.
+        // RFC 8693 token-exchange grant ONLY, stamp the two claims Vault's uc3-jwt
+        // role validates:
+        //   (1) may_act delegation (WHO may act) -> bound_claim /may_act/sub=uc3-actor;
+        //   (2) authorization_details TYPE (WHAT class of action) ->
+        //       bound_claim /authorization_details/0/type=refund_approval.
+        // Gated on grant_type so authorization_code / CIBA / client_credentials
+        // tokens for the other use cases are left untouched.
+        //
+        // WHY type-only (VERIFIED ISVAOP 25.10 + IBM docs tasks-rar /
+        // js_ciba_mapping_rule, 2026-05-29): the consent-time RAR amount/currency
+        // jaime approved is NOT exposed to any mapping rule at the CIBA mint or the
+        // token-exchange stage. RAR is a context attribute only on the request that
+        // CARRIES it (bc-authorize); it is returned as a token-RESPONSE field (not a
+        // JWT claim); `strategy` (sha512) is an identifier hash, not a propagation
+        // switch; and the ciba object exposes no authorization_details accessor. So
+        // the amount CANNOT be made a Vault-validated JWT claim here. `refund_approval`
+        // is the genuine, allowlisted, only RAR type jaime can approve (provider
+        // authorization_details_types_supported) — not a placeholder. The amount is
+        // consent-bound by three-plane audit correlation on request_id (IVIA approval
+        // -> Vault auth -> pgaudit DB write), which is also the only sound control:
+        // Vault bound_claims are string/glob matches and cannot numerically enforce
+        // an amount. See verify_access/README.md "UC3 RAR enforcement model".
         importClass(Packages.com.tivoli.am.fim.trustserver.sts.utilities.IDMappingExtUtils);
         var gt = stsuu.getContextAttributes().getAttributeValueByName("grant_type");
         if (gt == "urn:ietf:params:oauth:grant-type:token-exchange") {
           tokenData["may_act"] = { "sub": "uc3-actor" };
-          IDMappingExtUtils.traceString("UC3 pretoken injected may_act for token-exchange");
+          tokenData["authorization_details"] = [{ "type": "refund_approval" }];
+          IDMappingExtUtils.traceString("UC3 pretoken stamped may_act=uc3-actor + authorization_details type=refund_approval on token-exchange output");
         }

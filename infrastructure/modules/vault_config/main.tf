@@ -479,15 +479,27 @@ resource "vault_jwt_auth_backend_role" "uc3_jwt" {
 
   user_claim = "sub"
 
-  # may_act signals RFC 8693 delegation: the agent must present an exchanged token
-  # carrying it before Vault issues DB write creds. ISVAOP emits may_act as a JSON
-  # object {"sub":"uc3-actor"} (injected by the isvaop_pretoken mapping rule), so
-  # we match the nested member with a JSONPointer key — Vault cannot match a
-  # map-valued claim directly. glob "*" accepts any actor sub; tighten to the
-  # exact value ("uc3-actor") if a single fixed actor is desired.
+  # Two enforced bindings on the exchanged token, both injected by the
+  # isvaop_pretoken mapping rule and matched here with JSONPointer keys (Vault
+  # cannot match a map- or array-valued claim directly):
+  #   /may_act/sub                  — RFC 8693 delegation (WHO may act). Bound to
+  #     the EXACT actor "uc3-actor"; a missing or different actor is rejected.
+  #   /authorization_details/0/type — RFC 9396 RAR TYPE (WHAT class of action).
+  #     Bound to the EXACT type "refund_approval" stamped on the exchanged token by
+  #     the isvaop_pretoken rule; any other type is rejected at point of use.
+  #     refund_approval is the genuine, allowlisted, only RAR type agent-uc3 can
+  #     request (provider authorization_details_types_supported) — not a placeholder.
+  # NOTE: the RAR AMOUNT/currency is NOT bound here. ISVAOP 25.10 does not expose the
+  # consent-time RAR to any mapping rule at mint/exchange (verified — see
+  # verify_access/README.md "UC3 RAR enforcement model"), and Vault bound_claims are
+  # string/glob matches that cannot numerically enforce an amount regardless. The
+  # amount is consent-bound by three-plane audit correlation on request_id, not a claim.
+  # Values are literals (no wildcards), so glob matching is exact. This is the
+  # OBJ-4 enforcement gate — Vault denies DB write creds unless BOTH match.
   bound_claims_type = "glob"
   bound_claims = {
-    "/may_act/sub" = "*"
+    "/may_act/sub"                  = "uc3-actor"
+    "/authorization_details/0/type" = "refund_approval"
   }
 
   # Audit-only metadata extraction (OBJ-4 / OBJ-5 three-plane correlation).
