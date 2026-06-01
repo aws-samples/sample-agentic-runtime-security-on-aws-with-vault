@@ -10,204 +10,341 @@ revealOptions:
   margin: 0.04
 ---
 
+<style>
+.reveal section .mermaid { text-align: center; margin: 0 auto; }
+.reveal section .mermaid svg { max-height: 560px; max-width: 96%; height: auto; width: auto; }
+.reveal section .uc-footer { font-size: 0.5em; color: #555; margin-top: 6px; }
+</style>
+
 # Agentic Runtime Security on AWS
 
-## A Hands-On Workshop
+### Solving Identity and Access Gaps in Agentic AI
 
-### IBM Verify Identity Access + HashiCorp Vault on EKS
+IBM Verify Identity Access + HashiCorp Vault on Amazon EKS
 
-<div style="display:flex; gap:40px; align-items:center; justify-content:center; margin-top:30px;">
-  <img src="assets/hashicorp_logo.png" style="width: 140px;" alt="HashiCorp" />
-  <img src="assets/aws-logo.png" style="width: 140px;" alt="AWS" />
+<div style="display:flex; gap:40px; align-items:center; justify-content:center; margin-top:24px;">
+  <img src="assets/hashicorp_logo.png" style="width: 130px;" alt="HashiCorp" />
+  <img src="assets/aws-logo.png" style="width: 130px;" alt="AWS" />
 </div>
 
 **Presenter:** _<presenter name placeholder>_
 
 Note:
-Welcome. Over the next ~3 hours we are going to deploy and exercise a real implementation of agentic runtime security on AWS — every agent has a verifiable identity, no standing privileges, every action is tied to user intent, enforcement happens at the point of use, and audit evidence correlates across three trust planes. Three progressively harder use cases (UC1 → UC2 → UC3) build on each other. By the end you will be able to explain — not just demo — why each of the 5 control objectives matters, and what would have failed if we removed the corresponding control. The reference stack is IBM Verify Identity Access + HashiCorp Vault on Amazon EKS.
-
----
-
-## Agenda
-
-| Phase | Activity | Time |
-|-------|----------|------|
-| 1 | Scaffold and Pre-Flight (you ran this before arriving) | ~15 min |
-| 2 | Foundation Infrastructure (VPC, EKS, RDS, Bedrock KB) | ~30 min |
-| 3 | Platform and Configuration (Vault + IBM Verify Access) | ~30 min |
-| 4 | Use Case 1 — Non-personalized Read-Only | ~25 min |
-| 5 | Use Case 2 — OAuth Personalized Read-Only | ~30 min |
-| 6 | Use Case 3 — CIBA Privileged + Audit Correlation | ~40 min |
-| 7 | Cleanup, Summary, Appendices | ~10 min |
-| | **Total** | **~3 hours** |
-
-Note:
-The schedule is aggressive but achievable. Phase 1 is already done — you ran `install-prereqs.sh` and the four pre-flight checks before today. We will spend the most time in Phases 4-6 because that is where the control objectives actually get exercised. Phase 6 is the workshop's pedagogical money shot — a single Athena query joining three trust planes that answers "which user authorized this action, when, against what system, and was access revoked?"
+We open with the enterprise problem — the same framing as the HashiCorp + IBM SKO message — then spend the rest of the deck on the workshop, which is a real, deployable implementation of it. IBM Verify Identity Access owns user identity; HashiCorp Vault owns workload identity and credential vending; AWS-native services are the runtime and the enforcement surface. Three use cases (UC1 → UC2 → UC3) layer strictly on each other.
 
 ---
 
 ## The Problem
 
-- Agentic systems break least-privilege assumptions
-- Standing credentials and bearer tokens scale poorly
-- "Agent acts on behalf of user" — but **who** authorized **what**, and **when**?
-- Auditors ask: across IdP, secrets broker, and AWS, can you join the evidence?
+AI agents break assumptions security tooling has relied on for two decades:
 
-We need: **verifiable identity + brokered credentials + correlated audit**
+- **Non-deterministic** — agents self-direct across databases, APIs, and tools, unlike traditional applications
+- **Legacy IAM fails** — built for humans and deterministic systems, not real-time agent decisions
+- **Scale** — machine:human identities growing **45:1**; bearer tokens and standing DB GRANTs sprawl with every new agent
+
+**Three trust planes, at once:** _who is asking?_ (user) · _which agent is acting?_ (workload) · _what credential hits Postgres / Bedrock?_ (data)
 
 Note:
-Traditional service-to-service patterns assume a small number of long-lived service accounts with broad standing privileges. Agentic AI breaks that — agents act on behalf of arbitrary end users, often with elevated authority for short windows, sometimes with out-of-band human approval. If you ship that on bearer tokens and standing IAM roles you have built a confused-deputy generator. The workshop's thesis: solve it with verifiable workload identity, broker every credential just-in-time, tie privileged actions to explicit user intent (CIBA + RAR + may_act), and propagate a correlation ID across all three planes so auditors can actually answer the question.
+Agents are not users — they don't fit an IAM persona. They are not classic workloads either — sometimes acting on behalf of a user, sometimes autonomously, and the boundary moves request to request. When something goes wrong, "which user authorized this action?" is unanswerable across IdP, IAM, and database logs that share no correlation key. Most tooling owns one of the three planes and assumes the other two are someone else's problem. That assumption is what this workshop dismantles.
 
 ---
 
-## 5 Control Objectives — Overview
+## Four Critical Risk Areas
 
-1. **OBJ-1 — Verifiable identity** for every workload (no shared secrets)
-2. **OBJ-2 — No standing privileges** (credentials are JIT, leased, revocable)
-3. **OBJ-3 — Actions tied to user intent** (user JWT → scoped credentials)
-4. **OBJ-4 — Enforcement at the point of use** (policy + DB + network)
-5. **OBJ-5 — Correlated audit evidence** (one `request_id`, three trust planes)
+- **Over-privilege without visibility** — agents accumulate standing access far beyond need; massive blast radius if compromised
+- **No real-time enforcement** — the last mile is unguarded when agents invoke tools and APIs; end-to-end security breaks
+- **Impersonation & invisible delegation** — breaks audit trails; you can't answer _"who authorized this?"_
+- **Zero accountability** — new models reach production without proper access and compliance controls
 
 Note:
-These five sentences are the workshop. Every other slide either deepens one of them or shows them working together. Memorize the numbering — when we hit Phase 6 you will see all five demonstrated by a single Athena query. The numbering is not arbitrary: each objective layers on top of the previous. You cannot enforce OBJ-3 without OBJ-1 (verifiable identity is a prerequisite for tying actions to user intent), and you cannot deliver OBJ-5 without OBJ-4 (without enforcement at the point of use the audit log only records aspirations, not facts).
+This is the threat-modeling lens for agentic workloads. Each risk area maps directly to a control objective the workshop implements and then tests — including a deliberate bypass test that proves the control is real, not theater.
 
 ---
 
-## OBJ-1 Deep-Dive — Verifiable Identity
+## Why Action Is Urgent Now
 
-**Concrete example (UC1):**
-
-- EKS ServiceAccount `uc1-retriever-sa` projects a Kubernetes service-account JWT
-- Vault Kubernetes auth method validates the JWT against the EKS OIDC provider
-- Vault role binding `uc1-readonly` matches `(namespace=uc1, sa=uc1-retriever-sa)` → returns a Vault token
-- No shared secrets, no static API keys on the agent pod
+| Force | What's happening |
+|---|---|
+| **Security threat** | Agent compromise is the fastest-growing attack vector — poor detection, high breach cost |
+| **Regulatory pressure** | SOC 2, GDPR, PCI-DSS demand unique agent identity, audit trails, instant revocation |
+| **Operational sprawl** | Hundreds of agents planned — privilege creep and compounding compliance debt |
 
 Note:
-Note the deliberate choice — Vault's Kubernetes auth method, **not** IAM Roles for Service Accounts (IRSA). Why? IRSA gives the pod AWS credentials directly; we want every credential to flow through Vault so the audit story is single-pane. The tradeoff is that we depend on Vault availability for cred issuance — which is exactly why Vault Raft is 3-node with KMS auto-unseal. The pedagogical point: identity is verifiable because the SA JWT is signed by the EKS OIDC provider; no human plants a secret on the pod.
+The market forces are converging now. The regulatory column is the one most teams underestimate: unique agent identity, correlated audit trails, and instant revocation are becoming table stakes — exactly the three things the workshop builds and demonstrates end-to-end.
 
 ---
 
-## OBJ-2 Deep-Dive — No Standing Privileges
+## Five Enterprise Imperatives
 
-**Concrete example (UC1):**
-
-- Vault Postgres database secrets engine, role `uc1-readonly`, **default TTL 15 minutes**
-- `creation_statements`: `CREATE ROLE "{{name}}" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}'; GRANT readonly TO "{{name}}";`
-- `revocation_statements`: `REVOKE ALL ... ; DROP ROLE "{{name}}";`
-- Lease revocation event lands in Vault audit log with the `request_id`
+1. **Register every agent** — unique, cryptographically bound identity; no shared keys
+2. **Strip standing privileges** — just-in-time, scoped access; authority expires automatically
+3. **Tie actions to intent** — capture consent, purpose, sponsorship; traceable and instantly revocable
+4. **Enforce at the point of use** — every API call validated against policy; nothing executes outside boundaries
+5. **Produce proof of control** — audit answers in seconds; cryptographically signed evidence
 
 Note:
-Standing credentials are the original sin of cloud security. Here every Postgres credential is dynamic — Vault calls `CREATE ROLE` at issuance and `DROP ROLE` at revocation. The 15-minute TTL is short enough that even an exfiltrated credential expires before an attacker can use it. Watch for the matching `revocation_statements` — auditors will ask "are you sure these accounts are actually deleted?" and you will be able to grep the Vault audit log to prove it. Same pattern applies to AWS via Vault's AWS secrets engine, which we use for scoped Bedrock STS credentials.
+These five imperatives are the spine of the whole story. The workshop implements each one as a concrete control objective on real infrastructure — that mapping is the next slide.
 
 ---
 
-## OBJ-3 Deep-Dive — Actions Tied to User Intent
+# From Imperatives to Implementation
 
-**Concrete example (UC2):**
+### The workshop deploys all five — on AWS EKS
 
-- User completes OAuth Authorization Code + PKCE against IBM Verify Access
-- IVIA issues a user JWT with `aud=agent-uc2`
-- Vault `jwt` auth method validates the JWT against IVIA's OIDC discovery URL
-- Role `uc2-personal-readonly` enforces `bound_audiences=["agent-uc2"]` and binds the user's `sub` into per-user-scoped DB credentials
+| Enterprise imperative | Workshop control objective |
+|---|---|
+| Register every agent | **OBJ-1** — Verifiable identity (K8s SA + OAuth JWT) |
+| Strip standing privileges | **OBJ-2** — No standing privileges (JIT, TTL 5–15m) |
+| Tie actions to intent | **OBJ-3** — Actions tied to user intent (PKCE, CIBA, RAR) |
+| Enforce at the point of use | **OBJ-4** — Enforcement at point of use (policy · DB · network) |
+| Produce proof of control | **OBJ-5** — Correlated audit (one `request_id`, three planes) |
 
 Note:
-This is where agentic security stops looking like service-to-service security. The agent is no longer running on its own authority — it is running on **the user's** authority, with a JWT that proves the user authorized this action right now. PKCE prevents code-interception in the browser. `bound_audiences` prevents one user's JWT from being replayed at a different agent. The DB credentials Vault returns are scoped per-user (the SQL `creation_statements` plant the user's `sub` into a row-level security predicate). Result: even if UC2 leaked a credential, the blast radius is one user's data, not the dataset.
+This is the hinge of the deck. Everything before was the "why"; everything after is the "how" — IBM Verify Identity Access, HashiCorp Vault, and Amazon EKS / RDS / Bedrock / Athena turning five sentences into running, testable infrastructure. Each objective layers on the previous one.
 
 ---
 
-## OBJ-4 Deep-Dive — Enforcement at the Point of Use
+## Responsibility Segregation
 
-**Three layers, three resources:**
+<img src="assets/verify-vault-split.svg" style="max-height: 440px;" />
 
-| Layer | Where | What |
-|-------|-------|------|
-| 1 — Policy | Vault | Each SA → exactly one role; cross-role token rejected |
-| 2 — Resource | RDS / IAM | DB GRANTs + scoped Bedrock STS reject out-of-scope ops |
-| 3 — Network | EKS | NetworkPolicy denies egress to non-approved endpoints |
-
-Layer 4 (Envoy/OPA per-call) → **Appendix**
+**IBM Verify** owns Identity & Access — human auth, SSO, OAuth, CIBA. **HashiCorp Vault** owns Secrets & Credential vending — non-human identity, policy enforcement, JIT external brokering.
 
 Note:
-Defense in depth is a cliché until you actually wire it. We enforce in three places, on purpose: Vault rejects an SA asking for a role it does not own (Layer 1); the database itself rejects an INSERT on a R/O credential (Layer 2); the pod cannot exfiltrate through a side channel because NetworkPolicy whitelists kube-dns + RDS + Vault + IVIA (WRP + OIDC Provider) + Bedrock endpoints only (Layer 3). UC2 demonstrates Layer 2 by attempting an INSERT and watching it fail at Postgres, **not** at the agent. Layer 4 — Envoy + OPA per-API-call enforcement — is in the appendix because it is heavy-weight; the three layers above are the workshop minimum.
+Leveraging the right technology for each plane aligns to industry standards and is usually owned by different teams. IBM Verify handles human authentication, single sign-on, OAuth integration for the AI runtime, and CIBA out-of-band approval. HashiCorp Vault handles non-human identity, centralized policy enforcement, JIT credential vending, and 1-to-many external brokering. The rule: Verify never sees the database; Vault never authenticates an end user. They meet at exactly one OIDC-mediated seam.
 
 ---
 
-## OBJ-5 Deep-Dive — Correlated Audit Evidence
+## Reference Architecture
 
-<img src="assets/audit-correlation.svg" style="max-height: 400px;" />
+<img src="assets/architecture-overview.svg" style="max-height: 500px;" />
 
-- One `request_id`, propagated end-to-end
-- IVIA decision log + Vault audit log + AWS CloudTrail
-- Single Athena query JOINs all three by `request_id`
+IBM Verify + HashiCorp Vault credential-vending backbone — on AWS-native services
 
 Note:
-This slide is the workshop's pedagogical money shot. The diagram has two halves on purpose — top half is the temporal story (User → WRP (authentication) → IVIA OIDC Provider (consent + token) → agent → Vault → RDS → CloudTrail), bottom half is the JOIN visualization (three log stores, one query). Auditors will ask "which user authorized this privileged action against this resource at this time, and was access revoked?" — and the only answer that survives scrutiny is the one where you can produce a single query that proves it. We will run that query at the end of Phase 6. The design tax — propagating `request_id` everywhere — is paid in Phase 1, exercised in Phase 6.
+Keep this open in a second window. IBM Verify owns the user-identity plane; Vault owns workload identity and credential vending; AWS-native services are the runtime and the enforcement surface. The two systems meet at one seam — Vault's JWT auth trusts IVIA's OIDC discovery (JWKS) — which is where user intent becomes a Vault-vended, short-lived credential.
 
 ---
 
-# The IBM Verify + HashiCorp Vault Answer
+## Leveraging AWS-Native Services
 
-### How responsibility splits between identity and secrets
+| Service | Security role |
+|---|---|
+| **Amazon EKS** (1.34) | Workload runtime; OIDC provider anchors workload identity |
+| **Amazon RDS PostgreSQL 17** | pgaudit + Row-Level Security; Vault-vended dynamic creds |
+| **Amazon Bedrock** | Nova Pro inference + Nova 2 embeddings; reached via Vault AWS STS |
+| **OpenSearch Serverless + S3** | Knowledge Base vector store + corpus |
+| **AWS KMS** | Single CMK encrypts RDS, S3, AOSS, CloudWatch |
+| **Amazon Athena** | Cross-plane audit-correlation query |
 
 Note:
-Section break. The next slide is the diagram you should keep open in a second window for the rest of the workshop — it answers the question "which system does what?" cleanly. IBM Verify Identity Access owns user identity, OAuth flows, CIBA, RAR, and JWT signing. HashiCorp Vault owns workload identity (Kubernetes auth), JWT validation against IVIA, dynamic secrets engines (Postgres + AWS), and the audit device that drops every credential issuance into CloudWatch. The split is deliberate — they are best-of-breed at different problems and they meet at the JWT.
+Every credential to these services is Vault-vended and short-lived (TTL 5–15 min) — no standing keys on any pod. AWS primitives do the enforcement: RDS enforces Row-Level Security and records pgaudit, KMS encrypts every store under one workshop CMK, Athena answers the auditor's cross-plane question. Verify and Vault broker identity and credentials; AWS enforces and audits at the point of use.
 
 ---
 
-## Verify+Vault Responsibility Split (SKO Slide 13 redraw)
+# Three Use Cases
 
-<img src="assets/verify-vault-split.svg" style="max-height: 480px;" />
+### UC1 → UC2 → UC3 — each a strict superset of the previous
+
+Non-personalized → personalized → privileged + audit correlation
 
 Note:
-This is a workshop-native redraw of SKO 2026 Slide 13. IBM Verify Identity Access owns the **user-identity plane** — it runs the OAuth Authorization Code + PKCE flow for Use Case 2, the CIBA out-of-band approval flow for Use Case 3, the RAR (RFC 9396) authorization-details enforcement, and the JWT signing key. The **Web Reverse Proxy (WRP)** is IVIA's browser-facing entry point — it handles user authentication against Simple AD and serves the CIBA consent page via junction. The standalone OIDC Provider only issues tokens; WRP provides the authentication engine that fronts every browser-initiated flow. HashiCorp Vault owns the **workload-identity and secrets plane** — it runs the Kubernetes auth method (validates EKS SA JWTs), the `jwt` auth method (validates IVIA-issued user JWTs), the Postgres database secrets engine (dynamic R/O and R/W roles), the AWS secrets engine (scoped Bedrock STS), and the audit device. They meet at the user JWT — IVIA mints it, Vault validates it. Neither system has to know the other's internals; they share an OIDC discovery URL and an audience claim.
+These mirror the three SKO implementation patterns. UC1 = non-personalized (no user context, no consent). UC2 = personalized (OAuth Authorization Code + PKCE, user consent). UC3 = personalized AND privileged (CIBA out-of-band delegation). They are intentionally not reorderable — each builds on the last.
 
 ---
 
-# Three Use Cases — Preview
+### Use Case 1 — Non-personalized Read-Only
 
-### UC1 → UC2 → UC3 strictly layer (each is a superset of the previous)
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#d0e2ff', 'primaryTextColor': '#161616', 'primaryBorderColor': '#0f62fe',
+  'lineColor': '#0f62fe', 'secondaryColor': '#bae6ff', 'tertiaryColor': '#f4f4f4',
+  'noteBkgColor': '#e8daff', 'noteTextColor': '#161616', 'noteBorderColor': '#8a3ffc',
+  'actorBkg': '#d0e2ff', 'actorBorder': '#0f62fe', 'actorTextColor': '#161616',
+  'signalColor': '#161616', 'signalTextColor': '#161616', 'sequenceNumberColor': '#ffffff'
+}}}%%
+sequenceDiagram
+    autonumber
+    actor Attendee
+    participant Agent as Use Case 1 Agent<br/>(Strands SDK)
+    participant Vault as HashiCorp Vault
+    participant EKS as EKS API<br/>(TokenReview)
+    participant RDS as PostgreSQL<br/>(RDS)
+    participant Bedrock as Amazon Bedrock<br/>(Nova Pro + KB)
+
+    rect rgba(208, 226, 255, 0.3)
+    Note over Agent,EKS: Pod startup — workload identity (OBJ-1)
+    Agent->>Vault: POST /v1/auth/kubernetes/login {jwt: SA token, role: "uc1"}
+    Vault->>EKS: TokenReview — validate SA JWT signature
+    EKS-->>Vault: Confirmed: uc1-retriever-sa in ns uc1
+    Vault-->>Agent: Vault client token (TTL 1h)
+    end
+
+    rect rgba(186, 230, 255, 0.3)
+    Note over Attendee,Bedrock: Query — JIT credentials (OBJ-2)
+    Attendee->>Agent: POST /query "What tables exist?"
+    Agent->>Vault: GET /v1/database/creds/uc1-readonly
+    Vault->>RDS: CREATE ROLE with TTL 15 min
+    Vault-->>Agent: JIT creds {username, password} + lease_id
+    Agent->>RDS: Connect + SELECT (read-only)
+    RDS-->>Agent: Query results
+    Agent->>Vault: GET /v1/aws/sts/bedrock-reader
+    Vault-->>Agent: Scoped STS session
+    Agent->>Bedrock: retrieve() — semantic search (ephemeral STS)
+    Bedrock-->>Agent: Ranked text passages
+    end
+
+    Agent-->>Attendee: Formatted answer
+    rect rgba(167, 240, 186, 0.3)
+    Vault->>RDS: 15-min TTL expires → DROP ROLE
+    end
+```
+
+<p class="uc-footer">agent SA → Vault K8s auth → JIT R/O Postgres + scoped Bedrock STS &nbsp;·&nbsp; OBJ-1, 2, 5</p>
 
 Note:
-Section break. UC1 is the foundational pattern — workload identity + JIT credentials + audit. UC2 adds OAuth personalization on top of UC1. UC3 adds CIBA out-of-band approval, may_act delegation, and RAR enforcement on top of UC2 — and exercises the audit-correlation diagram end-to-end. They are intentionally not reorderable; each one fails to deliver the next objective without the previous one in place. Watch the SVGs as we preview them — same color coding (workload identity = blue, user identity = purple, data plane = orange) appears across all three.
+The simplest pattern — a retrieval agent with no notion of "user," answering questions that are the same for everyone. It runs on ServiceAccount `uc1-retriever-sa`, authenticates to Vault via the Kubernetes auth method, and receives a short-lived R/O Postgres credential plus a scoped Bedrock STS credential. No JWT yet. No user consent required. If UC1 doesn't work cleanly, none of the harder cases will.
 
 ---
 
-## UC1 — Non-personalized Read-Only
+### Use Case 2 — OAuth Personalized Read-Only
 
-<img src="assets/uc1-flow.svg" style="max-height: 440px;" />
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#d0e2ff', 'primaryTextColor': '#161616', 'primaryBorderColor': '#0f62fe',
+  'lineColor': '#0f62fe', 'secondaryColor': '#bae6ff', 'tertiaryColor': '#f4f4f4',
+  'noteBkgColor': '#e8daff', 'noteTextColor': '#161616', 'noteBorderColor': '#8a3ffc',
+  'actorBkg': '#d0e2ff', 'actorBorder': '#0f62fe', 'actorTextColor': '#161616',
+  'signalColor': '#161616', 'signalTextColor': '#161616', 'sequenceNumberColor': '#ffffff'
+}}}%%
+sequenceDiagram
+    autonumber
+    actor User
+    participant UI as Banking UI<br/>(SvelteKit)
+    participant WRP as IVIA WebSEAL<br/>Reverse Proxy
+    participant OP as IVIA OIDC<br/>Provider
+    participant LDAP as OpenLDAP
+    participant Agent as Banking Agent
+    participant MCP as MCP Server
+    participant Vault as HashiCorp<br/>Vault
+    participant RDS as PostgreSQL<br/>(RDS + RLS)
 
-**Pattern:** agent SA → Vault K8s auth → JIT R/O Postgres + scoped Bedrock STS
+    rect rgba(208, 226, 255, 0.3)
+    Note over User,LDAP: Authentication — Authorization Code + PKCE
+    User->>UI: GET / (no session)
+    UI-->>User: 302 to IVIA /oauth2/authorize?code_challenge=…
+    User->>WRP: GET /isvaop/oauth2/authorize
+    WRP-->>User: Login page
+    User->>WRP: POST username + password
+    WRP->>LDAP: LDAP bind cn=oscar,dc=ibm,dc=com
+    LDAP-->>WRP: Bind OK → WebSEAL session
+    WRP->>OP: Proxy /authorize + iv-user header
+    OP-->>User: 302 to /callback?code=…&state=…
+    User->>UI: GET /callback?code=…
+    UI->>OP: POST /oauth2/token (in-cluster) code + code_verifier
+    OP-->>UI: access_token + id_token (JWT with sub)
+    UI-->>User: 302 to /dashboard
+    end
 
-**Objectives demonstrated:** OBJ-1, OBJ-2, OBJ-5
+    rect rgba(186, 230, 255, 0.3)
+    Note over User,RDS: Banking query — identity propagation
+    User->>UI: "What are my accounts?"
+    UI->>Agent: POST /chat + Bearer id_token
+    Agent->>MCP: tools/call get_accounts + Bearer id_token
+    MCP->>Vault: POST /v1/auth/jwt/login {jwt, role: "uc2-jwt"}
+    Vault->>OP: Validate JWT signature via JWKS
+    OP-->>Vault: Public key confirmation
+    Vault-->>MCP: Vault token (uc2-personal, bound_audiences=agent-uc2)
+    MCP->>Vault: GET /v1/database/creds/uc2-personal-readonly
+    Vault->>RDS: CREATE ROLE with 15-min TTL
+    Vault-->>MCP: JIT credentials
+    MCP->>RDS: set_config('app.current_user_sub','oscar') + SELECT
+    RDS->>RDS: RLS filters WHERE owner_sub = 'oscar'
+    RDS-->>MCP: Oscar's accounts only
+    end
+
+    MCP-->>Agent: Tool result (accounts JSON)
+    Agent-->>UI: SSE stream formatted answer
+    UI-->>User: "Checking: $4,250 · Savings: $18,750"
+    rect rgba(167, 240, 186, 0.3)
+    Vault->>RDS: TTL expires → DROP ROLE (auto-revocation)
+    end
+```
+
+<p class="uc-footer">user OAuth + PKCE → user JWT → Vault jwt auth → per-user RLS-scoped creds &nbsp;·&nbsp; + OBJ-3, 4</p>
 
 Note:
-UC1 is the simplest case — an internal retrieval agent that has no notion of "user" at all. It runs on its own ServiceAccount `uc1-retriever-sa`, authenticates to Vault via the Kubernetes auth method, and receives a 15-minute R/O Postgres credential plus a scoped Bedrock STS credential for hitting the Knowledge Base. There is no JWT in the picture yet — that comes in UC2. The point of UC1 is to nail the foundational pattern: even a non-personalized agent gets verifiable identity, JIT credentials, and an audit trail. If you cannot do UC1 cleanly, none of the harder cases will work.
+The user enters. IVIA runs Authorization Code + PKCE and mints a user JWT carrying user context and session ID; the agent presents it to Vault's JWT auth method, which issues per-user credentials. PostgreSQL Row-Level Security scopes rows to `app.current_user_sub`. We prove enforcement by attempting an INSERT on a read-only credential (Postgres rejects it) and egress to an unapproved endpoint (NetworkPolicy blocks it).
 
 ---
 
-## UC2 — OAuth Personalized Read-Only
+### Use Case 3 — CIBA Privileged + Audit Correlation
 
-<img src="assets/uc2-oauth-flow.svg" style="max-height: 440px;" />
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#d0e2ff', 'primaryTextColor': '#161616', 'primaryBorderColor': '#0f62fe',
+  'lineColor': '#0f62fe', 'secondaryColor': '#bae6ff', 'tertiaryColor': '#f4f4f4',
+  'noteBkgColor': '#e8daff', 'noteTextColor': '#161616', 'noteBorderColor': '#8a3ffc',
+  'actorBkg': '#d0e2ff', 'actorBorder': '#0f62fe', 'actorTextColor': '#161616',
+  'signalColor': '#161616', 'signalTextColor': '#161616', 'sequenceNumberColor': '#ffffff'
+}}}%%
+sequenceDiagram
+    autonumber
+    participant Agent as Use Case 3 Agent
+    participant OP as OIDC Provider<br/>(ClusterIP)
+    participant WRP as WRP<br/>(Web Reverse Proxy)
+    participant RT as Runtime<br/>(AAC)
+    participant AD as OpenLDAP
+    participant User as User<br/>(Browser)
 
-**Pattern:** user OAuth + PKCE → user JWT → Vault `jwt` auth → per-user scoped credentials
+    Agent->>OP: POST /oauth2/ciba (login_hint, scope, authorization_details)
+    OP-->>Agent: auth_req_id
+    OP->>OP: Execute notifyuser rule (InternalAuthenticator)
+    Note over OP: Consent URL: /isvaop/oauth2/ciba_user_authorize/{transactionID}
+    Agent->>User: Display consent URL in chat session
+    User->>WRP: Click consent URL (browser)
+    WRP->>User: Show login page (anyauth ACL)
+    User->>WRP: Submit credentials
+    WRP->>RT: Validate credentials
+    RT->>AD: LDAP bind
+    AD-->>RT: Auth success
+    RT-->>WRP: Authenticated session established
+    WRP->>OP: Forward to /ciba_user_authorize/{transactionID}
+    OP->>User: Show consent page
+    User->>OP: Approve
+    Agent->>OP: POST /oauth2/token (grant_type=ciba, auth_req_id, poll)
+    OP-->>Agent: access_token (subject_token with user claims)
+```
 
-**Objectives demonstrated:** OBJ-1, OBJ-2, OBJ-3 (added), OBJ-4 (Layer 2 + 3), OBJ-5
+<p class="uc-footer">CIBA approval → token-exchange JWT w/ may_act (RFC 8693) + authorization_details (RFC 9396) → Vault bound_claims → 5-min write creds &nbsp;·&nbsp; all 5</p>
 
 Note:
-Use Case 2 introduces the user. Browser hits IVIA's Web Reverse Proxy (WRP), which authenticates the user against Simple AD and fronts the OAuth Authorization Code + PKCE flow — the OIDC Provider receives an already-authenticated session from WRP and returns a user JWT. The agent presents that JWT to Vault's `jwt` auth method, and Vault issues per-user-scoped Postgres credentials. We will demonstrate Layer 2 enforcement by attempting an INSERT through the R/O credential and watching Postgres reject it — and Layer 3 enforcement by attempting egress to an unapproved endpoint and watching NetworkPolicy block it. End the user session, watch Vault revoke the lease in the audit log. UC2 is where OBJ-3 (actions tied to user intent) actually shows up in the system.
+A privileged banking action triggers an out-of-band CIBA approval — a real-time push to the user's device. The user approves; IVIA mints a JWT carrying may_act (Token Exchange delegation) and authorization_details (RAR, task-specific fine-grained permission) claims; Vault validates them via bound_claims and issues a 5-minute write credential. Then the bypass test — forge a may_act claim and watch Vault reject it — proves the controls are real.
 
 ---
 
-## UC3 — CIBA Privileged + Audit Correlation
+## One `request_id`, Three Planes
 
-<img src="assets/uc3-ciba-flow.svg" style="max-height: 440px;" />
+<img src="assets/audit-correlation.svg" style="max-height: 430px;" />
 
-**Pattern:** CIBA out-of-band approval → JWT with `may_act` (RFC 8693) + `authorization_details` (RFC 9396 RAR) → time-boxed write creds (TTL 5m) → Athena correlation
-
-**Objectives demonstrated:** **all 5**
+A single **Athena** query JOINs **IVIA decision log + Vault audit log + RDS pgaudit log**
 
 Note:
-Use Case 3 is the workshop's pedagogical money shot — it exercises **all five** control objectives in a single flow. A privileged action triggers an out-of-band CIBA approval — the agent displays a consent URL that routes through the IVIA Web Reverse Proxy (WRP). The user clicks the link, WRP authenticates them against Simple AD, then forwards the authenticated session to the OIDC Provider's consent page. The user approves, IVIA mints a JWT carrying `may_act` (RFC 8693 Token Exchange) and `authorization_details` (RFC 9396 RAR) claims, Vault validates those claims via `bound_claims`, and issues a 5-minute write credential. The agent performs the privileged action against RDS. Then we run the bypass test — forge a `may_act` claim and watch Vault reject it; this proves the controls are real, not theater. Finally, the Athena query joins IVIA decision logs + Vault audit + CloudTrail by `request_id` and answers the auditor's question end-to-end.
+The pedagogical money shot, and the answer to the SKO "produce proof of control" imperative. The request_id propagates through every hop; one Athena query joins the three log stores and answers: which user authorized this privileged action, when, against what resource, and was access revoked? Audit separation is maintained — Verify logs the decision, Vault logs the credential, Postgres logs the write — yet they correlate.
+
+---
+
+## The Agentic Runtime Security Journey
+
+Progressive maturity on HashiCorp Vault + IBM Verify
+
+- **Discover** — inventory models, agents, external connections; confirm OAuth / SPIFFE / Cloud Identity
+- **Integrate** — agent identity + credentials via Vault; user auth via Verify; CIBA for privileged ops
+- **Observe** — agent access patterns and credential usage; tighten policies in Verify and Vault
+- **React** — auth-denied violations in Vault · policy violations in Verify · failed CIBA requests
+
+Note:
+The workshop drops you at the Integrate/Observe stages with a working reference. Forward-looking: Vault's native AI agent support (May 2026) adds an agent registry, 4-layer policy intersection, on-behalf-of delegation, and ephemeral authorization — the same patterns this workshop wires by hand become first-class.
 
 ---
 
@@ -224,4 +361,4 @@ Use Case 3 is the workshop's pedagogical money shot — it exercises **all five*
 **Repo:** _<repo URL placeholder>_
 
 Note:
-Wrap-up. Three things to take away: (1) every agent must have a verifiable identity that auditors can trace back to a signing authority, not a shared secret; (2) every credential must be JIT-issued and short-lived, with the revocation path tested, not assumed; (3) audit evidence is only useful if it correlates across trust planes — design the propagation in Phase 1, not Phase 6. Slides, repo, and pre-flight scripts are at the URLs above. Open the floor for Q&A.
+Three takeaways: every agent needs a verifiable identity traceable to a signing authority, not a shared secret; every credential must be JIT-issued and short-lived with the revocation path tested; and audit evidence is only useful if it correlates across trust planes. IBM Verify + HashiCorp Vault on AWS-native services delivers all three — and you just deployed it.
