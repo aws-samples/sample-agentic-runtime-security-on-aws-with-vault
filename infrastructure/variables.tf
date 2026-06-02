@@ -24,6 +24,28 @@ variable "kb_region" {
 }
 
 #-------------------------------------------------------------------------------
+# WRP public TLS (MMFA mobile-push enrollment)
+# The IBM Verify mobile app requires a publicly-trusted TLS chain during method
+# enrollment; the self-signed ALB cert is rejected ("A TLS error caused the
+# secure connection to fail"). Setting wrp_dns_zone_name turns on a DNS-validated
+# ACM public cert + Route53 record fronting the WRP ALB so the phone trusts it.
+# Leave wrp_dns_zone_name = "" to keep the self-signed-only, browser-clickthrough
+# posture (no domain required — but mobile-push enrollment will not complete).
+#-------------------------------------------------------------------------------
+
+variable "wrp_dns_zone_name" {
+  type        = string
+  default     = ""
+  description = "Name of an existing public Route53 hosted zone (e.g. \"oscar-medina.sbx.hashidemos.io\") that is internet-delegated. When non-empty, a publicly-trusted ACM cert + CNAME for <wrp_public_hostname>.<zone> are created and bound to the WRP ALB. Empty = self-signed only."
+}
+
+variable "wrp_public_hostname" {
+  type        = string
+  default     = "ivia"
+  description = "Left-most label of the WRP public FQDN within wrp_dns_zone_name. The full FQDN is \"<wrp_public_hostname>.<wrp_dns_zone_name>\". Ignored when wrp_dns_zone_name is empty."
+}
+
+#-------------------------------------------------------------------------------
 # EKS Cluster Configuration
 #-------------------------------------------------------------------------------
 
@@ -90,6 +112,13 @@ variable "icr_entitlement_key" {
   sensitive   = true
   default     = ""
   description = "IBM Container Registry entitlement key for pulling IVIA images (icr.io/ivia/ivia-oidc-provider). Attendees obtain from IBM."
+}
+
+variable "ivia_mmfa_push_client_secret" {
+  type        = string
+  sensitive   = true
+  default     = ""
+  description = "VerifyPushCreds API Key for IBM Verify mobile-push (MMFA). For ISVA 10.0.3+ the API Key IS the push provider Client Secret. Stored as the 'ivia-mmfa-push' Secret in 'verify-access'. Leave empty until MMFA is enabled. Supply via gitignored terraform.tfvars."
 }
 
 #-------------------------------------------------------------------------------

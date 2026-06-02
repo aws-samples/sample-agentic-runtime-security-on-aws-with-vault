@@ -39,3 +39,19 @@ output "ivia_oidc_ca_pem" {
   value       = file("${path.module}/iviaop-config/iviaop.pem")
 }
 
+output "ivia_runtime_user" {
+  description = "AAC runtime service user (easuser) for HTTP Basic on the admin SCIM read. Consumed by uc3_agent IVIA_SCIM_USER."
+  value       = local.ivia_runtime_user
+}
+
+output "ivia_runtime_user_password" {
+  description = "Generated password for the AAC runtime service user (easuser). uc3_agent uses it for HTTP Basic on the admin SCIM read that resolves MMFA transaction status (the CIBA mobile-push approval gate)."
+  value       = random_password.ivia_runtime_user_pwd.result
+  sensitive   = true
+}
+
+output "ivia_runtime_ca_pem" {
+  description = "AAC runtime (iviaruntime) self-signed serving cert (CN=isam, no SAN) captured from :9443. uc3_agent PINS this as the CA (check_hostname=False) for the SCIM read + MMFA push-fire. Static repo file — mirrors the iviaop.pem/iviawrprp1.pem captured-serving-cert convention."
+  value       = file("${path.module}/iviaop-config/iviaruntime.pem")
+}
+

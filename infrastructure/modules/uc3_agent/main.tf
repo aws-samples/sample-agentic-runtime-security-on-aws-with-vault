@@ -97,6 +97,15 @@ resource "kubernetes_config_map" "uc3_agent" {
     # iviaop self-signed CA bundle path — auth.py and agent.py verify all
     # outbound IVIA TLS calls against this file (no verify=False).
     IVIA_CA_BUNDLE = "/etc/ssl/ivia/iviaop.pem"
+    # AAC runtime (iviaruntime:9443) — mmfa.py fires the MMFA push and reads the
+    # admin SCIM MMFA transaction status here (the CIBA mobile-push approval gate).
+    # IVIA_SCIM_USER is easuser (not secret); its password is injected via a Secret
+    # (secretKeyRef IVIA_SCIM_PASSWORD), never this ConfigMap. The runtime serves a
+    # self-signed cert CN=isam (no SAN) — mmfa.py PINS IVIA_RUNTIME_CA_BUNDLE with
+    # check_hostname=False (cert-pinning, never verify=False).
+    IVIA_RUNTIME_URL       = var.ivia_runtime_url
+    IVIA_SCIM_USER         = var.ivia_scim_user
+    IVIA_RUNTIME_CA_BUNDLE = "/etc/ssl/ivia/iviaruntime.pem"
   }
 }
 
@@ -118,7 +127,31 @@ resource "kubernetes_secret" "ivia_oidc_ca" {
   }
 
   data = {
+    # iviaop OIDC provider cert (:8436) — outbound CIBA/token/JWKS TLS (agent.py, auth.py).
     "iviaop.pem" = var.ivia_oidc_ca_pem
+    # iviaruntime AAC cert (:9443, CN=isam, no SAN) — PINNED by mmfa.py for the MMFA
+    # push-fire + admin SCIM read (check_hostname=False, never verify=False).
+    "iviaruntime.pem" = var.ivia_runtime_ca_pem
+  }
+}
+
+################################################################################
+# 2b. Secret — uc3-scim-cred (easuser password for the admin SCIM read)
+#
+# mmfa.read_txn_status() does an HTTP Basic admin SCIM GET against iviaruntime:9443
+# to resolve the user's OWN MMFA transaction status (the CIBA mobile-push approval
+# gate). The username (easuser) is non-secret and rides the ConfigMap; the password
+# is injected here via secretKeyRef IVIA_SCIM_PASSWORD — never the ConfigMap.
+################################################################################
+
+resource "kubernetes_secret" "uc3_scim_cred" {
+  metadata {
+    name      = "uc3-scim-cred"
+    namespace = var.namespace
+  }
+
+  data = {
+    password = var.ivia_scim_password
   }
 }
 
@@ -179,6 +212,17 @@ resource "kubernetes_deployment" "uc3_agent" {
             }
           }
 
+          # easuser SCIM password — Secret, not ConfigMap (paired with IVIA_SCIM_USER).
+          env {
+            name = "IVIA_SCIM_PASSWORD"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret.uc3_scim_cred.metadata[0].name
+                key  = "password"
+              }
+            }
+          }
+
           volume_mount {
             name       = "ivia-ca"
             mount_path = "/etc/ssl/ivia"
@@ -229,6 +273,7 @@ resource "kubernetes_deployment" "uc3_agent" {
     kubernetes_service_account.uc3_agent,
     kubernetes_config_map.uc3_agent,
     kubernetes_secret.ivia_oidc_ca,
+    kubernetes_secret.uc3_scim_cred,
   ]
 }
 
@@ -484,10 +529,15 @@ resource "kubernetes_network_policy" "uc3_allow_bedrock" {
 }
 
 ################################################################################
-# 11. NetworkPolicy — uc3-allow-inbound (ingress from banking-agent on TCP 8080)
+# 11. NetworkPolicy — uc3-allow-inbound (ingress on TCP 8080)
 #
-# The UC3 agent is invoked by the banking-agent (uc2-agent label) to perform
-# privileged refund operations after CIBA consent is granted.
+# Ingress on 8080 from: the banking-ui / uc2-agent pods (the chat that drives the
+# refund), AND the IVIA namespace — iviaop runs the CIBA checkstatus rule that PUTs
+# /api/ciba/status on this service during the token poll.
+#
+# NOTE: this cluster runs with the EKS network-policy controller DISABLED, so this
+# rule is an inert API object documenting intent — the cross-namespace call works
+# regardless. Kept additive + accurate so enabling enforcement later is a flip.
 ################################################################################
 
 resource "kubernetes_network_policy" "uc3_allow_inbound" {
@@ -518,6 +568,15 @@ resource "kubernetes_network_policy" "uc3_allow_inbound" {
         pod_selector {
           match_labels = {
             app = "banking-ui"
+          }
+        }
+      }
+
+      # iviaop (CIBA checkstatus rule) calls /api/ciba/status from the IVIA namespace.
+      from {
+        namespace_selector {
+          match_labels = {
+            "kubernetes.io/metadata.name" = var.ivia_namespace
           }
         }
       }
