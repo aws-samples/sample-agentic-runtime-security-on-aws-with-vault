@@ -6,7 +6,7 @@ proven happy path against EKS:
 
 - 7 deployments in single `verify-access` namespace.
 - Pinned image tags — see Pinned Versions below.
-- In-cluster `kubernetes_job_v1` running `python -m ibmvia_autoconf 0.3.34`
+- In-cluster `kubernetes_job_v1` running `python -m ibmvia_autoconf 0.3.21`
   against a MINIMAL `webseal.runtime` base_layer.yaml.
 - LMI is NOT exposed externally. Admin-only, one-time bring-up via
   `kubectl port-forward svc/iviaconfig 9443:9443` (4 manual browser steps).
@@ -21,10 +21,33 @@ proven happy path against EKS:
 | LMI / DSC / Runtime / WRP / Postgres | `icr.io/ivia/ivia-{config,dsc,runtime,wrp,postgresql}` | `11.0.2.0` |
 | OIDC Provider | `icr.io/ivia/ivia-oidc-provider` | `25.10` |
 | OpenLDAP | `icr.io/isva/verify-access-openldap` | `10.0.6.0` |
-| autoconf SDK | `ibmvia_autoconf` (pip) | `0.3.34` |
+| autoconf SDK | `ibmvia_autoconf` (pip) | `0.3.21` (installed `--no-deps`) |
 | autoconf SDK dep | `pyivia` (pip) | `0.2.44` |
+| autoconf SDK dep | `pyyaml` (pip) | `6.0.1` |
 | Job init container | `busybox` | `1.36` |
 | Job main container | `python` | `3.11-slim` |
+
+> **autoconf pinned to 0.3.21, not the sibling's 0.3.34.** From 0.3.22 onward,
+> `_configure_api_protection_definition` unconditionally passes the 11.0.3-only
+> api_protection kwargs (`definition_id`/`hash_secrets`/`max_active_secrets`/
+> `min_secret_len`) to `pyivia create_definition`. On our **11.0.2.0** appliance
+> `pyivia` maps to `APIProtection10030`, which lacks those kwargs → `TypeError`
+> that blocks MMFA api_protection (and therefore IBM Verify QR enrollment).
+> IBM has not shipped an 11.0.3.0 image (icr.io tops out at 11.0.2.0), so the
+> appliance cannot be raised to match 0.3.34. 0.3.21 is the last release that
+> omits those kwargs and still ships the api_protection/mmfa/push_notifications
+> handlers. `pyivia 0.2.44` is unchanged (maps 11.0.2.0 → 10030, compatible).
+>
+> **Why `--no-deps`.** autoconf 0.3.21 hard-pins `pyyaml==5.4.1` + `Cython<3` in
+> its metadata. PyYAML 5.4.1 has no cp311 wheel, so on the `python:3.11-slim`
+> Job image pip builds it from sdist — which fails twice (no C compiler in slim;
+> and PyYAML 5.4.1's source build breaks against Cython 3). We install autoconf
+> `--no-deps` and supply its real runtime imports directly (`pyivia`, `kubernetes`,
+> `requests`, `pyyaml==6.0.1`). autoconf only imports `yaml`/`requests`/`pyivia`/
+> `kubernetes` (verified in source); `pyyaml 6.0.1` ships a cp311 manylinux wheel
+> and is API-compatible (autoconf always calls `yaml.load` with an explicit
+> `Loader`). The `Cython`/`docker-compose`/`typing` metadata deps are never
+> imported, so they are skipped.
 
 ## Architecture
 
@@ -88,6 +111,59 @@ Vault-validated claim through documented means. If UC3 later adopts a CIBA provi
 surfaces the consent-time RAR at token mint, the amount could additionally become an
 enforced claim; until then this is the documented ceiling for ISVAOP 25.10.
 
+## SCIM bind account — current bind is admin (`cn=root`); `cn=iviascim` least-privilege was reverted
+
+The SCIM service (`access_control.scim`) reads users and reads/writes MMFA transaction
+attributes through the `wrp_runtime` LDAP connection. That connection **binds as the ISAM
+administrative DN `cn=root,secAuthority=Default`**, using the openldap admin password
+(`!secret verify-access/openldap-creds:admin_password`) — see `server_connections.wrp_runtime`
+in `base_layer/base_layer.yaml.tftpl` and `local.ivia_scim_bind_dn` in `main.tf`.
+
+**Why admin and not least-privilege.** The
+`urn:ietf:params:scim:schemas:extension:isam:1.0:User` schema sets `update_native_users: True`,
+so a `/scim/Me` read-back touches native IVIA security-entity data. A least-privilege bind
+(`cn=iviascim` was tried) fails the post-PATCH read-back with **HPDAA0319E "insufficient access
+rights"**, which blocks MMFA Approve/Deny self-enrollment. IBM's MMFA autoconf reference also
+binds `wrp_runtime` as `cn=root,secAuthority=Default`. This is a fixed infrastructure service
+principal, not a session-derived identity.
+
+### The `cn=iviascim` account still exists (it is not the bind)
+
+The least-privilege scaffolding is still provisioned, but is **not wired as the SCIM bind**:
+
+- **Generated, never hardcoded.** `random_password.ivia_scim_bind_pwd` (main.tf) mints a
+  24-char password at apply time, written to the `ivia-scim-bind` Kubernetes Secret
+  (key `bind_pwd`) — no plaintext in code, state-only.
+- **Created by autoconf.** The `ibmvia_autoconf` Job creates the `cn=iviascim,dc=ibm,dc=com`
+  pdadmin user from that secret (`base_layer.yaml.tftpl`, `webseal.runtime.pdadmin.users`).
+- **No effect on the live bind.** Because the active `wrp_runtime` bind is `cn=root` (above),
+  **rotating `cn=iviascim` does nothing to the SCIM bind today.** To rotate the credential the
+  bind actually uses, rotate the openldap admin password
+  (`verify-access/openldap-creds:admin_password`) — which is shared with `webseal.runtime.ldap`
+  and the policy-server bind, so the reseed blast radius is larger.
+
+### Future improvement — Vault-managed rotation if least-privilege is re-adopted
+
+If a least-privilege SCIM bind is re-attempted (resolving the HPDAA0319E grant first), put that
+account under a Vault `ldap` secrets engine **static role** so Vault owns rotation. The
+non-obvious engine topology requirement, verified live 2026-05-30 and confirmed with the
+advisor:
+
+- Use a **separate dedicated manager bind account** (e.g. `cn=vault-ldap-manager`) as the
+  engine `binddn`, with rights to change the target account's `userPassword`. The static role
+  then rotates the target repeatably and exposes the current value via `ldap/static-cred/...`
+  for the IVIA reseed.
+- **Do NOT** make the engine bind *as* the rotated account itself (self-bind, `binddn == dn`).
+  That topology rotates exactly **once**: an LDAP static-role rotation updates only the role
+  record, never the engine's stored `bindpass`, so after the first rotation the engine can no
+  longer bind and the second rotation fails. `rotate-root` would update the bind password but
+  its value is intentionally non-retrievable, so IVIA could never re-bind. The self-bind pattern
+  was built and proven a one-shot trap.
+- Either way, IVIA bakes the bind password into its config DB **at autoconf config time**, so
+  each rotation requires a full autoconf re-run (~12–15 min, recreates
+  `iviaruntime`/`iviawrprp1`) for IVIA to re-resolve `!secret`. That reseed cost is inherent to
+  IVIA, independent of the Vault topology.
+
 ## Inputs
 
 | Variable | Purpose |
@@ -137,6 +213,20 @@ All four fields MUST be non-null.
 | WRP returns 502 / `WGAWA0963E` for minutes after autoconf | Stale snapshot backoff | `kubectl rollout restart deploy/iviawrprp1 -n verify-access`. (RESEARCH Pitfall 6) |
 | cert/lua `Failed to upload … already exists` in Job logs | Cert imports + lua transforms are not idempotent | Expected on re-runs. Non-fatal; cross-cycle convergence. (RESEARCH Pitfall 3) |
 | autoconf Job fails on first apply with "trust store empty" / "DB cannot be contacted" | LMI bring-up not done yet | Operator must complete the 4 manual LMI steps before terraform apply reaches the Job. See `workshop/content/40-platform/42-deploy-verify-access/` for the port-forward + step-by-step procedure. |
+| autoconf Job aborts with `KeyError: 'pnr_id'` in `push_notifications()` (only when `push_notification_providers` already exist) | Upstream `ibmvia_autoconf` SDK bug — update path reads the wrong API field and mis-matches providers that share an `app_id`. See [Vendored SDK patch](#vendored-sdk-patch--push_notifications-keyerror-pnr_id) below. | The autoconf Job applies a fail-loud in-place patch before running. No action needed; if the patch's expected source lines are absent the Job exits non-zero rather than running unpatched. |
+
+## Vendored SDK patch — `push_notifications()` `KeyError: 'pnr_id'`
+
+The autoconf Job pins `ibmvia_autoconf==0.3.21`. Its `AccessControl.push_notifications()` has a bug on the **update** path (i.e. only when the providers already exist, so it surfaces on the *second* and later applies, not the first). The Job patches it in place — fail-loud, idempotent — between `pip install` and `cd /base_layer` (see `module.ivia` autoconf Job command in `main.tf`).
+
+Two defects, both still present in the latest published SDK **0.3.41** (verified by inspecting the 0.3.41 sdist; `access_control.py` lines 106 + 108 are unchanged):
+
+1. **Wrong API field.** It reads the existing provider id as `old_pnp['pnr_id']`, but the IVIA `GET /iam/access/v8/push-notification` list response keys the id as `push_id`. The `KeyError: 'pnr_id'` is itself proof the key is absent. (`pnr_id` is the correct *argument* name for `pyivia`'s `update_provider(pnr_id, …)` — the SDK simply pulls it from the wrong response field.)
+2. **Match by `app_id` alone.** It selects the existing provider with `filter_list('app_id', provider.app_id, …)`. Apple and Android share one `app_id` (`com.ibm.security.verifyapp`), so both desired providers collapse onto whichever live provider matches first — the second is mis-targeted. The SDK's own docstring example (access_control.py lines 59-68) shows two providers sharing one `app_id`, differing only by `platform`, so the supported config triggers the defect.
+
+The patch matches on `app_id` **and** `platform`, and reads `push_id` (falling back to `pnr_id`). If the expected upstream source lines are not found, the Job exits non-zero rather than running unpatched — it never silently no-ops.
+
+> **Upstream issue:** report this against `https://github.com/lachlan-ibm/ibmvia_autoconf` (author Lachlan Gleeson). Until fixed upstream and the pin is bumped, the in-Job patch is the fix of record. Remove the patch only after bumping the pin to a release that resolves it.
 
 ## Phase 7 plan references
 
