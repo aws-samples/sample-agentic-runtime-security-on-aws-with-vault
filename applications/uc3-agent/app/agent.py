@@ -37,6 +37,7 @@ from strands.models import BedrockModel
 from strands.session import FileSessionManager
 
 from . import ciba_store
+from . import mmfa
 from .auth import _AUTHENTICATED_SUB
 
 logger = logging.getLogger(__name__)
@@ -543,34 +544,23 @@ def initiate_refund(
 
     ciba = _initiate_ciba(login_hint, authorization_details, request_id)
     auth_req_id = ciba["auth_req_id"]
-    user_code = ciba["user_code"]
 
     rar_desc = f"refund_approval ${amount} {currency} for transaction {transaction_id}"
 
-    # The real CIBA consent page is /isvaop/oauth2/ciba_user_authorize/{transactionID},
-    # where transactionID is an internal id the client never sees. The IVIA notifyuser
-    # mapping rule fires during bc-authorize and POSTs that full browser-reachable URL
-    # to our /api/ciba/pending endpoint. Poll the store briefly for it (notifyuser runs
-    # server-side before bc-authorize returns, so it is normally present immediately).
-    consent_url = ""
-    for _ in range(80):  # up to ~20s (push lands ~0.3s when warm; covers cold starts)
-        consent_url = ciba_store.get(auth_req_id) or ""
-        if consent_url:
-            break
-        time.sleep(0.25)
-
-    if not consent_url:
-        logger.warning(
-            "ciba_consent_url_not_pushed",
-            extra={"request_id": request_id, "auth_req_id": auth_req_id},
-        )
+    # Mobile-push consent: fire an MMFA push to the AUTHENTICATED user's IBM Verify
+    # device (identity straight from the verified session — never a parameter) and
+    # record auth_req_id -> {username, txn_id}. The IVIA checkstatus rule later polls
+    # /api/ciba/status, which reads this user's OWN SCIM transaction (the EXACT one
+    # fired here) to decide approval. complete_refund's CIBA token poll drives that.
+    txn_id = mmfa.fire_push(authenticated_sub)
+    ciba_store.put_txn(auth_req_id, authenticated_sub, txn_id)
 
     logger.info(
-        "ciba_consent_requested",
+        "ciba_mobile_push_sent",
         extra={
             "request_id": request_id,
             "auth_req_id": auth_req_id,
-            "user_code": user_code,
+            "mmfa_transaction_id": txn_id,
             "authorization_details": authorization_details,
         },
     )
@@ -583,9 +573,9 @@ def initiate_refund(
         "transaction_id": transaction_id,
         "amount": amount,
         "currency": currency,
-        "user_code": user_code,
-        "consent_url": consent_url,
-        "consent_marker": f"CIBA_CONSENT:auth_req_id={auth_req_id}|request_id={request_id}|user_code={user_code}|details={rar_desc}|consent_url={consent_url}",
+        "channel": "mobile_push",
+        "details": rar_desc,
+        "message": "An approval request was pushed to the user's IBM Verify app.",
     }
 
 
@@ -903,11 +893,13 @@ def build_uc3_agent(vault_client=None, session_id: str = "default") -> Agent:
         "   - transaction_id: the id from the selected transaction\n"
         "   - amount: the absolute value of the amount (positive number)\n"
         "   - currency: 'USD'\n"
-        "6. initiate_refund returns a consent_marker string. You MUST include it EXACTLY as-is in your response.\n"
-        "   Tell the user: 'CIBA consent is required. Click Approve in the consent banner below,\n"
-        "   sign in if prompted, and approve the refund.'\n"
-        "7. When the user says they approved (or sends any follow-up), call complete_refund with:\n"
-        "   auth_req_id, request_id, account_id, transaction_id, amount, currency from the initiate_refund result.\n"
+        "6. initiate_refund pushes an approval request to the user's IBM Verify mobile app.\n"
+        "   Tell the user EXACTLY: 'I've sent an approval request to your IBM Verify app. Open the\n"
+        "   app and tap Approve, then reply here and I'll finish the refund.' Do NOT print any\n"
+        "   internal IDs, tokens, or URLs.\n"
+        "7. When the user says they approved (or sends any follow-up), call complete_refund with the\n"
+        "   auth_req_id, request_id, account_id, transaction_id, amount, currency from the\n"
+        "   initiate_refund result (these are in the tool result; never invent them).\n"
         "8. Report exactly what the complete_refund tool returns to the user.\n\n"
         "CRITICAL RULES:\n"
         "- NEVER generate URLs, consent links, request_ids, or refund_ids yourself.\n"

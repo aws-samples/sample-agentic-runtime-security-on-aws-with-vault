@@ -35,6 +35,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from . import ciba_store
+from . import mmfa
 from .agent import build_uc3_agent
 from .vault_client import UC3VaultClient
 from .auth import verify_id_token, _AUTHENTICATED_SUB, AuthenticationError
@@ -205,6 +206,47 @@ async def ciba_pending_push(request: Request):
 async def ciba_pending_get(auth_req_id: str):
     """Return the consent URL notifyuser pushed for this auth_req_id (or null)."""
     return {"auth_req_id": auth_req_id, "consent_url": ciba_store.get(auth_req_id)}
+
+
+@app.put("/api/ciba/status")
+async def ciba_status(request: Request, auth_req_id: str):
+    """Server-polled CIBA check-status endpoint (called by the IVIA checkstatus rule).
+
+    The IVIA ExternalAuthenticatorWithCheckStatusEndpoint makes ISVAOP PUT this on
+    every /token poll. We authenticate the poll by first-seen-pinning the CIBA
+    bearer (Authorization header) per auth_req_id — defense-in-depth — then return
+    the truth from the user's OWN SCIM MMFA transaction (the EXACT push uc3-agent
+    fired in initiate_refund):
+
+      {"status":"approved","uid":"<user>"} | {"status":"denied"} | {"status":"pending"}
+
+    `uid` becomes the id_token `sub`. 401 on unknown auth_req_id or bearer mismatch.
+    The SCIM read is the real gate — a stale/unrelated SUCCESS cannot complete it.
+    """
+    entry = ciba_store.get_txn(auth_req_id)
+    if entry is None:
+        raise HTTPException(status_code=401, detail="unknown auth_req_id")
+
+    auth_header = request.headers.get("Authorization", "")
+    bearer = auth_header[7:].strip() if auth_header.lower().startswith("bearer ") else None
+    if not ciba_store.match_or_set_bearer(auth_req_id, bearer):
+        logger.warning("ciba_status_bearer_mismatch auth_req_id=%s", auth_req_id)
+        raise HTTPException(status_code=401, detail="bearer mismatch")
+
+    username = entry["username"]
+    txn_id = entry["txn_id"]
+    try:
+        status = mmfa.read_txn_status(username, txn_id)
+    except Exception as exc:  # noqa: BLE001 — transient SCIM fault => keep polling
+        logger.warning("ciba_status_scim_error auth_req_id=%s err=%s", auth_req_id, str(exc))
+        status = "pending"
+
+    logger.info("ciba_status_polled auth_req_id=%s status=%s", auth_req_id, status)
+    if status == "approved":
+        return {"status": "approved", "uid": username}
+    if status == "denied":
+        return {"status": "denied"}
+    return {"status": "pending"}
 
 
 @app.get("/health")
