@@ -8,7 +8,7 @@
 #     iviaruntime, iviawrprp1) in single 'verify-access' namespace.
 #   - Pinned image tags (LMI/DSC/Runtime/WRP/Postgres 11.0.2.0,
 #     OIDC Provider 25.10, OpenLDAP 10.0.6.0).
-#   - In-cluster kubernetes_job_v1 running python -m ibmvia_autoconf 0.3.34
+#   - In-cluster kubernetes_job_v1 running python -m ibmvia_autoconf 0.3.21
 #     against a MINIMAL webseal.runtime base_layer.yaml.
 #   - LMI is NOT exposed externally — admin-only, one-time bring-up via
 #     `kubectl port-forward svc/iviaconfig 9443:9443` (4 manual browser steps).
@@ -117,7 +117,7 @@ resource "aws_security_group_rule" "node_ldaps_self" {
 }
 
 #-------------------------------------------------------------------------------
-# RBAC for the autoconf Job. ibmvia_autoconf 0.3.34 requires:
+# RBAC for the autoconf Job. ibmvia_autoconf 0.3.21 requires:
 #   - get/list secrets + configmaps   for !secret <ns>/<name>:<key> resolution
 #   - get/list/patch deployments.apps for _restart_k8s_deployments
 # (RESEARCH §8.3, evidenced by the RuntimeError trace at data_util.py:43 when
@@ -262,6 +262,24 @@ resource "random_password" "sec_master_pwd" {
 
 resource "random_password" "ivia_oauth_client_secret" {
   length  = 32
+  special = false
+}
+
+# AAC runtime service user (easuser) password — increment 2. Used for HTTP Basic
+# to the localscim server_connection, the /scim junction, and the mmfa/aac
+# configuration runtime block. Set on the runtime's Liberty basic registry via
+# container.runtime_properties.users in base_layer.yaml.tftpl.
+resource "random_password" "ivia_runtime_user_pwd" {
+  length  = 24
+  special = false
+}
+
+# Dedicated SCIM LDAP bind (cn=iviascim) password. The SCIM service binds AS this
+# least-privilege account to resolve users (wrp_runtime server_connection), instead
+# of the LDAP root bind. Generated here and static for the deployment; Vault-managed
+# rotation is the documented future improvement (see README "SCIM bind account").
+resource "random_password" "ivia_scim_bind_pwd" {
+  length  = 24
   special = false
 }
 
@@ -415,6 +433,38 @@ resource "kubernetes_secret" "ivia_secauthority_creds" {
   type = "Opaque"
   data = {
     sec_master_password = random_password.sec_master_pwd.result
+  }
+}
+
+# AAC runtime service user (easuser) — increment 2. base_layer.yaml.tftpl
+# references this as `!secret verify-access/ivia-runtime-user:password`.
+resource "kubernetes_secret" "ivia_runtime_user" {
+  metadata {
+    name      = "ivia-runtime-user"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels    = local.common_labels
+  }
+  type = "Opaque"
+  data = {
+    password = random_password.ivia_runtime_user_pwd.result
+  }
+}
+
+# Dedicated SCIM LDAP bind (cn=iviascim) — generated, least-privilege service
+# account. base_layer.yaml.tftpl references this as
+# `!secret verify-access/ivia-scim-bind:bind_pwd` (both the pdadmin user create
+# and the wrp_runtime server_connection bind_pwd); autoconf resolves it at config
+# time. Password is static for the deployment; Vault-managed rotation is the
+# documented future improvement (see README "SCIM bind account" section).
+resource "kubernetes_secret" "ivia_scim_bind" {
+  metadata {
+    name      = "ivia-scim-bind"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels    = local.common_labels
+  }
+  type = "Opaque"
+  data = {
+    bind_pwd = random_password.ivia_scim_bind_pwd.result
   }
 }
 
@@ -1303,7 +1353,7 @@ resource "kubernetes_ingress_v1" "ivia_wrp" {
       "alb.ingress.kubernetes.io/scheme"               = "internet-facing"
       "alb.ingress.kubernetes.io/target-type"          = "ip"
       "alb.ingress.kubernetes.io/listen-ports"         = "[{\"HTTP\":80},{\"HTTPS\":443}]"
-      "alb.ingress.kubernetes.io/certificate-arn"      = var.tls_certificate_arn
+      "alb.ingress.kubernetes.io/certificate-arn"      = join(",", compact([var.wrp_public_certificate_arn, var.tls_certificate_arn]))
       "alb.ingress.kubernetes.io/ssl-redirect"         = "443"
       "alb.ingress.kubernetes.io/backend-protocol"     = "HTTPS"
       "alb.ingress.kubernetes.io/healthcheck-protocol" = "HTTPS"
@@ -1344,14 +1394,31 @@ resource "kubernetes_config_map" "base_layer" {
     labels    = local.common_labels
   }
   data = {
-    "base_layer.yaml"          = file("${path.module}/base_layer/base_layer.yaml")
-    "ISAM-Trial-HashiCorp.cer" = file("${path.module}/base_layer/ISAM-Trial-HashiCorp.cer")
-    "iviaop.pem"               = file("${path.module}/base_layer/iviaop.pem")
-    "ldap.crt"                 = file("${path.module}/base_layer/ldap.crt")
-    "DigiCertGlobalRootG3.crt" = file("${path.module}/base_layer/DigiCertGlobalRootG3.crt")
-    "postgres.crt"             = tls_self_signed_cert.postgresql.cert_pem
-    "req_openid_config.lua"    = file("${path.module}/base_layer/req_openid_config.lua")
-    "rsp_openid_config.lua"    = file("${path.module}/base_layer/rsp_openid_config.lua")
+    # base_layer.yaml is now a template: ${wrp_alb_host} (the WRP ALB hostname,
+    # resolvable here because the ingress sets wait_for_load_balancer=true),
+    # ${runtime_user} (AAC runtime service user), and ${scim_bind_dn} (the SCIM
+    # LDAP bind) are injected for the increment-2 MMFA subsystem. enable_mmfa_push
+    # gates the push_notification_providers block: when no push API key is supplied
+    # (var.ivia_mmfa_push_client_secret == "", the default) the block is omitted so
+    # autoconf never tries to resolve the count-gated ivia-mmfa-push Secret (a
+    # missing-secret !secret lookup fails the YAML load and aborts the whole run,
+    # including the WebSEAL/forms-auth step).
+    "base_layer.yaml" = templatefile("${path.module}/base_layer/base_layer.yaml.tftpl", {
+      wrp_alb_host     = local.wrp_effective_host
+      runtime_user     = local.ivia_runtime_user
+      scim_bind_dn     = local.ivia_scim_bind_dn
+      enable_mmfa_push = var.ivia_mmfa_push_client_secret != ""
+    })
+    # MMFA OAuth post-token mapping rule (IBM-shipped, verbatim). REQUIRED for
+    # device enrollment — see api_protection note in base_layer.yaml.tftpl.
+    "mmfa_oauth_posttoken_mapping.js" = file("${path.module}/base_layer/mmfa_oauth_posttoken_mapping.js")
+    "ISAM-Trial-HashiCorp.cer"        = file("${path.module}/base_layer/ISAM-Trial-HashiCorp.cer")
+    "iviaop.pem"                      = file("${path.module}/base_layer/iviaop.pem")
+    "ldap.crt"                        = file("${path.module}/base_layer/ldap.crt")
+    "DigiCertGlobalRootG3.crt"        = file("${path.module}/base_layer/DigiCertGlobalRootG3.crt")
+    "postgres.crt"                    = tls_self_signed_cert.postgresql.cert_pem
+    "req_openid_config.lua"           = file("${path.module}/base_layer/req_openid_config.lua")
+    "rsp_openid_config.lua"           = file("${path.module}/base_layer/rsp_openid_config.lua")
   }
 }
 
@@ -1398,20 +1465,48 @@ resource "kubernetes_secret" "base_layer_p12" {
 #-------------------------------------------------------------------------------
 
 locals {
+  # MMFA subsystem identities (increment 2). easuser = the AAC runtime's built-in
+  # Liberty service user (IBM reference RUNTIME_USER). scim_bind_dn = the LDAP
+  # bind the isamruntime SCIM connection uses. It MUST be the ISAM administrative
+  # DN (cn=root,secAuthority=Default), NOT a least-privilege user: the SCIM
+  # isam:1.0:User schema has update_native_users:True, so /scim/Me reads/writes
+  # native IVIA security-entity data. A plain bind (we tried cn=iviascim) fails
+  # the post-PATCH read-back with HPDAA0319E "insufficient access rights", which
+  # blocks MMFA userPresenceMethods (Approve/Deny) self-enrollment. IBM's MMFA
+  # autoconf reference binds wrp_runtime as cn=root,secAuthority=Default. Both are
+  # fixed infrastructure service principals, not session-derived identities.
+  ivia_runtime_user = "easuser"
+  ivia_scim_bind_dn = "cn=root,secAuthority=Default"
+
+  # Host that every MMFA endpoint URL in base_layer is rendered against. When a
+  # publicly-trusted FQDN is provided (Route53 + ACM public cert), use it so the
+  # IBM Verify mobile app validates a real chain during method enrollment (Face
+  # ID / approve-key setup). Without it the app rejects the WRP ALB's self-signed
+  # cert mid-enrollment ("A TLS error caused the secure connection to fail") and
+  # the device is left with empty auth_methods (no Approve/Deny). Falls back to
+  # the raw ELB hostname when no domain is configured (browser-only, self-signed).
+  wrp_effective_host = var.wrp_public_fqdn != "" ? var.wrp_public_fqdn : kubernetes_ingress_v1.ivia_wrp.status[0].load_balancer[0].ingress[0].hostname
+
   base_layer_files = sort(tolist(fileset("${path.module}/base_layer", "*")))
   base_layer_hash = sha256(join("", concat(
     [for f in local.base_layer_files : filesha256("${path.module}/base_layer/${f}")],
     # fileset("base_layer","*") is top-level only, so the management-pages/ subtree
     # is invisible to it. Fold in the zip's content hash so editing login.html
     # forces the autoconf Job to recreate and re-import the page.
-    [data.archive_file.ivia_management_pages.output_sha256]
+    [data.archive_file.ivia_management_pages.output_sha256],
+    # base_layer.yaml is now templated; ${wrp_alb_host} is resolved at apply time
+    # and is NOT captured by filesha256 of the .tftpl source. Fold the rendered
+    # host in so changing it (ELB hostname OR the public FQDN) re-renders the
+    # ConfigMap and recreates the autoconf Job (re-running the MMFA wizard against
+    # the new endpoints).
+    [local.wrp_effective_host]
   )))
 }
 
 #-------------------------------------------------------------------------------
 # ibmvia_autoconf Job — drives base_layer.yaml against the LMI REST API.
 #
-# Why in-cluster (NOT operator-side): ibmvia_autoconf 0.3.34's
+# Why in-cluster (NOT operator-side): ibmvia_autoconf's
 # _restart_k8s_deployments handler reads the K8s downward-API namespace file
 # at /var/run/secrets/kubernetes.io/serviceaccount/namespace. Outside a pod
 # this raises RuntimeError (RESEARCH Pitfall 1, sibling base_layer.log:62-68).
@@ -1494,7 +1589,55 @@ resource "kubernetes_job_v1" "ivia_autoconf" {
           command = ["/bin/sh", "-c"]
           args = [<<-EOSH
             set -e
-            pip install --quiet ibmvia_autoconf==0.3.34 pyivia==0.2.44 kubernetes==31.0.0
+            # autoconf 0.3.21 is the version aligned to our 11.0.2.0 appliance.
+            # 0.3.22+ unconditionally pass the 11.0.3-only api_protection args
+            # (definition_id/hash_secrets/max_active_secrets/min_secret_len) to
+            # pyivia create_definition; on an 11.0.2.0 appliance pyivia maps to
+            # APIProtection10030 which lacks those kwargs -> TypeError that blocks
+            # MMFA enrollment. IBM has not shipped an 11.0.3.0 image (icr.io tops
+            # out at 11.0.2.0), so the appliance can't be raised to match 0.3.34.
+            # 0.3.21 still has the api_protection/mmfa/push_notifications handlers.
+            # pyivia 0.2.44 stays (maps 11.0.2.0 -> 10030, compatible with 0.3.21).
+            #
+            # autoconf 0.3.21 hard-pins pyyaml==5.4.1 + Cython<3 in its metadata.
+            # PyYAML 5.4.1 has no cp311 wheel, so pip builds it from sdist on this
+            # python:3.11-slim image -- which (a) has no C compiler and (b) breaks
+            # against Cython 3 ('build_ext' has no 'cython_sources'). We install
+            # autoconf with --no-deps and supply its REAL runtime imports
+            # ourselves: it only imports yaml/requests/pyivia/kubernetes (verified
+            # in source). pyyaml 6.0.1 ships a cp311 manylinux wheel (no build) and
+            # is API-compatible -- autoconf always calls yaml.load with an explicit
+            # Loader (CustomLoader subclasses SafeLoader). The Cython/docker-compose/
+            # typing metadata deps are never imported at runtime, so we skip them.
+            pip install --quiet pyivia==0.2.44 kubernetes==31.0.0 requests pyyaml==6.0.1
+            pip install --quiet --no-deps ibmvia_autoconf==0.3.21
+            # PATCH autoconf 0.3.21 push_notifications() idempotency bug (verified
+            # against SDK source + the live API response). On the UPDATE path it
+            # reads the existing provider id as old_pnp['pnr_id'], but the live
+            # GET /iam/access/v8/push-notification returns that id under 'push_id'
+            # -> KeyError 'pnr_id' crashes the whole run. Because aac.configure()
+            # runs BEFORE web.configure() (configure.py), this crash ALSO blocks the
+            # WebSEAL/forms-auth stanza step from ever executing. It additionally
+            # matches existing providers on app_id alone, but our apple+android
+            # providers share one app_id -> both updates would target the same entry
+            # and corrupt one. Fix: match on app_id+platform and use push_id (with a
+            # pnr_id fallback). Guarded marker = idempotent; fail-loud if source drifts.
+            python - <<'PY'
+            import sys
+            p = "/usr/local/lib/python3.11/site-packages/ibmvia_autoconf/access_control.py"
+            s = open(p).read()
+            if "provider.platform" in s:
+                print("autoconf push_notifications already patched; skipping", flush=True); sys.exit(0)
+            old1 = "old_pnp = optional_list(filter_list('app_id', provider.app_id, existing_pnp))[0]"
+            new1 = "old_pnp = optional_list(filter_list('platform', provider.platform, filter_list('app_id', provider.app_id, existing_pnp)))[0]"
+            old2 = "self.aac.push_notification.update_provider(old_pnp['pnr_id'], **provider)"
+            new2 = "self.aac.push_notification.update_provider(old_pnp.get('push_id') or old_pnp.get('pnr_id'), **provider)"
+            for needle in (old1, old2):
+                if needle not in s:
+                    print("FATAL: expected autoconf push_notifications source not found; refusing to run unpatched", flush=True); sys.exit(3)
+            open(p, "w").write(s.replace(old1, new1).replace(old2, new2))
+            print("PATCHED autoconf push_notifications: match app_id+platform, use push_id (fixes KeyError pnr_id)", flush=True)
+            PY
             cd /base_layer
             IVIA_CONFIG_YAML=base_layer.yaml \
             IVIA_CONFIG_BASE=/base_layer \
@@ -1553,6 +1696,10 @@ resource "kubernetes_job_v1" "ivia_autoconf" {
     kubernetes_secret.postgresql_creds,
     kubernetes_secret.openldap_creds,
     kubernetes_secret.ivia_secauthority_creds,
+    # MMFA subsystem credentials (increment 2) — must exist before autoconf
+    # resolves their !secret references (runtime service user + SCIM LDAP bind).
+    kubernetes_secret.ivia_runtime_user,
+    kubernetes_secret.ivia_scim_bind,
     kubernetes_config_map.base_layer,
     kubernetes_secret.base_layer_p12,
     # MMFA push credential (count-gated; empty list when not configured). Ensures

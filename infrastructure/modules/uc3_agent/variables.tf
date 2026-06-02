@@ -106,3 +106,30 @@ variable "ivia_oidc_ca_pem" {
   description = "iviaop self-signed CA PEM the agent trusts on outbound IVIA TLS calls. Mounted at /etc/ssl/ivia/iviaop.pem; consumed by auth.py and agent.py via IVIA_CA_BUNDLE env var."
   type        = string
 }
+
+variable "ivia_runtime_url" {
+  description = "AAC runtime (iviaruntime) cluster-internal HTTPS base URL (e.g. https://iviaruntime.verify-access.svc.cluster.local:9443). mmfa.py fires the MMFA push and reads admin SCIM transaction status here."
+  type        = string
+}
+
+variable "ivia_scim_user" {
+  description = "AAC runtime service user (easuser) for HTTP Basic on the admin SCIM read. Surfaced via ConfigMap IVIA_SCIM_USER (username is not a secret; the paired password is)."
+  type        = string
+}
+
+variable "ivia_scim_password" {
+  description = "Password for ivia_scim_user. Injected into the uc3-agent pod via a Kubernetes Secret (secretKeyRef IVIA_SCIM_PASSWORD) — never the ConfigMap."
+  type        = string
+  sensitive   = true
+}
+
+variable "ivia_runtime_ca_pem" {
+  description = "iviaruntime self-signed serving cert (CN=isam, no SAN) the agent PINS for TLS to :9443. Mounted at /etc/ssl/ivia/iviaruntime.pem; consumed by mmfa.py via IVIA_RUNTIME_CA_BUNDLE (cert-pinning with check_hostname=False, never verify=False)."
+  type        = string
+}
+
+variable "ivia_namespace" {
+  description = "Namespace where IVIA runs (iviaop hosts the checkstatus rule that calls uc3-agent /api/ciba/status). Used as an additive ingress namespace_selector on uc3-allow-inbound."
+  type        = string
+  default     = "verify-access"
+}

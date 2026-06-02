@@ -53,16 +53,19 @@ module "ecr" {
 #-------------------------------------------------------------------------------
 # Wave 0 — TLS (self-signed cert for the browser-facing ALB HTTPS listeners)
 #
-# This is an ephemeral, self-contained workshop: every attendee runs in their
-# own isolated AWS account with no custom domain and no shared/central
-# dependency. The browser entry points are the raw ALB DNS names
-# (k8s-...<region>.elb.amazonaws.com), which only exist post-apply, so a
-# publicly-trusted ACM/Route53 cert (which requires a delegated domain) is not
-# an option. Instead we mint a self-signed cert covering the ALB wildcard and
-# import it into ACM so the ALB HTTPS:443 listener has a cert to serve. The
-# attendee accepts the browser "not trusted" prompt once per host — acceptable
-# for a throwaway lab. IVIAOP requires https (not http) redirect_uris for
-# non-localhost hosts, which this satisfies. NOT Vault PKI, NOT a public cert.
+# Browsers tolerate a self-signed cert (one-time "not trusted" click-through),
+# so the raw ALB DNS names (k8s-...<region>.elb.amazonaws.com) get a self-signed
+# wildcard cert imported into ACM. This is the baseline that always works with
+# no domain. IVIAOP requires https (not http) redirect_uris for non-localhost
+# hosts, which this satisfies. NOT Vault PKI.
+#
+# EXCEPTION — MMFA mobile-push enrollment. The IBM Verify mobile app enforces
+# Apple ATS and rejects the self-signed chain mid-enrollment ("A TLS error
+# caused the secure connection to fail"), leaving the device with empty
+# auth_methods (no Approve/Deny). For that path a publicly-trusted cert is
+# mandatory, so when var.wrp_dns_zone_name is set we additionally mint a
+# DNS-validated ACM public cert for <wrp_public_hostname>.<zone> and add it as
+# the WRP ALB's default listener cert (see aws_acm_certificate.wrp_public below).
 #-------------------------------------------------------------------------------
 
 resource "tls_private_key" "workshop_tls" {
@@ -106,6 +109,61 @@ locals {
   # Imported self-signed cert ARN bound to both browser-facing ALB HTTPS:443
   # listeners (banking-ui + ivia-wrp).
   tls_certificate_arn = aws_acm_certificate.workshop_tls.arn
+
+  # Public-FQDN path for MMFA mobile-push enrollment. Enabled only when a real
+  # Route53 zone is supplied; the WRP ALB then serves a publicly-trusted cert
+  # under this name so the IBM Verify app trusts it during method enrollment.
+  wrp_public_enabled = var.wrp_dns_zone_name != ""
+  wrp_public_fqdn    = local.wrp_public_enabled ? "${var.wrp_public_hostname}.${var.wrp_dns_zone_name}" : ""
+}
+
+#-------------------------------------------------------------------------------
+# Wave 0 — WRP public TLS (MMFA mobile-push). DNS-validated ACM PUBLIC cert for
+# the WRP FQDN + Route53 validation records + a CNAME (added after module.ivia)
+# pointing the FQDN at the WRP ALB. The ALB serves this cert as its default 443
+# cert (self-signed kept as SNI fallback) so the IBM Verify app validates a real
+# chain. ACM cert for an ALB must live in the ALB's region (default provider =
+# var.region). All conditional on var.wrp_dns_zone_name being set.
+#-------------------------------------------------------------------------------
+
+data "aws_route53_zone" "wrp" {
+  count        = local.wrp_public_enabled ? 1 : 0
+  name         = var.wrp_dns_zone_name
+  private_zone = false
+}
+
+resource "aws_acm_certificate" "wrp_public" {
+  count             = local.wrp_public_enabled ? 1 : 0
+  domain_name       = local.wrp_public_fqdn
+  validation_method = "DNS"
+  tags              = var.tags
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "aws_route53_record" "wrp_cert_validation" {
+  for_each = {
+    for dvo in(local.wrp_public_enabled ? aws_acm_certificate.wrp_public[0].domain_validation_options : []) :
+    dvo.domain_name => {
+      name   = dvo.resource_record_name
+      type   = dvo.resource_record_type
+      record = dvo.resource_record_value
+    }
+  }
+  zone_id         = data.aws_route53_zone.wrp[0].zone_id
+  name            = each.value.name
+  type            = each.value.type
+  records         = [each.value.record]
+  ttl             = 60
+  allow_overwrite = true
+}
+
+resource "aws_acm_certificate_validation" "wrp_public" {
+  count                   = local.wrp_public_enabled ? 1 : 0
+  certificate_arn         = aws_acm_certificate.wrp_public[0].arn
+  validation_record_fqdns = [for r in aws_route53_record.wrp_cert_validation : r.fqdn]
 }
 
 #-------------------------------------------------------------------------------
@@ -374,9 +432,28 @@ module "ivia" {
   ivia_mmfa_push_client_secret = var.ivia_mmfa_push_client_secret
   node_security_group_id       = module.eks.node_security_group_id
   tls_certificate_arn          = local.tls_certificate_arn
+  wrp_public_fqdn              = local.wrp_public_fqdn
+  wrp_public_certificate_arn   = local.wrp_public_enabled ? aws_acm_certificate_validation.wrp_public[0].certificate_arn : ""
   tags                         = var.tags
 
   depends_on = [time_sleep.alb_webhook_ready]
+}
+
+#-------------------------------------------------------------------------------
+# WRP public CNAME — points <wrp_public_hostname>.<zone> at the WRP ALB hostname
+# (only known after module.ivia creates the Ingress). The MMFA endpoints in
+# base_layer are rendered against this FQDN, so the phone resolves here, the ALB
+# serves the publicly-trusted cert, and method enrollment completes. Conditional
+# on var.wrp_dns_zone_name.
+#-------------------------------------------------------------------------------
+
+resource "aws_route53_record" "wrp_cname" {
+  count   = local.wrp_public_enabled ? 1 : 0
+  zone_id = data.aws_route53_zone.wrp[0].zone_id
+  name    = local.wrp_public_fqdn
+  type    = "CNAME"
+  ttl     = 60
+  records = [module.ivia.ivia_wrp_alb_hostname]
 }
 
 #-------------------------------------------------------------------------------
@@ -470,6 +547,11 @@ module "uc3_agent" {
   region                 = var.region
   rds_cidr               = module.vpc.vpc_cidr
   ivia_oidc_ca_pem       = module.ivia.ivia_oidc_ca_pem
+  ivia_runtime_url       = "https://iviaruntime.${module.ivia.namespace}.svc.cluster.local:9443"
+  ivia_scim_user         = module.ivia.ivia_runtime_user
+  ivia_scim_password     = module.ivia.ivia_runtime_user_password
+  ivia_runtime_ca_pem    = module.ivia.ivia_runtime_ca_pem
+  ivia_namespace         = module.ivia.namespace
   tags                   = var.tags
 
   depends_on = [module.vault, module.rds, module.ivia, module.uc2_app]

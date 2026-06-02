@@ -1,7 +1,8 @@
 container:
-  # k8s_deployments removed — SDK 0.3.34 has a bug iterating this dict where it
-  # tries to patch a deployment literally named "namespace". We don't need
-  # autoconf to restart pods; terraform/k8s handle that on ConfigMap change.
+  # k8s_deployments intentionally omitted — we don't want autoconf restarting
+  # pods (terraform/k8s handle that on ConfigMap change), and the 0.3.x SDK has
+  # a bug iterating this dict where it tries to patch a deployment literally
+  # named "namespace".
   management_authorization:
     authorization_enforcement: True
     roles:
@@ -61,6 +62,76 @@ container:
         replication_port: 9444
   activation: #Activation codes
     trial_license: "ISAM-Trial-HashiCorp.cer"
+  # MMFA/AAC server connections. wrp_runtime = the LDAP bind the SCIM service uses
+  # to resolve AND manage users. It is the ISAM admin DN (cn=root,secAuthority=
+  # Default) because the isam:1.0:User schema sets update_native_users:True — see
+  # the bind_dn note below and modules/verify_access/README.md. localscim = the AAC
+  # runtime's own SCIM endpoint, reached over HTTPS using the runtime service user.
+  server_connections:
+  - name: "wrp_runtime"
+    description: "LDAP user-registry bind for SCIM (ISAM admin cn=root,secAuthority=Default)"
+    type: "isamruntime"
+    properties:
+      # MUST be the ISAM administrative bind. The isam:1.0:User schema below sets
+      # update_native_users:True, so /scim/Me read-back touches native IVIA
+      # security-entity data; a least-privilege bind fails with HPDAA0319E
+      # "insufficient access rights" and blocks MMFA Approve/Deny self-enrollment.
+      # Same admin DN + secret already used by webseal.runtime.ldap above; matches
+      # IBM's MMFA autoconf reference (wrp_runtime = cn=root,secAuthority=Default).
+      bind_dn: "${scim_bind_dn}"
+      bind_pwd: !secret verify-access/openldap-creds:admin_password
+      ssl: True
+      ssl_truststore: "lmi_trust_store"
+  - name: "localscim"
+    description: "Local SCIM server on the AAC runtime"
+    type: "ws"
+    properties:
+      url: "https://iviaruntime:9443/scim"
+      user: "${runtime_user}"
+      password: !secret verify-access/ivia-runtime-user:password
+      ssl: True
+      # ws connections with ssl:True require a truststore (maps to connection/sslTruststore).
+      # rt_profile_keys holds the AAC runtime's own server cert signer — IBM mmfa_demo reference.
+      key_file: "rt_profile_keys"
+  # Runtime service user — created in the AAC runtime's local registry. Used for
+  # SCIM HTTP Basic (localscim), the /scim junction, and the MMFA runtime config.
+  runtime_properties:
+    # Pin the AAC/Federation runtime Liberty trace to a safe level. A live LMI debug
+    # session had set this to "*=all=enabled"; full trace activates Apache CXF's
+    # message-logging interceptor (LoggingInInterceptor -> DefaultLogEventMapper.
+    # getHeaders), whose String-vs-List HTTP-header cast throws on EVERY oauth-auth
+    # SecurityTokenService validation (WebSEAL logs DPWWA2852E "java.lang.String
+    # incompatible with java.util.List"). That silently broke the MMFA mobile
+    # channel: the IBM Verify app could not fetch or approve pending transactions.
+    # Pinning it here keeps the safe level durable across restart/redeploy so the
+    # debug spec cannot silently reappear. autoconf calls update_trace + restarts.
+    # TEMP — approve-400 diagnosis: raise ONLY the authsvc automaton + MMFA
+    # mechanism to FINEST (where RestAuthSvcDelegate.doProcessState throws the
+    # BadRequestException on the verify PUT). Deliberately NOT "*=all" — full
+    # trace activates Apache CXF's LoggingInInterceptor and re-triggers
+    # DPWWA2852E (note above), which re-breaks the mobile channel we are
+    # debugging. Revert to "*=info=enabled" after the rejection reason is captured.
+    trace: "*=info=enabled:com.tivoli.am.fim.authsvc.*=all=enabled:com.tivoli.am.fim.mmfa.*=all=enabled"
+    users:
+    - name: "${runtime_user}"
+      password: !secret verify-access/ivia-runtime-user:password
+      # adminGroup grants the two Liberty roles the runtime service user needs:
+      # TrustClientRole (fim-runtime-server.xml, /SecurityTokenServiceWST13) and
+      # security-authz (rtss-runtime-server.xml, /services/AuthzService). Both
+      # bind to plain group "adminGroup", so easuser must be a member or those
+      # authorization checks return CWWKS9104A. create_user attaches easuser to
+      # adminGroup here (verified: server.xml gains <member name="easuser"/>).
+      groups:
+      - "adminGroup"
+    # Pre-create adminGroup so it exists BEFORE the users block runs. autoconf
+    # 0.3.21 processes groups (access_control.py:2233) before users (2254), and
+    # create_user silently drops membership in a group that does not yet exist.
+    # On a from-scratch workshop deploy adminGroup is absent, so this create_group
+    # is required; on an already-provisioned box it is a no-op ("Group exists").
+    # No users listed here on purpose — membership is set by users[].groups above
+    # as the final, durable op, dodging the users-block delete/recreate ordering.
+    groups:
+    - name: "adminGroup"
 webseal:
   runtime:
     policy_server: "ldap"
@@ -93,6 +164,17 @@ webseal:
       dn: "cn=jaime,dc=ibm,dc=com"
       first_name: "Jaime"
       last_name: "Sommers"
+    # Dedicated SCIM bind service account. Password is generated
+    # (random_password.ivia_scim_bind_pwd) and delivered as the ivia-scim-bind
+    # secret; static for the deployment (Vault-managed rotation = future improvement).
+    - username: "iviascim"
+      password: !secret verify-access/ivia-scim-bind:bind_pwd
+      dn: "cn=iviascim,dc=ibm,dc=com"
+      # Single-token names: pdadmin "user create {} {} {} {} {}" is positional and
+      # UNQUOTED (autoconf webseal.py), so a space in first/last name mis-parses
+      # the password arg → HPDMG0764E. jaime/oscar above are the working pattern.
+      first_name: "IVIAScim"
+      last_name: "Service"
     acls:
     - name: "unauth"
       users:
@@ -110,6 +192,36 @@ webseal:
         - "/isvaop/oauth2/token"
         - "/isvaop/oauth2/jwks"
         - "/isvaop/oauth2/ciba"
+      # MMFA QR self-enrollment authz. The AAC/MMFA wizard roots /mga at the
+      # deny-default isam_mobile_nobody (Any-other=T, traverse-only/no-read) and opens
+      # only a few leaves (/details=unauth, /oauth20/token=unauth, /scim/Me=
+      # default-webseal). It never grants the self-care page, the QR-image REST leaf,
+      # or the OAuth authorize endpoint the enrollment flow drives, so a logged-in user
+      # gets the page but a blank QR. qr_code.js (a) GETs /oauth20/authorize?
+      # client_id=AuthenticatorClient&response_type=code&scope=mmfaAuthn to mint a code,
+      # then (b) sets qr_img.src=/mmfa/user/mgmt/qr_code?code=... for the image.
+      # Grant the IBM-documented MMFA self-care leaf ACLs (verified against live ACL
+      # contents):
+      #   isam_mobile_anyauth  Any-other=Tr     -> the static self-care HTML page
+      #   isam_mobile_rest     Any-other=Tmdr   -> REST leaves; authenticated read+verbs,
+      #                                            unauth=T so the QR stays user-scoped
+      #   isam_mobile_unauth   Any-other/Unauth=Tr -> /authorize, matching its sibling
+      #                                            /oauth20/token; AAC enforces real
+      #                                            identity inside the OAuth flow.
+      # acl attach runs in the pdadmin phase AFTER the wizard creates these ACLs
+      # (webseal.py configure(): self.wrp before self.pdadmin), so they resolve cold.
+      - name: "isam_mobile_anyauth"
+        junctions:
+        - "/mga/sps/mmfa/user/mgmt/html"
+      - name: "isam_mobile_rest"
+        junctions:
+        - "/mga/sps/mmfa/user/mgmt/qr_code"
+        - "/mga/sps/mmfa/user/mgmt/authenticators"
+        - "/mga/sps/mmfa/user/mgmt/auth_methods"
+        - "/mga/sps/mmfa/user/mgmt/transactions"
+      - name: "isam_mobile_unauth"
+        junctions:
+        - "/mga/sps/oauth/oauth20/authorize"
   reverse_proxy:
   - name: "rp1"
     host: "www.iamlab.ibm.com"
@@ -127,17 +239,114 @@ webseal:
     # init container (see kubernetes_secret.base_layer_p12 + archive_file).
     management_root:
     - "reverse_proxy.zip"
+    # AAC/MMFA wiring on rp1 (increment 2). aac_configuration auto-creates the
+    # /mga junction + supporting ACLs against the AAC runtime; mmfa_configuration
+    # registers the mobile-app endpoints. reuse_acls/reuse_certs make this purely
+    # additive — the existing /isvaop CIBA junction + its ACLs are untouched.
+    mmfa_configuration:
+      channel: "mobile"
+      lmi:
+        hostname: "iviaconfig"
+        port: "9443"
+        username: "admin"
+        password: !secret verify-access/iviaadmin:adminpw
+      runtime:
+        hostname: "iviaruntime"
+        port: "9443"
+        username: "${runtime_user}"
+        password: !secret verify-access/ivia-runtime-user:password
+      reuse_acls: True
+      reuse_certs: True
+    aac_configuration:
+      junction: "/mga"
+      runtime:
+        hostname: "iviaruntime"
+        port: "9443"
+        username: "${runtime_user}"
+        password: !secret verify-access/ivia-runtime-user:password
+      reuse_acls: True
+      reuse_certs: True
     junctions:
     - junction_point: "/isvaop"
       description: "Verify Identiy Access OIDC OP Container"
       junction_type: "ssl"
       server_hostname: "iviaop"
       server_port: 8436
+    # SCIM endpoint on the AAC runtime — used for MMFA device enrollment
+    # (/scim/Me) and CIBA transaction-status polling (increment 3 checkstatus
+    # rule). Basic-auth as the runtime service user.
+    - junction_point: "/scim"
+      description: "AAC SCIM endpoint (MMFA enrollment + transaction status)"
+      junction_type: "ssl"
+      transparent_path_junction: "yes"
+      server_hostname: "iviaruntime"
+      server_port: 9443
+      enable_basic_auth: "yes"
+      username: "${runtime_user}"
+      password: !secret verify-access/ivia-runtime-user:password
+      remote_http_header:
+      - "iv-user"
+      - "iv-groups"
+      - "iv-creds"
     stanza_configuration:
+    # Restore forms-based interactive login. The aac_configuration wizard above
+    # switches the WRP point-of-contact to EAI-only (sets [forms] forms-auth=none),
+    # which makes the %BASICAUTHN% macro comment out the OscarVault username/password
+    # form so Jaime/Oscar cannot log in. autoconf applies stanza_configuration AFTER
+    # aac/mmfa (webseal.py _configure_stanza runs last, before deploy), so this
+    # update is the final write and is not re-clobbered. forms-auth + eai-auth=https
+    # coexist: forms is the primary interactive login, EAI stays for AAC/MMFA.
+    # Value is "https" (not "both") because the WRP is HTTPS-only (http.enabled=no).
+    - stanza: "forms"
+      entry_id: "forms-auth"
+      value: "https"
+      operation: "update"
     - stanza: "ssl"
       entry_id: "webseal-cert-keyfile-label"
       value: "WRP"
       operation: "update"
+    # OpenLDAP stores userPassword as {SSHA}. WebSEAL's default (auth-using-compare=yes)
+    # authenticates via an LDAP COMPARE, which OpenLDAP evaluates with octetStringMatch
+    # (literal bytes) — cleartext vs {SSHA} always fails, so valid logins are rejected
+    # (HPDRG0201E 0x31 / HPDIA0221W). "no" switches to a BIND, which OpenLDAP verifies
+    # against the hash. Required for any third-party LDAP that hashes userPassword.
+    - stanza: "ldap"
+      entry_id: "auth-using-compare"
+      value: "no"
+      operation: "update"
+    # === MMFA approve POST->PUT session continuity (3 settings, work together) ===
+    # WebSEAL fronts ONE Liberty backend (iviaruntime) via TWO junctions: /scim
+    # (mints the Liberty JSESSIONID on the /scim/Me enrollment+poll response) and
+    # /mga (runs the apiauthsvc approve POST then PUT). The cookieless IBM Verify
+    # app echoes JSESSIONID on the POST (->200) but NOT the PUT (->cookieless ->
+    # fresh HttpSession -> apiauthsvc state not found -> 400 "Server state ID
+    # [null]"). Per webseald.conf: managed-cookies-list captures a cookie ONLY
+    # from its OWN junction's response, and share-cookies=false isolates the jar
+    # per junction. So three settings, in concert:
+    #   1. [junction:/scim] managed-cookies-list -> WebSEAL captures JSESSIONID
+    #      into the cookie jar when /scim/Me mints it (no longer depends on the
+    #      phone echoing it).
+    #   2. [junction] share-cookies=true -> the jar's JSESSIONID is sent across
+    #      the /mga apiauthsvc POST AND PUT (default false would keep it on /scim).
+    #   3. [server] clear-cookie-jar-on-reauth=no -> the per-request MMFA-bearer
+    #      reauth ([session-http-headers] Authorization=https) does not wipe the
+    #      now-populated jar between POST and PUT.
+    # /isvaop (iviaop:8436, OIDC/CIBA - MUST NOT BREAK) is unaffected: it has no
+    # managed-cookies-list (its cookies never enter the jar) and the phone's MMFA
+    # WebSEAL session is distinct from the banking-app browser session that uses
+    # /isvaop, so share-cookies (within-session, cross-junction) never bridges them.
+    - stanza: "server"
+      entry_id: "clear-cookie-jar-on-reauth"
+      value: "no"
+      operation: "update"
+    - stanza: "junction"
+      entry_id: "share-cookies"
+      value: "true"
+      operation: "update"
+    - stanza: "junction:/scim"
+      entry_id: "managed-cookies-list"
+      value: "*JSESSIONID*"
+      operation: "add"
     - stanza: "http-transformations"
       entry_id: "req_openid"
       value: "req_openid_config.lua"
@@ -183,3 +392,159 @@ webseal:
       operation: "add"
       entry_id: "lifetime"
       value: "120"
+# AAC Advanced Access Control — MMFA subsystem (increment 2). Adapted from IBM's
+# ibmvia_autoconf examples/mmfa_demo/mmfa_config.yaml, trimmed to the CIBA
+# mobile-push approval path (no FIDO/recaptcha/risk/transfer-amount demo blocks).
+# push_notification_providers (the VerifyPushCreds relay registration) is the
+# last child of this access_control block — see the push block below mmfa.
+access_control:
+  # SCIM service config — exposes user + MMFA transaction attributes. Resolves
+  # users via the wrp_runtime LDAP bind (cn=root,secAuthority=Default); transaction verdicts are
+  # served by the AAC runtime itself (localscim / RUNTIME_USER).
+  scim:
+    schemas:
+    - uri: "urn:ietf:params:scim:schemas:core:2.0:User"
+      properties:
+        connection_type: "isamruntime"
+        ldap_connection: "wrp_runtime"
+        search_suffix: "dc=ibm,dc=com"
+        user_suffix: "dc=ibm,dc=com"
+        user_id: "cn"
+    - uri: "urn:ietf:params:scim:schemas:extension:isam:1.0:User"
+      properties:
+        ldap_connection: "wrp_runtime"
+        isam_domain: "Default"
+        update_native_users: True
+        connection_type: "isamruntime"
+    attribute_modes:
+    - schema: "urn:ietf:params:scim:schemas:extension:isam:1.0:MMFA:Transaction"
+      modes:
+      - attribute: "transactionsPending"
+        mode: "readwrite"
+      - attribute: "transactionsPending"
+        subattribute: "txnStatus"
+        mode: "readwrite"
+  # OAuth API-protection definition + client used by the IBM Verify app during
+  # QR device enrollment. redirect_uri points at the WRP-fronted QR enroll page.
+  # post_token_mapping_rule is REQUIRED, not cosmetic: the IBM-shipped rule's
+  # isMmfaScopePresent() branch calls MMFAMappingExtUtils.registerAuthenticator /
+  # savePushToken / saveDeviceAttributes during the enrollment token exchange —
+  # i.e. it is what actually registers the device + push token. The auto-created
+  # default PostTokenGeneration rule is a passthrough and does none of this.
+  # Path is flat (no mapping_rules/ prefix): the autoconf init container copies
+  # the bundle flat into /base_layer, and ISVA keys the rule by its generated
+  # name (AuthenticatorPostTokenGeneration), not by source path.
+  api_protection:
+    definitions:
+    - name: "Authenticator"
+      description: "MMFA Authenticator"
+      grant_types:
+      - "AUTHORIZATION_CODE"
+      enforce_single_use_grant: True
+      post_token_mapping_rule: mmfa_oauth_posttoken_mapping.js
+      tcm_behavior: "NEVER_PROMPT"
+      access_token_lifetime: 3600
+    clients:
+    - name: "AuthenticatorClient"
+      client_id: "AuthenticatorClient"
+      company_name: "OscarVault"
+      contact_type: "TECHNICAL"
+      redirect_uri:
+      - "https://${wrp_alb_host}/mga/sps/mmfa/user/mgmt/html/mmfa/qr_code.html?client_id=AuthenticatorClient"
+      definition: "Authenticator"
+  # MMFA endpoints embedded in the enrollment QR code. The IBM Verify app reaches
+  # these over the WRP ALB. options below sets ignoreSslCerts=true UNCONDITIONALLY,
+  # i.e. on the public-FQDN path (var.wrp_public_fqdn) too — NOT only the fallback.
+  # On the self-signed ELB-hostname fallback it is required (the app would reject
+  # the ALB cert SAN). On the public-FQDN path the ACM public cert is trusted, so
+  # the flag is not needed there and currently skips chain validation on Android
+  # anyway (iOS enforces via ATS regardless). Hardening — drop the flag on the
+  # public-FQDN path — is a deliberate follow-up; left on here so as not to change
+  # working enrollment.
+  mmfa:
+    client_id: "AuthenticatorClient"
+    endpoints:
+      details_url: "https://${wrp_alb_host}/mga/sps/mmfa/user/mgmt/details"
+      token_endpoint: "https://${wrp_alb_host}/mga/sps/oauth/oauth20/token"
+      # hotp/totp shared-secret endpoints are REQUIRED by the AAC MMFA API
+      # (FBTRBA243E if omitted) — IBM mmfa_demo reference mmfa_config.yaml.
+      hotp_shared_secret_endpoint: "https://${wrp_alb_host}/mga/sps/mga/user/mgmt/otp/hotp"
+      totp_shared_secret_endpoint: "https://${wrp_alb_host}/mga/sps/mga/user/mgmt/otp/totp"
+      enrollment_endpoint: "https://${wrp_alb_host}/scim/Me"
+      authntrxn_endpoint: "https://${wrp_alb_host}/scim/Me?attributes=urn:ietf:params:scim:schemas:extension:isam:1.0:MMFA:Transaction:transactionsPending,urn:ietf:params:scim:schemas:extension:isam:1.0:MMFA:Transaction:attributesPending"
+      mobile_endpoint_prefix: "https://${wrp_alb_host}/mga"
+    discovery_mechanisms:
+    - "urn:ibm:security:authentication:asf:mechanism:mobile_user_approval:fingerprint"
+    - "urn:ibm:security:authentication:asf:mechanism:mobile_user_approval:user_presence"
+    options: "ignoreSslCerts=true"
+  # Push notification providers — register the IBM Verify app against IBM's
+  # hosted VerifyPushCreds relay so the AAC runtime can deliver MMFA pushes to
+  # enrolled devices. Grounded in the IBM "Push Notifications for IBMers" doc +
+  # pyivia 0.2.44 PushNotification9021.create_provider:
+  #   * Appliance is 11.0.2.0 (>= 10.0.3): the VerifyPushCreds API Key is the
+  #     IMC Client Secret -> imc_client_secret. The IBM doc says Refresh Token /
+  #     App Key are pre-10.0.3 only, but the live 11.0.2.0 push-notification API
+  #     (POST /iam/access/v8/push-notification) STILL requires both JSON
+  #     properties and returns FBTRBA243E "required JSON property [refresh_token]
+  #     / [app_key] is missing" when they are absent (verified live 2026-05-30).
+  #     So both are supplied: refresh_token = the same API Key (the relay
+  #     credential, per the doc's pre-10.0.3 mapping), app_key = "notused" (the
+  #     doc states App Key is "any value - will not be used").
+  #   * Client ID is documented "any value, not used".
+  #   * provider_address is the live relay host verifypushcreds.verify.ibm.com
+  #     (the autoconf docstring's *.mybluemix.net host is stale). DigiCert Global
+  #     Root G3 (signer_certificates, top of file) is the runtime trust anchor.
+  #   * No `provider:` key — it is not a create_provider kwarg and would raise
+  #     TypeError; the IMC provider is selected by populating imc_* fields.
+  #   * One registration per platform (apple + android), same API Key, per the
+  #     IBM doc. Both share app_id com.ibm.security.verifyapp (the IBM Verify
+  #     bundle id the device reports). Re-apply is SAFE: the autoconf Job applies a
+  #     fail-loud in-Job patch to ibmvia_autoconf access_control.py (see main.tf
+  #     "PATCHED autoconf push_notifications" + README "Vendored SDK patch") that
+  #     matches each provider by (app_id, platform) and reads the live push_id, so
+  #     apple and android update independently on every run. (Unpatched 0.3.21
+  #     matched on app_id alone and clobbered the second provider.)
+  #   * Gated on enable_mmfa_push (= var.ivia_mmfa_push_client_secret != ""): when
+  #     no push API key is supplied the whole block is omitted, so autoconf does not
+  #     resolve the absent ivia-mmfa-push Secret — a missing !secret lookup fails
+  #     the YAML load and aborts the entire run, including the WebSEAL/forms-auth
+  #     step (aac.configure() runs before web.configure()).
+%{ if enable_mmfa_push }
+  push_notification_providers:
+  - app_id: "com.ibm.security.verifyapp"
+    platform: "apple"
+    provider_address: "verifypushcreds.verify.ibm.com"
+    imc_client_id: "notused"
+    imc_client_secret: !secret verify-access/ivia-mmfa-push:imc_client_secret
+    imc_refresh_token: !secret verify-access/ivia-mmfa-push:imc_client_secret
+    imc_app_key: "notused"
+  - app_id: "com.ibm.security.verifyapp"
+    platform: "android"
+    provider_address: "verifypushcreds.verify.ibm.com"
+    imc_client_id: "notused"
+    imc_client_secret: !secret verify-access/ivia-mmfa-push:imc_client_secret
+    imc_refresh_token: !secret verify-access/ivia-mmfa-push:imc_client_secret
+    imc_app_key: "notused"
+%{ endif }
+  # Transaction-approval policies. Initiate pushes to the enrolled device; the
+  # Response policies complete on Approve (user-presence = simple Approve/Deny,
+  # fingerprint = biometric). Policy XML is verbatim from the IBM example except
+  # the human-facing contextMessage display string. mmfa + mobile_user_approval
+  # mechanisms are built into the AAC runtime (not user-defined here).
+  authentication:
+    policies:
+    - name: "MMFA Initiate Login Policy"
+      uri: "urn:ibm:security:authentication:asf:mmfa_initiate_simple_login"
+      description: "OscarVault MMFA approval initiate policy"
+      enabled: True
+      policy: '<Policy xmlns="urn:ibm:security:authentication:policy:1.0:schema" PolicyId="urn:ibm:security:authentication:asf:mmfa_initiate_simple_login"><Description>IBM MMFA Login Policy</Description><Step type="Authenticator"><Authenticator AuthenticatorId="urn:ibm:security:authentication:asf:mechanism:mmfa"><Parameters><AttributeAssignment AttributeId="contextMessage"><AttributeValue DataType="String">Approve your OscarVault request</AttributeValue></AttributeAssignment><AttributeAssignment AttributeId="mode"><AttributeValue DataType="String">Initiate</AttributeValue></AttributeAssignment><AttributeAssignment AttributeId="policyURI"><AttributeValue DataType="URI">urn:ibm:security:authentication:asf:mmfa_response_userpresence</AttributeValue></AttributeAssignment><AttributeAssignment AttributeId="username"><AttributeDesignator AttributeId="username" Namespace="urn:ibm:security:asf:request:parameter" Source="urn:ibm:security:asf:scope:request" DataType="String"/></AttributeAssignment></Parameters></Authenticator></Step></Policy>'
+    - name: "MMFA User Presence Response"
+      uri: "urn:ibm:security:authentication:asf:mmfa_response_userpresence"
+      description: "MMFA user-presence (Approve/Deny) challenge response"
+      enabled: True
+      policy: '<Policy xmlns="urn:ibm:security:authentication:policy:1.0:schema" PolicyId="urn:ibm:security:authentication:asf:mmfa_response_userpresence"><Description>IBM MMFA Demo User Presence challenge response</Description><Step type="Authenticator"><Authenticator AuthenticatorId="urn:ibm:security:authentication:asf:mechanism:mobile_user_approval:user_presence"/></Step><Step type="Authenticator"><Authenticator AuthenticatorId="urn:ibm:security:authentication:asf:mechanism:mmfa"><Parameters><AttributeAssignment AttributeId="mode"><AttributeValue DataType="String">Response</AttributeValue></AttributeAssignment></Parameters></Authenticator></Step></Policy>'
+    - name: "MMFA Fingerprint Authentication Response"
+      uri: "urn:ibm:security:authentication:asf:mmfa_fingerprint_response"
+      description: "MMFA fingerprint (biometric) challenge response"
+      enabled: True
+      policy: '<Policy xmlns="urn:ibm:security:authentication:policy:1.0:schema" PolicyId="urn:ibm:security:authentication:asf:mmfa_fingerprint_response"><Description>IBM MMFA Demo Fingerprint challenge response</Description><Step type="Authenticator"><Authenticator AuthenticatorId="urn:ibm:security:authentication:asf:mechanism:mobile_user_approval:fingerprint"/></Step><Step type="Authenticator"><Authenticator AuthenticatorId="urn:ibm:security:authentication:asf:mechanism:mmfa"><Parameters><AttributeAssignment AttributeId="mode"><AttributeValue DataType="String">Response</AttributeValue></AttributeAssignment></Parameters></Authenticator></Step></Policy>'

@@ -2,68 +2,81 @@ rules:
   mapping:
     - name: notifyuser
       content: |
-        // CIBA InternalAuthenticator + push the consent URL to the banking app so a
-        // workshop user gets an "Approve" button (no kubectl / no log access needed).
+        // UC3 mobile-push CIBA. Route refund consent to the user's IBM Verify device
+        // instead of browser consent. uc3-agent fires the MMFA push itself right after
+        // bc-authorize (identity taken from the authenticated banking session, never a
+        // parameter), so this rule only has to wire CIBA completion to a server-polled
+        // check-status endpoint on uc3-agent.
         //
-        // VERIFIED LIVE 2026-05-23 (ivia-oidc-provider:25.10): notifyuser CAN make
-        // outbound HTTP. The sandbox is position-sensitive -- `Packages` is not a bare
-        // global, and HttpClientV2 is NOT pre-bound; you MUST importClass HttpClientV2
-        // INSIDE this block, on the line immediately before the call. Plain http://
-        // needs no truststore; headers=null + sendAsJson=true sends a JSON body.
-        // httpPost(url,headers,body,trustStore,user,pass,keyStore,keyAlias,proto,
-        //          throwExec,timeoutSecs,sendAsJson,proxy)
+        // ExternalAuthenticatorWithCheckStatusEndpoint(checkStatusEndpoint, bearer):
+        // ISVAOP PUTs checkStatusEndpoint on every token poll (see the checkstatus
+        // rule); uc3-agent reports SUCCESS only when the user's OWN SCIM MMFA
+        // transaction -- the exact one uc3-agent fired -- resolves to SUCCESS, so the
+        // approval is unforgeable and requires the physical device tap. The bearer is
+        // surfaced to checkstatus via ciba.getBearerToken() and replayed to uc3-agent
+        // as a per-request shared secret (defense-in-depth on top of the SCIM gate).
+        // The authenticator classes are pre-bound in the ciba rule sandbox (same as
+        // the InternalAuthenticator this replaces) -- no importClass needed.
         importClass(Packages.com.tivoli.am.fim.trustserver.sts.utilities.IDMappingExtUtils);
-        try {
-          // Import BOTH in this order (verbatim the live-verified form): importing
-          // HttpClient first loads the httpclient package so the HttpClientV2 import
-          // resolves. Importing only HttpClientV2 fails ("HttpClientV2 is not defined").
-          importClass(Packages.com.ibm.security.access.httpclient.HttpClient);
-          importClass(Packages.com.ibm.security.access.httpclient.HttpClientV2);
-          var consentUrl = "" + ciba.getUserAuthorizeEndpoint();
-          var authReqId  = "" + ciba.getAuthRequestID();
-          var body = '{"auth_req_id":"' + authReqId + '","consent_url":"' + consentUrl + '"}';
-          var resp = HttpClientV2.httpPost(
-            "http://uc3-agent-svc.banking-app.svc.cluster.local:8080/api/ciba/pending",
-            null, body, null, null, null, null, null, null, false, 5, true, null);
-          IDMappingExtUtils.traceString("notifyuser pushed consent code=" + resp.getCode() + " auth_req_id=" + authReqId);
-        } catch (e) {
-          IDMappingExtUtils.traceString("notifyuser consent push FAILED: " + e);
-        }
-        ciba.setAuthenticator(new InternalAuthenticator());
+        var authReqId = "" + ciba.getAuthRequestID();
+        var bearer    = "" + ciba.getBearerToken();
+        var statusUrl = "http://uc3-agent-svc.banking-app.svc.cluster.local:8080/api/ciba/status?auth_req_id=" + authReqId;
+        IDMappingExtUtils.traceString("UC3 notifyuser -> ExternalAuthenticatorWithCheckStatusEndpoint auth_req_id=" + authReqId);
+        ciba.setAuthenticator(new ExternalAuthenticatorWithCheckStatusEndpoint(statusUrl, bearer));
     - name: checkstatus
       content: |
-        /**
-        * Copyright contributors to the IBM Security Verify Access OIDC Provider Resources project
-        */
+        // UC3 mobile-push CIBA check-status. ISVAOP runs this on every token poll.
+        // PUT the check-status endpoint (uc3-agent) with the CIBA bearer; uc3-agent
+        // looks up the MMFA transaction it fired for this auth_req_id, reads the
+        // user's OWN SCIM transaction status, and returns a small JSON body:
+        //   {"status":"approved","uid":"<user>"} | {"status":"denied"} | {"status":"pending"}
+        // uid is bound as the id_token 'sub' via meta[subject_attribute_name] (=sub,
+        // provider.yml). uc3-agent matches the
+        // EXACT fired transactionId (never "any SUCCESS for the user"), so a stale or
+        // unrelated SUCCESS cannot complete this flow.
+        //
+        // httpPut(url,header,body,trustStore,user,pass,keyStore,keyAlias,proto,
+        //         throwExec,timeoutSecs,sendAsJson,proxy) -- importClass HttpClient
+        // BEFORE HttpClientV2 (the V2 import only resolves once the package is loaded).
         importClass(Packages.com.tivoli.am.fim.trustserver.sts.utilities.IDMappingExtUtils);
+        importClass(Packages.com.ibm.security.access.httpclient.HttpClient);
+        importClass(Packages.com.ibm.security.access.httpclient.HttpClientV2);
+        importClass(Packages.com.ibm.security.access.httpclient.Headers);
 
-        IDMappingExtUtils.traceString("Starting CheckStatus JS");
-        IDMappingExtUtils.traceString("Auth Request ID: " + ciba.getAuthRequestID());
+        var url    = "" + ciba.getCheckStatusEndpoint();
+        var bearer = "" + ciba.getBearerToken();
 
-        /**
-        * What is expected to be done here:
-        * - Calling the configured check status endpoint to get the latest authentication status
-        *   Use http module to make http callout
-        * - Populate user metadata in the case of successful authentication
-        *   The metadata serve as credential attributes that can be used for grant enrichment
-        *   At least the metadata should contain 'uid' claim (or claim indicated in 'subject_attribute_name')
-        *   as this will be used as the 'sub' in id_token
-        * - Send the status back using one of the method: pending(), failed() or success()
-        */
-        if (ciba.getCheckStatusEndpoint() == "https://checkstatus.com?status=fail") { // for demo
-            ciba.failed(); // user rejected
-        } else if (ciba.getCheckStatusEndpoint() == "https://checkstatus.com?status=pass") { // for demo
+        var headers = new Headers();
+        headers.addHeader("Content-Type", "application/json");
+        headers.addHeader("Authorization", "Bearer " + bearer);
 
-            var meta = {};
-            meta["uid"] = "25202QWRUA";
-            meta["email"] = "asmith@test.com";
-            meta["preferred_username"] = "asmith";
-            meta["given_name"] = "Alex";
-            meta["family_name"] = "Smith";
-            ciba.success(meta); // user has been authenticated
+        var resp = HttpClientV2.httpPut(url, headers, "{}", null, null, null, null, null, null, null, null, true, null);
 
+        if (resp == null || resp.hasError()) {
+          IDMappingExtUtils.traceString("UC3 checkstatus: transport error -> pending");
+          ciba.pending();
         } else {
-            ciba.pending(); // waiting for user's response
+          var code    = resp.getCode();
+          var bodyStr = "" + resp.getBody();
+          IDMappingExtUtils.traceString("UC3 checkstatus code=" + code + " body=" + bodyStr);
+          var status = "pending";
+          var uid    = null;
+          try {
+            var pl = JSON.parse(bodyStr);
+            if (pl != null && pl.status != null) { status = "" + pl.status; }
+            if (pl != null && pl.uid != null)    { uid    = "" + pl.uid; }
+          } catch (e) {
+            IDMappingExtUtils.traceString("UC3 checkstatus JSON parse error: " + e);
+          }
+          if (code == 200 && status == "approved" && uid != null) {
+            var meta = {};
+            meta["sub"] = uid;  // provider.yml subject_attribute_name=sub -> id_token sub
+            ciba.success(meta);
+          } else if (code == 200 && status == "denied") {
+            ciba.failed();
+          } else {
+            ciba.pending();
+          }
         }
     - name: idmap
       content: |
