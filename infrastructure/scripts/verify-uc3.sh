@@ -24,8 +24,13 @@
 #   9.  fluent-bit DaemonSet pods Running in logging namespace
 #   10. S3 log bucket exists and has objects
 #   11. Athena audit_correlation VIEW auto-created (attendees run only the SELECT)
-#   12. UC3 agent chat: "I need a refund" returns transaction list
-#   13. UC3 agent chat: multi-turn session — selecting a transaction is acknowledged
+#   12. UC3 agent /chat returns transaction data — runs only if UC3_VERIFY_CHAT_TOKEN
+#       is set to a real jaime id_token captured from the browser flow. There is no
+#       public ROPC client in clients.yml.tftpl (agent-uc2 is confidential +
+#       authorization_code only), so headless token minting is structurally
+#       impossible without expanding the production attack surface. If unset, this
+#       check is SKIPPED with a print_warn — never a fake pass.
+#   13. UC3 agent /chat multi-turn session — same UC3_VERIFY_CHAT_TOKEN gate.
 #
 # Bypass mode (--bypass) — two GENUINE negative tests, classified by reason:
 #   14. Untrusted-signer control: an HS256 self-forged JWT must be rejected at
@@ -90,8 +95,13 @@ Normal mode checks (19 total):
   9.  fluent-bit DaemonSet Running in logging namespace
   10. S3 log bucket exists and has objects
   11. Athena audit_correlation VIEW auto-created (attendees run only the SELECT)
-  12. UC3 agent chat: "I need a refund" returns transaction list
-  13. UC3 agent chat: multi-turn session — selecting a transaction is acknowledged
+  12. UC3 agent /chat returns transaction data (requires UC3_VERIFY_CHAT_TOKEN)
+  13. UC3 agent /chat multi-turn session (requires UC3_VERIFY_CHAT_TOKEN)
+       — both 12 and 13 are SKIPPED with print_warn if UC3_VERIFY_CHAT_TOKEN is
+       unset. There is no public ROPC client in clients.yml.tftpl, so headless
+       jaime id_token minting is impossible without expanding production attack
+       surface. Capture a real bearer from the browser flow:
+       workshop/content/70-use-case-3/70-test-refund/.
 
 Bypass mode (--bypass) adds two genuine negative tests:
   14. Untrusted-signer control — HS256 self-forged JWT rejected at signature layer
@@ -99,13 +109,15 @@ Bypass mode (--bypass) adds two genuine negative tests:
       rejected at the /may_act/sub bound_claim (skip/infra error = HARD FAIL)
 
 Env-var overrides:
-  BANKING_NAMESPACE   (default: banking-app)
-  LOGGING_NAMESPACE   (default: logging)
-  VAULT_NAMESPACE     (default: vault)
-  VAULT_POD           (default: vault-0)
-  VAULT_ROOT_TOKEN    (optional)
-  IVIA_ISSUER         (default: https://iviaop.verify-access.svc.cluster.local:8436/oauth2)
-  AWS_REGION          (default: resolved from terraform.tfvars)
+  BANKING_NAMESPACE       (default: banking-app)
+  LOGGING_NAMESPACE       (default: logging)
+  VAULT_NAMESPACE         (default: vault)
+  VAULT_POD               (default: vault-0)
+  VAULT_ROOT_TOKEN        (optional)
+  IVIA_ISSUER             (default: https://iviaop.verify-access.svc.cluster.local:8436/oauth2)
+  AWS_REGION              (default: resolved from terraform.tfvars)
+  UC3_VERIFY_CHAT_TOKEN   (optional — bearer captured from a real browser sign-in;
+                           enables Checks 12 and 13 against the live /chat endpoint)
 USAGE
     exit 0
 fi
@@ -122,8 +134,6 @@ LOGGING_NAMESPACE="${LOGGING_NAMESPACE:-logging}"
 VAULT_NAMESPACE="${VAULT_NAMESPACE:-vault}"
 VAULT_POD="${VAULT_POD:-vault-0}"
 IVIA_ISSUER="${IVIA_ISSUER:-https://iviaop.verify-access.svc.cluster.local:8436/oauth2}"
-# source of truth: infrastructure/modules/verify_access/base_layer/base_layer.yaml (pdadmin.users)
-JAIME_PASSWORD="${JAIME_PASSWORD:-WorkshopUser1!}"
 
 # Resolve AWS region from terraform.tfvars (canonical-region contract)
 _TFVARS="${SCRIPT_DIR}/../../infrastructure/terraform.tfvars"
@@ -483,10 +493,16 @@ db_creds_json=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
 db_username=$(echo "${db_creds_json}" | jq -r '.data.username' 2>/dev/null || echo "")
 db_password=$(echo "${db_creds_json}" | jq -r '.data.password' 2>/dev/null || echo "")
 
+# uc3-agent-config exposes the RDS host as DB_HOST (UC3 module convention);
+# banking-mcp-config (UC2 MCP server) exposes the same RDS host as RDS_ADDRESS.
+# kubectl ... -o jsonpath='{.data.MISSING_KEY}' returns "" with rc=0, so a `||`
+# chain never fires — we have to check for empty explicitly between fallbacks.
 rds_host=$(kubectl get configmap uc3-agent-config -n "${BANKING_NAMESPACE}" \
-    -o jsonpath='{.data.RDS_ADDRESS}' 2>/dev/null || \
-    kubectl get configmap banking-mcp-config -n "${BANKING_NAMESPACE}" \
-    -o jsonpath='{.data.RDS_ADDRESS}' 2>/dev/null || echo "")
+    -o jsonpath='{.data.DB_HOST}' 2>/dev/null || echo "")
+if [ -z "${rds_host}" ]; then
+    rds_host=$(kubectl get configmap banking-mcp-config -n "${BANKING_NAMESPACE}" \
+        -o jsonpath='{.data.RDS_ADDRESS}' 2>/dev/null || echo "")
+fi
 
 if [ -n "${db_username}" ] && [ "${db_username}" != "null" ] && [ -n "${rds_host}" ]; then
     refunds_check_pod="verify-uc3-refunds-$$"
@@ -694,83 +710,58 @@ else
 fi
 
 #-------------------------------------------------------------------------------
-# Pre-check 12/13 — Mint a real IVIA id_token for jaime via ROPC
+# Checks 12 and 13 — UC3 agent /chat (authenticated)
 #
-# Checks 12 and 13 POST to the authenticated /chat endpoint (post-07.6 the
-# agent requires Authorization: Bearer <id_token>). Mint a real id_token via
-# ROPC (grant_type=password) before running the chat checks.
-# -k is intentional here: this is the verify harness talking directly to the
-# in-cluster IVIA over a non-proxied path; the production agent code itself
-# uses the mounted CA (IVIA_CA_BUNDLE), not the verify harness.
-#-------------------------------------------------------------------------------
-IVIA_ID_TOKEN=""
-token_mint_pod="uc3-token-mint-$$"
-kubectl delete pod "${token_mint_pod}" -n "${BANKING_NAMESPACE}" --ignore-not-found --wait=true &>/dev/null
-
-token_mint_raw=$(kubectl run "${token_mint_pod}" --rm -i --restart=Never \
-    -n "${BANKING_NAMESPACE}" \
-    --image=curlimages/curl -- \
-    curl -sk --max-time 20 -X POST "${IVIA_ISSUER}/token" \
-    -H 'Content-Type: application/x-www-form-urlencoded' \
-    -d "grant_type=password&username=jaime&password=${JAIME_PASSWORD}&client_id=agent-uc2&scope=openid" \
-    2>/dev/null || echo "")
-
-IVIA_ID_TOKEN=$(echo "${token_mint_raw}" | grep -o '"id_token":"[^"]*"' | cut -d'"' -f4 || echo "")
-
-if [ -z "${IVIA_ID_TOKEN}" ]; then
-    print_fail "Pre-check 12/13: could not mint IVIA id_token via ROPC — check IVIA ROPC/passwordGrant is enabled and JAIME_PASSWORD is correct. Token mint response: ${token_mint_raw:0:300}"
-fi
-
-#-------------------------------------------------------------------------------
-# Check 12 — UC3 agent chat: list_transactions returns transaction data
+# Both checks POST to the agent's /chat endpoint, which requires a real IVIA
+# id_token in the Authorization header (post-07.6 auth.py validates JWKS/aud/iss).
+# There is no public ROPC client in clients.yml.tftpl that can mint a jaime
+# id_token headlessly:
+#   - agent-uc2 is grant_types=[authorization_code, refresh_token],
+#     token_endpoint_auth_method=client_secret_basic, require_pkce=true.
+#   - agent-uc1/uc3-actor are client_credentials only (no user sub).
+# Adding a ROPC client purely for testing would expand the production attack
+# surface — anyone with jaime's password could mint a working id_token outside
+# the WebSEAL login + PKCE flow. That is not an acceptable trade for green ticks.
 #
-# Proves the AUTHENTICATED read path: jaime's id_token → /chat 200 →
-# list_transactions → jaime's data returned (Vault uc3-readonly creds + DB).
-# A 401 here means the id_token was rejected by auth.py (JWKS/aud/iss check).
+# Instead, the operator captures a real bearer from the browser sign-in
+# (workshop/content/70-use-case-3/70-test-refund/) and exports it as
+# UC3_VERIFY_CHAT_TOKEN before running this script. If unset, Checks 12 and 13
+# print_warn (skipped) — never a fake pass.
 #-------------------------------------------------------------------------------
 chat_session="verify-$$-$(date +%s)"
-if [ -n "${IVIA_ID_TOKEN}" ]; then
+if [ -n "${UC3_VERIFY_CHAT_TOKEN:-}" ]; then
     chat_response=$(kubectl run uc3-chat-test-$$ --rm -i --restart=Never -n "${BANKING_NAMESPACE}" \
         --image=curlimages/curl -- \
         curl -s --max-time 30 -X POST http://uc3-agent-svc:8080/chat \
         -H 'Content-Type: application/json' \
-        -H "Authorization: Bearer ${IVIA_ID_TOKEN}" \
+        -H "Authorization: Bearer ${UC3_VERIFY_CHAT_TOKEN}" \
         -d "{\"message\":\"I need a refund\",\"sessionId\":\"${chat_session}\"}" \
         2>/dev/null || echo "")
 
     if echo "${chat_response}" | grep -qi "transaction\|amount\|merchant"; then
-        print_pass "UC3 agent chat: list_transactions returns transaction data (authenticated)"
+        print_pass "Check 12: UC3 agent /chat returned transaction data with the supplied bearer (authenticated)"
     else
-        print_fail "UC3 agent chat: list_transactions did not return transaction data" \
-            "Expected response containing transaction details. A 401 means the id_token was rejected (auth.py JWKS/aud/iss). Got: ${chat_response:0:200}. Check: kubectl logs deployment/uc3-agent -n ${BANKING_NAMESPACE}"
+        print_fail "Check 12: UC3 agent /chat did not return transaction data with the supplied bearer" \
+            "A 401 means UC3_VERIFY_CHAT_TOKEN was rejected by auth.py (JWKS/aud/iss check). Capture a fresh jaime id_token from the browser sign-in flow and re-export. Got: ${chat_response:0:200}. Check: kubectl logs deployment/uc3-agent -n ${BANKING_NAMESPACE}"
     fi
-else
-    print_fail "Check 12 skipped — id_token mint failed (see pre-check error above)"
-fi
 
-#-------------------------------------------------------------------------------
-# Check 13 — UC3 agent chat: multi-turn session (select transaction)
-#
-# Send a follow-up message selecting transaction #1 on the same sessionId.
-# The agent should acknowledge the selection (proves session state works).
-#-------------------------------------------------------------------------------
-if [ -n "${IVIA_ID_TOKEN}" ]; then
     select_response=$(kubectl run uc3-chat-sel-$$ --rm -i --restart=Never -n "${BANKING_NAMESPACE}" \
         --image=curlimages/curl -- \
         curl -s --max-time 30 -X POST http://uc3-agent-svc:8080/chat \
         -H 'Content-Type: application/json' \
-        -H "Authorization: Bearer ${IVIA_ID_TOKEN}" \
+        -H "Authorization: Bearer ${UC3_VERIFY_CHAT_TOKEN}" \
         -d "{\"message\":\"Refund transaction 1\",\"sessionId\":\"${chat_session}\"}" \
         2>/dev/null || echo "")
 
     if echo "${select_response}" | grep -qi "refund\|confirm\|approve\|CIBA\|consent\|process"; then
-        print_pass "UC3 agent chat: multi-turn session — agent acknowledged transaction selection"
+        print_pass "Check 13: UC3 agent /chat multi-turn — selection acknowledged with the supplied bearer"
     else
-        print_fail "UC3 agent chat: multi-turn session did not acknowledge selection" \
+        print_fail "Check 13: UC3 agent /chat multi-turn did not acknowledge selection" \
             "Expected response referencing refund/confirm/CIBA. Got: ${select_response:0:200}. Check: kubectl logs deployment/uc3-agent -n ${BANKING_NAMESPACE}"
     fi
 else
-    print_fail "Check 13 skipped — id_token mint failed (see pre-check error above)"
+    print_warn "Check 12 skipped — set UC3_VERIFY_CHAT_TOKEN=<bearer> with a real jaime id_token captured from the browser sign-in flow (workshop/content/70-use-case-3/70-test-refund/) to exercise the authenticated /chat path. No public ROPC client exists in clients.yml.tftpl for headless testing — adding one would expand the production attack surface."
+    print_warn "Check 13 skipped — same reason as Check 12 (UC3_VERIFY_CHAT_TOKEN not set)."
 fi
 
 #-------------------------------------------------------------------------------
