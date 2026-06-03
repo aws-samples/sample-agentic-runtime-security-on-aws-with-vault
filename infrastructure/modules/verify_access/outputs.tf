@@ -51,7 +51,7 @@ output "ivia_runtime_user_password" {
 }
 
 output "ivia_runtime_ca_pem" {
-  description = "AAC runtime (iviaruntime) self-signed serving cert (CN=isam, no SAN) captured from :9443. uc3_agent PINS this as the CA (check_hostname=False) for the SCIM read + MMFA push-fire. Static repo file — mirrors the iviaop.pem/iviawrprp1.pem captured-serving-cert convention."
-  value       = file("${path.module}/iviaop-config/iviaruntime.pem")
+  description = "AAC runtime (iviaruntime) Terraform-owned serving cert (CN=isam). uc3_agent PINS this as the CA (check_hostname=False) for the SCIM read + MMFA push-fire. State-derived from tls_self_signed_cert.iviaruntime, installed into IVIA's rt_profile_keys keystore (label \"server\") by the autoconf job — stable across iviaruntime pod restarts AND module.ivia rebuilds. See README § \"TLS serving cert ownership\"."
+  value       = tls_self_signed_cert.iviaruntime.cert_pem
 }
 

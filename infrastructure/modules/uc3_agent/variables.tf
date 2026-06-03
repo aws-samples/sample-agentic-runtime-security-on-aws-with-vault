@@ -124,7 +124,7 @@ variable "ivia_scim_password" {
 }
 
 variable "ivia_runtime_ca_pem" {
-  description = "iviaruntime self-signed serving cert (CN=isam, no SAN) the agent PINS for TLS to :9443. Mounted at /etc/ssl/ivia/iviaruntime.pem; consumed by mmfa.py via IVIA_RUNTIME_CA_BUNDLE (cert-pinning with check_hostname=False, never verify=False)."
+  description = "iviaruntime Terraform-owned serving cert (CN=isam) the agent PINS for TLS to :9443. Mounted at /etc/ssl/ivia/iviaruntime.pem; consumed by mmfa.py via IVIA_RUNTIME_CA_BUNDLE (cert-pinning with check_hostname=False, never verify=False). Source = tls_self_signed_cert.iviaruntime in modules/verify_access — state-derived, no longer a captured static file; stable across iviaruntime restarts + module.ivia rebuilds."
   type        = string
 }
 

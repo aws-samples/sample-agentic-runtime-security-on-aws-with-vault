@@ -25,6 +25,20 @@ container:
     - "postgres.crt"
     - "ldap.crt"
   - name: "rt_profile_keys"
+    # iviaruntime serving cert (Liberty defaultKeyStore at
+    # /var/pdweb/shared/keytab/rt_profile_keys.p12, label "server"). Terraform
+    # owns the keypair (tls_self_signed_cert.iviaruntime in main.tf); the
+    # autoconf bash preamble mints the PKCS#12 from cert+key+seal-password and
+    # writes it to /tmp/base_layer/iviaruntime.p12. The autoconf SDK is
+    # monkey-patched (also in main.tf bash preamble) to delete-then-import the
+    # personal cert so re-applies overwrite the existing label cleanly. iviaconfig
+    # PVC persists this KDB across iviaruntime pod restarts AND module.ivia
+    # rebuilds — no more cert drift, no more stale uc3-agent pin.
+    # See modules/verify_access/README.md § "TLS serving cert ownership".
+    personal_certificates:
+    - name: "server"
+      p12_file: "iviaruntime.p12"
+      secret: !secret verify-access/ivia-runtime-p12-creds:secret
     signer_certificates:
     - "postgres.crt"
     # DigiCert Global Root G3 — trust anchor for verifypushcreds.verify.ibm.com
@@ -33,6 +47,25 @@ container:
     # "DigiCert Global G3 TLS ECC SHA384 2020 CA1" intermediate; trusting the
     # root survives intermediate rotation. Verified live 2026-05-30.
     - "DigiCertGlobalRootG3.crt"
+  # pdsrv — WebSEAL outbound truststore for the /mga + /scim junctions to
+  # iviaruntime. Without this signer entry, WRP cannot TLS-handshake to
+  # iviaruntime after the runtime cert is rotated to the Terraform-owned one —
+  # the appliance's pre-baked CA root that originally signed iviaruntime's
+  # auto-self-signed cert no longer matches our new self-signed cert. WebSEAL
+  # logs `DPWIV1228W ... GSK_ERROR_BAD_CERT` + `DPWWA2851E ... oauth-cluster
+  # ping fail` until the new cert is trusted here. Adding it as a signer makes
+  # WRP trust the Terraform-issued chain (cert is self-signed, so it acts as
+  # its own CA). Re-uses the same iviaruntime.cert.pem we wrote into the
+  # ivia-base-layer ConfigMap for the personal-cert import above.
+  - name: "pdsrv"
+    signer_certificates:
+    - "iviaruntime.cert.pem"
+  # lmi_trust_store — outbound trust for the LMI's own calls to iviaruntime
+  # (server_connections wp_runtime / localscim use this store). Same root
+  # cause + same fix as pdsrv above.
+  - name: "lmi_trust_store"
+    signer_certificates:
+    - "iviaruntime.cert.pem"
   - name: "pdsrv"
     personal_certificates:
     - name: "WRP"
