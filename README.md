@@ -10,8 +10,6 @@ Step-by-step **hands-on** AWS Workshop Studio workshop that deploys the IBM Veri
 
 ![Reference architecture](assets/architecture-overview.svg)
 
-![Reference architecture](assets/architecture-overview.svg)
-
 ---
 
 ## Quick start (admin)
