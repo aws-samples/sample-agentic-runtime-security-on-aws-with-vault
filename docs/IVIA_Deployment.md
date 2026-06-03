@@ -6,15 +6,15 @@ Definitive playbook for tearing down and redeploying the IBM Verify Identity Acc
 
 ## Quick Reference
 
-| Component | Terraform Resource | Image | Port | Gated by `ivia_activated` |
-|-----------|-------------------|-------|------|---------------------------|
-| OIDC Provider | `kubernetes_deployment.isvaop` | `icr.io/ivia/ivia-oidc-provider:25.10` | 8436 | No |
-| Config + slapd + Runtime | `kubernetes_deployment.ivia_config` | `ivia-config:11.0.2.0` + `slapd` + `ivia-runtime:11.0.2.0` | 9443, 389, 9444 | No |
-| Web Reverse Proxy | `kubernetes_deployment.ivia_wrp` | `icr.io/ivia/ivia-wrp:11.0.2.0` | 9443 | **Yes** |
-| WRP Service | `kubernetes_service.ivia_wrp` | — | 9443 (ClusterIP) | No |
-| WRP Ingress (ALB) | `kubernetes_ingress_v1.ivia_wrp` | — | 80 (HTTP) → 9443 (HTTPS) | No |
-| DB Init Job | `kubernetes_job.ivia_db_init` | `postgres:17-alpine` | — | No |
-| Autoconf Job | `kubernetes_job.ivia_autoconf` | `curlimages/curl:latest` | — | **Yes** |
+| Component | Terraform Resource | Image | Port |
+|-----------|-------------------|-------|------|
+| OIDC Provider | `kubernetes_deployment.isvaop` | `icr.io/ivia/ivia-oidc-provider:25.10` | 8436 |
+| Config + slapd + Runtime | `kubernetes_deployment.ivia_config` | `ivia-config:11.0.2.0` + `slapd` + `ivia-runtime:11.0.2.0` | 9443, 389, 9444 |
+| Web Reverse Proxy | `kubernetes_deployment.ivia_wrp` | `icr.io/ivia/ivia-wrp:11.0.2.0` | 9443 |
+| WRP Service | `kubernetes_service.ivia_wrp` | — | 9443 (ClusterIP) |
+| WRP Ingress (ALB) | `kubernetes_ingress_v1.ivia_wrp` | — | 80 (HTTP) → 9443 (HTTPS) |
+| DB Init Job | `kubernetes_job.ivia_db_init` | `postgres:17-alpine` | — |
+| Autoconf Job | `kubernetes_job.ivia_autoconf` | `curlimages/curl:latest` | — |
 
 **Namespace:** `verify-access`
 **Terraform module:** `module.ivia` (source: `./modules/verify_access`)
@@ -70,7 +70,7 @@ kubectl logs -n verify-access -l app.kubernetes.io/name=ivia-config -c ivia-conf
 kubectl logs -n verify-access -l app.kubernetes.io/name=ivia-autoconf -f --tail=200
 ```
 
-**Shell 5 — WRP logs (start after ivia_activated=true apply)**
+**Shell 5 — WRP logs**
 ```bash
 kubectl logs -n verify-access -l app.kubernetes.io/name=ivia-wrp -f --tail=50
 ```
@@ -102,6 +102,16 @@ cd infrastructure
 # Destroy only the IVIA module — leaves EKS, RDS, Vault, etc. intact
 terraform destroy -target=module.ivia -auto-approve
 ```
+
+**MANDATORY post-destroy verification — confirm PVCs are gone BEFORE re-applying:**
+
+```bash
+kubectl get pvc -n verify-access            # Expect: "No resources found"
+kubectl get ns verify-access                # Expect: "NotFound"
+kubectl get pv | grep -E "verify-access|iviaconfig|ldap"   # Expect: empty
+```
+
+If any of these still show resources, the destroy is incomplete — **do NOT proceed to apply**. The four PVCs (`iviaconfig`, `ldapslapd`, `ldapsecauthority`, `ldaplib`) MUST all be gone. If `secAuthority=Default` survives on the OpenLDAP PVC (`ldapsecauthority` / `ldapslapd` / `ldaplib`), the next autoconf will fail with `DPWAP0003I "A policy server is already configured to this LDAP server"` and the WRP will never create `rp1` (`WGAWA0963E rp1 is not a known instance`).
 
 This cleanly removes all IVIA resources from EKS and Terraform state:
 
@@ -190,129 +200,22 @@ done
 
 ---
 
-## 5. Redeploy (Two-Phase Apply)
+## 5. Redeploy
 
-The redeploy is a **two-phase terraform apply** with a manual UI step in between:
+**Two-step apply** — first `-target=module.ivia` to bring up IVIA, then a full `terraform apply` to patch the OIDC issuer to the real ELB hostname and reconcile dependents (banking-ui, uc3-agent, route53 record).
 
-| Phase | `ivia_activated` | What deploys | What's manual |
-|-------|-----------------|-------------|---------------|
-| **Phase 1** | `false` (default) | Config+slapd+Runtime pod, OIDC Provider, DB init job, secrets, configmaps, network policies, namespace | — |
-| **Manual gate** | — | — | Accept SLA, login to LMI, import trial license |
-| **Phase 2** | `true` | WRP deployment, autoconf job, WRP ingress (ALB) | — |
+> **Why two steps?** `terraform apply -target=module.ivia` brings up the IVIA stack but the OIDC discovery document serves the placeholder issuer `https://issuer-patched-at-root.invalid`. That's because `kubernetes_config_map_v1_data.iviaop_clients_patch` (in root `main.tf`, NOT in `module.ivia`) is the resource that overwrites the placeholder with the real WRP ALB hostname (only known after `module.ivia` creates the Ingress). A second, full `terraform apply` runs this patch + restarts iviaop to re-read clients.yml + recreates any banking/uc3 dependents that were destroyed alongside `module.ivia`.
 
-> **Why two phases?** The WRP and autoconf job require the trial license to be active (wga, mga, federation modules). On a fresh PVC, all three API methods for trial activation fail (HTTP 302). The only proven path is the LMI browser UI. Phase 1 brings the LMI up so you can activate the trial; Phase 2 deploys everything that depends on it.
+> **Why `-target=module.ivia` for the first step?** All IVIA applies MUST use `-target=module.ivia`. A full `terraform apply` fails with "Kubernetes cluster unreachable" because the Kubernetes and Helm providers depend on `data.aws_eks_cluster.this`, which has `depends_on = [module.eks]` (providers.tf line 84). Terraform defers reading that data source until apply time — even when the cluster already exists — so the providers get empty config during the plan phase. Targeting `module.ivia` avoids re-evaluating `module.eks`, letting the data source resolve immediately from state. The second-step full `terraform apply` works because the prior targeted apply has already primed the data source.
 
-> **Why `-target=module.ivia`?** All IVIA applies MUST use `-target=module.ivia`. A full `terraform apply` fails with "Kubernetes cluster unreachable" because the Kubernetes and Helm providers depend on `data.aws_eks_cluster.this`, which has `depends_on = [module.eks]` (providers.tf line 84). Terraform defers reading that data source until apply time — even when the cluster already exists — so the providers get empty config during the plan phase. Targeting `module.ivia` avoids re-evaluating `module.eks`, letting the data source resolve immediately from state. If you need a full apply (all modules), do it in two steps: `terraform apply -target=module.eks` first, then `terraform apply`.
-
----
-
-### Phase 1 — Deploy Base Components
-
-**First, ensure `ivia_activated = false` in `terraform.tfvars`:**
+### Step 1 — Bring up IVIA
 
 ```bash
 cd infrastructure
-
-# Set ivia_activated to false for Phase 1
-sed -i '' 's/^ivia_activated = true/ivia_activated = false/' terraform.tfvars
-
-# Verify
-grep ivia_activated terraform.tfvars
-# Expected: ivia_activated = false
-```
-
-Then apply:
-
-```bash
 terraform apply -target=module.ivia -auto-approve
 ```
 
-Verify base components are healthy:
-
-```bash
-# Config pod (3 containers: ivia-config, slapd, ivia-runtime)
-kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=ivia-config -n verify-access --timeout=300s
-
-# slapd on port 389
-kubectl exec -n verify-access deploy/ivia-config -c slapd -- ss -tlnp | grep 389
-
-# LMI responding (expect HTTP 200)
-kubectl exec -n verify-access deploy/ivia-config -c ivia-config -- \
-  curl -sk -o /dev/null -w '%{http_code}' https://localhost:9443/core/login
-
-# Runtime on port 9444 (NOT 9443 — avoids LMI collision)
-kubectl exec -n verify-access deploy/ivia-config -c ivia-runtime -- ss -tlnp | grep 9444
-
-# OIDC Provider
-kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=isvaop -n verify-access --timeout=180s
-```
-
----
-
-### Manual Gate — LMI Admin Setup + Trial Activation
-
-> **This blocks Phase 2.** The autoconf job (Phase 2) attempts trial activation via API, but all three methods historically fail on a fresh PVC. You must do this manually via the LMI browser UI.
-
-**Get credentials and port-forward:**
-
-```bash
-# Admin password (Terraform-generated, random 24 chars)
-kubectl get secret ivia-admin -n verify-access -o jsonpath='{.data.admin_password}' | base64 -d; echo
-
-# Port-forward to LMI (keep this shell open)
-kubectl port-forward -n verify-access svc/iviaconfig 9443:9443
-```
-
-**In the browser:**
-
-1. Open **https://localhost:9443** — accept the self-signed certificate
-2. **Accept the SLA** — this is the first screen the LMI shows on a fresh PVC
-3. **Login** — username `admin`, password from the command above
-4. If prompted to change the admin password:
-   - Set it to something memorable (e.g., `theace01`)
-   - Then update the K8s secret so autoconf can authenticate:
-     ```bash
-     kubectl patch secret ivia-admin -n verify-access \
-       -p='{"stringData":{"admin_password":"<your-new-password>"}}'
-     ```
-5. Navigate to **System > Trial > Import**
-6. Upload `ISAM-Trial-HashiCorp.cer` (located in `infrastructure/`)
-7. Click **Save Configuration** — wait ~10s for reload
-8. Click **Publish Configuration** (top banner or System menu) — this publishes the configuration snapshot to `/shared_volume` so the runtime container can download it. Without this step, the runtime gets 404 on snapshot download and pdmgrd never starts.
-9. Go back to **System > Trial** — confirm three modules activated:
-   - **wga** (Web Gateway / Reverse Proxy)
-   - **mga** (Mobile Gateway / Advanced Access Control)
-   - **federation** (OIDC / SAML / Token Exchange)
-9. Note the expiration date (84 days from activation)
-
-> If modules don't appear, the trial cert may be expired. Get a new one from https://isva-trial.verify.ibm.com/ and repeat steps 5-8.
-
-Close the port-forward when done. Autoconf uses the internal ClusterIP service.
-
----
-
-### Phase 2 — Deploy Gated Resources
-
-**Flip `ivia_activated` to `true` in `terraform.tfvars`:**
-
-```bash
-cd infrastructure
-
-# Set ivia_activated to true for Phase 2
-sed -i '' 's/^ivia_activated = false/ivia_activated = true/' terraform.tfvars
-
-# Verify
-grep ivia_activated terraform.tfvars
-# Expected: ivia_activated = true
-```
-
-Then apply:
-
-```bash
-terraform apply -target=module.ivia -auto-approve
-```
-
-This deploys the **WRP**, **autoconf job**, and **ALB ingress**. The autoconf job runs 18 steps in strict sequence:
+The autoconf Job runs 18 steps in strict sequence:
 
 ```bash
 # Monitor in Shell 4 (from Section 2)
@@ -320,6 +223,32 @@ kubectl logs -n verify-access -l app.kubernetes.io/name=ivia-autoconf -f --tail=
 ```
 
 Steps: (1) wait LMI → (2) accept SLA → (3) trial verify → (4) HVDB → (5) deploy → (6) re-wait → (7) clean dirs → (8) runtime config → (9) deploy → (10) re-wait → (11) Simple AD feddir → (12) deploy → (13) WRP create → (14) deploy → (15) junction /isvaop → (16) anyauth ACL → (17) cfgsvc pwd → (18) final deploy
+
+### Step 2 — Patch the issuer + reconcile dependents (full apply)
+
+After step 1 completes, the OIDC discovery document at `/isvaop/oauth2/.well-known/openid-configuration` still serves the placeholder issuer `https://issuer-patched-at-root.invalid` — sign-in flows will not work until this is patched. Run a full apply to overwrite the placeholder, restart iviaop, and recreate banking-ui + uc3-agent:
+
+```bash
+terraform apply -auto-approve
+```
+
+Confirm the issuer is now the real ELB hostname:
+
+```bash
+kubectl -n verify-access exec deploy/iviawrprp1 -- \
+  curl -sk https://localhost:9443/isvaop/oauth2/.well-known/openid-configuration \
+  | python3 -c 'import json,sys; d=json.load(sys.stdin); print("issuer:", d["issuer"])'
+# Expect: issuer: https://k8s-verifyac-iviawrp-<id>.<region>.elb.amazonaws.com
+# (NOT https://issuer-patched-at-root.invalid)
+```
+
+### Verify base components
+
+```bash
+kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=ivia-config -n verify-access --timeout=300s
+kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=isvaop -n verify-access --timeout=180s
+kubectl exec -n verify-access deploy/iviaconfig -- curl -sk -o /dev/null -w '%{http_code}' https://localhost:9443/core/login
+```
 
 ### Verify WRP + OIDC
 
