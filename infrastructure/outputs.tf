@@ -128,6 +128,11 @@ output "ivia_issuer" {
   value       = local.ivia_public_issuer
 }
 
+output "wrp_public_fqdn" {
+  description = "Publicly-resolvable, ACM-trusted FQDN that fronts the WRP ALB when wrp_dns_zone_name is set. Empty string if no public DNS is configured (self-signed only). UC3 mobile-device enrollment for the IBM Verify app requires this — the device pins the IVIA runtime cert at enrollment, which is bound to this FQDN via the ALB listener. Surfaced to workshop attendees via `terraform -chdir=infrastructure output -raw wrp_public_fqdn` on the Use Case 3 enroll-device walkthrough."
+  value       = local.wrp_public_fqdn
+}
+
 output "ivia_oidc_ca_pem" {
   description = "IVIA OIDC Provider self-signed TLS cert. vault-config feeds it to the JWT auth backend as jwks_ca_pem so Vault trusts the cluster-internal JWKS endpoint. Static repo file — does not drift on rebuild."
   value       = module.ivia.ivia_oidc_ca_pem

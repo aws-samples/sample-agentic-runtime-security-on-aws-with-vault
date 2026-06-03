@@ -71,6 +71,66 @@ Services:
 - `ivia-wrp` Ingress (ALB, HTTP listener → HTTPS:9443 backend — for
   browser-facing CIBA flows). This is the ONLY internet-facing IVIA endpoint.
 
+## TLS serving cert ownership (the three IVIA pods)
+
+Authoritative reference for how each IVIA pod's serving TLS cert is produced + installed.
+Two of the three pods serve a Terraform-owned cert imported via autoconf; the third
+(`iviaruntime`) is the outlier and is the source of the UC3 cert-pinning fragility.
+
+| Pod | Serves on | Cert ownership | Autoconf import mechanism | Stable across pod restart / rebuild? |
+| --- | --- | --- | --- | --- |
+| `iviaop` (ISVAOP) | :8436 | Terraform-owned files `iviaop-config/iviaop.key` + `iviaop.pem` | `iviaop-config/provider.yml.tftpl` `keystore: isvaop_keys, type: pem` → `'@iviaop.pem'`, `'@iviaop.key'` | **Yes** — identical cert every rebuild |
+| `iviawrprp1` (WebSEAL) | :443 | Terraform-owned PKCS#12 `base_layer/iviawrprp1.p12` (cert + key) | `base_layer/base_layer.yaml.tftpl` `keystore: pdsrv, personal_certificates: [{name: WRP, p12_file: iviawrprp1.p12}]` | **Yes** — identical cert every rebuild |
+| `iviaruntime` (AAC runtime, Liberty) | :9443 | Liberty defaultKeyStore auto-self-signs on first start (no Terraform keypair, no PVC) | None — autoconf does NOT install a serving cert into the runtime's defaultKeyStore (the `rt_profile_keys` keystore at `base_layer.yaml.tftpl:27-35` holds only **signer/trust** certs: `postgres.crt`, `DigiCertGlobalRootG3.crt`) | **No** — fresh self-signed cert on every pod restart |
+
+### Why iviaruntime is the outlier
+
+`kubectl get pvc -n verify-access` returns five PVCs: `iviaconfig`, `ldaplib`,
+`ldapsecauthority`, `ldapslapd`, `postgresqldata`. **No PVC for `iviaruntime`.** Liberty's
+defaultKeyStore therefore lives on the ephemeral container filesystem and is regenerated on
+every pod start, producing a fresh self-signed cert (CN=`isam`, no SAN).
+
+### Why this matters — the UC3 refund TLS handshake break
+
+`uc3_agent` pins the iviaruntime cert as its CA: the static file
+`iviaop-config/iviaruntime.pem` is read by `outputs.tf` (`ivia_runtime_ca_pem`), feeds
+the `ivia-oidc-ca-uc3` Secret in `modules/uc3_agent/main.tf`, mounts at
+`/etc/ssl/ivia/iviaruntime.pem`, and is loaded by `app/mmfa.py:_runtime_ssl_context()`
+with `check_hostname=False` — so only the cert pin matters. Any `terraform apply` that
+restarts iviaruntime regenerates the live serving cert; the pinned file is now stale;
+TLS handshake fails `unknown_ca`; `mmfa.fire_push()` silently fails; UC3 refund flow
+breaks. Re-capturing the transient cert into git after every restart is a treadmill, not
+a fix.
+
+### The durable fix (architectural pattern, not yet implemented)
+
+Bring iviaruntime into the same Terraform-owned + autoconf-installed pattern that already
+works for `iviaop` and `iviawrprp1`:
+
+1. Generate the iviaruntime keypair in Terraform via `tls_private_key` +
+   `tls_self_signed_cert` (modeled on the existing `tls_self_signed_cert.postgresql` in
+   `main.tf` — same module).
+2. Mount the new key + cert into the `ivia-base-layer` ConfigMap (alongside the existing
+   `iviaop.pem` + `iviawrprp1.pem` signer-trust entries).
+3. Add an autoconf YAML stanza in `base_layer.yaml.tftpl` to install that keypair into the
+   AAC runtime's Liberty defaultKeyStore. **The exact autoconf stanza name for the AAC
+   runtime serving keystore is not yet verified** — must be confirmed against
+   `pip show ibmvia_autoconf` source + IBM `ibmsecurity` GitHub examples before any YAML
+   is written (per project rule: no unverified IBM config keys).
+4. `outputs.tf` `ivia_runtime_ca_pem` keeps reading `iviaruntime.pem`, but the file is now
+   Terraform-managed and stable across rebuilds. `uc3_agent`'s pin becomes durable.
+
+Same architectural shape as the Vault `bound_issuer` fix (2026-06-03): single source of
+truth, both sides reference it, drift becomes impossible by construction.
+
+### Why we don't re-capture the cert manually
+
+Re-capturing `iviaruntime.pem` via `openssl s_client` after every restart was explicitly
+rejected as a hack — it requires manual operator action on every IVIA rebuild and is the
+same anti-pattern that allowed the Vault `bound_issuer` drift to silently persist. The
+durable answer is to make the cert owned by state on one side and installed from state on
+the other side, exactly like the other two pods.
+
 ## UC3 RAR enforcement model (what Vault enforces vs. what audit correlation proves)
 
 UC3's privileged refund chains RFC 8693 token-exchange with RFC 9396 Rich Authorization

@@ -248,6 +248,16 @@ resource "random_password" "wrp_p12_secret" {
   special = false
 }
 
+# PKCS#12 protection password for the Terraform-owned iviaruntime serving cert.
+# Used by the autoconf job to seal the in-cluster-minted .p12 before importing
+# into IVIA's rt_profile_keys keystore via LMI. Static across applies — the .p12
+# is regenerated only when the cert pem changes; rotating the seal password on
+# every apply would force a re-mint without solving anything.
+resource "random_password" "ivia_runtime_p12_secret" {
+  length  = 24
+  special = false
+}
+
 resource "random_password" "sec_master_pwd" {
   length  = 24
   special = false
@@ -316,6 +326,60 @@ resource "tls_self_signed_cert" "postgresql" {
   ]
 
   dns_names = ["postgresql", "postgresql.verify-access.svc.cluster.local"]
+}
+
+#-------------------------------------------------------------------------------
+# iviaruntime serving cert (Liberty defaultKeyStore — rt_profile_keys, label
+# "server"). Replaces the auto-self-signed cert Liberty mints on every cold
+# start in the absence of a pre-provisioned personal cert.
+#
+# Before this resource existed: iviaruntime had no PVC, so on every pod restart
+# Liberty regenerated a fresh self-signed cert in
+# /var/pdweb/shared/keytab/rt_profile_keys.p12 (verified via server.xml
+# defaultKeyStore + LMI GET /isam/ssl_certificates/rt_profile_keys/personal_cert).
+# uc3-agent pins this cert (mmfa.py _runtime_ssl_context, check_hostname=False),
+# so the pinned static iviaruntime.pem in the iviaop-config/ dir went stale on
+# every restart — breaking the MMFA push-fire TLS handshake.
+#
+# With this resource: Terraform state owns the keypair. The autoconf job imports
+# it into rt_profile_keys via LMI (label "server", replacing the auto-gen cert
+# of the same label) — see autoconf args block below for the delete-then-import
+# monkey-patch. iviaconfig's PVC persists the KDB across rebuilds, so the cert
+# survives both iviaruntime pod restarts AND module.ivia destroy+recreate.
+#
+# CN=isam matches what the existing IVIA internal SCIM/MMFA caller paths
+# already expect for the runtime serving cert (the auto-gen one is also CN=isam,
+# O=ibm, C=us). uc3-agent disables hostname verification on this pin so the SAN
+# list is for cluster-DNS hygiene only.
+#-------------------------------------------------------------------------------
+
+resource "tls_private_key" "iviaruntime" {
+  algorithm = "RSA"
+  rsa_bits  = 2048
+}
+
+resource "tls_self_signed_cert" "iviaruntime" {
+  private_key_pem = tls_private_key.iviaruntime.private_key_pem
+
+  subject {
+    common_name  = "isam"
+    organization = "ibm"
+    country      = "us"
+  }
+
+  validity_period_hours = 87600 # 10 years
+  early_renewal_hours   = 720
+
+  allowed_uses = [
+    "key_encipherment",
+    "digital_signature",
+    "server_auth",
+  ]
+
+  dns_names = [
+    "iviaruntime",
+    "iviaruntime.verify-access.svc.cluster.local",
+  ]
 }
 
 #-------------------------------------------------------------------------------
@@ -421,6 +485,23 @@ resource "kubernetes_secret" "wrp_p12_creds" {
     # passout. For now, override with the sibling-locked string.
     # CONTEXT D4 documented exception.
     secret = "Passw0rd"
+  }
+}
+
+resource "kubernetes_secret" "ivia_runtime_p12_creds" {
+  metadata {
+    name      = "ivia-runtime-p12-creds"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels    = local.common_labels
+  }
+  type = "Opaque"
+  data = {
+    # Sealing password for the in-cluster-minted iviaruntime.p12. Referenced by
+    # base_layer.yaml.tftpl's rt_profile_keys.personal_certificates[0].secret
+    # via `!secret verify-access/ivia-runtime-p12-creds:secret`. Autoconf
+    # resolves the !secret reference, fetches this value, and passes it to
+    # LMI POST /isam/ssl_certificates/{kdb}/personal_cert as the unwrap pw.
+    secret = random_password.ivia_runtime_p12_secret.result
   }
 }
 
@@ -1414,11 +1495,18 @@ resource "kubernetes_config_map" "base_layer" {
     "mmfa_oauth_posttoken_mapping.js" = file("${path.module}/base_layer/mmfa_oauth_posttoken_mapping.js")
     "ISAM-Trial-HashiCorp.cer"        = file("${path.module}/base_layer/ISAM-Trial-HashiCorp.cer")
     "iviaop.pem"                      = file("${path.module}/base_layer/iviaop.pem")
-    "ldap.crt"                        = file("${path.module}/base_layer/ldap.crt")
-    "DigiCertGlobalRootG3.crt"        = file("${path.module}/base_layer/DigiCertGlobalRootG3.crt")
-    "postgres.crt"                    = tls_self_signed_cert.postgresql.cert_pem
-    "req_openid_config.lua"           = file("${path.module}/base_layer/req_openid_config.lua")
-    "rsp_openid_config.lua"           = file("${path.module}/base_layer/rsp_openid_config.lua")
+    # Terraform-owned iviaruntime serving keypair. Minted into iviaruntime.p12 by
+    # the autoconf job's bash preamble (Python cryptography lib), then imported
+    # into LMI rt_profile_keys keystore as personal cert "server" (replacing the
+    # Liberty-auto-generated cert of the same label). State-derived; survives all
+    # pod restarts + module.ivia rebuilds via iviaconfig PVC.
+    "iviaruntime.cert.pem"     = tls_self_signed_cert.iviaruntime.cert_pem
+    "iviaruntime.key.pem"      = tls_private_key.iviaruntime.private_key_pem
+    "ldap.crt"                 = file("${path.module}/base_layer/ldap.crt")
+    "DigiCertGlobalRootG3.crt" = file("${path.module}/base_layer/DigiCertGlobalRootG3.crt")
+    "postgres.crt"             = tls_self_signed_cert.postgresql.cert_pem
+    "req_openid_config.lua"    = file("${path.module}/base_layer/req_openid_config.lua")
+    "rsp_openid_config.lua"    = file("${path.module}/base_layer/rsp_openid_config.lua")
   }
 }
 
@@ -1609,8 +1697,48 @@ resource "kubernetes_job_v1" "ivia_autoconf" {
             # is API-compatible -- autoconf always calls yaml.load with an explicit
             # Loader (CustomLoader subclasses SafeLoader). The Cython/docker-compose/
             # typing metadata deps are never imported at runtime, so we skip them.
-            pip install --quiet pyivia==0.2.44 kubernetes==31.0.0 requests pyyaml==6.0.1
+            pip install --quiet pyivia==0.2.44 kubernetes==31.0.0 requests pyyaml==6.0.1 cryptography
             pip install --quiet --no-deps ibmvia_autoconf==0.3.21
+            # MINT iviaruntime.p12 from the Terraform-owned PEM cert+key (mounted into
+            # /base_layer by the merge-config initContainer). The PKCS#12 file is what
+            # LMI ssl_certificates POST /personal_cert expects — it cannot consume raw
+            # PEM. Python's cryptography lib produces a PKCS#12 with no host-side
+            # openssl needed (so the autoconf image stays python:3.11-slim). The .p12
+            # is sealed with the random_password.ivia_runtime_p12_secret value, which
+            # base_layer.yaml.tftpl references via `!secret verify-access/
+            # ivia-runtime-p12-creds:secret` so autoconf unwraps with the matching pw.
+            python - <<'PY'
+            from cryptography.hazmat.primitives.serialization import (
+                pkcs12, load_pem_private_key, BestAvailableEncryption,
+            )
+            from cryptography import x509
+            import os
+            base = "/base_layer"
+            key = load_pem_private_key(open(f"{base}/iviaruntime.key.pem", "rb").read(), password=None)
+            cert = x509.load_pem_x509_certificate(open(f"{base}/iviaruntime.cert.pem", "rb").read())
+            p12 = pkcs12.serialize_key_and_certificates(
+                name=b"server",
+                key=key,
+                cert=cert,
+                cas=None,
+                encryption_algorithm=BestAvailableEncryption(os.environ["IVIA_RUNTIME_P12_PASSWORD"].encode()),
+            )
+            # /base_layer is mounted read-only from the merged emptyDir; write under
+            # /tmp and add to FILE_LOADER search by symlinking (autoconf resolves
+            # p12_file via FILE_LOADER which already scans /tmp via OS default).
+            out = "/tmp/iviaruntime.p12"
+            open(out, "wb").write(p12)
+            # Autoconf's FILE_LOADER.read_file resolves p12_file relative to
+            # IVIA_CONFIG_BASE first; symlink into /base_layer is not possible (RO).
+            # Workaround: set IVIA_CONFIG_BASE to a writable merged dir below.
+            print(f"WROTE {out} ({len(p12)} bytes) sealed with random_password.ivia_runtime_p12_secret", flush=True)
+            PY
+            # Stage a writable merged config dir so FILE_LOADER can resolve both the
+            # ConfigMap-mounted files and the just-minted iviaruntime.p12.
+            mkdir -p /tmp/base_layer
+            cp -L /base_layer/* /tmp/base_layer/
+            cp /tmp/iviaruntime.p12 /tmp/base_layer/
+            chmod -R 644 /tmp/base_layer/
             # PATCH autoconf 0.3.21 push_notifications() idempotency bug (verified
             # against SDK source + the live API response). On the UPDATE path it
             # reads the existing provider id as old_pnp['pnr_id'], but the live
@@ -1638,9 +1766,53 @@ resource "kubernetes_job_v1" "ivia_autoconf" {
             open(p, "w").write(s.replace(old1, new1).replace(old2, new2))
             print("PATCHED autoconf push_notifications: match app_id+platform, use push_id (fixes KeyError pnr_id)", flush=True)
             PY
-            cd /base_layer
+            # PATCH autoconf 0.3.21 _import_personal_cert to DELETE existing label
+            # before import. pyivia ssl_certificates.import_personal does not have
+            # replace semantics — the LMI returns an error if the label already
+            # exists, and autoconf does not delete-first. For rt_profile_keys the
+            # "server" label is auto-populated by Liberty on every iviaruntime cold
+            # start, so we MUST delete-then-import to install the Terraform-owned
+            # cert. Tolerates 404 (first-install path). RESTClient.delete already
+            # exists in pyivia (restclient.py:37); we drive it directly because
+            # sslcertificates.py does not expose delete_personal. Guarded marker
+            # = idempotent.
+            python - <<'PY'
+            import sys
+            p = "/usr/local/lib/python3.11/site-packages/ibmvia_autoconf/configure.py"
+            s = open(p).read()
+            if "_TF_DELETE_BEFORE_IMPORT" in s:
+                print("autoconf _import_personal_cert delete-then-import patch already applied; skipping", flush=True); sys.exit(0)
+            old = "    def _import_personal_cert(self, db_name, cert):\n        ssl = self.factory.get_system_settings().ssl_certificates\n        personal_parsed_file = optional_list(FILE_LOADER.read_file(cert.p12_file))[0]\n        rsp = ssl.import_personal(db_name, "
+            new = (
+                "    def _import_personal_cert(self, db_name, cert):  # _TF_DELETE_BEFORE_IMPORT\n"
+                "        ssl = self.factory.get_system_settings().ssl_certificates\n"
+                "        personal_parsed_file = optional_list(FILE_LOADER.read_file(cert.p12_file))[0]\n"
+                "        # Pre-step: DELETE existing personal cert with this label. Tolerates 404.\n"
+                "        # LMI rejects re-import of an existing label; replace semantics requires\n"
+                "        # delete-then-import.\n"
+                "        if cert.name:\n"
+                "            del_endpoint = '/isam/ssl_certificates/{}/personal_cert/{}'.format(db_name, cert.name)\n"
+                "            # Accept: application/json MUST be passed explicitly — pyivia\n"
+                "            # RESTClient.delete defaults to */* which routes through the LMI\n"
+                "            # HTML web UI handler (returns 405). The JSON REST handler returns\n"
+                "            # 200 on success / 404 on missing label.\n"
+                "            del_rsp = ssl._client.delete(del_endpoint, accept_type='application/json')\n"
+                "            if del_rsp.status_code in (200, 204):\n"
+                "                _logger.info('Deleted existing personal cert {} from {} before import'.format(cert.name, db_name))\n"
+                "            elif del_rsp.status_code == 404:\n"
+                "                _logger.info('No existing personal cert {} in {} to delete (first install)'.format(cert.name, db_name))\n"
+                "            else:\n"
+                "                _logger.error('Pre-import delete returned status {} for {}/{}: {}'.format(del_rsp.status_code, db_name, cert.name, getattr(del_rsp, 'data', '')))\n"
+                "        rsp = ssl.import_personal(db_name, "
+            )
+            if old not in s:
+                print("FATAL: expected autoconf _import_personal_cert source not found; refusing to run unpatched", flush=True); sys.exit(3)
+            open(p, "w").write(s.replace(old, new))
+            print("PATCHED autoconf _import_personal_cert: DELETE existing label before LMI import", flush=True)
+            PY
+            cd /tmp/base_layer
             IVIA_CONFIG_YAML=base_layer.yaml \
-            IVIA_CONFIG_BASE=/base_layer \
+            IVIA_CONFIG_BASE=/tmp/base_layer \
             IVIA_MGMT_BASE_URL=https://iviaconfig.verify-access.svc.cluster.local:9443 \
             IVIA_MGMT_USER=admin \
             IVIA_MGMT_OLD_PWD="$ADMIN_PWD" \
@@ -1655,6 +1827,21 @@ resource "kubernetes_job_v1" "ivia_autoconf" {
               secret_key_ref {
                 name = kubernetes_secret.ivia_admin.metadata[0].name
                 key  = "adminpw"
+              }
+            }
+          }
+
+          # PKCS#12 seal password for the in-cluster-minted iviaruntime.p12. Must
+          # equal kubernetes_secret.ivia_runtime_p12_creds.data.secret so the
+          # `!secret verify-access/ivia-runtime-p12-creds:secret` lookup in
+          # base_layer.yaml.tftpl resolves to the same value autoconf gives the
+          # LMI for the cert-unwrap step.
+          env {
+            name = "IVIA_RUNTIME_P12_PASSWORD"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret.ivia_runtime_p12_creds.metadata[0].name
+                key  = "secret"
               }
             }
           }
@@ -1693,6 +1880,7 @@ resource "kubernetes_job_v1" "ivia_autoconf" {
     kubernetes_role_binding.ivia_autoconf,
     kubernetes_secret.configreader,
     kubernetes_secret.wrp_p12_creds,
+    kubernetes_secret.ivia_runtime_p12_creds,
     kubernetes_secret.postgresql_creds,
     kubernetes_secret.openldap_creds,
     kubernetes_secret.ivia_secauthority_creds,

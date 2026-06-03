@@ -1,183 +1,120 @@
 # Agentic Runtime Security on AWS
 
-A hands-on AWS Workshop Studio workshop that teaches platform and security teams how to implement the IBM Verify + HashiCorp Vault joint reference architecture for **runtime agentic security on AWS**. Attendees leave able to deploy and explain a real implementation of the 5 control objectives — every agent has a verifiable identity, no standing privileges, actions tied to user intent, enforcement at point of use, and correlated audit evidence — using the IBM Verify + HashiCorp Vault stack on AWS EKS.
+AWS Workshop Studio workshop that deploys the IBM Verify + HashiCorp Vault reference architecture for runtime AI agent security on EKS. Three progressively-layered use cases on a single `us-west-2` cluster: workload identity (UC1), OAuth user identity (UC2), CIBA mobile-push approval for privileged writes (UC3).
 
-## Overview
+**Audience:** workshop admins running this for their orgs. Attendee-facing pages live in `workshop/content/`.
 
-This repository delivers a Workshop Studio site + reveal-md slide deck + Terraform Stacks IaC that progressively layers three use cases on a single-region (`us-west-2`) EKS cluster:
+**Latest release:** [v0.15.0](https://github.com/sharepointoscar/agentic-runtime-security-aws/releases/latest) — UC1/UC2/UC3 all green end-to-end.
 
-- **UC1 — Non-personalized read-only:** Strands agent with workload identity (Vault Kubernetes auth), JIT R/O Postgres credentials (TTL 15m), and scoped Bedrock STS for Knowledge Base retrieval (Objectives 1, 2, 5)
-- **UC2 — OAuth personalized read-only:** OAuth Authorization Code + PKCE against IBM Verify Access establishes user identity; Vault `jwt` auth vends per-user-scoped credentials; Layer 2 + Layer 3 enforcement demonstrated (adds Objective 3)
-- **UC3 — CIBA privileged + three-plane audit correlation:** CIBA out-of-band approval; tokens carry `may_act` (RFC 8693) and `authorization_details` (RFC 9396 RAR) claims enforced by Vault `bound_claims`; time-boxed R/W credentials (TTL 5m); single Athena query joining IVIA decision logs + Vault audit + AWS CloudTrail by `request_id` (all 5 Objectives)
+---
 
-
-
-## Architecture
-
-![Reference architecture](assets/architecture-overview.svg)
-
-The reference architecture diagram (regenerated from Excalidraw source in `assets/`) shows the joint Verify + Vault responsibility split: IBM Verify owns human IAM (user authentication, OAuth, CIBA); HashiCorp Vault owns non-human IAM (workload identity, policy enforcement, JIT credential vending). All three agents (UC1/UC2/UC3) run as pods on a single EKS cluster alongside Vault (Raft 3-node, KMS auto-unseal) and IBM Verify Identity Access (Config Service + Runtime + DSC).
-
-
-## Prerequisites
-
-Workshop attendees do not install CLI tools manually. A single consolidated `preflight.sh` script auto-installs every required CLI and verifies the AWS account in one shot.
+## Quick start (admin)
 
 ```bash
-# Single pre-flight: install CLI tools (kubectl 1.33.x, helm 3.12+,
-#    terraform 1.10+, vault 1.21.x, aws v2, jq, yq) AND verify
-#    Bedrock access (us.amazon.nova-pro-v1:0 — Amazon Nova Pro via
-#    cross-region inference profile) + service quotas + IAM permissions
-./infrastructure/scripts/preflight.sh
+# 1. Preview the workshop content locally before deploying anything
+bash workshop/scripts/preview.sh
+
+# 2. Verify your CLI tools + AWS account + Bedrock access
+bash infrastructure/scripts/check-prerequisites.sh
+
+# 3. Deploy the full stack and run all use-case verifications
+bash infrastructure/scripts/workshop-e2e.sh --interactive --skip-teardown
+
+# 4. Spot-check each use case (run individually as needed)
+bash infrastructure/scripts/verify-uc1.sh
+bash infrastructure/scripts/verify-uc2.sh
+bash infrastructure/scripts/verify-uc3.sh
+bash infrastructure/scripts/verify-uc3.sh --bypass    # negative tests (forged JWT, missing may_act)
+
+# 5. Tear down everything (no orphans)
+bash infrastructure/scripts/teardown.sh
 ```
 
-Obtain the two IVIA licensing artifacts (ICR entitlement key + IVIA trial certificate) before deploying — see the [Prerequisites module](workshop/content/20-prerequisites/22-ivia-licensing/index.en.md).
+All scripts are idempotent. `workshop-e2e.sh --help` lists every flag (`--start-from`, `--dry-run`, `--teardown-only`, `--nuke`, etc.).
 
-`preflight.sh` emits colored `✓ PASS` / `✗ FAIL` / `⚠ WARN` markers and a single consolidated summary with full inline copy-paste remediation for any failure (no "see external doc" indirection). Flags: `--interactive` (prompt before each install + each check section), `--dry-run` (print install plan), `--help`.
+---
 
-### Slide deck preview
+## Admin-only test + diagnostic scripts
 
-The workshop slide deck lives in `slides.md` (reveal-md markdown format — no build step required). Diagrams are authored in Excalidraw and exported to SVG via `python3 infrastructure/scripts/excalidraw-to-svg.py`.
+The workshop content never shows attendees these. Use them to isolate problems, sanity-check a fresh deploy, or re-run a single layer after a change. All live under `infrastructure/scripts/`.
 
-```bash
-# Present (opens browser)
-npx reveal-md slides.md
-
-# Export to PDF
-npx reveal-md slides.md --print slides.pdf
-```
-
-### Workshop content preview
-
-Preview the Workshop Studio content locally (downloads the AWS preview utility on first run):
-
-```bash
-./workshop/scripts/preview.sh
-```
-
-## Deploy
-
-After prerequisites, run the end-to-end deploy + verification:
-
-```bash
-./infrastructure/scripts/workshop-e2e.sh --interactive --skip-teardown
-```
-
-The deploy covers `terraform -chdir=infrastructure apply` which provisions `vpc` + `eks` + `rds` + `bedrock_kb` + `vault` + `verify_access` + `vault_config` + `uc1_agent` + `uc2_app` + `uc3_agent` in dependency order, plus the `aws eks update-kubeconfig` one-liner to reach the cluster from `kubectl`. State is stored locally in `infrastructure/terraform.tfstate`.
-
-## Cleanup
-
-*Cleanup instructions populated in Phase 7 (Cleanup, Summary, Appendices).*
-
-The cleanup story will cover the one-shot `infrastructure/scripts/teardown.sh` that decommissions all workshop resources (Stacks deployments, EKS, RDS, Bedrock KB + OpenSearch Serverless, Vault PVCs, IBM Verify Access snapshots, audit log groups, Secrets Manager entries, ENIs, Load Balancers, EBS volumes) with no orphans surviving — so the same account can immediately host a second workshop run.
-
-## Project Structure
-
-```
-.
-├── README.md
-├── LICENSE                          # MIT-0 (AWS Workshop Studio convention)
-├── TESTING.md                       # Tester role guide — how to test the workshop and file issues
-├── slides.md                        # reveal-md slide deck
-├── reveal-md.json                   # reveal-md theme + transition config
-├── assets/                          # Excalidraw sources + exported SVGs (six diagrams)
-├── workshop/                        # AWS Workshop Studio content
-│   ├── contentspec.yaml             # Workshop Studio v2 schema
-│   └── content/
-│       ├── 10-introduction/
-│       ├── 20-prerequisites/
-│       ├── 30-foundational/         # Phase 2 content
-│       ├── 40-platform/             # Phase 3 content
-│       ├── 50-integration/          # Phase 3 content
-│       ├── 60-uc1-non-personalized/ # Phase 4 content
-│       ├── 70-uc2-personalized/     # Phase 5 content
-│       ├── 80-uc3-privileged/       # Phase 6 content
-│       ├── 97-appendices/           # Phase 7 content
-│       ├── 98-summary/              # Phase 7 content
-│       ├── 99-credits/
-│       └── 99-resources/            # Phase 7 content
-└── infrastructure/                  # Terraform IaC (local state)
-    ├── modules/
-    │   ├── vpc/                     # Phase 2
-    │   ├── eks/                     # Phase 2
-    │   ├── rds/                     # Phase 2
-    │   ├── bedrock_kb/              # Phase 2
-    │   ├── vault/                   # Phase 3
-    │   ├── verify_access/           # Phase 3
-    │   ├── vault_config/            # Phase 3
-    │   ├── isva_config/             # Phase 3
-    │   ├── observability/           # Phase 6
-    │   ├── uc1_agent/               # Phase 4
-    │   ├── uc2_agent/               # Phase 5
-    │   └── uc3_agent/               # Phase 6
-    └── scripts/
-        ├── preflight.sh             # PREF-01/02/03/05 — install CLIs + verify Bedrock + quotas + IAM
-        ├── common-checks.sh         # shared bash library (print_pass/fail, confirm, print_summary)
-        └── excalidraw-to-svg.py     # SVG regeneration pipeline
-```
-
-## Diagram Style Guide
-
-All Mermaid diagrams in `workshop/content/` use the **IBM Design Language** color palette ([source](https://www.ibm.com/design/language/color/)) via the `base` theme with custom `themeVariables`.
-
-### Token mapping
-
-| Role | IBM Token | Hex |
+| Script | When to run | What it checks |
 |---|---|---|
-| Participant background | Blue 20 | `#d0e2ff` |
-| Participant border / lines | Blue 60 | `#0f62fe` |
-| Note background | Purple 20 | `#e8daff` |
-| Note border | Purple 60 | `#8a3ffc` |
-| All text | Gray 100 | `#161616` |
-| Activation background | Blue 10 | `#edf5ff` |
-| Sequence numbers | White | `#ffffff` |
-| Section tint — auth | Blue 20 | `rgba(208, 226, 255, 0.3)` |
-| Section tint — data flow | Cyan 20 | `rgba(186, 230, 255, 0.3)` |
-| Section tint — lifecycle | Green 20 | `rgba(167, 240, 186, 0.3)` |
-| Section tint — security | Teal 20 | `rgba(158, 240, 240, 0.3)` |
+| `workshop-e2e.sh` | Full clean deploy + validate | Phases 0–8: prerequisites → bootstrap → `terraform apply` → kubectl config → foundation tests → IVIA → Vault init/config → UC1/UC2/UC3 → optional teardown. `--start-from <phase>` resumes; `--dry-run` previews. |
+| `e2e-validate.sh` | After any layer change | Runs every `verify-*.sh` + `test-*.sh` end-to-end and emits one summary. Use this to confirm nothing regressed before opening a PR. |
+| `test-foundation.sh` | After `terraform apply` | EKS + RDS + Bedrock KB + OpenLDAP all healthy. |
+| `test-eks.sh` | If pods won't schedule | Cluster nodes Ready, addons running, IAM/IRSA wired. |
+| `test-rds.sh` | If DB connections fail | Instance status, parameter group, pgaudit + RLS enabled. |
+| `test-bedrock-kb.sh` | If UC1 `/query` is empty | KB exists, AOSS collection ready, S3 corpus has objects, ingestion job succeeded. Pair with `sync-bedrock-kb.sh` to re-ingest. |
+| `test-vault-verify.sh` | After Vault unseal / re-init | Vault auth methods + secrets engines + policies present. |
+| `verify-uc1.sh` / `verify-uc2.sh` / `verify-uc3.sh` | Per use case | See the table below. |
+| `verify-uc3.sh --bypass` | Adversarial check | Forged HS256 JWT and a real IVIA token without `may_act` are both rejected by Vault — proves bound_claims actually gate access. |
+| `show-audit-correlation.sh` | After a UC3 refund | Runs the three-plane Athena correlation query for a given `request_id` and prints the single forensic row. |
+| `sync-bedrock-kb.sh` | After corpus changes | Re-ingests the KB so retrieval matches the current corpus. |
 
-### Init block (copy-paste for new diagrams)
+Every `verify-*.sh` and `test-*.sh` script is non-destructive, prints `✓ PASS / ✗ FAIL / ⚠ WARN` markers, and exits non-zero on any FAIL so you can chain them in CI.
 
-````
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#d0e2ff',
-  'primaryTextColor': '#161616',
-  'primaryBorderColor': '#0f62fe',
-  'lineColor': '#0f62fe',
-  'secondaryColor': '#bae6ff',
-  'tertiaryColor': '#f4f4f4',
-  'noteBkgColor': '#e8daff',
-  'noteTextColor': '#161616',
-  'noteBorderColor': '#8a3ffc',
-  'actorBkg': '#d0e2ff',
-  'actorBorder': '#0f62fe',
-  'actorTextColor': '#161616',
-  'signalColor': '#161616',
-  'signalTextColor': '#161616',
-  'labelBoxBkgColor': '#d0e2ff',
-  'labelBoxBorderColor': '#0f62fe',
-  'labelTextColor': '#161616',
-  'loopTextColor': '#161616',
-  'activationBorderColor': '#0f62fe',
-  'activationBkgColor': '#edf5ff',
-  'sequenceNumberColor': '#ffffff'
-}}}%%
-````
+---
 
-## Known Issues
+## Required licenses (must obtain before deploy)
 
-- **IVIA OIDC Provider 25.10 — ROPC + `scope=openid` crashes id_token generation.** The ROPC flow does not propagate the authenticated user identity to the `pretoken` mapping rule, causing a nil pointer at `access_response_writer.go:28`. A workaround is applied in the `pretoken` rule. See [`infrastructure/modules/verify_access/README.md`](infrastructure/modules/verify_access/README.md#known-issue--ivia-2510-ropc--scopeopenid-id_token-generation-crash) for full details, root cause analysis, and the Goja JS runtime API reference.
+IVIA does not deploy without two artifacts from IBM:
 
-## References
+1. **IBM Container Registry entitlement key** — lets the cluster pull `icr.io/ibm-vassd/verify-access:11.0.2` images. From IBM Cloud → Container Software Library.
+2. **IVIA 90-day trial activation certificate** — unlocks the IVIA server at runtime.
 
-- [Terraform Stacks Documentation](https://developer.hashicorp.com/terraform/language/stacks)
-- [HashiCorp Validated Design — Organizing Resources](https://developer.hashicorp.com/validated-designs/terraform-operating-guides-adoption/organizing-resources#terraform-stacks)
-- [AWS EKS Blueprints for Terraform](https://github.com/aws-ia/terraform-aws-eks-blueprints)
-- [HashiCorp Vault on Kubernetes (Helm)](https://developer.hashicorp.com/vault/docs/platform/k8s/helm)
-- [IBM Verify Identity Access](https://www.ibm.com/products/verify-identity-access)
-- [Strands Agents](https://strandsagents.com/)
-- [Reference workshop — `eks-terraform-stacks`](https://github.com/aws-samples/eks-terraform-stacks)
+Both go into `infrastructure/terraform.tfvars`. Full procurement steps: [`workshop/content/20-prerequisites/22-ivia-licensing/`](workshop/content/20-prerequisites/22-ivia-licensing/index.en.md).
+
+Bedrock access required: enable `us.amazon.nova-pro-v1:0` (Nova Pro via CRIS) in `us-west-2` and `amazon.nova-2-multimodal-embeddings-v1:0` in `us-east-1` for the Knowledge Base.
+
+---
+
+## What gets deployed
+
+Single-region (`us-west-2`) EKS 1.34 cluster running:
+
+- **HashiCorp Vault** (Raft 3-node, KMS auto-unseal) — non-human IAM, JIT credentials.
+- **IBM Verify Identity Access 11.0.2** — 7 pods: `iviaconfig` (LMI), `iviaruntime` (AAC), `iviadsc` (DSC), `iviawrprp1` (WebSEAL reverse proxy), `iviaop` (OIDC Provider), `openldap`, `postgresql`. Owns human IAM, OAuth, CIBA.
+- **UC1/UC2/UC3 Strands agents** plus the banking-app UI for UC2/UC3.
+- **RDS PostgreSQL** with Row-Level Security + pgaudit.
+- **Bedrock Knowledge Base** (AOSS + Nova 2 Multimodal Embeddings, us-east-1) and Nova Pro inference (us-west-2 via CRIS).
+- **Three-plane audit pipeline** — fluent-bit → Firehose → S3 → Glue → Athena workgroup `workshop`.
+
+Reference architecture: [`assets/architecture-overview.svg`](assets/architecture-overview.svg). UC-specific diagrams: `assets/uc1-flow.svg`, `assets/uc2-oauth-flow.svg`, `assets/uc3-ciba-flow.svg`.
+
+State lives locally in `infrastructure/terraform.tfstate`. No HCP, no Terraform Stacks.
+
+---
+
+## Use cases (admin TL;DR)
+
+| | What it proves | TTL | Verify |
+|---|---|---|---|
+| **UC1** — Non-personalized read-only | Vault Kubernetes auth → JIT Postgres + Bedrock STS. No standing creds. | 15m | `verify-uc1.sh` (9 checks) |
+| **UC2** — OAuth personalized read-only | Authorization Code + PKCE via IVIA → per-user JIT creds → Postgres RLS. ENFC-02 (no INSERT) + ENFC-03 (NetworkPolicy egress block). | 15m | `verify-uc2.sh` (14 checks) |
+| **UC3** — CIBA privileged write | Mobile-push approval via **IBM Verify app** on the admin's phone → RFC 8693 token exchange with `may_act` + RFC 9396 RAR `authorization_details` enforced by Vault `bound_claims` → three-plane Athena audit correlation by `request_id`. | 5m | `verify-uc3.sh` (15 checks) + `--bypass` (2 negative tests) |
+
+UC3 requires the free **IBM Verify** app installed on a phone (App Store / Google Play) **before** running the refund flow — used for the mobile-push approval. Enrollment URL is printed by `terraform -chdir=infrastructure output -raw wrp_public_fqdn` plus the path documented at `workshop/content/70-use-case-3/70-enroll-device/`.
+
+---
+
+## Repo map
+
+- `infrastructure/` — Terraform IaC + admin scripts (`workshop-e2e.sh`, `teardown.sh`, `check-prerequisites.sh`, `verify-uc*.sh`, build/seed/config scripts).
+- `infrastructure/modules/` — one module per layer; **each module has its own `README.md`** (e.g. `verify_access/README.md` documents the IVIA stack + TLS cert ownership; `vault_config/README.md` documents Vault policies/roles).
+- `infrastructure/vault-config/` — separate Terraform root run over a `kubectl port-forward` (Vault provider needs cluster-internal access).
+- `workshop/content/` — attendee-facing markdown (Hugo + Workshop Studio v2). Preview via `workshop/scripts/preview.sh`.
+- `applications/` — `banking-app/` (UI + agent + MCP server for UC2/UC3) and `uc3-agent/` source.
+- `assets/` — SVG architecture diagrams + workshop branding.
+- `docs/` — admin-facing runbooks (e.g. `docs/IVIA_Deployment.md` for IVIA destroy/rebuild procedure).
+- `slides.md` lives in a sibling worktree: `../agentic-runtime-security-aws-slides/` (not in this repo).
+
+---
+
+## Issues + feedback
+
+File issues at <https://github.com/sharepointoscar/agentic-runtime-security-aws/issues>. Workshop-tester role guide: [`TESTING.md`](TESTING.md).
 
 ## License
 
-See LICENSE file (MIT-0).
+MIT-0 (AWS Workshop Studio convention).
