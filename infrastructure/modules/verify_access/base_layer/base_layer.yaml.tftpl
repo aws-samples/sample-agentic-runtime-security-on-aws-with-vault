@@ -314,6 +314,24 @@ webseal:
       entry_id: "auth-using-compare"
       value: "no"
       operation: "update"
+    # CSP form-action 'self' (IBM's stock webseald-rp1.conf [acnt-mgt] http-rsp-header)
+    # is enforced by Chrome on the ENTIRE redirect chain following a form submission
+    # (CSP3 spec section 6.3.2). The OAuth Authorization Code flow needs
+    # /pkmslogin.form -> 302 /authorize -> 303 banking-app/callback, where the final
+    # hop crosses origin. form-action 'self' silently blocks that hop -> the first
+    # Login click does nothing visible; a second click hits an already-authenticated
+    # WebSEAL session with no original URL stored, and falls back to login_success.html
+    # (the "Application Gateway" help page). Replace the stock CSP with one that omits
+    # form-action; default-src 'self' (scripts) and frame-ancestors 'self' (clickjacking)
+    # remain in place.
+    - stanza: "acnt-mgt"
+      entry_id: "http-rsp-header"
+      value: "content-security-policy:TEXT{default-src 'self'; frame-ancestors 'self'; form-action 'self';}"
+      operation: "delete"
+    - stanza: "acnt-mgt"
+      entry_id: "http-rsp-header"
+      value: "content-security-policy:TEXT{default-src 'self'; frame-ancestors 'self';}"
+      operation: "add"
     # === MMFA approve POST->PUT session continuity (3 settings, work together) ===
     # WebSEAL fronts ONE Liberty backend (iviaruntime) via TWO junctions: /scim
     # (mints the Liberty JSESSIONID on the /scim/Me enrollment+poll response) and
