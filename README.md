@@ -1,10 +1,16 @@
 # Agentic Runtime Security on AWS
 
-AWS Workshop Studio workshop that deploys the IBM Verify + HashiCorp Vault reference architecture for runtime AI agent security on EKS. Three progressively-layered use cases on a single `us-west-2` cluster: workload identity (UC1), OAuth user identity (UC2), CIBA mobile-push approval for privileged writes (UC3).
+Step-by-step **hands-on** AWS Workshop Studio workshop that deploys the IBM Verify + HashiCorp Vault reference architecture for runtime AI agent security on EKS. Attendees follow guided modules to provision and verify three progressively-layered use cases on a single `us-west-2` cluster: workload identity (UC1), OAuth user identity (UC2), CIBA mobile-push approval for privileged writes (UC3).
+
+**Duration:** ~2 hours minimum end-to-end (longer if attendees pause to inspect Vault policies, IVIA decisions, or the Athena audit correlation between modules).
 
 **Audience:** workshop admins running this for their orgs. Attendee-facing pages live in `workshop/content/`.
 
-**Latest release:** [v0.15.0](https://github.com/sharepointoscar/agentic-runtime-security-aws/releases/latest) — UC1/UC2/UC3 all green end-to-end.
+**Latest release:** [v0.15.0](https://github.ibm.com/Oscar-Medina/agentic-runtime-security-aws/releases/latest) — UC1/UC2/UC3 all green end-to-end.
+
+![Reference architecture](assets/architecture-overview.svg)
+
+![Reference architecture](assets/architecture-overview.svg)
 
 ---
 
@@ -34,6 +40,40 @@ All scripts are idempotent. `workshop-e2e.sh --help` lists every flag (`--start-
 
 ---
 
+## Required licenses (must obtain before deploy)
+
+IVIA does not deploy without two artifacts from IBM:
+
+1. **IBM Container Registry entitlement key** — lets the cluster pull `icr.io/ibm-vassd/verify-access:11.0.2` images. From IBM Cloud → Container Software Library.
+2. **IVIA 90-day trial activation certificate** — unlocks the IVIA server at runtime.
+
+Both go into `infrastructure/terraform.tfvars`. Full procurement steps: [`workshop/content/20-prerequisites/22-ivia-licensing/`](workshop/content/20-prerequisites/22-ivia-licensing/index.en.md).
+
+Bedrock access required: enable `us.amazon.nova-pro-v1:0` (Nova Pro via CRIS) in `us-west-2` and `amazon.nova-2-multimodal-embeddings-v1:0` in `us-east-1` for the Knowledge Base.
+
+---
+
+## Workshop content (preview + publish)
+
+Attendee-facing pages live under `workshop/content/` (Hugo + AWS Workshop Studio v2 contentspec). Three admin actions:
+
+```bash
+# Preview locally — auto-downloads the AWS Workshop Studio preview CLI on first run,
+# caches it at workshop/tmp/preview_build, then serves http://localhost:8080.
+# Open that URL in a browser to read the workshop exactly as attendees will.
+bash workshop/scripts/preview.sh
+
+# Sync diagram SVGs from assets/ into workshop/static/images/ (run before publish).
+bash workshop/scripts/package-assets.sh
+
+# Publish to AWS Workshop Studio with an explicit version tag.
+bash workshop/scripts/publish.sh <version>    # e.g. 0.15.0
+```
+
+Edit content under `workshop/content/<NN-section>/index.en.md` (or `<NN-section>/<NN-subpage>/index.en.md`). The preview reloads on file change — keep it running in a side terminal while editing.
+
+---
+
 ## Admin-only test + diagnostic scripts
 
 The workshop content never shows attendees these. Use them to isolate problems, sanity-check a fresh deploy, or re-run a single layer after a change. All live under `infrastructure/scripts/`.
@@ -56,19 +96,6 @@ Every `verify-*.sh` and `test-*.sh` script is non-destructive, prints `✓ PASS 
 
 ---
 
-## Required licenses (must obtain before deploy)
-
-IVIA does not deploy without two artifacts from IBM:
-
-1. **IBM Container Registry entitlement key** — lets the cluster pull `icr.io/ibm-vassd/verify-access:11.0.2` images. From IBM Cloud → Container Software Library.
-2. **IVIA 90-day trial activation certificate** — unlocks the IVIA server at runtime.
-
-Both go into `infrastructure/terraform.tfvars`. Full procurement steps: [`workshop/content/20-prerequisites/22-ivia-licensing/`](workshop/content/20-prerequisites/22-ivia-licensing/index.en.md).
-
-Bedrock access required: enable `us.amazon.nova-pro-v1:0` (Nova Pro via CRIS) in `us-west-2` and `amazon.nova-2-multimodal-embeddings-v1:0` in `us-east-1` for the Knowledge Base.
-
----
-
 ## What gets deployed
 
 Single-region (`us-west-2`) EKS 1.34 cluster running:
@@ -79,8 +106,6 @@ Single-region (`us-west-2`) EKS 1.34 cluster running:
 - **RDS PostgreSQL** with Row-Level Security + pgaudit.
 - **Bedrock Knowledge Base** (AOSS + Nova 2 Multimodal Embeddings, us-east-1) and Nova Pro inference (us-west-2 via CRIS).
 - **Three-plane audit pipeline** — fluent-bit → Firehose → S3 → Glue → Athena workgroup `workshop`.
-
-Reference architecture: [`assets/architecture-overview.svg`](assets/architecture-overview.svg). UC-specific diagrams: `assets/uc1-flow.svg`, `assets/uc2-oauth-flow.svg`, `assets/uc3-ciba-flow.svg`.
 
 State lives locally in `infrastructure/terraform.tfstate`. No HCP, no Terraform Stacks.
 
@@ -113,7 +138,7 @@ UC3 requires the free **IBM Verify** app installed on a phone (App Store / Googl
 
 ## Issues + feedback
 
-File issues at <https://github.com/sharepointoscar/agentic-runtime-security-aws/issues>. Workshop-tester role guide: [`TESTING.md`](TESTING.md).
+File issues at <https://github.ibm.com/Oscar-Medina/agentic-runtime-security-aws/issues>. Workshop-tester role guide: [`TESTING.md`](TESTING.md).
 
 ## License
 
