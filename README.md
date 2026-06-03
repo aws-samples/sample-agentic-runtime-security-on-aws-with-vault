@@ -6,6 +6,8 @@ AWS Workshop Studio workshop that deploys the IBM Verify + HashiCorp Vault refer
 
 **Latest release:** [v0.15.0](https://github.com/sharepointoscar/agentic-runtime-security-aws/releases/latest) — UC1/UC2/UC3 all green end-to-end.
 
+![Reference architecture](assets/architecture-overview.svg)
+
 ---
 
 ## Quick start (admin)
@@ -79,8 +81,6 @@ Single-region (`us-west-2`) EKS 1.34 cluster running:
 - **RDS PostgreSQL** with Row-Level Security + pgaudit.
 - **Bedrock Knowledge Base** (AOSS + Nova 2 Multimodal Embeddings, us-east-1) and Nova Pro inference (us-west-2 via CRIS).
 - **Three-plane audit pipeline** — fluent-bit → Firehose → S3 → Glue → Athena workgroup `workshop`.
-
-Reference architecture: [`assets/architecture-overview.svg`](assets/architecture-overview.svg). UC-specific diagrams: `assets/uc1-flow.svg`, `assets/uc2-oauth-flow.svg`, `assets/uc3-ciba-flow.svg`.
 
 State lives locally in `infrastructure/terraform.tfstate`. No HCP, no Terraform Stacks.
 
