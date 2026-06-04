@@ -72,6 +72,22 @@ Edit content under `workshop/content/<NN-section>/index.en.md` (or `<NN-section>
 
 ---
 
+## Slide deck (presenter mode)
+
+The slide deck `slides.md` is reveal-md markdown; it lives in the sibling worktree `../agentic-runtime-security-aws-slides/`. From that directory:
+
+```bash
+# Live present (opens browser at http://localhost:1948, hot-reloads on edit)
+npx reveal-md slides.md
+
+# Export to PDF for offline / printed handouts
+npx reveal-md slides.md --print slides.pdf
+```
+
+No build step — `reveal-md.json` next to `slides.md` carries the theme + transition config.
+
+---
+
 ## Admin-only test + diagnostic scripts
 
 The workshop content never shows attendees these. Use them to isolate problems, sanity-check a fresh deploy, or re-run a single layer after a change. All live under `infrastructure/scripts/`.
