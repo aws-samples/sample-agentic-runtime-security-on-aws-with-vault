@@ -37,14 +37,3 @@ variable "tls_certificate_arn" {
   description = "Self-signed ACM cert ARN (wildcard *.<region>.elb.amazonaws.com) attached to the WRP ALB HTTPS:443 listener. provider.yml issuer/base_url are patched to the real ALB hostname at the root module post-apply."
 }
 
-variable "wrp_public_fqdn" {
-  type        = string
-  default     = ""
-  description = "Publicly-resolvable FQDN (Route53) that fronts the WRP ALB. When set, all MMFA endpoint URLs in base_layer use this host instead of the raw ELB hostname, so the IBM Verify mobile app validates a publicly-trusted chain during enrollment. Empty string = fall back to the ELB hostname (self-signed, browser-only)."
-}
-
-variable "wrp_public_certificate_arn" {
-  type        = string
-  default     = ""
-  description = "Publicly-trusted ACM cert ARN (DNS-validated, for wrp_public_fqdn) added as the DEFAULT cert on the WRP ALB HTTPS:443 listener via the comma-separated certificate-arn annotation. Empty string = only the self-signed tls_certificate_arn is attached."
-}

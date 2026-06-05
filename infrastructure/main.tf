@@ -51,21 +51,23 @@ module "ecr" {
 }
 
 #-------------------------------------------------------------------------------
-# Wave 0 — TLS (self-signed cert for the browser-facing ALB HTTPS listeners)
+# Wave 0 — TLS (self-signed bootstrap cert for the browser-facing ALB HTTPS
+# listeners; replaced in-place by Phase 07.8 Plan 04 with a Let's Encrypt cert).
 #
-# Browsers tolerate a self-signed cert (one-time "not trusted" click-through),
-# so the raw ALB DNS names (k8s-...<region>.elb.amazonaws.com) get a self-signed
-# wildcard cert imported into ACM. This is the baseline that always works with
-# no domain. IVIAOP requires https (not http) redirect_uris for non-localhost
-# hosts, which this satisfies. NOT Vault PKI.
+# This resource MINTS the ACM ARN that both attendee-facing ALB Ingresses
+# (IVIA WRP + banking-UI) bind via the `alb.ingress.kubernetes.io/certificate-arn`
+# annotation. At first apply the cert content is the self-signed wildcard
+# (`*.<region>.elb.amazonaws.com`) below; Phase 07.8 Plan 04's ACM-sync CronJob
+# then upserts the LE-issued cert body into THIS SAME ARN via
+# `aws acm import-certificate --certificate-arn ...`. The `lifecycle.ignore_changes`
+# below (Plan 02) protects that import from being undone by Terraform re-apply.
 #
-# EXCEPTION — MMFA mobile-push enrollment. The IBM Verify mobile app enforces
-# Apple ATS and rejects the self-signed chain mid-enrollment ("A TLS error
-# caused the secure connection to fail"), leaving the device with empty
-# auth_methods (no Approve/Deny). For that path a publicly-trusted cert is
-# mandatory, so when var.wrp_dns_zone_name is set we additionally mint a
-# DNS-validated ACM public cert for <wrp_public_hostname>.<zone> and add it as
-# the WRP ALB's default listener cert (see aws_acm_certificate.wrp_public below).
+# Phase 07.8 replaces the historical Route53+ACM-DNS-validation path that used
+# to mint a separate publicly-trusted cert for an attendee-provided Route53 zone
+# (var.wrp_dns_zone_name / var.wrp_public_hostname). That path is RETIRED as
+# part of Plan 02 — see Phase 07.8 CONTEXT D-06. Workshop Studio attendees do
+# not own a DNS zone; nip.io + Let's Encrypt via cert-manager (Plans 03-04) is
+# the only attendee-trusted path going forward.
 #-------------------------------------------------------------------------------
 
 resource "tls_private_key" "workshop_tls" {
@@ -102,68 +104,26 @@ resource "aws_acm_certificate" "workshop_tls" {
 
   lifecycle {
     create_before_destroy = true
+    # Phase 07.8 Plan 02 (D-10): protect the cert body from Terraform drift after
+    # Plan 04's ACM-sync CronJob upserts the Let's Encrypt-issued cert into this
+    # same ARN. Without ignore_changes Terraform would see the post-import body
+    # diverge from tls_self_signed_cert.workshop_tls.cert_pem and re-apply the
+    # self-signed material, undoing the trusted chain. The ARN stays stable so
+    # the ALB Ingress annotation never needs to change across renewals.
+    ignore_changes = [
+      private_key,
+      certificate_body,
+      certificate_chain,
+    ]
   }
 }
 
 locals {
-  # Imported self-signed cert ARN bound to both browser-facing ALB HTTPS:443
-  # listeners (banking-ui + ivia-wrp).
+  # Imported ACM cert ARN bound to both browser-facing ALB HTTPS:443 listeners
+  # (banking-ui + ivia-wrp). Phase 07.8 Plan 02 retired the old Route53+ACM-DNS
+  # public-FQDN path; Plan 04 in-place upserts a Let's Encrypt-issued cert into
+  # THIS SAME ARN so the listener annotation never needs to change.
   tls_certificate_arn = aws_acm_certificate.workshop_tls.arn
-
-  # Public-FQDN path for MMFA mobile-push enrollment. Enabled only when a real
-  # Route53 zone is supplied; the WRP ALB then serves a publicly-trusted cert
-  # under this name so the IBM Verify app trusts it during method enrollment.
-  wrp_public_enabled = var.wrp_dns_zone_name != ""
-  wrp_public_fqdn    = local.wrp_public_enabled ? "${var.wrp_public_hostname}.${var.wrp_dns_zone_name}" : ""
-}
-
-#-------------------------------------------------------------------------------
-# Wave 0 — WRP public TLS (MMFA mobile-push). DNS-validated ACM PUBLIC cert for
-# the WRP FQDN + Route53 validation records + a CNAME (added after module.ivia)
-# pointing the FQDN at the WRP ALB. The ALB serves this cert as its default 443
-# cert (self-signed kept as SNI fallback) so the IBM Verify app validates a real
-# chain. ACM cert for an ALB must live in the ALB's region (default provider =
-# var.region). All conditional on var.wrp_dns_zone_name being set.
-#-------------------------------------------------------------------------------
-
-data "aws_route53_zone" "wrp" {
-  count        = local.wrp_public_enabled ? 1 : 0
-  name         = var.wrp_dns_zone_name
-  private_zone = false
-}
-
-resource "aws_acm_certificate" "wrp_public" {
-  count             = local.wrp_public_enabled ? 1 : 0
-  domain_name       = local.wrp_public_fqdn
-  validation_method = "DNS"
-  tags              = var.tags
-
-  lifecycle {
-    create_before_destroy = true
-  }
-}
-
-resource "aws_route53_record" "wrp_cert_validation" {
-  for_each = {
-    for dvo in(local.wrp_public_enabled ? aws_acm_certificate.wrp_public[0].domain_validation_options : []) :
-    dvo.domain_name => {
-      name   = dvo.resource_record_name
-      type   = dvo.resource_record_type
-      record = dvo.resource_record_value
-    }
-  }
-  zone_id         = data.aws_route53_zone.wrp[0].zone_id
-  name            = each.value.name
-  type            = each.value.type
-  records         = [each.value.record]
-  ttl             = 60
-  allow_overwrite = true
-}
-
-resource "aws_acm_certificate_validation" "wrp_public" {
-  count                   = local.wrp_public_enabled ? 1 : 0
-  certificate_arn         = aws_acm_certificate.wrp_public[0].arn
-  validation_record_fqdns = [for r in aws_route53_record.wrp_cert_validation : r.fqdn]
 }
 
 #-------------------------------------------------------------------------------
@@ -436,28 +396,9 @@ module "ivia" {
   ivia_mmfa_push_client_secret = var.ivia_mmfa_push_client_secret
   node_security_group_id       = module.eks.node_security_group_id
   tls_certificate_arn          = local.tls_certificate_arn
-  wrp_public_fqdn              = local.wrp_public_fqdn
-  wrp_public_certificate_arn   = local.wrp_public_enabled ? aws_acm_certificate_validation.wrp_public[0].certificate_arn : ""
   tags                         = var.tags
 
   depends_on = [time_sleep.alb_webhook_ready]
-}
-
-#-------------------------------------------------------------------------------
-# WRP public CNAME — points <wrp_public_hostname>.<zone> at the WRP ALB hostname
-# (only known after module.ivia creates the Ingress). The MMFA endpoints in
-# base_layer are rendered against this FQDN, so the phone resolves here, the ALB
-# serves the publicly-trusted cert, and method enrollment completes. Conditional
-# on var.wrp_dns_zone_name.
-#-------------------------------------------------------------------------------
-
-resource "aws_route53_record" "wrp_cname" {
-  count   = local.wrp_public_enabled ? 1 : 0
-  zone_id = data.aws_route53_zone.wrp[0].zone_id
-  name    = local.wrp_public_fqdn
-  type    = "CNAME"
-  ttl     = 60
-  records = [module.ivia.ivia_wrp_alb_hostname]
 }
 
 #-------------------------------------------------------------------------------

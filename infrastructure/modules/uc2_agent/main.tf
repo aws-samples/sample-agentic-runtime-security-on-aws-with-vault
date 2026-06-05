@@ -1085,6 +1085,13 @@ resource "kubernetes_ingress_v1" "banking_ui" {
       "alb.ingress.kubernetes.io/certificate-arn" = var.tls_certificate_arn
       "alb.ingress.kubernetes.io/ssl-redirect"    = "443"
       "kubernetes.io/ingress.class"               = "alb"
+      # Phase 07.8 Plan 02 (D-01): join the shared ALB IngressGroup so this
+      # Ingress co-tenants ONE ALB with the IVIA WRP Ingress. Plan 03
+      # cert-manager Certificate's HTTP-01 solver Ingress lands in the same
+      # group with group.order=1 so /.well-known/acme-challenge/* wins before
+      # this Ingress's /* catch-all (group.order=10).
+      "alb.ingress.kubernetes.io/group.name"  = "workshop-acme"
+      "alb.ingress.kubernetes.io/group.order" = "10"
     }
   }
 
