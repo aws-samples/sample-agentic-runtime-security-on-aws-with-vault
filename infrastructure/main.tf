@@ -263,6 +263,10 @@ module "addons" {
   cluster_version   = module.eks.cluster_version
   oidc_provider_arn = module.eks.oidc_provider_arn
   tags              = var.tags
+  # Phase 07.8 Plan 01 Task 2: ACME email pass-through. Plan 03 cert-manager
+  # ClusterIssuer (new resource added there) consumes module.addons.acme_email
+  # in spec.acme.email. No default per CLAUDE.md identity-defaults rule.
+  acme_email = var.acme_email
 
   depends_on = [module.eks]
 }

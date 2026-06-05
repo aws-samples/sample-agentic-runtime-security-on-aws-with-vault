@@ -32,3 +32,8 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "acme_email" {
+  description = "Let's Encrypt ACME account contact email — passed through from root var.acme_email. Required input; no fallback value is shipped (project identity-fallback rule). Plan 03 cert-manager ClusterIssuer consumes this in spec.acme.email."
+  type        = string
+}
