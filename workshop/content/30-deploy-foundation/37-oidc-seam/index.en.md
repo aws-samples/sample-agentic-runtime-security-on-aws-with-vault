@@ -112,15 +112,15 @@ kubectl exec -n vault vault-0 -- \
   sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read auth/jwt/config"
 ```
 
-Expected:
+Expected — `jwks_url` is cluster-internal Service DNS (stable across rebuilds); `bound_issuer` matches the `iss` claim IVIA stamps on its tokens (the public WRP host):
 
 ```
 jwks_url              https://iviaop.verify-access.svc.cluster.local:8436/oauth2/jwks
-bound_issuer          https://k8s-verifyac-iviawrp-8b70662954-852192817.us-west-2.elb.amazonaws.com
+bound_issuer          # Output will be captured from live run during Task 3 checkpoint
 oidc_discovery_url    n/a
 ```
 
-Vault validates IVIA-issued JWTs via `jwks_url` (cluster-internal Service DNS — stable across rebuilds). `bound_issuer` matches the `iss` claim IVIA stamps on its tokens — the WRP ALB hostname.
+Vault validates IVIA-issued JWTs via `jwks_url` (cluster-internal Service DNS — stable across rebuilds). `bound_issuer` matches the `iss` claim IVIA stamps on its tokens (the WRP host attendees navigate to in their browser — see `NIP_FQDN_WRP` in `infrastructure/.acme-state`).
 
 ## Step 4 — Confirm database connection
 
