@@ -22,6 +22,7 @@
 #   --cluster-name NAME      EKS cluster name (default: parsed from terraform.tfvars)
 #   --skip-vault-init        Skip Vault initialization (Vault already initialized)
 #   --skip-build             Skip image build+push (images already in ECR)
+#   --skip-acme              Skip ACME cert issuance + ACM first-sync (cert already valid)
 #   --dry-run                Print planned actions without executing
 #   --help                   Show this help message
 #
@@ -55,6 +56,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 # Suppress the common-checks EXIT trap — we emit our own summary at end.
+# (Phase 07.8 Plan 01 Task 2 incidental fix: this variable IS consumed by
+# common-checks.sh which is sourced below, but shellcheck cannot follow the
+# sourced file with SC1091 disabled; the directive documents the design.)
+# shellcheck disable=SC2034
 COMMON_CHECKS_SUMMARY=0
 # shellcheck source=common-checks.sh
 source "${SCRIPT_DIR}/common-checks.sh"
@@ -66,6 +71,10 @@ REGION=""
 CLUSTER_NAME=""
 SKIP_VAULT_INIT=false
 SKIP_BUILD=false
+# Phase 07.8 Plan 01 Task 2: --skip-acme flag plumbing. Variable is consumed
+# by Plan 04 ACME step body (sentinel block: if [[ "$SKIP_ACME" = true ]] ...).
+# shellcheck disable=SC2034
+SKIP_ACME=false
 DRY_RUN=false
 
 # Vault port-forward PID (cleaned up on exit)
@@ -94,12 +103,14 @@ usage() {
 # Argument Parsing
 #-------------------------------------------------------------------------------
 while [[ $# -gt 0 ]]; do
+    # shellcheck disable=SC2034  # SKIP_ACME assignment is intentional — consumed by Plan 04 ACME step body
     case "$1" in
         --help|-h)          usage ;;
         --region)           REGION="$2"; shift ;;
         --cluster-name)     CLUSTER_NAME="$2"; shift ;;
         --skip-vault-init)  SKIP_VAULT_INIT=true ;;
         --skip-build)       SKIP_BUILD=true ;;
+        --skip-acme)        SKIP_ACME=true ;;
         --dry-run)          DRY_RUN=true ;;
         -*) echo "Unknown option: $1"; usage ;;
     esac

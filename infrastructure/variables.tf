@@ -122,6 +122,28 @@ variable "ivia_mmfa_push_client_secret" {
 }
 
 #-------------------------------------------------------------------------------
+# Phase 07.8 — Attendee-trusted TLS via nip.io + Let's Encrypt
+# acme_email: Let's Encrypt ACME account contact email. NO default (per project
+#   rule never-hardcode-identity-defaults — identity-bearing inputs are caller-
+#   supplied, never defaulted). Workshop owner / Workshop Studio attendees
+#   provide via terraform.tfvars. Consumed by Plan 03 ClusterIssuer.
+# deploy_id_state_path: relative path (resolved from infrastructure/) to the
+#   local .acme-state file written by Plan 04 configure-workshop.sh ACME step
+#   and read by verify-tls.sh. Gitignored (D-10 no-cross-deploy-cache).
+#-------------------------------------------------------------------------------
+
+variable "acme_email" {
+  type        = string
+  description = "Let's Encrypt ACME account contact email. Required input — per the project's CLAUDE.md identity-fallback rule, this MUST be supplied by the caller via terraform.tfvars; no fallback value is shipped. Consumed by Plan 03 cert-manager ClusterIssuer."
+}
+
+variable "deploy_id_state_path" {
+  type        = string
+  default     = ".acme-state"
+  description = "Relative path (resolved from infrastructure/) to the local .acme-state file. Written by Plan 04 configure-workshop.sh ACME step (DEPLOY_ID, STABLE_ACM_ARN, ALB_IP, NIP_FQDN_WRP, NIP_FQDN_BANKING) and read by verify-tls.sh. Gitignored per D-10."
+}
+
+#-------------------------------------------------------------------------------
 # UC1 Agent Configuration
 # uc1_agent_image: set by attendees after ECR push (Phase 4 lab step).
 # bedrock_model_id: defaults to Nova Pro CRIS profile — no tfvars override needed.
