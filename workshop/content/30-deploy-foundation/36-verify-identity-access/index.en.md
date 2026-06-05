@@ -69,11 +69,11 @@ terraform -chdir=infrastructure apply
 kubectl get ingress -n verify-access
 ```
 
-Expected:
+Expected — one ALB Ingress addressed (the shared `workshop-acme` IngressGroup also fronts the banking-UI Ingress in the `banking-app` namespace; both share the same ALB hostname so a single Let's Encrypt cert covers both nip.io FQDNs):
 
 ```
-NAME       CLASS   HOSTS   ADDRESS                                        PORTS   AGE
-ivia-wrp   alb     *       k8s-verifyac-ivia-xxxx.elb.amazonaws.com      80      8m
+# Output will be captured from live run during Task 3 checkpoint
+# (the ADDRESS column shows the shared workshop ALB hostname)
 ```
 
 Save the WRP hostname for the next check:
@@ -84,7 +84,7 @@ WRP_HOST=$(kubectl get ingress -n verify-access ivia-wrp \
 echo "WRP host: $WRP_HOST"
 ```
 
-> The PORTS column shows `80`, but the ALB also listens on port 443 with an SSL redirect active — all browser and API traffic is served over HTTPS.
+> The PORTS column shows `80`, but the ALB also listens on port 443 with a publicly trusted Let's Encrypt cert (issued for the nip.io FQDN that `bash infrastructure/scripts/configure-workshop.sh` provisioned — see `infrastructure/.acme-state`). All browser and API traffic is served over HTTPS.
 
 ## Step 3 — Confirm OIDC discovery via WRP junction
 
