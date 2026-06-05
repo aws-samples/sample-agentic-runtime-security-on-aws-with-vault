@@ -264,12 +264,20 @@ _sweep_orphan_tgbs() {
         if [ "$alb_hostname" != "$expected_hostname" ]; then
             print_info "Deleting orphan TGB ${tgb_namespace}/${tgb_name} (owner ${owner_ns}/${owner_name}; orphan ALB: ${alb_hostname}; current: ${expected_hostname})"
             kubectl --context workshop -n "$tgb_namespace" delete targetgroupbinding "$tgb_name" --wait=false >/dev/null 2>&1 || true
+            # LBC v2.7.x does NOT GC the orphan ALB on its own when the Ingress
+            # stack tag still references a live Ingress (the new ALB wins
+            # ownership). Delete the orphan ALB explicitly here — its listeners
+            # (with cert refs) are removed atomically by delete-load-balancer.
+            # Safe because we already verified expected_hostname != alb_hostname,
+            # i.e. no live Ingress points at this ALB.
+            print_info "  → also deleting orphan ALB ${tgb_alb_arn}"
+            aws elbv2 delete-load-balancer --region "$WORKSHOP_REGION" --load-balancer-arn "$tgb_alb_arn" >/dev/null 2>&1 || true
             count=$((count + 1))
         fi
     done < <(kubectl --context workshop get targetgroupbinding -A -o jsonpath='{range .items[*]}{.metadata.namespace}{"\t"}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)
 
     if [ "$count" -gt 0 ]; then
-        print_warn "Swept ${count} orphan TargetGroupBinding(s). LBC will GC the empty ALB(s) on next reconcile."
+        print_warn "Swept ${count} orphan TargetGroupBinding(s) + their backing ALB(s). Cert detachment + ALB deletion is async (typically 30-60s)."
     else
         print_info "No orphan TargetGroupBindings found."
     fi
