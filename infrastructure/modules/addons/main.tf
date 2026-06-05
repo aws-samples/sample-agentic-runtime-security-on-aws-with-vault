@@ -156,3 +156,204 @@ resource "kubernetes_manifest" "letsencrypt_prod_issuer" {
 
   depends_on = [helm_release.cert_manager]
 }
+
+################################################################################
+# Phase 07.8 Plan 03 — ACM-sync CronJob (every 6h) + ServiceAccount + Pod
+# Identity + scoped IAM
+#
+# Architecture: cert-manager native renewal lives in the Certificate CR (added
+# by Plan 04, sets renewBefore: 720h — 30d before LE's 90d expiry). When
+# cert-manager rotates the cert it rewrites the K8s Secret
+# `workshop-le-tls-secret` IN PLACE. The CronJob below runs every 6h, mounts
+# that Secret, and calls `aws acm import-certificate --certificate-arn
+# $STABLE_ARN ...` to upsert the new cert content INTO THE SAME ACM ARN. The
+# ALB listener annotation never changes. (D-03 stable-ARN contract; D-09
+# cert-manager owns renewal — this CronJob is the SYNC mechanism, NOT the
+# renewer.)
+#
+# Pre-Plan-04 tolerance: at the time this plan applies, Plan 04's Certificate
+# CR has not shipped, so the K8s Secret `workshop-le-tls-secret` does not
+# exist yet. The Secret volume below is marked `optional = true` and the
+# CronJob container has an early-return guard (`[ ! -f $CERT_PATH ] && exit
+# 0`) so the first 6h cycle silently no-ops until Plan 04 lands.
+#
+# IAM scope (T-cronjob-iam-overprivilege mitigation): the inline policy
+# allows acm:ImportCertificate + acm:DescribeCertificate on var.workshop_tls_arn
+# ONLY — not the wildcard form. Pod Identity binds the cert-manager
+# namespace's `acm-sync` ServiceAccount to this role, so credentials only
+# reach pods running with that exact SA in that exact namespace.
+################################################################################
+
+# ServiceAccount used by the CronJob — Pod Identity attaches IAM creds at
+# pod-start. cert-manager namespace is created by the Helm release above.
+resource "kubernetes_service_account" "acm_sync" {
+  metadata {
+    name      = "acm-sync"
+    namespace = "cert-manager"
+    labels = {
+      "app.kubernetes.io/name"       = "acm-sync"
+      "app.kubernetes.io/managed-by" = "terraform"
+      "app.kubernetes.io/part-of"    = "workshop-tls"
+    }
+  }
+
+  automount_service_account_token = true
+
+  depends_on = [helm_release.cert_manager]
+}
+
+# Trust policy: pods.eks.amazonaws.com Service principal (Pod Identity
+# pattern, NOT IRSA). Mirrors vault/main.tf:96-104 + observability/main.tf:51-61.
+data "aws_iam_policy_document" "acm_sync_trust" {
+  statement {
+    sid     = "AllowEKSPodIdentity"
+    actions = ["sts:AssumeRole", "sts:TagSession"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["pods.eks.amazonaws.com"]
+    }
+  }
+}
+
+# Inline policy: SCOPED to the single workshop ACM ARN. Resource is the
+# exact var.workshop_tls_arn — NOT `*`, NOT a wildcard ARN pattern.
+data "aws_iam_policy_document" "acm_sync_import" {
+  statement {
+    sid    = "WorkshopACMImport"
+    effect = "Allow"
+    actions = [
+      "acm:ImportCertificate",
+      "acm:DescribeCertificate",
+    ]
+    resources = [var.workshop_tls_arn]
+  }
+}
+
+resource "aws_iam_role" "acm_sync" {
+  name               = "${var.cluster_name}-acm-sync"
+  assume_role_policy = data.aws_iam_policy_document.acm_sync_trust.json
+  tags               = var.tags
+}
+
+resource "aws_iam_role_policy" "acm_sync" {
+  name   = "acm-import-workshop"
+  role   = aws_iam_role.acm_sync.id
+  policy = data.aws_iam_policy_document.acm_sync_import.json
+}
+
+resource "aws_eks_pod_identity_association" "acm_sync" {
+  cluster_name    = var.cluster_name
+  namespace       = "cert-manager"
+  service_account = "acm-sync"
+  role_arn        = aws_iam_role.acm_sync.arn
+
+  tags = var.tags
+
+  depends_on = [kubernetes_service_account.acm_sync]
+}
+
+# CronJob: every 6h, reads the Plan-04 K8s Secret `workshop-le-tls-secret`
+# from /tls, calls `aws acm import-certificate` against the stable ARN. The
+# Secret volume is `optional = true` so cycles BEFORE Plan 04 lands the
+# Certificate CR are silent no-ops (the guard in args exits 0 when the cert
+# file is absent).
+resource "kubernetes_cron_job_v1" "acm_sync" {
+  metadata {
+    name      = "acm-sync"
+    namespace = "cert-manager"
+    labels = {
+      "app.kubernetes.io/name"       = "acm-sync"
+      "app.kubernetes.io/managed-by" = "terraform"
+      "app.kubernetes.io/part-of"    = "workshop-tls"
+    }
+  }
+
+  spec {
+    schedule                      = "0 */6 * * *"
+    concurrency_policy            = "Forbid"
+    successful_jobs_history_limit = 1
+    failed_jobs_history_limit     = 3
+
+    job_template {
+      metadata {
+        labels = { "app.kubernetes.io/name" = "acm-sync" }
+      }
+
+      spec {
+        backoff_limit              = 2
+        ttl_seconds_after_finished = 3600
+
+        template {
+          metadata {
+            labels = { "app.kubernetes.io/name" = "acm-sync" }
+          }
+
+          spec {
+            service_account_name = kubernetes_service_account.acm_sync.metadata[0].name
+            restart_policy       = "OnFailure"
+
+            container {
+              name    = "acm-sync"
+              image   = "public.ecr.aws/aws-cli/aws-cli:latest"
+              command = ["/bin/sh", "-c"]
+              args = [<<-EOT
+                set -eu
+                CERT_PATH=/tls/tls.crt
+                KEY_PATH=/tls/tls.key
+                CHAIN_PATH=/tls/ca.crt
+                if [ ! -f "$CERT_PATH" ]; then
+                  echo "K8s Secret workshop-le-tls-secret not yet populated by cert-manager Certificate CR (Plan 04 not landed). Exit 0 — CronJob will retry next 6h cycle."
+                  exit 0
+                fi
+                if [ ! -f "$CHAIN_PATH" ]; then
+                  echo "ca.crt absent — Certificate CR with intermediate chain has not yet been issued. Exit 0; retry next cycle."
+                  exit 0
+                fi
+                echo "Importing LE cert content into stable ACM ARN $STABLE_ARN (region $REGION)"
+                aws acm import-certificate \
+                  --certificate-arn "$STABLE_ARN" \
+                  --certificate     "fileb://$CERT_PATH" \
+                  --private-key     "fileb://$KEY_PATH" \
+                  --certificate-chain "fileb://$CHAIN_PATH" \
+                  --region "$REGION"
+                echo "import-certificate completed"
+              EOT
+              ]
+
+              env {
+                name  = "STABLE_ARN"
+                value = var.workshop_tls_arn
+              }
+              env {
+                name  = "REGION"
+                value = var.region
+              }
+
+              volume_mount {
+                name       = "tls"
+                mount_path = "/tls"
+                read_only  = true
+              }
+            }
+
+            volume {
+              name = "tls"
+              secret {
+                # Plan 04's Certificate CR creates this Secret. `optional = true`
+                # lets the CronJob mount no-op until then.
+                secret_name = "workshop-le-tls-secret"
+                optional    = true
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  depends_on = [
+    helm_release.cert_manager,
+    aws_eks_pod_identity_association.acm_sync,
+  ]
+}
