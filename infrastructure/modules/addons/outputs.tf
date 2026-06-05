@@ -20,3 +20,8 @@ output "aws_load_balancer_controller_release" {
   description = "AWS Load Balancer Controller helm_release attributes. Phase 3+ Ingress resources depending on ALB provisioning can `depends_on` this."
   value       = try(module.eks_blueprints_addons.aws_load_balancer_controller, null)
 }
+
+output "letsencrypt_issuer_name" {
+  description = "ClusterIssuer metadata.name for the Let's Encrypt PRODUCTION issuer created by Plan 03. Consumed by Plan 04's Certificate CR (issuerRef.name) which binds the resolved nip.io SANs against this issuer. Value is static — the name is fixed in the ClusterIssuer manifest body and does not depend on a resolved-at-apply attribute."
+  value       = "letsencrypt-prod"
+}
