@@ -37,3 +37,17 @@ variable "tls_certificate_arn" {
   description = "Self-signed ACM cert ARN (wildcard *.<region>.elb.amazonaws.com) attached to the WRP ALB HTTPS:443 listener. provider.yml issuer/base_url are patched to the real ALB hostname at the root module post-apply."
 }
 
+# Phase 07.8 Plan 05 — nip.io FQDN propagation for IVIA WRP MMFA endpoints.
+# The root module reads .acme-state (written by Plan 04's configure-workshop.sh
+# ACME step) and parses the NIP_FQDN_WRP= line into this variable. When empty
+# (first-deploy bootstrap, before .acme-state exists) the verify_access module
+# falls back to the Ingress-status hostname so the autoconf base_layer always
+# has a resolvable host. After Plan 04's second apply, this carries the
+# wrp.<deploy_id>.<alb_ip_dashed>.nip.io FQDN that IBM Verify validates against
+# the LE-trusted chain during MMFA enrollment.
+variable "nip_io_wrp_host" {
+  type        = string
+  default     = ""
+  description = "nip.io FQDN for IVIA WRP, sourced from .acme-state by the root module. Empty triggers fallback to the Ingress-status hostname for first-deploy bootstrap."
+}
+

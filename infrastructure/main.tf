@@ -124,6 +124,37 @@ locals {
   # public-FQDN path; Plan 04 in-place upserts a Let's Encrypt-issued cert into
   # THIS SAME ARN so the listener annotation never needs to change.
   tls_certificate_arn = aws_acm_certificate.workshop_tls.arn
+
+  # Phase 07.8 Plan 05 — nip.io FQDN propagation for IVIA WRP MMFA endpoints.
+  #
+  # Bootstrap order (NO operator-manual second `terraform apply` — all converge
+  # work goes through configure-workshop.sh per project rule
+  # feedback_changes_through_existing_scripts.md):
+  #   1. First `terraform apply`: .acme-state ABSENT → _acme_state_exists=false
+  #      → _acme_state_content="" → nip_io_wrp_host="" → module.ivia receives
+  #      empty string → verify_access falls back to the Ingress-status hostname
+  #      so base_layer is still rendered with a resolvable host (degraded but
+  #      working). The ALB Ingress + LBC stand up so an ALB IP exists.
+  #   2. `bash configure-workshop.sh` runs. Its ACME step (Plan 04) writes
+  #      .acme-state (with NIP_FQDN_WRP=wrp.<deploy_id>.<alb_ip_dashed>.nip.io),
+  #      then invokes `terraform -chdir=infrastructure apply -auto-approve
+  #      -target=module.ivia` inside the same step.
+  #   3. Second apply: _acme_state_exists=true → file() reads the content →
+  #      regex() extracts NIP_FQDN_WRP → nip_io_wrp_host populated → module.ivia
+  #      re-wires wrp_effective_host to nip.io → base_layer_hash recomputes →
+  #      ConfigMap recreates → autoconf Job re-runs → AAC DB MMFA endpoint URLs
+  #      flip to the nip.io FQDN. IBM Verify mobile app validates the LE chain
+  #      during enrollment.
+  #
+  # Implementation notes: hashicorp/local's data.local_file FAILS HARD on a
+  # missing file (no try() around the data source helps), so we use the
+  # Terraform built-ins fileexists() + file() — both pure functions, no provider
+  # involvement, no failure on absent file. regex() returns the captured group
+  # as a list; try() unwraps with "" fallback when the file is empty or doesn't
+  # contain NIP_FQDN_WRP yet.
+  _acme_state_exists  = fileexists(var.deploy_id_state_path)
+  _acme_state_content = local._acme_state_exists ? file(var.deploy_id_state_path) : ""
+  nip_io_wrp_host     = try(regex("NIP_FQDN_WRP=([^\n]+)", local._acme_state_content)[0], "")
 }
 
 #-------------------------------------------------------------------------------
@@ -405,7 +436,12 @@ module "ivia" {
   ivia_mmfa_push_client_secret = var.ivia_mmfa_push_client_secret
   node_security_group_id       = module.eks.node_security_group_id
   tls_certificate_arn          = local.tls_certificate_arn
-  tags                         = var.tags
+  # Phase 07.8 Plan 05: nip.io FQDN parsed from .acme-state. Empty on first
+  # apply (file absent) → verify_access falls back to Ingress-status hostname;
+  # populated after Plan 04's ACME step → wrp_effective_host flips → autoconf
+  # re-runs against the LE-trusted endpoints.
+  nip_io_wrp_host = local.nip_io_wrp_host
+  tags            = var.tags
 
   depends_on = [time_sleep.alb_webhook_ready]
 }

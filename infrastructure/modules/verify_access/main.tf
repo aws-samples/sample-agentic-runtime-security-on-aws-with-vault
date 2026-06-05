@@ -1574,11 +1574,15 @@ locals {
   ivia_scim_bind_dn = "cn=root,secAuthority=Default"
 
   # Host that every MMFA endpoint URL in base_layer is rendered against. Phase
-  # 07.8 Plan 02 simplified this to the ELB-hostname fallback only (the Route53
-  # public-FQDN branch was retired with D-06). Plan 05 re-wires this to the
-  # nip.io FQDN local once Plan 03+04 land the cert-manager Certificate + ACM
-  # sync, so the IBM Verify app validates the LE chain during enrollment.
-  wrp_effective_host = kubernetes_ingress_v1.ivia_wrp.status[0].load_balancer[0].ingress[0].hostname
+  # 07.8 Plan 05 re-wires this to var.nip_io_wrp_host (the nip.io FQDN the root
+  # module parsed from .acme-state). On first deploy .acme-state is absent so
+  # the variable is empty — the ternary falls back to the Ingress-status hostname
+  # (the same self-signed-ELB path Plan 02 left in place) so the autoconf
+  # base_layer always renders a resolvable host. After Plan 04's ACME step
+  # writes .acme-state and re-applies module.ivia, this flips to the nip.io
+  # FQDN, base_layer_hash recomputes, the autoconf Job re-runs, and IBM Verify
+  # validates the LE-trusted chain during MMFA enrollment.
+  wrp_effective_host = var.nip_io_wrp_host != "" ? var.nip_io_wrp_host : kubernetes_ingress_v1.ivia_wrp.status[0].load_balancer[0].ingress[0].hostname
 
   base_layer_files = sort(tolist(fileset("${path.module}/base_layer", "*")))
   base_layer_hash = sha256(join("", concat(
