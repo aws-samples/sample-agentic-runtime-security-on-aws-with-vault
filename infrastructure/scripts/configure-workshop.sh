@@ -621,8 +621,15 @@ if [[ "$DRY_RUN" = true ]]; then
     print_info "[DRY-RUN] Would query in-cluster OpenLDAP for cn=oscar"
     print_pass "Step 7: OpenLDAP user check (dry-run)"
 else
-    LDAP_PW=$(kubectl get secret openldap-creds -n verify-access -o jsonpath='{.data.admin_password}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
-    if [ -n "${LDAP_PW}" ] && kubectl exec -n verify-access deploy/openldap -- \
+    # CR-02 fix (Phase 07.8 code review): Step 7 was the only place in
+    # configure-workshop.sh that dropped --context workshop. Without it, the
+    # calls silently target the attendee's current default context (extremely
+    # common to be wrong during the workshop); kubectl returns nothing,
+    # LDAP_PW="", and the ldapsearch reports a spurious red flag.
+    # (Also fixes base64 -d -> base64 --decode for BSD/macOS portability;
+    # see CR-04 in REVIEW.md for the same regression in Step 4.)
+    LDAP_PW=$(kubectl --context workshop get secret openldap-creds -n verify-access -o jsonpath='{.data.admin_password}' 2>/dev/null | base64 --decode 2>/dev/null || echo "")
+    if [ -n "${LDAP_PW}" ] && kubectl --context workshop exec -n verify-access deploy/openldap -- \
             ldapsearch -x -H ldapi:/// -D "cn=admin,dc=ibm,dc=com" -w "${LDAP_PW}" \
             -b "dc=ibm,dc=com" "(cn=oscar)" dn 2>/dev/null | grep -q '^dn:'; then
         print_pass "Step 7: OpenLDAP user 'oscar' present (seeded by IVIA autoconf)"
