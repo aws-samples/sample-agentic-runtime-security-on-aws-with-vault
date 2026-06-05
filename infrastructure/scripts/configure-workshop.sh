@@ -421,7 +421,12 @@ _run_acme_step() {
 
     # (3) DEPLOY_ID — generate fresh if missing, preserve on rerun (idempotency).
     if [[ -z "${DEPLOY_ID:-}" ]]; then
-        DEPLOY_ID=$(tr -dc 'a-z0-9' < /dev/urandom | head -c6)
+        DEPLOY_ID=$(LC_ALL=C tr -dc 'a-z0-9' < /dev/urandom | head -c6)
+    fi
+    if [[ -z "$DEPLOY_ID" ]] || [[ ${#DEPLOY_ID} -lt 6 ]]; then
+        print_fail "Step 4: DEPLOY_ID generation" \
+            "tr -dc 'a-z0-9' produced empty/short DEPLOY_ID='${DEPLOY_ID}' (expected 6 chars). Re-run with LC_ALL=C bash ${BASH_SOURCE[0]}"
+        return 1
     fi
     NIP_FQDN_WRP="wrp.${DEPLOY_ID}.${ALB_IP_DASHED}.nip.io"
     NIP_FQDN_BANKING="banking.${DEPLOY_ID}.${ALB_IP_DASHED}.nip.io"
