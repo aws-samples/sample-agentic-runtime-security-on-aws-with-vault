@@ -89,3 +89,70 @@ resource "helm_release" "cert_manager" {
 
   depends_on = [time_sleep.lbc_webhook_ready]
 }
+
+################################################################################
+# Phase 07.8 Plan 03 — Let's Encrypt PRODUCTION ClusterIssuer (D-08)
+#
+# Issues browser-trusted certs via the ACME HTTP-01 challenge. The solver
+# Ingress carries `alb.ingress.kubernetes.io/group.name = workshop-acme` to
+# join the SAME shared ALB created by Plan 02 (IVIA WRP + banking-UI both
+# carry group.name=workshop-acme group.order=10). The solver gets
+# group.order="1" so the LBC evaluates the `/.well-known/acme-challenge/*`
+# rule BEFORE the catch-all rules; without this the catch-all's HTTPS
+# redirect annotation would 301 LE's HTTP-01 GET (LE does NOT follow
+# redirects on challenge — RESEARCH Pitfall 1) and validation would fail.
+#
+# No staging ClusterIssuer (D-08 — production only). The Certificate CR that
+# binds the resolved nip.io SANs to this issuer lands in Plan 04 (it requires
+# the post-apply ALB hostname → IP resolution that Plan 04 owns).
+#
+# depends_on pins the cert-manager Helm release: per RESEARCH Pitfall 5 we
+# need cert-manager.io/v1 CRDs registered before Terraform applies the CR.
+################################################################################
+
+resource "kubernetes_manifest" "letsencrypt_prod_issuer" {
+  manifest = {
+    apiVersion = "cert-manager.io/v1"
+    kind       = "ClusterIssuer"
+    metadata = {
+      name = "letsencrypt-prod"
+    }
+    spec = {
+      acme = {
+        # D-08 — Let's Encrypt PRODUCTION ACME endpoint (literal, hardcoded;
+        # no staging knob, no attendee-facing override).
+        server = "https://acme-v02.api.letsencrypt.org/directory"
+        email  = var.acme_email
+        privateKeySecretRef = {
+          name = "letsencrypt-prod-account-key"
+        }
+        solvers = [
+          {
+            http01 = {
+              ingress = {
+                ingressClassName = "alb"
+                ingressTemplate = {
+                  metadata = {
+                    annotations = {
+                      "alb.ingress.kubernetes.io/scheme"       = "internet-facing"
+                      "alb.ingress.kubernetes.io/target-type"  = "ip"
+                      "alb.ingress.kubernetes.io/group.name"   = "workshop-acme"
+                      "alb.ingress.kubernetes.io/group.order"  = "1"
+                      "alb.ingress.kubernetes.io/listen-ports" = "[{\"HTTP\":80}]"
+                      # Note: the HTTPS-redirect annotation is intentionally
+                      # OMITTED here — RESEARCH Pitfall 1. LE's HTTP-01
+                      # validator does NOT follow 301s; if the solver
+                      # Ingress 301'd to HTTPS the challenge fails.
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+
+  depends_on = [helm_release.cert_manager]
+}

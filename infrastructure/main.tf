@@ -227,6 +227,15 @@ module "addons" {
   # ClusterIssuer (new resource added there) consumes module.addons.acme_email
   # in spec.acme.email. No default per CLAUDE.md identity-defaults rule.
   acme_email = var.acme_email
+  # Phase 07.8 Plan 03: stable ACM cert ARN pass-through. The addons module
+  # uses this in two places: (1) the ACM-sync CronJob's IAM policy is scoped
+  # to acm:ImportCertificate on THIS resource ARN only (single-resource IAM
+  # scope; STRIDE T-cronjob-iam-overprivilege mitigation, NOT wildcard); (2)
+  # the CronJob in-place upserts the Let's Encrypt cert content into THIS
+  # SAME ARN every 6h so the ALB listener annotation never changes across
+  # cert-manager-driven renewals (D-03 stable-ARN contract). Drift on the
+  # ARN's cert body is suppressed by lifecycle.ignore_changes set by Plan 02.
+  workshop_tls_arn = local.tls_certificate_arn
 
   depends_on = [module.eks]
 }
