@@ -483,12 +483,23 @@ EOF
     # aws acm import-certificate fails with MalformedCertificateException
     # (a misleading failure that reads as "ACM rejected my cert" rather
     # than "my base64 binary is BSD"). `--decode` is the portable spelling.
+    # cert-manager concatenates leaf + intermediate(s) [+ root] into tls.crt
+    # (kubernetes.io/tls secret format). ACM import-certificate requires the
+    # leaf in --certificate and the rest in --certificate-chain, so split.
+    # ca.crt is NOT populated by cert-manager — relying on it yields an empty
+    # chain file and a misleading "Member must have length >= 1" ACM error.
     kubectl --context workshop get secret workshop-le-tls-secret -n cert-manager \
-        -o jsonpath='{.data.tls\.crt}' | base64 --decode > /tmp/tls.crt
+        -o jsonpath='{.data.tls\.crt}' | base64 --decode > /tmp/tls-bundle.pem
     kubectl --context workshop get secret workshop-le-tls-secret -n cert-manager \
         -o jsonpath='{.data.tls\.key}' | base64 --decode > /tmp/tls.key
-    kubectl --context workshop get secret workshop-le-tls-secret -n cert-manager \
-        -o jsonpath='{.data.ca\.crt}' | base64 --decode > /tmp/chain.pem
+    awk '/-----BEGIN CERTIFICATE-----/{n++} n==1{print > "/tmp/tls.crt"} n>1{print > "/tmp/chain.pem"}' /tmp/tls-bundle.pem
+    rm -f /tmp/tls-bundle.pem
+    if [[ ! -s /tmp/tls.crt ]] || [[ ! -s /tmp/chain.pem ]]; then
+        rm -f /tmp/tls.crt /tmp/tls.key /tmp/chain.pem
+        print_fail "Step 4: split leaf/chain" \
+            "Failed to split tls.crt bundle (leaf=$(stat -f%z /tmp/tls.crt 2>/dev/null || echo 0)B, chain=$(stat -f%z /tmp/chain.pem 2>/dev/null || echo 0)B). Inspect: kubectl get secret workshop-le-tls-secret -n cert-manager -o jsonpath='{.data.tls\\.crt}' | base64 --decode"
+        return 1
+    fi
 
     if ! aws acm import-certificate \
             --certificate-arn "$STABLE_ACM_ARN" \

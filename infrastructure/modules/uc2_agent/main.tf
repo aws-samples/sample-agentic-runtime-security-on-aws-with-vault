@@ -1083,7 +1083,6 @@ resource "kubernetes_ingress_v1" "banking_ui" {
       "alb.ingress.kubernetes.io/target-type"     = "ip"
       "alb.ingress.kubernetes.io/listen-ports"    = jsonencode([{ HTTP = 80 }, { HTTPS = 443 }])
       "alb.ingress.kubernetes.io/certificate-arn" = var.tls_certificate_arn
-      "alb.ingress.kubernetes.io/ssl-redirect"    = "443"
       "kubernetes.io/ingress.class"               = "alb"
       # Phase 07.8 Plan 02 (D-01): join the shared ALB IngressGroup so this
       # Ingress co-tenants ONE ALB with the IVIA WRP Ingress. Plan 03

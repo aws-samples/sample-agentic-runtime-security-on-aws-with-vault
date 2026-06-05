@@ -1435,7 +1435,6 @@ resource "kubernetes_ingress_v1" "ivia_wrp" {
       "alb.ingress.kubernetes.io/target-type"          = "ip"
       "alb.ingress.kubernetes.io/listen-ports"         = "[{\"HTTP\":80},{\"HTTPS\":443}]"
       "alb.ingress.kubernetes.io/certificate-arn"      = var.tls_certificate_arn
-      "alb.ingress.kubernetes.io/ssl-redirect"         = "443"
       "alb.ingress.kubernetes.io/backend-protocol"     = "HTTPS"
       "alb.ingress.kubernetes.io/healthcheck-protocol" = "HTTPS"
       "alb.ingress.kubernetes.io/healthcheck-port"     = "9443"
