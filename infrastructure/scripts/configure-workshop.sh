@@ -471,12 +471,19 @@ EOF
     # into the SAME ARN the ACM-sync CronJob uses. The CronJob's first 6h cycle
     # would do the same thing — this short-circuits so the ALB serves trusted
     # cert immediately after configure-workshop.sh exits.
+    #
+    # CR-04 fix (Phase 07.8 code review): `base64 -d` is GNU-specific; BSD
+    # base64 (default on macOS attendee shells) uses `-D` and rejects `-d`
+    # with `usage: base64 [-Ddi] ...` — writes an empty file, then
+    # aws acm import-certificate fails with MalformedCertificateException
+    # (a misleading failure that reads as "ACM rejected my cert" rather
+    # than "my base64 binary is BSD"). `--decode` is the portable spelling.
     kubectl --context workshop get secret workshop-le-tls-secret -n cert-manager \
-        -o jsonpath='{.data.tls\.crt}' | base64 -d > /tmp/tls.crt
+        -o jsonpath='{.data.tls\.crt}' | base64 --decode > /tmp/tls.crt
     kubectl --context workshop get secret workshop-le-tls-secret -n cert-manager \
-        -o jsonpath='{.data.tls\.key}' | base64 -d > /tmp/tls.key
+        -o jsonpath='{.data.tls\.key}' | base64 --decode > /tmp/tls.key
     kubectl --context workshop get secret workshop-le-tls-secret -n cert-manager \
-        -o jsonpath='{.data.ca\.crt}' | base64 -d > /tmp/chain.pem
+        -o jsonpath='{.data.ca\.crt}' | base64 --decode > /tmp/chain.pem
 
     if ! aws acm import-certificate \
             --certificate-arn "$STABLE_ACM_ARN" \
@@ -520,11 +527,43 @@ EOF
     # so iviawrprp1 + iviaruntime keep stale base_layer/policy in memory
     # (manifests as 0x31 login error + FBTAUT003E policy reload). Documented in
     # docs/IVIA_Deployment.md §7a and project rule project_ivia_post_apply_restart.
-    kubectl --context workshop -n verify-access rollout restart deploy/iviawrprp1 deploy/iviaruntime >/dev/null 2>&1 || true
-    kubectl --context workshop -n verify-access rollout status deploy/iviawrprp1 --timeout=180s >/dev/null 2>&1 || true
-    kubectl --context workshop -n verify-access rollout status deploy/iviaruntime --timeout=180s >/dev/null 2>&1 || true
+    #
+    # WR-05 fix (Phase 07.8 code review): `|| true` previously swallowed
+    # rollout-restart / rollout-status errors entirely, so a missing
+    # deployment, unreachable cluster, or RBAC failure would let Step 4
+    # report SUCCESS while WRP + runtime never actually picked up the new
+    # TLS material — attendees then saw stale cert behavior with no error
+    # trail. Replaced with `print_warn` that captures rc and surfaces in
+    # the Step-4 summary. NOT a return 1: the ACM import at step (7) has
+    # already succeeded, so a failed rollout-restart is a recoverable
+    # warning (manual `kubectl rollout restart` resolves), not a fatal.
+    local ROLLOUT_FAILURE=false
+    local _rc=0
+    kubectl --context workshop -n verify-access rollout restart deploy/iviawrprp1 deploy/iviaruntime >/dev/null 2>&1
+    _rc=$?
+    if [[ "${_rc}" -ne 0 ]]; then
+        print_warn "Step 4: rollout restart deploy/iviawrprp1 + deploy/iviaruntime failed (rc=${_rc}). Cert is imported but WRP+runtime may still hold stale TLS material; run manually: kubectl --context workshop -n verify-access rollout restart deploy/iviawrprp1 deploy/iviaruntime"
+        ROLLOUT_FAILURE=true
+    else
+        kubectl --context workshop -n verify-access rollout status deploy/iviawrprp1 --timeout=180s >/dev/null 2>&1
+        _rc=$?
+        if [[ "${_rc}" -ne 0 ]]; then
+            print_warn "Step 4: rollout status deploy/iviawrprp1 did not reach Ready within 180s (rc=${_rc}). Inspect: kubectl --context workshop -n verify-access describe deploy/iviawrprp1"
+            ROLLOUT_FAILURE=true
+        fi
+        kubectl --context workshop -n verify-access rollout status deploy/iviaruntime --timeout=180s >/dev/null 2>&1
+        _rc=$?
+        if [[ "${_rc}" -ne 0 ]]; then
+            print_warn "Step 4: rollout status deploy/iviaruntime did not reach Ready within 180s (rc=${_rc}). Inspect: kubectl --context workshop -n verify-access describe deploy/iviaruntime"
+            ROLLOUT_FAILURE=true
+        fi
+    fi
 
-    print_pass "Step 4: ACME cert issued and imported to ACM (${NIP_FQDN_WRP}, ${NIP_FQDN_BANKING}); module.ivia converged on nip.io; iviawrprp1+iviaruntime rolled"
+    if [[ "${ROLLOUT_FAILURE}" = "true" ]]; then
+        print_pass "Step 4: ACME cert issued + imported (${NIP_FQDN_WRP}, ${NIP_FQDN_BANKING}); module.ivia converged on nip.io — BUT one or more IVIA rollout-restart/status checks failed (see warnings above). Manual restart may be required before browser/mobile trust works."
+    else
+        print_pass "Step 4: ACME cert issued and imported to ACM (${NIP_FQDN_WRP}, ${NIP_FQDN_BANKING}); module.ivia converged on nip.io; iviawrprp1+iviaruntime rolled"
+    fi
     return 0
 }
 
