@@ -261,6 +261,7 @@ phase_deploy_foundation() {
     if [ "$DRY_RUN" = true ]; then
         print_info "[DRY-RUN] Would run: terraform -chdir=infrastructure apply -auto-approve"
         print_info "[DRY-RUN] Would call configure-workshop.sh after apply completes"
+        print_info "[DRY-RUN] Would call verify-tls.sh as a strict Phase 2 trusted-cert gate (Phase 07.8)"
         return 0
     fi
 
@@ -284,6 +285,18 @@ phase_deploy_foundation() {
         --cluster-name "$CLUSTER_NAME" || {
         print_warn "configure-workshop.sh reported failures — see above for details"
     }
+
+    # Phase 07.8 — strict trusted-cert gate. verify-tls.sh is wave-aware: pending
+    # preconditions emit info notices and exit 0; a check failing AFTER its
+    # delivering wave has landed exits nonzero. Treat nonzero as fatal so e2e
+    # doesn't ship a foundation that fails the "no click-through warning"
+    # contract.
+    step_header "Running Phase 07.8 trusted-cert verification (verify-tls.sh)..."
+    bash "$SCRIPT_DIR/verify-tls.sh" || {
+        print_error "verify-tls.sh failed — trusted-cert chain not serving on attendee-facing ALBs. See above for failing check(s)."
+        exit 1
+    }
+    print_success "Phase 07.8 trusted-cert chain verified on attendee-facing ALBs"
 
     pause_if_interactive "Foundation deploy complete. Infrastructure is running."
 }
