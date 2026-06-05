@@ -394,7 +394,7 @@ _run_acme_step() {
     # contract requires both IVIA WRP and banking-UI Ingresses to share ONE ALB.
     WRP_ALB=$(kubectl --context workshop get ingress -n verify-access ivia-wrp \
         -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
-    BANKING_ALB=$(kubectl --context workshop get ingress -n banking-app banking-ui \
+    BANKING_ALB=$(kubectl --context workshop get ingress -n banking-app banking-ui-ingress \
         -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
 
     if [[ -z "$WRP_ALB" ]] || [[ -z "$BANKING_ALB" ]]; then
