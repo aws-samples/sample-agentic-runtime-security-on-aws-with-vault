@@ -108,6 +108,20 @@ output "banking_ui_alb_hostname" {
 }
 
 #-------------------------------------------------------------------------------
+# Phase 07.8 Plan 04 (D-03 / D-10): stable workshop TLS ACM ARN exposed for the
+# configure-workshop.sh ACME step body (aws acm import-certificate
+# --certificate-arn $STABLE_ACM_ARN) and for verify-tls.sh --check arn-stable.
+# The ARN is preserved across Let's Encrypt renewals via the lifecycle.ignore_changes
+# block on aws_acm_certificate.workshop_tls (Plan 02). Re-import upserts cert
+# content in place; the ALB listener annotation never needs to change.
+#-------------------------------------------------------------------------------
+
+output "tls_certificate_arn" {
+  description = "Stable ACM ARN for the workshop TLS cert. Consumed by infrastructure/scripts/configure-workshop.sh ACME step (Plan 04) for the in-place aws acm import-certificate call; preserved across LE renewals via lifecycle.ignore_changes on aws_acm_certificate.workshop_tls (Plan 02 / D-10)."
+  value       = local.tls_certificate_arn
+}
+
+#-------------------------------------------------------------------------------
 # vault-config inputs — consumed by the separate infrastructure/vault-config/
 # Terraform root via data.terraform_remote_state.root (local backend, this
 # state file). The vault-config root needs a live Vault provider over a

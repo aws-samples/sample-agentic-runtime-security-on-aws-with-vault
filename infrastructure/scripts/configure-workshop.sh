@@ -7,10 +7,11 @@
 #   Step 1: Configure kubectl (aws eks update-kubeconfig)
 #   Step 2: Build & push application images (build-images.sh) + roll Deployments
 #   Step 3: Initialize Vault (vault-init.sh)
-#   Step 4: Configure Vault (vault-configure.sh)
-#   Step 5: Configure IVIA (ivia-configure.sh)
-#   Step 6: Verify OpenLDAP user 'oscar' seeded by IVIA autoconf
-#   Step 7: Seed banking DB (seed-banking-db.sh)
+#   Step 4: ACME cert issuance + ACM bootstrap sync (nip.io + Let's Encrypt)
+#   Step 5: Configure Vault (vault-configure.sh)
+#   Step 6: Configure IVIA (ivia-configure.sh)
+#   Step 7: Verify OpenLDAP user 'oscar' seeded by IVIA autoconf
+#   Step 8: Seed banking DB (seed-banking-db.sh)
 #
 # Idempotent — safe to re-run. Each step self-verifies its result.
 # Missing sub-scripts are skipped with a warning (not a fatal error).
@@ -319,16 +320,221 @@ else
 fi
 
 #===============================================================================
-# STEP 4: Configure Vault (vault-configure.sh)
+# STEP 4: ACME cert issuance + ACM bootstrap sync (nip.io + Let's Encrypt)
+#
+# Phase 07.8 Plan 04 (D-03, D-07, D-10, D-11, D-12).
+#
+# Resolves the shared workshop-acme ALB hostname (Plan 02 IngressGroup), computes
+# nip.io FQDNs `wrp.<deploy_id>.<alb_ip_dashed>.nip.io` and `banking.<deploy_id>.<alb_ip_dashed>.nip.io`,
+# applies a cert-manager Certificate CR with those SANs against the Plan 03
+# ClusterIssuer `letsencrypt-prod`, waits for `Certificate Ready=true`, and runs
+# a one-shot bootstrap `aws acm import-certificate --certificate-arn $STABLE_ACM_ARN`
+# so attendees don't wait 6h for the first ACM-sync CronJob cycle.
+#
+# Idempotency floor (D-12): a second run detects the existing Let's Encrypt-issued
+# ACM cert via `aws acm describe-certificate --query 'Certificate.Issuer'` and exits
+# early — no LE re-issuance, no new ACM import.
+#
+# D-10 (no cross-deploy cache): `.acme-state` is local-only + gitignored (Plan 01
+# wired the gitignore). Fresh cluster destroy → re-deploy regenerates DEPLOY_ID.
+#
+# D-07 sequencing: AFTER `.acme-state` is written, the step runs `terraform
+# -chdir=infrastructure apply -auto-approve -target=module.ivia` so the new
+# NIP_FQDN_WRP flips `local.wrp_effective_host` → re-hashes `base_layer_hash` →
+# triggers ConfigMap recreation + autoconf Job re-run → flips IVIA AAC DB MMFA
+# endpoint URLs to nip.io. Per project rule `feedback_changes_through_existing_scripts.md`.
+#===============================================================================
+ACME_STATE_FILE="${PROJECT_ROOT}/infrastructure/.acme-state"
+
+# Function wrapper allows `return 0/1` for the idempotency early-exit and the
+# shared-ALB equality / ALB-IP failure cases without aborting the whole script.
+_run_acme_step() {
+    # Source existing .acme-state if present (Plan 01 wired the gitignore;
+    # contains DEPLOY_ID, ALB_IP, ALB_IP_DASHED, NIP_FQDN_WRP, NIP_FQDN_BANKING,
+    # STABLE_ACM_ARN from a previous successful run).
+    # shellcheck disable=SC1090
+    if [[ -f "$ACME_STATE_FILE" ]]; then
+        # shellcheck source=/dev/null
+        source "$ACME_STATE_FILE"
+    fi
+
+    # Idempotency early-return (D-12): if the stable ACM ARN is already
+    # Let's Encrypt-issued, skip the entire step — even when --skip-acme is NOT
+    # set. This is what makes a second `bash configure-workshop.sh` succeed
+    # without ACM churn.
+    if [[ "$SKIP_ACME" != true ]] && [[ -n "${STABLE_ACM_ARN:-}" ]]; then
+        CURRENT_ISSUER=$(aws acm describe-certificate \
+            --certificate-arn "$STABLE_ACM_ARN" \
+            --region "$REGION" \
+            --query 'Certificate.Issuer' --output text 2>/dev/null || echo "")
+        if echo "$CURRENT_ISSUER" | grep -q "Let's Encrypt"; then
+            print_pass "Step 4: ACME cert already trusted (Let's Encrypt issuer confirmed)"
+            return 0
+        fi
+    fi
+
+    if [[ "$SKIP_ACME" = true ]]; then
+        print_info "Step 4: ACME skipped (--skip-acme)"
+        PASSES+=("Step 4: ACME (skipped)")
+        return 0
+    fi
+
+    if [[ "$DRY_RUN" = true ]]; then
+        print_info "[DRY-RUN] Would resolve shared workshop-acme ALB hostname (kubectl get ingress)"
+        print_info "[DRY-RUN] Would compute nip.io FQDNs and apply cert-manager Certificate CR (issuerRef.name=letsencrypt-prod)"
+        print_info "[DRY-RUN] Would wait for Certificate Ready=true (timeout 300s)"
+        print_info "[DRY-RUN] Would bootstrap: aws acm import-certificate --certificate-arn \$STABLE_ACM_ARN ..."
+        print_info "[DRY-RUN] Would write ${ACME_STATE_FILE} with DEPLOY_ID/ALB_IP/NIP_FQDN_*/STABLE_ACM_ARN"
+        print_info "[DRY-RUN] Would run: terraform -chdir=${PROJECT_ROOT}/infrastructure apply -auto-approve -target=module.ivia"
+        print_pass "Step 4: ACME cert issuance + ACM bootstrap sync (dry-run)"
+        return 0
+    fi
+
+    # (1) Resolve shared workshop-acme ALB hostname — Plan 02 IngressGroup
+    # contract requires both IVIA WRP and banking-UI Ingresses to share ONE ALB.
+    WRP_ALB=$(kubectl --context workshop get ingress -n verify-access ivia-wrp \
+        -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
+    BANKING_ALB=$(kubectl --context workshop get ingress -n banking-app banking-ui \
+        -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
+
+    if [[ -z "$WRP_ALB" ]] || [[ -z "$BANKING_ALB" ]]; then
+        print_fail "Step 4: shared workshop-acme ALB hostname" \
+            "Could not resolve ALB hostname from IVIA WRP (got '${WRP_ALB}') or banking-UI (got '${BANKING_ALB}') Ingress status. Wait for LBC reconciliation: kubectl get ingress -A | grep alb"
+        return 1
+    fi
+
+    if [[ "$WRP_ALB" != "$BANKING_ALB" ]]; then
+        print_fail "Step 4: shared workshop-acme ALB" \
+            "IVIA WRP and banking-UI Ingresses resolved to DIFFERENT ALB hostnames (WRP=${WRP_ALB}, banking=${BANKING_ALB}). Plan 02's alb.ingress.kubernetes.io/group.name=workshop-acme annotation is not effective — verify it is present on BOTH Ingresses: kubectl get ingress -A -o yaml | grep -A1 group.name"
+        return 1
+    fi
+
+    # (2) Resolve ALB IP via dig (nip.io encodes the IP into the hostname so
+    # browsers resolve directly without external DNS).
+    ALB_IP=$(dig +short "$WRP_ALB" | head -1)
+    if [[ -z "$ALB_IP" ]]; then
+        print_fail "Step 4: ALB IP resolution" \
+            "dig +short ${WRP_ALB} returned empty. Confirm the ALB has converged with an A record: aws elbv2 describe-load-balancers --region ${REGION}"
+        return 1
+    fi
+    ALB_IP_DASHED=$(echo "$ALB_IP" | tr '.' '-')
+
+    # (3) DEPLOY_ID — generate fresh if missing, preserve on rerun (idempotency).
+    if [[ -z "${DEPLOY_ID:-}" ]]; then
+        DEPLOY_ID=$(tr -dc 'a-z0-9' < /dev/urandom | head -c6)
+    fi
+    NIP_FQDN_WRP="wrp.${DEPLOY_ID}.${ALB_IP_DASHED}.nip.io"
+    NIP_FQDN_BANKING="banking.${DEPLOY_ID}.${ALB_IP_DASHED}.nip.io"
+
+    # (4) STABLE_ACM_ARN — sourced from terraform output (Plan 04 added the
+    # output; D-03 ARN-stability contract per Plan 02 lifecycle.ignore_changes).
+    STABLE_ACM_ARN=$(terraform -chdir="${PROJECT_ROOT}/infrastructure" \
+        output -raw tls_certificate_arn 2>/dev/null || echo "")
+    if [[ -z "$STABLE_ACM_ARN" ]]; then
+        print_fail "Step 4: STABLE_ACM_ARN resolution" \
+            "terraform output -raw tls_certificate_arn returned empty. Confirm the workshop has been deployed AND the output exists. Check: cd ${PROJECT_ROOT}/infrastructure && terraform output tls_certificate_arn"
+        return 1
+    fi
+
+    # (5) Render and apply Certificate CR with both nip.io SANs. issuerRef
+    # matches Plan 03 ClusterIssuer (letsencrypt-prod). secretName matches the
+    # Plan 03 ACM-sync CronJob's mounted secret (workshop-le-tls-secret).
+    # renewBefore=720h = 30 days before LE's 90-day expiry (D-09 contract).
+    cat <<EOF | kubectl --context workshop apply -f -
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: workshop-le-tls
+  namespace: cert-manager
+spec:
+  secretName: workshop-le-tls-secret
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+  dnsNames:
+    - ${NIP_FQDN_WRP}
+    - ${NIP_FQDN_BANKING}
+  renewBefore: 720h
+EOF
+
+    # (6) Wait for cert-manager to drive the HTTP-01 challenge through Plan 03's
+    # solver Ingress (group.order=1 wins before the catch-all). 5 min budget.
+    if ! kubectl --context workshop wait \
+            --for=condition=Ready certificate/workshop-le-tls \
+            -n cert-manager --timeout=300s 2>&1; then
+        print_fail "Step 4: Certificate Ready=true" \
+            "cert-manager did not mark workshop-le-tls Ready within 300s. Investigate: kubectl describe certificate/workshop-le-tls -n cert-manager; kubectl get challenges,orders -n cert-manager"
+        return 1
+    fi
+
+    # (7) Bootstrap ACM import — extract the K8s Secret contents and upsert
+    # into the SAME ARN the ACM-sync CronJob uses. The CronJob's first 6h cycle
+    # would do the same thing — this short-circuits so the ALB serves trusted
+    # cert immediately after configure-workshop.sh exits.
+    kubectl --context workshop get secret workshop-le-tls-secret -n cert-manager \
+        -o jsonpath='{.data.tls\.crt}' | base64 -d > /tmp/tls.crt
+    kubectl --context workshop get secret workshop-le-tls-secret -n cert-manager \
+        -o jsonpath='{.data.tls\.key}' | base64 -d > /tmp/tls.key
+    kubectl --context workshop get secret workshop-le-tls-secret -n cert-manager \
+        -o jsonpath='{.data.ca\.crt}' | base64 -d > /tmp/chain.pem
+
+    if ! aws acm import-certificate \
+            --certificate-arn "$STABLE_ACM_ARN" \
+            --certificate "fileb:///tmp/tls.crt" \
+            --private-key "fileb:///tmp/tls.key" \
+            --certificate-chain "fileb:///tmp/chain.pem" \
+            --region "$REGION" >/dev/null; then
+        rm -f /tmp/tls.crt /tmp/tls.key /tmp/chain.pem
+        print_fail "Step 4: aws acm import-certificate" \
+            "Bootstrap ACM upsert failed. The ACM-sync CronJob will retry every 6h; if you want trusted cert before then, debug with: aws acm describe-certificate --certificate-arn ${STABLE_ACM_ARN} --region ${REGION}"
+        return 1
+    fi
+    # Clean cert content tempfiles immediately (STRIDE T-tls-key-on-disk).
+    rm -f /tmp/tls.crt /tmp/tls.key /tmp/chain.pem
+
+    # (8) Persist .acme-state — consumed by Plan 05's wrp_effective_host re-wire,
+    # by verify-tls.sh, and by this step on the next rerun (DEPLOY_ID preserved).
+    cat > "$ACME_STATE_FILE" <<EOF
+DEPLOY_ID=${DEPLOY_ID}
+ALB_IP=${ALB_IP}
+ALB_IP_DASHED=${ALB_IP_DASHED}
+NIP_FQDN_WRP=${NIP_FQDN_WRP}
+NIP_FQDN_BANKING=${NIP_FQDN_BANKING}
+STABLE_ACM_ARN=${STABLE_ACM_ARN}
+EOF
+
+    # (9) Propagate NIP_FQDN_WRP from .acme-state into module.ivia → flips
+    # wrp_effective_host → re-hashes base_layer_hash → triggers ConfigMap
+    # recreation + autoconf Job re-run → flips IVIA AAC DB MMFA endpoint URLs
+    # to nip.io (D-07). Idempotent: a re-run with unchanged .acme-state
+    # produces no diff and exits 0. Per project rule
+    # `feedback_changes_through_existing_scripts.md` — all changes go through
+    # the script, not a manual operator step.
+    if ! terraform -chdir="${PROJECT_ROOT}/infrastructure" apply -auto-approve -target=module.ivia; then
+        print_fail "Step 4: post-ACME terraform apply -target=module.ivia" \
+            "Re-run with TF_LOG=DEBUG; check .acme-state has NIP_FQDN_WRP populated. Last value: NIP_FQDN_WRP=${NIP_FQDN_WRP}"
+        return 1
+    fi
+
+    print_pass "Step 4: ACME cert issued and imported to ACM (${NIP_FQDN_WRP}, ${NIP_FQDN_BANKING}); module.ivia converged on nip.io"
+    return 0
+}
+
+echo ""
+echo -e "${YELLOW}> Step 4: ACME cert issuance + ACM bootstrap sync${NC}"
+_run_acme_step
+
+#===============================================================================
+# STEP 5: Configure Vault (vault-configure.sh)
 #===============================================================================
 echo ""
-echo -e "${YELLOW}> Step 4: Configure Vault${NC}"
+echo -e "${YELLOW}> Step 5: Configure Vault${NC}"
 
 if [[ "$DRY_RUN" = true ]]; then
     print_info "[DRY-RUN] Would run: vault-configure.sh"
-    print_pass "Step 4: Configure Vault (dry-run)"
+    print_pass "Step 5: Configure Vault (dry-run)"
 else
-    if _run_subscript "Step 4: vault-configure" "${SCRIPT_DIR}/vault-configure.sh"; then
+    if _run_subscript "Step 5: vault-configure" "${SCRIPT_DIR}/vault-configure.sh"; then
         # Verify: vault auth list should show kubernetes/ and jwt/
         kubectl --context workshop port-forward svc/vault -n vault 8200:8200 \
             >/dev/null 2>&1 &
@@ -344,16 +550,16 @@ else
                 K8S_ENABLED=$(echo "$AUTH_LIST" | jq -r 'keys[] | select(. == "kubernetes/")' 2>/dev/null || echo "")
                 JWT_ENABLED=$(echo "$AUTH_LIST" | jq -r 'keys[] | select(. == "jwt/")' 2>/dev/null || echo "")
                 if [[ -n "$K8S_ENABLED" ]] && [[ -n "$JWT_ENABLED" ]]; then
-                    print_pass "Step 4: Configure Vault (kubernetes/ and jwt/ auth methods enabled)"
+                    print_pass "Step 5: Configure Vault (kubernetes/ and jwt/ auth methods enabled)"
                 else
-                    print_fail "Step 4: Configure Vault — auth methods missing" \
+                    print_fail "Step 5: Configure Vault — auth methods missing" \
                         "kubernetes=${K8S_ENABLED:-MISSING} jwt=${JWT_ENABLED:-MISSING}. Re-run: ${SCRIPT_DIR}/vault-configure.sh"
                 fi
             else
-                print_warn "Step 4: Could not verify Vault auth — root token not found in ~/vault-init.json"
+                print_warn "Step 5: Could not verify Vault auth — root token not found in ~/vault-init.json"
             fi
         else
-            print_warn "Step 4: Could not verify Vault auth via port-forward"
+            print_warn "Step 5: Could not verify Vault auth via port-forward"
         fi
         if [[ -n "$VAULT_PF_PID" ]] && kill -0 "$VAULT_PF_PID" 2>/dev/null; then
             kill "$VAULT_PF_PID" 2>/dev/null || true
@@ -363,16 +569,16 @@ else
 fi
 
 #===============================================================================
-# STEP 5: Configure IVIA (ivia-configure.sh)
+# STEP 6: Configure IVIA (ivia-configure.sh)
 #===============================================================================
 echo ""
-echo -e "${YELLOW}> Step 5: Configure IVIA${NC}"
+echo -e "${YELLOW}> Step 6: Configure IVIA${NC}"
 
 if [[ "$DRY_RUN" = true ]]; then
     print_info "[DRY-RUN] Would run: ivia-configure.sh"
-    print_pass "Step 5: Configure IVIA (dry-run)"
+    print_pass "Step 6: Configure IVIA (dry-run)"
 else
-    if _run_subscript "Step 5: ivia-configure" "${SCRIPT_DIR}/ivia-configure.sh"; then
+    if _run_subscript "Step 6: ivia-configure" "${SCRIPT_DIR}/ivia-configure.sh"; then
         # Verify: IVIA health endpoint responds
         IVIA_HEALTH=""
         if kubectl --context workshop get pods -n verify-access --no-headers 2>/dev/null | grep -q Running; then
@@ -387,50 +593,50 @@ else
             kill "$_IVIA_PF_PID" 2>/dev/null || true
         fi
         if [[ -n "$IVIA_HEALTH" ]]; then
-            print_pass "Step 5: Configure IVIA (OIDC issuer: ${IVIA_HEALTH})"
+            print_pass "Step 6: Configure IVIA (OIDC issuer: ${IVIA_HEALTH})"
         else
-            print_warn "Step 5: Could not verify IVIA OIDC health endpoint (IVIA may still be starting)"
+            print_warn "Step 6: Could not verify IVIA OIDC health endpoint (IVIA may still be starting)"
         fi
     fi
 fi
 
 #===============================================================================
-# STEP 6: Verify OpenLDAP user 'oscar' seeded by IVIA autoconf
+# STEP 7: Verify OpenLDAP user 'oscar' seeded by IVIA autoconf
 #===============================================================================
 # User 'oscar' is seeded into the in-cluster OpenLDAP automatically by IVIA
 # autoconf (webseal.pdadmin.users in modules/verify_access/base_layer/base_layer.yaml).
 # This step verifies the seed succeeded.
 echo ""
-echo -e "${YELLOW}> Step 6: Verify OpenLDAP user 'oscar' seeded${NC}"
+echo -e "${YELLOW}> Step 7: Verify OpenLDAP user 'oscar' seeded${NC}"
 
 if [[ "$DRY_RUN" = true ]]; then
     print_info "[DRY-RUN] Would query in-cluster OpenLDAP for cn=oscar"
-    print_pass "Step 6: OpenLDAP user check (dry-run)"
+    print_pass "Step 7: OpenLDAP user check (dry-run)"
 else
     LDAP_PW=$(kubectl get secret openldap-creds -n verify-access -o jsonpath='{.data.admin_password}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
     if [ -n "${LDAP_PW}" ] && kubectl exec -n verify-access deploy/openldap -- \
             ldapsearch -x -H ldapi:/// -D "cn=admin,dc=ibm,dc=com" -w "${LDAP_PW}" \
             -b "dc=ibm,dc=com" "(cn=oscar)" dn 2>/dev/null | grep -q '^dn:'; then
-        print_pass "Step 6: OpenLDAP user 'oscar' present (seeded by IVIA autoconf)"
+        print_pass "Step 7: OpenLDAP user 'oscar' present (seeded by IVIA autoconf)"
     else
-        print_warn "Step 6: OpenLDAP user 'oscar' NOT found — re-run terraform apply or inspect ivia-autoconf job logs"
+        print_warn "Step 7: OpenLDAP user 'oscar' NOT found — re-run terraform apply or inspect ivia-autoconf job logs"
     fi
 fi
 
 #===============================================================================
-# STEP 7: Seed Banking DB (seed-banking-db.sh)
+# STEP 8: Seed Banking DB (seed-banking-db.sh)
 #===============================================================================
 echo ""
-echo -e "${YELLOW}> Step 7: Seed Banking DB${NC}"
+echo -e "${YELLOW}> Step 8: Seed Banking DB${NC}"
 
 if [[ "$DRY_RUN" = true ]]; then
     print_info "[DRY-RUN] Would run: seed-banking-db.sh --region ${REGION}"
-    print_pass "Step 7: Seed Banking DB (dry-run)"
+    print_pass "Step 8: Seed Banking DB (dry-run)"
 else
-    if _run_subscript "Step 7: seed-banking-db" \
+    if _run_subscript "Step 8: seed-banking-db" \
             "${SCRIPT_DIR}/seed-banking-db.sh" \
             --region "${REGION}"; then
-        print_pass "Step 7: Seed Banking DB (script verified successfully)"
+        print_pass "Step 8: Seed Banking DB (script verified successfully)"
     fi
 fi
 
