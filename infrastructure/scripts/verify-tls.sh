@@ -186,19 +186,23 @@ check_mmfa_endpoint() {
         return
     fi
     # Query the AAC DB via LMI for the registered MMFA endpoint hostname.
-    ivia_admin_pw=$(kubectl get secret iviaadmin -n "${VERIFY_ACCESS_NAMESPACE}" \
-        -o jsonpath='{.data.adminpw}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+    # Pin --context workshop so the check works regardless of the caller's
+    # default kubeconfig (mirrors the CR-02 fix in configure-workshop.sh).
+    # Use base64 --decode for BSD/macOS portability (mirrors CR-04).
+    ivia_admin_pw=$(kubectl --context workshop get secret iviaadmin -n "${VERIFY_ACCESS_NAMESPACE}" \
+        -o jsonpath='{.data.adminpw}' 2>/dev/null | base64 --decode 2>/dev/null || echo "")
     if [ -z "${ivia_admin_pw}" ]; then
         print_fail "mmfa-endpoint: could not read iviaadmin Secret — cannot query AAC DB" \
-            "Confirm IVIA is deployed and the iviaadmin Secret exists. Check: kubectl get secret iviaadmin -n ${VERIFY_ACCESS_NAMESPACE}"
+            "Confirm IVIA is deployed and the iviaadmin Secret exists. Check: kubectl --context workshop get secret iviaadmin -n ${VERIFY_ACCESS_NAMESPACE}"
         return
     fi
-    mmfa_pod="mmfa-endpoint-check-$$"
-    kubectl delete pod "${mmfa_pod}" -n "${VERIFY_ACCESS_NAMESPACE}" --ignore-not-found --wait=true &>/dev/null
-    mmfa_json=$(kubectl run "${mmfa_pod}" --image=curlimages/curl --rm -i --restart=Never \
-        -n "${VERIFY_ACCESS_NAMESPACE}" -- \
+    # Live API path is /iam/access/v8/mmfa-config/ (NOT /mmfa/endpoints which
+    # returns 404). Discovered via kubectl exec against iviaconfig pod during
+    # Phase 07.8 live test — the endpoints structure includes 8 URLs that the
+    # autoconf re-writes when wrp_effective_host changes.
+    mmfa_json=$(kubectl --context workshop exec -n "${VERIFY_ACCESS_NAMESPACE}" deploy/iviaconfig -- \
         curl -sk --max-time 15 -u "admin:${ivia_admin_pw}" \
-        "https://iviaconfig.${VERIFY_ACCESS_NAMESPACE}.svc.cluster.local:9443/iam/access/v8/mmfa/endpoints" \
+        "https://localhost:9443/iam/access/v8/mmfa-config/" \
         2>/dev/null || echo "")
     if echo "${mmfa_json}" | grep -q "${NIP_FQDN_WRP}"; then
         print_pass "mmfa-endpoint: MMFA endpoint registered on nip.io FQDN (${NIP_FQDN_WRP})"
