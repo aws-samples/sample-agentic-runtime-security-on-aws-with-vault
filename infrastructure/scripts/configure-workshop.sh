@@ -516,7 +516,15 @@ EOF
         return 1
     fi
 
-    print_pass "Step 4: ACME cert issued and imported to ACM (${NIP_FQDN_WRP}, ${NIP_FQDN_BANKING}); module.ivia converged on nip.io"
+    # (10) MANDATORY IVIA post-apply restart — autoconf omits k8s_deployments,
+    # so iviawrprp1 + iviaruntime keep stale base_layer/policy in memory
+    # (manifests as 0x31 login error + FBTAUT003E policy reload). Documented in
+    # docs/IVIA_Deployment.md §7a and project rule project_ivia_post_apply_restart.
+    kubectl --context workshop -n verify-access rollout restart deploy/iviawrprp1 deploy/iviaruntime >/dev/null 2>&1 || true
+    kubectl --context workshop -n verify-access rollout status deploy/iviawrprp1 --timeout=180s >/dev/null 2>&1 || true
+    kubectl --context workshop -n verify-access rollout status deploy/iviaruntime --timeout=180s >/dev/null 2>&1 || true
+
+    print_pass "Step 4: ACME cert issued and imported to ACM (${NIP_FQDN_WRP}, ${NIP_FQDN_BANKING}); module.ivia converged on nip.io; iviawrprp1+iviaruntime rolled"
     return 0
 }
 
