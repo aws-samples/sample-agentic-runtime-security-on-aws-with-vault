@@ -112,15 +112,15 @@ kubectl exec -n vault vault-0 -- \
   sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read auth/jwt/config"
 ```
 
-Expected — `jwks_url` is cluster-internal Service DNS (stable across rebuilds); `bound_issuer` matches the `iss` claim IVIA stamps on its tokens (the public WRP host):
+Expected — `jwks_url` is cluster-internal Service DNS (stable across rebuilds); `bound_issuer` matches the `iss` claim IVIA stamps on its tokens (the public WRP host = the nip.io FQDN from `infrastructure/.acme-state`):
 
 ```
 jwks_url              https://iviaop.verify-access.svc.cluster.local:8436/oauth2/jwks
-bound_issuer          # Output will be captured from live run during Task 3 checkpoint
+bound_issuer          https://<NIP_FQDN_WRP from infrastructure/.acme-state>
 oidc_discovery_url    n/a
 ```
 
-Vault validates IVIA-issued JWTs via `jwks_url` (cluster-internal Service DNS — stable across rebuilds). `bound_issuer` matches the `iss` claim IVIA stamps on its tokens (the WRP host attendees navigate to in their browser — see `NIP_FQDN_WRP` in `infrastructure/.acme-state`).
+Vault validates IVIA-issued JWTs via `jwks_url` (cluster-internal Service DNS — stable across rebuilds). `bound_issuer` matches the `iss` claim IVIA stamps on its tokens (the WRP host attendees navigate to in their browser — `NIP_FQDN_WRP` in `infrastructure/.acme-state`). The exact value is per-deploy and is not captured live in this doc; resolve it locally with `grep NIP_FQDN_WRP infrastructure/.acme-state`.
 
 ## Step 4 — Confirm database connection
 

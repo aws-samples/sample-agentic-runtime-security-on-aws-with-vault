@@ -69,12 +69,7 @@ terraform -chdir=infrastructure apply
 kubectl get ingress -n verify-access
 ```
 
-Expected — one ALB Ingress addressed (the shared `workshop-acme` IngressGroup also fronts the banking-UI Ingress in the `banking-app` namespace; both share the same ALB hostname so a single Let's Encrypt cert covers both nip.io FQDNs):
-
-```
-# Output will be captured from live run during Task 3 checkpoint
-# (the ADDRESS column shows the shared workshop ALB hostname)
-```
+Expected — one ALB Ingress addressed. The shared `workshop-acme` IngressGroup also fronts the banking-UI Ingress in the `banking-app` namespace; both share the same ALB hostname so a single Let's Encrypt cert covers both nip.io FQDNs. The `ADDRESS` column will show a hostname of the form `k8s-workshop-acme-<hash>-<num>.<region>.elb.amazonaws.com` (exact value is per-deploy; not captured live in this doc).
 
 Save the WRP hostname for the next check:
 
@@ -84,7 +79,9 @@ WRP_HOST=$(kubectl get ingress -n verify-access ivia-wrp \
 echo "WRP host: $WRP_HOST"
 ```
 
-> The PORTS column shows `80`, but the ALB also listens on port 443 with a publicly trusted Let's Encrypt cert (issued for the nip.io FQDN that `bash infrastructure/scripts/configure-workshop.sh` provisioned — see `infrastructure/.acme-state`). All browser and API traffic is served over HTTPS.
+:::alert{header="When does the trusted cert appear?" type="info"}
+The `PORTS` column shows `80`, but the ALB also listens on port 443. By this point in the walkthrough you have already run `bash infrastructure/scripts/configure-workshop.sh` (page 31, Step 3). That script's Step 4 (`ACME cert issuance + ACM bootstrap sync`) is what provisions the publicly-trusted Let's Encrypt cert for the nip.io FQDN and imports it into the workshop ACM cert. The trusted hostname the browser and mobile app will validate against is `NIP_FQDN_WRP` recorded in `infrastructure/.acme-state` — **not** the raw `k8s-workshop-acme-*.elb.amazonaws.com` hostname above. If you skipped `configure-workshop.sh` or its Step 4 failed, browser navigation to the raw ALB hostname will show a TLS warning instead of the lock icon — return to page 31 and re-run before continuing.
+:::
 
 ## Step 3 — Confirm OIDC discovery via WRP junction
 
