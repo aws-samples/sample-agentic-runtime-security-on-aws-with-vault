@@ -504,14 +504,12 @@ access_control:
       - "https://${wrp_alb_host}/mga/sps/mmfa/user/mgmt/html/mmfa/qr_code.html?client_id=AuthenticatorClient"
       definition: "Authenticator"
   # MMFA endpoints embedded in the enrollment QR code. The IBM Verify app reaches
-  # these over the WRP ALB. options below sets ignoreSslCerts=true UNCONDITIONALLY,
-  # i.e. on the public-FQDN path (var.wrp_public_fqdn) too — NOT only the fallback.
-  # On the self-signed ELB-hostname fallback it is required (the app would reject
-  # the ALB cert SAN). On the public-FQDN path the ACM public cert is trusted, so
-  # the flag is not needed there and currently skips chain validation on Android
-  # anyway (iOS enforces via ATS regardless). Hardening — drop the flag on the
-  # public-FQDN path — is a deliberate follow-up; left on here so as not to change
-  # working enrollment.
+  # these over the WRP ALB at the nip.io FQDN (${wrp_alb_host} is rendered against
+  # the Plan 05 wrp_effective_host local: var.nip_io_wrp_host when .acme-state is
+  # populated, Ingress-status hostname as a first-deploy fallback). The LE chain
+  # is validated against the device system trust store — no chain-skip escape
+  # hatch (Phase 07.8 Plan 05 deleted the historical chain-skip mmfa option;
+  # silent acceptance of an untrusted chain becomes a loud enrollment failure).
   mmfa:
     client_id: "AuthenticatorClient"
     endpoints:
@@ -527,7 +525,6 @@ access_control:
     discovery_mechanisms:
     - "urn:ibm:security:authentication:asf:mechanism:mobile_user_approval:fingerprint"
     - "urn:ibm:security:authentication:asf:mechanism:mobile_user_approval:user_presence"
-    options: "ignoreSslCerts=true"
   # Push notification providers — register the IBM Verify app against IBM's
   # hosted VerifyPushCreds relay so the AAC runtime can deliver MMFA pushes to
   # enrolled devices. Grounded in the IBM "Push Notifications for IBMers" doc +
