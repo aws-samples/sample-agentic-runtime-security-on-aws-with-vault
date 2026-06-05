@@ -215,6 +215,68 @@ if [ -z "$WORKSHOP_REGION" ] && [ "$TEARDOWN_ONLY" = false ] && [ "$NUKE" = fals
     exit 1
 fi
 
+#-------------------------------------------------------------------------------
+# Phase 07.8 — Orphan TargetGroupBinding sweep
+#
+# AWS Load Balancer Controller v2.7.x creates a NEW TargetGroupBinding (+ new
+# Target Group + new ALB) when an Ingress's group.name annotation changes, but
+# does NOT garbage-collect the OLD TGB. The old TGB keeps the old ALB alive,
+# which keeps any cert attached to the old ALB's HTTPS listener un-deletable
+# (ResourceInUseException on aws_acm_certificate destroy).
+#
+# This sweep finds TGBs whose owning Ingress no longer references their backing
+# ALB and deletes them. LBC then reconciles → deletes the empty ALB → cert can
+# be destroyed by terraform.
+#
+# Variables consumed: ORPHAN_TGBS_SWEPT (exported count, read by caller).
+#-------------------------------------------------------------------------------
+_sweep_orphan_tgbs() {
+    # Note: written defensively to survive `set -e` / `set -u` — uses explicit
+    # if-blocks and parameter defaults, no `&&-continue` short-circuit chains.
+    local count=0
+    local tgb_namespace tgb_name owner_ns owner_name tgb_arn tgb_alb_arn alb_hostname expected_hostname
+
+    while IFS=$'\t' read -r tgb_namespace tgb_name; do
+        if [ -z "${tgb_namespace:-}" ]; then continue; fi
+
+        owner_ns=$(kubectl --context workshop -n "$tgb_namespace" get targetgroupbinding "$tgb_name" \
+            -o jsonpath='{.metadata.labels.ingress\.k8s\.aws/stack-namespace}' 2>/dev/null || true)
+        owner_name=$(kubectl --context workshop -n "$tgb_namespace" get targetgroupbinding "$tgb_name" \
+            -o jsonpath='{.metadata.labels.ingress\.k8s\.aws/stack-name}' 2>/dev/null || true)
+        if [ -z "${owner_ns:-}" ] || [ -z "${owner_name:-}" ]; then continue; fi
+
+        tgb_arn=$(kubectl --context workshop -n "$tgb_namespace" get targetgroupbinding "$tgb_name" \
+            -o jsonpath='{.spec.targetGroupARN}' 2>/dev/null || true)
+        if [ -z "${tgb_arn:-}" ]; then continue; fi
+
+        tgb_alb_arn=$(aws elbv2 describe-target-groups --region "$WORKSHOP_REGION" --target-group-arns "$tgb_arn" \
+            --query 'TargetGroups[0].LoadBalancerArns[0]' --output text 2>/dev/null || true)
+        if [ -z "${tgb_alb_arn:-}" ] || [ "${tgb_alb_arn}" = "None" ]; then continue; fi
+
+        alb_hostname=$(aws elbv2 describe-load-balancers --region "$WORKSHOP_REGION" --load-balancer-arns "$tgb_alb_arn" \
+            --query 'LoadBalancers[0].DNSName' --output text 2>/dev/null || true)
+        if [ -z "${alb_hostname:-}" ]; then continue; fi
+
+        expected_hostname=$(kubectl --context workshop -n "$owner_ns" get ingress "$owner_name" \
+            -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
+        if [ -z "${expected_hostname:-}" ]; then continue; fi
+
+        if [ "$alb_hostname" != "$expected_hostname" ]; then
+            print_info "Deleting orphan TGB ${tgb_namespace}/${tgb_name} (owner ${owner_ns}/${owner_name}; orphan ALB: ${alb_hostname}; current: ${expected_hostname})"
+            kubectl --context workshop -n "$tgb_namespace" delete targetgroupbinding "$tgb_name" --wait=false >/dev/null 2>&1 || true
+            count=$((count + 1))
+        fi
+    done < <(kubectl --context workshop get targetgroupbinding -A -o jsonpath='{range .items[*]}{.metadata.namespace}{"\t"}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)
+
+    if [ "$count" -gt 0 ]; then
+        print_warn "Swept ${count} orphan TargetGroupBinding(s). LBC will GC the empty ALB(s) on next reconcile."
+    else
+        print_info "No orphan TargetGroupBindings found."
+    fi
+    ORPHAN_TGBS_SWEPT="$count"
+    export ORPHAN_TGBS_SWEPT
+}
+
 #===============================================================================
 # PHASE 0: Prerequisites
 #===============================================================================
@@ -259,6 +321,7 @@ phase_deploy_foundation() {
     phase_header "Phase 2: Foundation Deploy (EKS + RDS + Bedrock KB)"
 
     if [ "$DRY_RUN" = true ]; then
+        print_info "[DRY-RUN] Would sweep orphan TargetGroupBindings (Phase 07.8 IngressGroup transition)"
         print_info "[DRY-RUN] Would run: terraform -chdir=infrastructure apply -auto-approve"
         print_info "[DRY-RUN] Would call configure-workshop.sh after apply completes"
         print_info "[DRY-RUN] Would call verify-tls.sh as a strict Phase 2 trusted-cert gate (Phase 07.8)"
@@ -270,6 +333,22 @@ phase_deploy_foundation() {
         print_error "Terraform init failed."
         exit 1
     }
+
+    # Phase 07.8 transition gate — sweep orphan TargetGroupBindings before apply.
+    # When an Ingress's alb.ingress.kubernetes.io/group.name annotation changes,
+    # AWS Load Balancer Controller creates new TargetGroupBindings + TGs + ALB
+    # but does NOT garbage-collect the old TGBs. The old TGBs keep the old ALB
+    # alive, which keeps the old DNS-validated ACM cert attached, which blocks
+    # `aws_acm_certificate.wrp_public` destroy with ResourceInUseException.
+    # Sweep deletes any TGB whose backing ALB hostname differs from its parent
+    # Ingress's current load-balancer hostname, then waits for LBC to GC the
+    # now-empty ALB so the cert destroy can proceed.
+    step_header "Sweeping orphan TargetGroupBindings (Phase 07.8 IngressGroup transition)..."
+    _sweep_orphan_tgbs
+    if [ "${ORPHAN_TGBS_SWEPT:-0}" -gt 0 ]; then
+        print_info "Waiting 90s for AWS Load Balancer Controller to reconcile + GC orphan ALBs..."
+        sleep 90
+    fi
 
     step_header "Running terraform apply..."
     terraform -chdir="$PROJECT_ROOT/infrastructure" apply -auto-approve || {
