@@ -155,6 +155,22 @@ locals {
   _acme_state_exists  = fileexists(var.deploy_id_state_path)
   _acme_state_content = local._acme_state_exists ? file(var.deploy_id_state_path) : ""
   nip_io_wrp_host     = try(regex("NIP_FQDN_WRP=([^\n]+)", local._acme_state_content)[0], "")
+  nip_io_banking_host = try(regex("NIP_FQDN_BANKING=([^\n]+)", local._acme_state_content)[0], "")
+
+  # CR-01 fix (Phase 07.8 code review) — OAuth/OIDC issuer wiring MUST prefer
+  # the LE-trusted nip.io FQDNs once .acme-state is populated. The LE cert SANs
+  # cover ONLY the nip.io hosts; binding wiring to the raw ALB DNS while the
+  # cert is bound to nip.io makes the browser fail TLS hostname validation
+  # (SSL_ERROR_BAD_CERT_DOMAIN / ERR_CERT_COMMON_NAME_INVALID) — the exact
+  # symptom Phase 07.8 was built to eliminate.
+  #
+  # Bootstrap fallback: before .acme-state exists, nip_io_*_host = "" — so
+  # coalesce("", <raw-ALB>) returns the raw ALB hostname and the first-deploy
+  # bootstrap doesn't break (browser warns at this stage; that is the expected
+  # pre-Step-4 state per workshop page 36). Terraform's coalesce() treats
+  # empty strings as null, so the empty nip_io_*_host slot is skipped.
+  effective_ivia_host    = coalesce(local.nip_io_wrp_host, module.ivia.ivia_ingress_hostname)
+  effective_banking_host = coalesce(local.nip_io_banking_host, module.uc2_app.banking_ui_alb_hostname)
 }
 
 #-------------------------------------------------------------------------------
@@ -506,9 +522,11 @@ module "uc2_app" {
   ivia_client_id        = "agent-uc2"
   ivia_client_secret    = module.ivia.ivia_client_secret
   tls_certificate_arn   = local.tls_certificate_arn
-  ivia_public_issuer    = "https://${module.ivia.ivia_ingress_hostname}"
-  ivia_oidc_ca_pem      = module.ivia.ivia_oidc_ca_pem
-  tags                  = var.tags
+  # CR-01 fix: use LE-trusted nip.io FQDN when available; raw ALB only as
+  # pre-Step-4 bootstrap fallback. See locals.effective_ivia_host above.
+  ivia_public_issuer = "https://${local.effective_ivia_host}"
+  ivia_oidc_ca_pem   = module.ivia.ivia_oidc_ca_pem
+  tags               = var.tags
 
   depends_on = [time_sleep.alb_webhook_ready]
 }
@@ -529,20 +547,22 @@ module "uc3_agent" {
   ivia_client_id         = "agent-uc3"
   ivia_id_token_audience = "agent-uc2"
   ivia_client_secret     = module.ivia.ivia_client_secret
-  ivia_external_url      = "https://${module.ivia.ivia_ingress_hostname}"
-  db_host                = module.rds.address
-  db_name                = "workshop"
-  uc3_agent_image        = var.uc3_agent_image
-  bedrock_model_id       = var.bedrock_model_id
-  region                 = var.region
-  rds_cidr               = module.vpc.vpc_cidr
-  ivia_oidc_ca_pem       = module.ivia.ivia_oidc_ca_pem
-  ivia_runtime_url       = "https://iviaruntime.${module.ivia.namespace}.svc.cluster.local:9443"
-  ivia_scim_user         = module.ivia.ivia_runtime_user
-  ivia_scim_password     = module.ivia.ivia_runtime_user_password
-  ivia_runtime_ca_pem    = module.ivia.ivia_runtime_ca_pem
-  ivia_namespace         = module.ivia.namespace
-  tags                   = var.tags
+  # CR-01 fix: use LE-trusted nip.io FQDN when available; raw ALB only as
+  # pre-Step-4 bootstrap fallback. See locals.effective_ivia_host above.
+  ivia_external_url   = "https://${local.effective_ivia_host}"
+  db_host             = module.rds.address
+  db_name             = "workshop"
+  uc3_agent_image     = var.uc3_agent_image
+  bedrock_model_id    = var.bedrock_model_id
+  region              = var.region
+  rds_cidr            = module.vpc.vpc_cidr
+  ivia_oidc_ca_pem    = module.ivia.ivia_oidc_ca_pem
+  ivia_runtime_url    = "https://iviaruntime.${module.ivia.namespace}.svc.cluster.local:9443"
+  ivia_scim_user      = module.ivia.ivia_runtime_user
+  ivia_scim_password  = module.ivia.ivia_runtime_user_password
+  ivia_runtime_ca_pem = module.ivia.ivia_runtime_ca_pem
+  ivia_namespace      = module.ivia.namespace
+  tags                = var.tags
 
   depends_on = [module.vault, module.rds, module.ivia, module.uc2_app]
 }
@@ -569,11 +589,21 @@ module "uc3_agent" {
 #-------------------------------------------------------------------------------
 
 locals {
-  # Browser-facing https issuer = the ivia-wrp (login) ALB; redirect_uri host =
-  # the banking-ui ALB. Both ALB hostnames are real post-apply values
-  # (wait_for_load_balancer = true on each Ingress).
-  ivia_public_issuer = "https://${module.ivia.ivia_ingress_hostname}"
-  uc2_redirect_uri   = "https://${module.uc2_app.banking_ui_alb_hostname}/callback"
+  # CR-01 fix (Phase 07.8 code review): the browser-facing https issuer and
+  # OAuth redirect_uri MUST use the LE-trusted nip.io FQDNs once .acme-state
+  # exists. The LE cert SANs cover ONLY nip.io hosts (configure-workshop.sh
+  # writes NIP_FQDN_WRP and NIP_FQDN_BANKING into .acme-state); binding wiring
+  # to raw ALB DNS while the cert is bound to nip.io makes the browser fail
+  # TLS hostname validation (SSL_ERROR_BAD_CERT_DOMAIN). See effective_*_host
+  # locals at the top of this file for the coalesce(nullif(...), ...) shape
+  # that provides a pre-Step-4 bootstrap fallback to the raw ALB DNS.
+  #
+  # outputs.tf:142 (ivia_issuer) sources local.ivia_public_issuer, so the
+  # Vault JWT auth backend's bound_issuer auto-tracks this value via the
+  # vault-config remote-state read — iviaop's iss claim and Vault's
+  # bound_issuer flip together, preserving coherence.
+  ivia_public_issuer = "https://${local.effective_ivia_host}"
+  uc2_redirect_uri   = "https://${local.effective_banking_host}/callback"
 
   iviaop_provider_yml_resolved = templatefile(
     "${path.module}/modules/verify_access/iviaop-config/provider.yml.tftpl",
