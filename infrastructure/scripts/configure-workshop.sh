@@ -364,19 +364,63 @@ _run_acme_step() {
     # without ACM churn. Writes the rerun marker (D-12 + D-11 proof for
     # verify-tls.sh dimension E).
     ACME_RERUN_MARKER="${ACME_STATE_FILE%.acme-state}.acme-rerun-marker"
+    # Idempotency early-return (D-12) — but ALSO drive the catch-up apply.
+    # When the stable ACM ARN is already Let's Encrypt-issued, skip the slow
+    # ACME issuance + import path; HOWEVER we MUST still run the targeted
+    # terraform apply (module.ivia + module.uc2_app + module.uc3_agent +
+    # iviaop_clients_patch + iviaop_rollout_restart). The apply is a no-op
+    # when nothing diverged, but it's the only way to reconcile post-source
+    # changes (e.g. a checksum/config annotation flip on uc3-agent rolling
+    # the pod to refresh its OIDC issuer cache). Previously the early-return
+    # skipped the apply entirely — a re-run after a uc3-agent module edit
+    # left the pod stale and the OAuth chain returning 401 (id_token verify
+    # issuer_mismatch).
     if [[ "$SKIP_ACME" != true ]] && [[ -n "${STABLE_ACM_ARN:-}" ]]; then
         CURRENT_ISSUER=$(aws acm describe-certificate \
             --certificate-arn "$STABLE_ACM_ARN" \
             --region "$REGION" \
             --query 'Certificate.Issuer' --output text 2>/dev/null || echo "")
         if echo "$CURRENT_ISSUER" | grep -q "Let's Encrypt"; then
+            print_info "Step 4: ACME cert already Let's Encrypt-trusted; skipping issuance + import (D-12 idempotency floor) but running catch-up terraform apply"
+            # Source DEPLOY_ID/NIP_FQDN_*/STABLE_ACM_ARN from .acme-state (sourced
+            # at function entry already, but be explicit) so the catch-up apply
+            # passes the same nip.io values it would on a fresh issuance run.
+            if ! terraform -chdir="${PROJECT_ROOT}/infrastructure" apply -auto-approve \
+                -target=module.ivia \
+                -target=module.uc2_app \
+                -target=module.uc3_agent \
+                -target=kubernetes_config_map_v1_data.iviaop_clients_patch \
+                -target=null_resource.iviaop_rollout_restart; then
+                print_fail "Step 4: catch-up terraform apply (idempotency path)" \
+                    "Re-run with TF_LOG=DEBUG. Check .acme-state has NIP_FQDN_WRP+NIP_FQDN_BANKING populated: cat ${ACME_STATE_FILE}"
+                return 1
+            fi
+            # Probe iviaop in-memory clients.yml after the apply — pod-recycle if
+            # stale (same logic as the issuance path). The
+            # null_resource.iviaop_rollout_restart only fires when its sha256
+            # trigger changes; a re-run with unchanged trigger but stale iviaop
+            # in-memory state needs a force-recycle.
+            expected_redirect_uri="https://${NIP_FQDN_BANKING}/callback"
+            live_redirect_uri=$(kubectl --context workshop -n verify-access exec deploy/iviaop -- \
+                grep -A1 "client_id: agent-uc2" /var/isvaop/config/clients.yml 2>/dev/null \
+                | grep -oE 'https://[^"]+/callback' | head -1 || echo "")
+            if [[ -n "${live_redirect_uri}" ]] && [[ "${live_redirect_uri}" != "${expected_redirect_uri}" ]]; then
+                print_info "iviaop in-memory clients.yml stale (${live_redirect_uri} != ${expected_redirect_uri}); recycling iviaop pod"
+                kubectl --context workshop -n verify-access delete pod -l app=iviaop --wait=true >/dev/null 2>&1 || true
+                kubectl --context workshop -n verify-access rollout status deploy/iviaop --timeout=180s >/dev/null 2>&1 || true
+            fi
+            # Marker preserves the most-recently-observed SKIP_ACME_HONORED value
+            # so an earlier --skip-acme run doesn't get retroactively un-asserted
+            # by a subsequent default run.
+            prior_skip_seen=$(grep -E '^SKIP_ACME_HONORED=' "${ACME_RERUN_MARKER}" 2>/dev/null | head -1 | cut -d= -f2 || echo "false")
+            [[ "${prior_skip_seen}" = "true" ]] || prior_skip_seen="false"
             cat > "$ACME_RERUN_MARKER" <<MARKER
 EXIT_CODE=0
 LE_REISSUE_COUNT=0
-SKIP_ACME_HONORED=false
+SKIP_ACME_HONORED=${prior_skip_seen}
 RERUN_TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 MARKER
-            print_pass "Step 4: ACME cert already trusted (Let's Encrypt issuer confirmed)"
+            print_pass "Step 4: ACME cert already trusted (Let's Encrypt issuer confirmed) + catch-up apply reconciled"
             return 0
         fi
     fi
