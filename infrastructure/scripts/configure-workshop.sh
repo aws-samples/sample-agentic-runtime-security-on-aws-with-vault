@@ -564,10 +564,29 @@ EOF
         -target=module.ivia \
         -target=module.uc2_app \
         -target=kubernetes_config_map_v1_data.iviaop_clients_patch \
-        -target=null_resource.iviaop_restart; then
+        -target=null_resource.iviaop_rollout_restart; then
         print_fail "Step 4: post-ACME terraform apply (module.ivia + module.uc2_app + iviaop_clients_patch)" \
             "Re-run with TF_LOG=DEBUG; check .acme-state has NIP_FQDN_WRP+NIP_FQDN_BANKING populated. Last values: NIP_FQDN_WRP=${NIP_FQDN_WRP} NIP_FQDN_BANKING=${NIP_FQDN_BANKING}"
         return 1
+    fi
+
+    # (9a) Force iviaop pod recycle when the apply was a no-op (trigger hash
+    # already matched). The null_resource.iviaop_rollout_restart's local-exec
+    # only fires when its sha256 trigger changes; if module.uc2_app was applied
+    # in a prior targeted plan, the patch CM may already carry the new
+    # redirect_uris[] but iviaop's in-memory clients.yml is still the boot-time
+    # snapshot. Probe the live agent-uc2 redirect_uri vs the one we just wrote;
+    # if they diverge, the pod hasn't re-read — recycle via pod-delete
+    # (matches ivia-configure.sh's pattern: no restartedAt annotation drift).
+    expected_redirect_uri="https://${NIP_FQDN_BANKING}/callback"
+    live_redirect_uri=$(kubectl --context workshop -n verify-access exec deploy/iviaop -- \
+        grep -A1 "client_id: agent-uc2" /var/isvaop/config/clients.yml 2>/dev/null \
+        | grep -oE 'https://[^"]+/callback' | head -1 || echo "")
+    if [[ -n "${live_redirect_uri}" ]] && [[ "${live_redirect_uri}" != "${expected_redirect_uri}" ]]; then
+        print_info "iviaop in-memory clients.yml has stale redirect_uri (${live_redirect_uri} != ${expected_redirect_uri}); recycling iviaop pod"
+        kubectl --context workshop -n verify-access delete pod -l app=iviaop --wait=true >/dev/null 2>&1 || true
+        kubectl --context workshop -n verify-access rollout status deploy/iviaop --timeout=180s >/dev/null 2>&1 || true
+        print_pass "iviaop pod recycled — clients.yml re-read; agent-uc2 redirect_uri now matches expected"
     fi
 
     # (10) MANDATORY IVIA post-apply restart — autoconf omits k8s_deployments,
