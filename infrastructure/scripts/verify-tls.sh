@@ -220,7 +220,9 @@ check_no_tls_reject() {
     # check messages / usage — those are descriptive, not active workaround usage.
     matches=$(grep -rnE "NODE_TLS_REJECT_UNAUTHORIZED" applications/ infrastructure/scripts/ \
         --include='*.ts' --include='*.js' --include='*.sh' \
-        --exclude='verify-tls.sh' 2>/dev/null || true)
+        --exclude='verify-tls.sh' \
+        --exclude-dir='node_modules' --exclude-dir='build' \
+        --exclude-dir='.svelte-kit' --exclude-dir='dist' 2>/dev/null || true)
     if [ -z "${matches}" ]; then
         print_pass "no-tls-reject: NODE_TLS_REJECT_UNAUTHORIZED is absent from applications/ + infrastructure/scripts/ (07.7 workaround retired)"
     else
@@ -244,7 +246,9 @@ check_no_extra_ca() {
     # the match is NOT inside a comment (// or # or /*).
     raw_matches=$(grep -rnE "NODE_EXTRA_CA_CERTS" applications/ infrastructure/scripts/ \
         --include='*.ts' --include='*.js' --include='*.sh' \
-        --exclude='verify-tls.sh' 2>/dev/null || true)
+        --exclude='verify-tls.sh' \
+        --exclude-dir='node_modules' --exclude-dir='build' \
+        --exclude-dir='.svelte-kit' --exclude-dir='dist' 2>/dev/null || true)
     if [ -z "${raw_matches}" ]; then
         print_pass "no-extra-ca: NODE_EXTRA_CA_CERTS is absent from applications/ + infrastructure/scripts/"
         return

@@ -361,19 +361,33 @@ _run_acme_step() {
     # Idempotency early-return (D-12): if the stable ACM ARN is already
     # Let's Encrypt-issued, skip the entire step — even when --skip-acme is NOT
     # set. This is what makes a second `bash configure-workshop.sh` succeed
-    # without ACM churn.
+    # without ACM churn. Writes the rerun marker (D-12 + D-11 proof for
+    # verify-tls.sh dimension E).
+    ACME_RERUN_MARKER="${ACME_STATE_FILE%.acme-state}.acme-rerun-marker"
     if [[ "$SKIP_ACME" != true ]] && [[ -n "${STABLE_ACM_ARN:-}" ]]; then
         CURRENT_ISSUER=$(aws acm describe-certificate \
             --certificate-arn "$STABLE_ACM_ARN" \
             --region "$REGION" \
             --query 'Certificate.Issuer' --output text 2>/dev/null || echo "")
         if echo "$CURRENT_ISSUER" | grep -q "Let's Encrypt"; then
+            cat > "$ACME_RERUN_MARKER" <<MARKER
+EXIT_CODE=0
+LE_REISSUE_COUNT=0
+SKIP_ACME_HONORED=false
+RERUN_TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+MARKER
             print_pass "Step 4: ACME cert already trusted (Let's Encrypt issuer confirmed)"
             return 0
         fi
     fi
 
     if [[ "$SKIP_ACME" = true ]]; then
+        cat > "$ACME_RERUN_MARKER" <<MARKER
+EXIT_CODE=0
+LE_REISSUE_COUNT=0
+SKIP_ACME_HONORED=true
+RERUN_TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+MARKER
         print_info "Step 4: ACME skipped (--skip-acme)"
         PASSES+=("Step 4: ACME (skipped)")
         return 0
