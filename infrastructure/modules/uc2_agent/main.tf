@@ -113,11 +113,13 @@ locals {
   # post-hoc patch needed. The Ingress depends only on banking_ui_svc, so there
   # is no cycle.
   banking_ui_alb_hostname = kubernetes_ingress_v1.banking_ui.status[0].load_balancer[0].ingress[0].hostname
-  # Browser-facing HTTPS URLs. The app's own origin/redirect_uri uses its own ALB
-  # host; the OIDC issuer uses the ivia-wrp (login) ALB host passed in from root.
-  # IVIAOP rejects http redirect_uris for non-localhost, so both are https; the
-  # ALB serves a self-signed cert (attendee accepts the browser prompt once).
-  banking_ui_external_url = "https://${local.banking_ui_alb_hostname}"
+  # Browser-facing HTTPS URLs. Phase 07.8 D-02: prefer the nip.io FQDN
+  # (Let's Encrypt-trusted via cert-manager + ACM in-place sync) when
+  # var.nip_io_banking_host is populated; fall back to the raw ALB hostname
+  # for pre-Step-4 bootstrap. IVIA's agent-uc2 client registration uses the
+  # same source-of-truth (main.tf local.uc2_redirect_uri) so both ends of
+  # the OAuth chain agree on the redirect_uri.
+  banking_ui_external_url = "https://${coalesce(var.nip_io_banking_host, local.banking_ui_alb_hostname)}"
   ivia_external_url       = "${var.ivia_public_issuer}/isvaop"
 
   banking_ui_config_data = {
@@ -143,12 +145,6 @@ locals {
     UC1_AGENT_URL = "http://uc1-agent-svc.uc1.svc.cluster.local"
     # SvelteKit CSRF protection: ORIGIN must match the browser's Origin header
     ORIGIN = local.banking_ui_external_url
-    # The /callback handler POSTs to IVIA_BASE_URL (in-cluster DNS, HTTPS)
-    # for the authorization code → token exchange. iviaop presents a
-    # self-signed certificate (httpserverkey/httpservercert) that is not
-    # trusted by Node's default CA bundle. TLS verification is enabled;
-    # the iviaop CA cert is trusted via NODE_EXTRA_CA_CERTS mounted from
-    # the ivia-oidc-ca Secret at /etc/ssl/ivia/iviaop.pem.
   }
 }
 
@@ -207,11 +203,18 @@ resource "kubernetes_config_map" "banking_mcp_config" {
 }
 
 ################################################################################
-# 8a. Secret — ivia-oidc-ca (iviaop self-signed CA for NODE_EXTRA_CA_CERTS)
+# 8a. Secret — ivia-oidc-ca (iviaop self-signed CA for in-cluster trust)
 #
-# The banking-ui Node.js process trusts the iviaop self-signed certificate via
-# NODE_EXTRA_CA_CERTS=/etc/ssl/ivia/iviaop.pem, which is backed by this Secret.
-# TLS is verified; no insecure runtime overrides are needed.
+# Banking-ui's /callback handler does the OAuth code → token exchange via the
+# in-cluster URL IVIA_BASE_URL=https://iviaop.verify-access.svc.cluster.local:8436
+# (bypasses the WRP ALB to reduce hop count + latency). iviaop serves its own
+# self-signed httpserverkey/httpservercert there, so Node has to trust it via
+# NODE_EXTRA_CA_CERTS=/etc/ssl/ivia/iviaop.pem (mounted from this Secret).
+#
+# This is K8s-level CA pinning — NOT the process.env.NODE_TLS_REJECT_UNAUTHORIZED
+# bypass that Plan 06 retired. The attendee-facing chain
+# (browser → wrp.<id>.nip.io / banking.<id>.nip.io) serves Let's Encrypt and
+# needs no CA injection; this Secret is only for the internal hop.
 ################################################################################
 
 resource "kubernetes_secret" "ivia_oidc_ca" {

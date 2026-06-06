@@ -526,7 +526,11 @@ module "uc2_app" {
   # pre-Step-4 bootstrap fallback. See locals.effective_ivia_host above.
   ivia_public_issuer = "https://${local.effective_ivia_host}"
   ivia_oidc_ca_pem   = module.ivia.ivia_oidc_ca_pem
-  tags               = var.tags
+  # Phase 07.8 D-02: pass the nip.io banking FQDN so banking-ui's REDIRECT_URI
+  # + ORIGIN are LE-trusted instead of raw ALB. Empty string until
+  # configure-workshop.sh Step 4 writes .acme-state (pre-bootstrap fallback).
+  nip_io_banking_host = local.nip_io_banking_host
+  tags                = var.tags
 
   depends_on = [time_sleep.alb_webhook_ready]
 }

@@ -122,8 +122,14 @@ variable "ivia_client_secret" {
 }
 
 variable "ivia_oidc_ca_pem" {
-  description = "iviaop self-signed CA PEM to trust on outbound Node.js fetches. Mounted as a K8s Secret and referenced via NODE_EXTRA_CA_CERTS at /etc/ssl/ivia/iviaop.pem."
+  description = "iviaop self-signed CA PEM for in-cluster trust on the /callback token-exchange hop (banking-ui → iviaop.verify-access.svc.cluster.local:8436). Mounted as a K8s Secret and referenced via NODE_EXTRA_CA_CERTS=/etc/ssl/ivia/iviaop.pem. NOT a workaround — the attendee-facing chain (Wave 2 LE) is independent."
   type        = string
+}
+
+variable "nip_io_banking_host" {
+  description = "Phase 07.8 D-02: nip.io FQDN for the banking-UI (e.g. banking.<deploy_id>.<alb_ip_dashed>.nip.io). Populated by main.tf from the .acme-state file written by configure-workshop.sh Step 4. Empty string until the ACME step has run; then the banking-UI's browser-facing REDIRECT_URI/ORIGIN flips from the raw ALB hostname to this trusted FQDN so the OAuth chain serves entirely on the Let's Encrypt cert."
+  type        = string
+  default     = ""
 }
 
 variable "tags" {
