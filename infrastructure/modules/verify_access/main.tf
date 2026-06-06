@@ -1450,6 +1450,14 @@ resource "kubernetes_ingress_v1" "ivia_wrp" {
   spec {
     ingress_class_name = "alb"
     rule {
+      # Phase 07.8 D-02: scope this Ingress to the nip.io WRP FQDN so the
+      # shared workshop-acme ALB installs a host-discriminating rule. Without
+      # this, both Ingresses default to host=* and the ALB's priority-1 rule
+      # wins for ALL hostnames — see uc2_agent's banking-ui Ingress comment
+      # for the redirect-loop trace. Pre-bootstrap fallback (empty
+      # nip_io_wrp_host) leaves host=wildcard so the raw ALB hostname still
+      # resolves during the bootstrap window.
+      host = var.nip_io_wrp_host
       http {
         path {
           path      = "/"

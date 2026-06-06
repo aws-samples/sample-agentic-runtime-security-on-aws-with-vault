@@ -1099,6 +1099,16 @@ resource "kubernetes_ingress_v1" "banking_ui" {
 
   spec {
     rule {
+      # Phase 07.8 D-02: scope this Ingress to the nip.io banking FQDN so the
+      # shared workshop-acme ALB installs a host-discriminating rule. Without
+      # this, BOTH banking-ui-ingress and ivia-wrp default to host=* and the
+      # ALB's priority-1 rule wins for ALL hostnames — chrome saw
+      # ERR_TOO_MANY_REDIRECTS because wrp.<id>.nip.io traffic was landing on
+      # banking-ui's root, which redirects to /isvaop/oauth2/authorize, which
+      # also routes to banking-ui, looping forever. Pre-bootstrap (empty
+      # nip_io_banking_host) falls back to the wildcard so the ALB has a host
+      # available for cert-manager HTTP-01 self-checks before .acme-state lands.
+      host = var.nip_io_banking_host
       http {
         path {
           path      = "/"
