@@ -540,16 +540,33 @@ NIP_FQDN_BANKING=${NIP_FQDN_BANKING}
 STABLE_ACM_ARN=${STABLE_ACM_ARN}
 EOF
 
-    # (9) Propagate NIP_FQDN_WRP from .acme-state into module.ivia → flips
-    # wrp_effective_host → re-hashes base_layer_hash → triggers ConfigMap
-    # recreation + autoconf Job re-run → flips IVIA AAC DB MMFA endpoint URLs
-    # to nip.io (D-07). Idempotent: a re-run with unchanged .acme-state
-    # produces no diff and exits 0. Per project rule
-    # `feedback_changes_through_existing_scripts.md` — all changes go through
-    # the script, not a manual operator step.
-    if ! terraform -chdir="${PROJECT_ROOT}/infrastructure" apply -auto-approve -target=module.ivia; then
-        print_fail "Step 4: post-ACME terraform apply -target=module.ivia" \
-            "Re-run with TF_LOG=DEBUG; check .acme-state has NIP_FQDN_WRP populated. Last value: NIP_FQDN_WRP=${NIP_FQDN_WRP}"
+    # (9) Propagate .acme-state into module.ivia + module.uc2_app + the
+    # iviaop_clients_patch in one targeted apply so EVERY URL the OAuth chain
+    # touches flips atomically:
+    #   - module.ivia → wrp_effective_host → base_layer_hash re-render
+    #     → autoconf Job re-publish → IVIA AAC DB MMFA endpoints on nip.io
+    #     → ivia-wrp Ingress host scoped to var.nip_io_wrp_host
+    #     (kills cross-routing redirect loop)
+    #   - module.uc2_app → banking-ui-ingress host scoped to
+    #     var.nip_io_banking_host + banking-ui Deployment env (IVIA_ISSUER,
+    #     REDIRECT_URI, ORIGIN, PUBLIC_*) all on nip.io
+    #   - kubernetes_config_map_v1_data.iviaop_clients_patch → flips agent-uc2
+    #     redirect_uris[] in iviaop-config to local.uc2_redirect_uri (nip.io
+    #     banking FQDN). Without this, iviaop keeps the ALB-hostname
+    #     redirect_uri it learned at first-apply and rejects every authorize
+    #     request with `invalid_request: The 'redirect_uri' parameter does
+    #     not match any of the OAuth 2.0 Client's pre-registered redirect
+    #     urls`. null_resource.iviaop_restart fires on patch change so
+    #     iviaop re-reads clients.yml at startup.
+    # Idempotent: a re-run with unchanged .acme-state produces no diff and
+    # exits 0. Per project rule `feedback_changes_through_existing_scripts.md`.
+    if ! terraform -chdir="${PROJECT_ROOT}/infrastructure" apply -auto-approve \
+        -target=module.ivia \
+        -target=module.uc2_app \
+        -target=kubernetes_config_map_v1_data.iviaop_clients_patch \
+        -target=null_resource.iviaop_restart; then
+        print_fail "Step 4: post-ACME terraform apply (module.ivia + module.uc2_app + iviaop_clients_patch)" \
+            "Re-run with TF_LOG=DEBUG; check .acme-state has NIP_FQDN_WRP+NIP_FQDN_BANKING populated. Last values: NIP_FQDN_WRP=${NIP_FQDN_WRP} NIP_FQDN_BANKING=${NIP_FQDN_BANKING}"
         return 1
     fi
 
