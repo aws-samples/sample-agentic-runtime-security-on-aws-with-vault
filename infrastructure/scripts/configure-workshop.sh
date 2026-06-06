@@ -563,9 +563,10 @@ EOF
     if ! terraform -chdir="${PROJECT_ROOT}/infrastructure" apply -auto-approve \
         -target=module.ivia \
         -target=module.uc2_app \
+        -target=module.uc3_agent \
         -target=kubernetes_config_map_v1_data.iviaop_clients_patch \
         -target=null_resource.iviaop_rollout_restart; then
-        print_fail "Step 4: post-ACME terraform apply (module.ivia + module.uc2_app + iviaop_clients_patch)" \
+        print_fail "Step 4: post-ACME terraform apply (module.ivia + module.uc2_app + module.uc3_agent + iviaop_clients_patch)" \
             "Re-run with TF_LOG=DEBUG; check .acme-state has NIP_FQDN_WRP+NIP_FQDN_BANKING populated. Last values: NIP_FQDN_WRP=${NIP_FQDN_WRP} NIP_FQDN_BANKING=${NIP_FQDN_BANKING}"
         return 1
     fi
