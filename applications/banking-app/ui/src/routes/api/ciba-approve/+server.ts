@@ -41,8 +41,6 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
 		);
 	}
 
-	// NODE_EXTRA_CA_CERTS (mounted from ivia-oidc-ca Secret at /etc/ssl/ivia/iviaop.pem)
-	// provides TLS trust for outbound fetches to iviaop — no runtime flag needed.
 	const res = await fetch(consent.update_url, {
 		method: 'POST',
 		headers: {

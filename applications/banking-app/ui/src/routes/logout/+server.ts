@@ -2,7 +2,7 @@ import { redirect } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ cookies }) => {
-	const cookieOpts = { path: '/', secure: false, httpOnly: true, sameSite: 'lax' as const };
+	const cookieOpts = { path: '/', secure: true, httpOnly: true, sameSite: 'lax' as const };
 	cookies.delete('access_token', cookieOpts);
 	cookies.delete('id_token', cookieOpts);
 	cookies.delete('refresh_token', cookieOpts);

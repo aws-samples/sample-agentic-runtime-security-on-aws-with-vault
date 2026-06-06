@@ -34,7 +34,7 @@ export const load: PageServerLoad = async ({ locals, cookies }) => {
     {
       path: '/',
       httpOnly: true,
-      secure: false,
+      secure: true,
       sameSite: 'lax',
       maxAge: 600
     }
