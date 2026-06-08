@@ -1576,6 +1576,90 @@ phase_verify_zero_residuals() {
     done
     _check "EKS OIDC providers" "$(echo "$oidc" | xargs)"
 
+    # Load balancers (ALB/NLB) — AWS Load Balancer Controller names them k8s-*.
+    # The controller's own resources are NOT workshop-tagged, so target the name
+    # prefix instead. Caught after PR #6 cleanup audit gap review (2026-06-08).
+    local albs
+    albs=$(aws elbv2 describe-load-balancers --region "$REGION" \
+        --query "LoadBalancers[?starts_with(LoadBalancerName,'k8s-')].LoadBalancerName" \
+        --output text 2>/dev/null)
+    [[ "$albs" == "None" ]] && albs=""
+    _check "Load balancers (ALB/NLB, k8s-named)" "$albs"
+
+    # Orphan ENIs — #1 cause of stuck VPC delete. ALB Controller leaves ENIs with
+    # description "ELB app/k8s-..." and VPC CNI leaves "aws-K8S-i-..." after pod
+    # cleanup races. Filter on status=available to catch only the orphans.
+    local enis
+    enis=$(aws ec2 describe-network-interfaces --region "$REGION" \
+        --filters "Name=status,Values=available" \
+        --query "NetworkInterfaces[?starts_with(Description,'ELB app/k8s-') || starts_with(Description,'aws-K8S-')].NetworkInterfaceId" \
+        --output text 2>/dev/null)
+    [[ "$enis" == "None" ]] && enis=""
+    _check "Orphan ENIs (ALB/CNI residuals)" "$enis"
+
+    # Security groups — both workshop-tagged (Terraform-created) and ALB-Controller-
+    # created k8s-* named (controller does NOT propagate our Workshop tag).
+    local sgs=""
+    local sgs_tagged
+    sgs_tagged=$(aws ec2 describe-security-groups --region "$REGION" \
+        --filters "Name=tag:${WORKSHOP_TAG_KEY},Values=${WORKSHOP_TAG_VAL}" \
+        --query 'SecurityGroups[].GroupId' --output text 2>/dev/null)
+    [[ -n "$sgs_tagged" && "$sgs_tagged" != "None" ]] && sgs="$sgs $sgs_tagged"
+    local sgs_k8s
+    sgs_k8s=$(aws ec2 describe-security-groups --region "$REGION" \
+        --filters "Name=group-name,Values=k8s-*" \
+        --query 'SecurityGroups[].GroupId' --output text 2>/dev/null)
+    [[ -n "$sgs_k8s" && "$sgs_k8s" != "None" ]] && sgs="$sgs $sgs_k8s"
+    _check "Security groups (tagged + k8s-named)" "$(echo "$sgs" | xargs)"
+
+    # NAT gateways — workshop-tagged, active states only (deleted/failed/etc
+    # are fine to skip; we only want operationally-still-billable ones).
+    local nats
+    nats=$(aws ec2 describe-nat-gateways --region "$REGION" \
+        --filter "Name=tag:${WORKSHOP_TAG_KEY},Values=${WORKSHOP_TAG_VAL}" "Name=state,Values=available,pending" \
+        --query 'NatGateways[].NatGatewayId' --output text 2>/dev/null)
+    [[ "$nats" == "None" ]] && nats=""
+    _check "NAT gateways (tagged, active)" "$nats"
+
+    # Elastic IPs — workshop-tagged. NAT-attached EIPs survive a botched NAT delete.
+    local eips
+    eips=$(aws ec2 describe-addresses --region "$REGION" \
+        --filters "Name=tag:${WORKSHOP_TAG_KEY},Values=${WORKSHOP_TAG_VAL}" \
+        --query 'Addresses[].AllocationId' --output text 2>/dev/null)
+    [[ "$eips" == "None" ]] && eips=""
+    _check "Elastic IPs (tagged)" "$eips"
+
+    # Bedrock data sources — child of KB. Defense-in-depth: if a KB list returns
+    # empty but a DS somehow lingered (orphaned via API failure), surface it.
+    local bds=""
+    for kb in $(aws bedrock-agent list-knowledge-bases --region "$KB_REGION" \
+            --query 'knowledgeBaseSummaries[].knowledgeBaseId' --output text 2>/dev/null); do
+        [[ -z "$kb" || "$kb" == "None" ]] && continue
+        local ds
+        ds=$(aws bedrock-agent list-data-sources --knowledge-base-id "$kb" --region "$KB_REGION" \
+            --query 'dataSourceSummaries[].name' --output text 2>/dev/null)
+        [[ -n "$ds" && "$ds" != "None" ]] && bds="$bds $ds"
+    done
+    _check "Bedrock data sources (children of surviving KBs)" "$(echo "$bds" | xargs)"
+
+    # KMS keys in PendingDeletion — INFO line, not a FAIL. These auto-purge in
+    # 7-30 days. Surfacing them lets Bear see what's still on the books without
+    # blocking the audit on a state that resolves on its own.
+    local kms_pending=""
+    for k in $(aws kms list-keys --region "$REGION" --query 'Keys[].KeyId' --output text 2>/dev/null); do
+        local state
+        state=$(aws kms describe-key --region "$REGION" --key-id "$k" --query 'KeyMetadata.KeyState' --output text 2>/dev/null)
+        [[ "$state" != "PendingDeletion" ]] && continue
+        local tag
+        tag=$(aws kms list-resource-tags --region "$REGION" --key-id "$k" \
+            --query "Tags[?TagKey=='${WORKSHOP_TAG_KEY}' && TagValue=='${WORKSHOP_TAG_VAL}'].TagValue" \
+            --output text 2>/dev/null)
+        [[ -n "$tag" && "$tag" != "None" ]] && kms_pending="$kms_pending $k"
+    done
+    if [[ -n "$kms_pending" ]]; then
+        echo -e "    ${BLUE}INFO${NC}  KMS keys (PendingDeletion, auto-purge in 7-30d):$kms_pending"
+    fi
+
     echo ""
     if [[ $failures -eq 0 ]]; then
         print_success "Verification PASSED — zero residuals detected"
