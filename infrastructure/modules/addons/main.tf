@@ -37,6 +37,14 @@ terraform {
       source  = "hashicorp/kubernetes"
       version = "~> 2.35"
     }
+    # gavinbunney/kubectl — lazy-connects at apply time. Used for the
+    # cert-manager ClusterIssuer below (a CRD that does not exist at plan
+    # time on a from-scratch deploy, so hashicorp/kubernetes
+    # `kubernetes_manifest` fails with "no client config" — provider #1391).
+    kubectl = {
+      source  = "gavinbunney/kubectl"
+      version = "~> 1.14"
+    }
   }
 }
 
@@ -110,8 +118,15 @@ resource "helm_release" "cert_manager" {
 # need cert-manager.io/v1 CRDs registered before Terraform applies the CR.
 ################################################################################
 
-resource "kubernetes_manifest" "letsencrypt_prod_issuer" {
-  manifest = {
+# `kubectl_manifest` (gavinbunney/kubectl) — NOT hashicorp/kubernetes's
+# `kubernetes_manifest`. The latter dry-runs against the live cluster API at
+# PLAN time, which fails with "Failed to construct REST client: no client
+# config" on a from-scratch deploy where the cluster hasn't been created yet
+# (hashicorp/terraform-provider-kubernetes #1391). `kubectl_manifest`
+# lazy-connects at APPLY time, which is correct for any CRD whose CRD itself
+# is installed earlier in the same apply graph (cert-manager Helm chart above).
+resource "kubectl_manifest" "letsencrypt_prod_issuer" {
+  yaml_body = yamlencode({
     apiVersion = "cert-manager.io/v1"
     kind       = "ClusterIssuer"
     metadata = {
@@ -152,7 +167,10 @@ resource "kubernetes_manifest" "letsencrypt_prod_issuer" {
         ]
       }
     }
-  }
+  })
+
+  # ClusterIssuer has no meaningful rollout; skip provider's default wait.
+  wait_for_rollout = false
 
   depends_on = [helm_release.cert_manager]
 }
