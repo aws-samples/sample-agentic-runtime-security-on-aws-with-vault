@@ -8,10 +8,10 @@ This is the heart of Use Case 3 — a refund write executes only after the human
 **1. Open the banking app** — incognito window, sign in `jaime` / `WorkshopUser1!`. The banking UI is served on the nip.io FQDN that `bash infrastructure/scripts/configure-workshop.sh` provisioned a Let's Encrypt cert for (stored in `infrastructure/.acme-state` as `NIP_FQDN_BANKING`):
 
 ```bash
-grep '^NIP_FQDN_BANKING=' infrastructure/.acme-state
+source infrastructure/.acme-state && echo "https://${NIP_FQDN_BANKING}/"
 ```
 
-Open `https://<NIP_FQDN_BANKING>/` in your browser — you should see a lock icon (trusted Let's Encrypt cert). If you see a "Your connection is not private" warning, re-run `bash infrastructure/scripts/configure-workshop.sh` to re-issue the cert.
+Open the printed URL in your browser — you should see a lock icon (trusted Let's Encrypt cert). If you see a "Your connection is not private" warning, re-run `bash infrastructure/scripts/configure-workshop.sh` to re-issue the cert.
 
 **2. Click the red `I need a refund` button** in the chat suggestions bar.
 
