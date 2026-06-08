@@ -346,6 +346,144 @@ fi
 #===============================================================================
 ACME_STATE_FILE="${PROJECT_ROOT}/infrastructure/.acme-state"
 
+# Phase 07.8 bug #4 — autoconf's `clients:` YAML block is insert-if-not-exists
+# in pyivia, so AuthenticatorClient.redirectUri (stored in the IVIA AAC DB,
+# not the iviaop configmap) is written once at first autoconf run and NEVER
+# updated when ${wrp_alb_host} flips on a teardown→redeploy. The browser
+# completes login at the new FQDN, IVIA redirects to the stale FQDN baked in
+# the DB, and the QR enrollment page dead-ends with "site can't be reached".
+#
+# This function reconciles the live LMI value against the current
+# NIP_FQDN_WRP and PUTs the corrected redirectUri when they diverge. It must
+# run AFTER `.acme-state` is written and BEFORE the iviawrprp1 + iviaruntime
+# rollout restart (step 10) so the restart picks up the new DB value.
+# Idempotent: no-ops when the live LMI redirectUri already matches.
+_reconcile_mmfa_authenticator_client() {
+    [[ -z "${NIP_FQDN_WRP:-}" ]] && return 0
+    local target_uri="https://${NIP_FQDN_WRP}/mga/sps/mmfa/user/mgmt/html/mmfa/qr_code.html?client_id=AuthenticatorClient"
+    local admin_pass
+    admin_pass=$(kubectl --context workshop get secret -n verify-access iviaadmin \
+        -o jsonpath='{.data.adminpw}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+    if [[ -z "$admin_pass" ]]; then
+        print_warn "Step 4: AuthenticatorClient reconcile skipped — iviaadmin secret unreadable"
+        return 0
+    fi
+
+    local pf_port=$((30000 + RANDOM % 30000))
+    kubectl --context workshop port-forward -n verify-access svc/iviaconfig "${pf_port}:9443" \
+        >/dev/null 2>&1 &
+    local pf_pid=$!
+    sleep 3
+
+    local client_json
+    client_json=$(curl -sk -u "admin:${admin_pass}" \
+        "https://localhost:${pf_port}/iam/access/v8/clients" 2>/dev/null \
+        | python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    for c in d:
+        if c.get('name') == 'AuthenticatorClient':
+            print(json.dumps(c))
+            break
+except Exception:
+    pass
+" 2>/dev/null)
+
+    if [[ -z "$client_json" ]]; then
+        kill "$pf_pid" >/dev/null 2>&1
+        wait "$pf_pid" 2>/dev/null
+        print_warn "Step 4: AuthenticatorClient not found via LMI — skipping reconcile (autoconf may not have run yet)"
+        return 0
+    fi
+
+    local live_uri client_id
+    live_uri=$(echo "$client_json" | python3 -c "import json,sys;print(json.load(sys.stdin).get('redirectUri',''))" 2>/dev/null)
+    client_id=$(echo "$client_json" | python3 -c "import json,sys;print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
+
+    if [[ "$live_uri" == "$target_uri" ]]; then
+        print_info "Step 4: AuthenticatorClient redirectUri already staged on ${NIP_FQDN_WRP}"
+    else
+        print_info "Step 4: AuthenticatorClient redirectUri drift (live=${live_uri} target=${target_uri}); patching LMI"
+        # Build a MINIMAL PUT body — IVIA LMI rejects bodies with `null` fields it
+        # treats as immutable (clientSecret, id, encryptionCert, etc.), returning
+        # HTTP 400. Mirrors the working manual PUT shape:
+        #   clientId, name, redirectUri, companyName, contactType, requirePkce,
+        #   definition, introspectWithSecret.
+        local put_body
+        put_body=$(echo "$client_json" | TARGET_URI="$target_uri" python3 -c "
+import json, os, sys
+c = json.load(sys.stdin)
+body = {
+    'clientId': c.get('clientId', 'AuthenticatorClient'),
+    'name': c.get('name', 'AuthenticatorClient'),
+    'redirectUri': os.environ['TARGET_URI'],
+    'companyName': c.get('companyName', 'OscarVault'),
+    'contactType': c.get('contactType', 'TECHNICAL'),
+    'requirePkce': c.get('requirePkce', False),
+    'definition': c.get('definition', '1'),
+    'introspectWithSecret': c.get('introspectWithSecret', True),
+}
+print(json.dumps(body))
+" 2>/dev/null)
+
+        local http_code
+        http_code=$(curl -sk -u "admin:${admin_pass}" -X PUT \
+            -H "Content-Type: application/json" \
+            -H "Accept: application/json" \
+            -w '%{http_code}' -o /dev/null \
+            "https://localhost:${pf_port}/iam/access/v8/clients/${client_id}" \
+            --data-raw "$put_body" 2>/dev/null)
+
+        if [[ "$http_code" -ge 200 ]] && [[ "$http_code" -lt 300 ]]; then
+            print_pass "Step 4: AuthenticatorClient redirectUri patched → ${NIP_FQDN_WRP} (HTTP ${http_code})"
+        else
+            print_warn "Step 4: AuthenticatorClient LMI PUT returned HTTP ${http_code} — QR enrollment may dead-end on stale FQDN. Inspect: kubectl logs -n verify-access deploy/iviaconfig"
+        fi
+    fi
+
+    # Publish LMI config to the runtime snapshot. The AAC runtime (iviaruntime)
+    # does NOT read the LMI's live config — at boot it downloads a PUBLISHED
+    # snapshot file (ivia_11.0.2.0_published.snapshot). Updating the client via
+    # /iam/access/v8/clients (the PUT above) only mutates the LMI working copy;
+    # without regenerating + publishing the snapshot, the iviaruntime restart at
+    # the call site just re-downloads the OLD snapshot and keeps ENFORCING the
+    # dead FQDN (UC3 QR enrollment 500/404 — GitHub issue #5). A pod restart
+    # alone never fixes it; the snapshot is the source of truth.
+    #
+    # Canonical sequence autoconf issues after every mutation (proven from the
+    # ivia-autoconf job log, NOT guessed — see issue #5):
+    #   1. GET  /isam/pending_changes/deploy  (commit staged edits)
+    #   2. PUT  /docker/publish               (regenerate the published snapshot
+    #          — returns 201 {"filename":"ivia_11.0.2.0_published.snapshot"})
+    # Both require the JSON Accept + Content-type headers or the LMI returns 405.
+    #
+    # Run UNCONDITIONALLY (not gated on /isam/pending_changes being non-empty):
+    # the /iam client PUT does not always register as a pending change, and the
+    # runtime can be stale even when the LMI working copy is already correct —
+    # the exact re-run failure mode of issue #5 (LMI=new host, runtime=old host).
+    # deploy + publish from the current LMI config is idempotent: an unchanged
+    # config republishes a byte-equivalent snapshot.
+    local deploy_code publish_code
+    deploy_code=$(curl -sk -u "admin:${admin_pass}" \
+        -H "Accept: application/json" -H "Content-type: application/json" \
+        -w '%{http_code}' -o /dev/null \
+        "https://localhost:${pf_port}/isam/pending_changes/deploy" 2>/dev/null)
+    publish_code=$(curl -sk -u "admin:${admin_pass}" -X PUT \
+        -H "Accept: application/json" -H "Content-type: application/json" \
+        -w '%{http_code}' -o /dev/null \
+        "https://localhost:${pf_port}/docker/publish" 2>/dev/null)
+    if [[ "$publish_code" -ge 200 ]] && [[ "$publish_code" -lt 300 ]]; then
+        print_pass "Step 4: deployed + published IVIA runtime snapshot (deploy HTTP ${deploy_code}, publish HTTP ${publish_code}) — iviaruntime restart will load the new AuthenticatorClient redirectUri"
+    else
+        print_warn "Step 4: IVIA /docker/publish returned HTTP ${publish_code} (deploy HTTP ${deploy_code}) — runtime may still serve stale OAuth client config; inspect: kubectl logs -n verify-access deploy/iviaconfig"
+    fi
+
+    kill "$pf_pid" >/dev/null 2>&1
+    wait "$pf_pid" 2>/dev/null
+    return 0
+}
+
 # Function wrapper allows `return 0/1` for the idempotency early-exit and the
 # shared-ALB equality / ALB-IP failure cases without aborting the whole script.
 _run_acme_step() {
@@ -356,6 +494,31 @@ _run_acme_step() {
     if [[ -f "$ACME_STATE_FILE" ]]; then
         # shellcheck source=/dev/null
         source "$ACME_STATE_FILE"
+    fi
+
+    # ALB-IP drift detection (added after a teardown→redeploy cycle exposed
+    # the latent bug). On destroy+recreate the ALB gets new public IPs, but
+    # `.acme-state` survives — its NIP_FQDN_WRP / NIP_FQDN_BANKING then encode
+    # IPs that no longer route.
+    #
+    # Multi-AZ ALBs publish 2-3 IPs (one per AZ). `dig` returns them in DNS
+    # round-robin order, so comparing the cached ALB_IP to `dig | head -1` is
+    # order-dependent and false-positives on every re-run. Instead check whether
+    # the cached ALB_IP is STILL in the live IP set; only the absent-from-set
+    # case is real drift (ALB was destroyed and re-created with new IPs).
+    if [[ -n "${ALB_IP:-}" ]]; then
+        LIVE_ALB_HOST=$(kubectl --context workshop get ingress -n verify-access ivia-wrp \
+            -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
+        if [[ -n "$LIVE_ALB_HOST" ]]; then
+            LIVE_ALB_IPS=$(dig +short "$LIVE_ALB_HOST" 2>/dev/null)
+            if [[ -n "$LIVE_ALB_IPS" ]] && ! echo "$LIVE_ALB_IPS" | grep -qx "$ALB_IP"; then
+                LIVE_LIST=$(echo "$LIVE_ALB_IPS" | tr '\n' ',' | sed 's/,$//')
+                print_info "Step 4: ALB IP drift detected (.acme-state=${ALB_IP} no longer in live ALB set [${LIVE_LIST}]). Clearing stale .acme-state and forcing re-issuance."
+                rm -f "$ACME_STATE_FILE"
+                rm -f "${ACME_STATE_FILE%.acme-state}.acme-rerun-marker"
+                unset DEPLOY_ID ALB_IP ALB_IP_DASHED NIP_FQDN_WRP NIP_FQDN_BANKING STABLE_ACM_ARN
+            fi
+        fi
     fi
 
     # Idempotency early-return (D-12): if the stable ACM ARN is already
@@ -409,6 +572,19 @@ _run_acme_step() {
                 kubectl --context workshop -n verify-access delete pod -l app=iviaop --wait=true >/dev/null 2>&1 || true
                 kubectl --context workshop -n verify-access rollout status deploy/iviaop --timeout=180s >/dev/null 2>&1 || true
             fi
+
+            # Reconcile MMFA AuthenticatorClient.redirectUri against IVIA AAC DB
+            # (Phase 07.8 bug #4 — autoconf insert-if-not-exists semantics).
+            _reconcile_mmfa_authenticator_client
+
+            # After LMI patch, iviawrprp1 + iviaruntime must restart so the runtime
+            # re-reads the AAC DB. The early-return path didn't previously restart
+            # the runtime — it does now, because the LMI patch above can mutate DB
+            # state that only takes effect on runtime reload.
+            kubectl --context workshop -n verify-access rollout restart deploy/iviawrprp1 deploy/iviaruntime >/dev/null 2>&1 || true
+            kubectl --context workshop -n verify-access rollout status deploy/iviawrprp1 --timeout=180s >/dev/null 2>&1 || true
+            kubectl --context workshop -n verify-access rollout status deploy/iviaruntime --timeout=180s >/dev/null 2>&1 || true
+
             # Marker preserves the most-recently-observed SKIP_ACME_HONORED value
             # so an earlier --skip-acme run doesn't get retroactively un-asserted
             # by a subsequent default run.
@@ -633,6 +809,14 @@ EOF
         kubectl --context workshop -n verify-access rollout status deploy/iviaop --timeout=180s >/dev/null 2>&1 || true
         print_pass "iviaop pod recycled — clients.yml re-read; agent-uc2 redirect_uri now matches expected"
     fi
+
+    # (9c) Reconcile MMFA AuthenticatorClient.redirectUri against IVIA AAC DB
+    # (Phase 07.8 bug #4 — autoconf's `clients:` block is insert-if-not-exists,
+    # so the DB redirectUri sticks to the FIRST deploy's FQDN and never updates
+    # when ${wrp_alb_host} flips. Browser login completes at the new FQDN, then
+    # IVIA bounces to the stale FQDN baked in the DB — QR enrollment dead-ends).
+    # The iviawrprp1 + iviaruntime restart at step (10) picks up the new value.
+    _reconcile_mmfa_authenticator_client
 
     # (10) MANDATORY IVIA post-apply restart — autoconf omits k8s_deployments,
     # so iviawrprp1 + iviaruntime keep stale base_layer/policy in memory
