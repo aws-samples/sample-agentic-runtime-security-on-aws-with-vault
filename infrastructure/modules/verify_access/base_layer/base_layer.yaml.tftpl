@@ -506,10 +506,15 @@ access_control:
   # MMFA endpoints embedded in the enrollment QR code. The IBM Verify app reaches
   # these over the WRP ALB at the nip.io FQDN (${wrp_alb_host} is rendered against
   # the Plan 05 wrp_effective_host local: var.nip_io_wrp_host when .acme-state is
-  # populated, Ingress-status hostname as a first-deploy fallback). The LE chain
-  # is validated against the device system trust store — no chain-skip escape
-  # hatch (Phase 07.8 Plan 05 deleted the historical chain-skip mmfa option;
-  # silent acceptance of an untrusted chain becomes a loud enrollment failure).
+  # populated, Ingress-status hostname as a first-deploy fallback).
+  #
+  # options: "ignoreSslCerts=true" — RESTORED 2026-06-07 after Plan 05 deletion
+  # broke iOS enrollment empirically (camera vibrated on scan, IBM Verify silently
+  # rejected the QR before any network call). The opaque options string is
+  # serialized into the QR JSON; iOS IBM Verify treats its absence as a malformed
+  # enrollment QR even when the chain is publicly trusted. The earlier theory
+  # ("not needed with trusted certs") was wrong: empirically the field is part of
+  # the QR schema contract, not a TLS-only knob. Keep this line; do not re-delete.
   mmfa:
     client_id: "AuthenticatorClient"
     endpoints:
@@ -525,6 +530,7 @@ access_control:
     discovery_mechanisms:
     - "urn:ibm:security:authentication:asf:mechanism:mobile_user_approval:fingerprint"
     - "urn:ibm:security:authentication:asf:mechanism:mobile_user_approval:user_presence"
+    options: "ignoreSslCerts=true"
   # Push notification providers — register the IBM Verify app against IBM's
   # hosted VerifyPushCreds relay so the AAC runtime can deliver MMFA pushes to
   # enrolled devices. Grounded in the IBM "Push Notifications for IBMers" doc +
