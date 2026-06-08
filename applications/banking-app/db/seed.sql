@@ -54,6 +54,26 @@ CREATE TABLE IF NOT EXISTS banking.transactions (
 );
 
 -- ---------------------------------------------------------------------------
+-- Refunds table (UC3 — CIBA privileged write)
+--
+-- Created here (BEFORE the RLS block below) so that ALTER TABLE / CREATE
+-- POLICY statements that reference banking.refunds can resolve on first run.
+-- Detail commentary on Vault role + approved_by attribution lives with the
+-- self-healing migration further down (search for "Self-healing migration").
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS banking.refunds (
+  refund_id      UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id     UUID          NOT NULL REFERENCES banking.accounts(id),
+  transaction_id UUID          NOT NULL REFERENCES banking.transactions(id),
+  amount      DECIMAL(12,2) NOT NULL,
+  currency    VARCHAR(3)    NOT NULL DEFAULT 'USD',
+  approved_by VARCHAR(255)  NOT NULL,
+  request_id  UUID          NOT NULL,
+  created_at  TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+);
+
+-- ---------------------------------------------------------------------------
 -- Row-Level Security (RLS)
 --
 -- Policies filter rows by user_sub = current_setting('app.current_user_sub').
@@ -167,29 +187,21 @@ VALUES
 ON CONFLICT (id) DO NOTHING;
 
 -- ---------------------------------------------------------------------------
--- Refunds table (UC3 — CIBA privileged write)
+-- Refunds table — Vault role + approved_by attribution
 --
--- The UC3 agent (privileged actor) writes approved refund records here.
+-- The UC3 agent (privileged actor) writes approved refund records to
+-- banking.refunds (CREATE TABLE is up-front, near the transactions table, so
+-- the RLS block can reference it on first run).
 -- Vault uc3-refund-writer role grants SELECT on banking.transactions and
 -- SELECT + INSERT + UPDATE on banking.refunds (no DELETE — audit preservation).
 -- approved_by holds the authenticated user's sub (set by the uc3-agent from the
 -- CIBA-validated authenticated_sub, established in 07.6) so the write is
 -- attributable in the three-plane audit JOIN.
+--
+-- Self-healing migration: add transaction_id to refunds tables created before
+-- this column existed (CREATE TABLE IF NOT EXISTS up-front is a no-op there).
 -- ---------------------------------------------------------------------------
 
-CREATE TABLE IF NOT EXISTS banking.refunds (
-  refund_id      UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
-  account_id     UUID          NOT NULL REFERENCES banking.accounts(id),
-  transaction_id UUID          NOT NULL REFERENCES banking.transactions(id),
-  amount      DECIMAL(12,2) NOT NULL,
-  currency    VARCHAR(3)    NOT NULL DEFAULT 'USD',
-  approved_by VARCHAR(255)  NOT NULL,
-  request_id  UUID          NOT NULL,
-  created_at  TIMESTAMPTZ   NOT NULL DEFAULT NOW()
-);
-
--- Self-healing migration: add transaction_id to refunds tables created before
--- this column existed (CREATE TABLE IF NOT EXISTS above is a no-op on those).
 ALTER TABLE banking.refunds
   ADD COLUMN IF NOT EXISTS transaction_id UUID REFERENCES banking.transactions(id);
 
