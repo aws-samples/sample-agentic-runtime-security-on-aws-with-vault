@@ -71,11 +71,11 @@ kubectl get ingress -n verify-access
 
 Expected — one ALB Ingress addressed. The shared `workshop-acme` IngressGroup also fronts the banking-UI Ingress in the `banking-app` namespace; both share the same ALB hostname so a single Let's Encrypt cert covers both nip.io FQDNs. The `ADDRESS` column will show a hostname of the form `k8s-workshop-acme-<hash>-<num>.<region>.elb.amazonaws.com` (exact value is per-deploy; not captured live in this doc).
 
-Save the WRP hostname for the next check:
+Save the WRP hostname for the next check. The trusted hostname is the **nip.io FQDN** that Let's Encrypt issued the cert for — sourced from `.acme-state` (written by `configure-workshop.sh` Step 4), **not** the raw ALB hostname above:
 
 ```bash
-WRP_HOST=$(kubectl get ingress -n verify-access ivia-wrp \
-  -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+source infrastructure/.acme-state
+WRP_HOST="$NIP_FQDN_WRP"
 echo "WRP host: $WRP_HOST"
 ```
 
