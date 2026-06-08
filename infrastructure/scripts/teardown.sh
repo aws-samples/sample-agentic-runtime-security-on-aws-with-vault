@@ -6,6 +6,10 @@
 #
 # Usage:
 #   teardown.sh                    Full nuke: terraform destroy + AWS sweep
+#   teardown.sh --keep-eks         Wipe EVERYTHING except EKS cluster + VPC + addons
+#                                  (preserves the slow-to-rebuild infra; nukes
+#                                  RDS, Vault, IVIA, Bedrock KB, S3, ECR, KMS,
+#                                  IAM, in-cluster workloads + their PVCs)
 #   teardown.sh --post-destroy-only  Skip terraform destroy, run full orphan sweep
 #   teardown.sh --aws-only         Only AWS resources (K8s drain + tag-scoped sweep)
 #   teardown.sh --dry-run          Preview without executing
@@ -69,6 +73,7 @@ print_warn()    { echo -e "${YELLOW}  $1${NC}"; }
 DRY_RUN=false
 AWS_ONLY=false
 POST_DESTROY_ONLY=false
+KEEP_EKS=false
 
 usage() {
     sed -n '2,21p' "$0"
@@ -79,6 +84,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --aws-only)           AWS_ONLY=true ;;
         --post-destroy-only)  POST_DESTROY_ONLY=true ;;
+        --keep-eks)           KEEP_EKS=true ;;
         --dry-run)            DRY_RUN=true ;;
         --help|-h)  usage ;;
         *)
@@ -92,10 +98,25 @@ done
 local_exclusive=0
 [ "$AWS_ONLY" = true ] && local_exclusive=$((local_exclusive + 1))
 [ "$POST_DESTROY_ONLY" = true ] && local_exclusive=$((local_exclusive + 1))
+[ "$KEEP_EKS" = true ] && local_exclusive=$((local_exclusive + 1))
 if [ "$local_exclusive" -gt 1 ]; then
-    echo -e "${RED}Error: --aws-only and --post-destroy-only are mutually exclusive${NC}" >&2
+    echo -e "${RED}Error: --aws-only, --post-destroy-only, and --keep-eks are mutually exclusive${NC}" >&2
     exit 1
 fi
+
+#-------------------------------------------------------------------------------
+# Workshop context bootstrap — isolate KUBECONFIG to the workshop EKS cluster.
+# In modes where the cluster may already be gone (--aws-only,
+# --post-destroy-only), skip isolation; the script's own k8s_cleanup checks
+# tolerate a missing cluster. For default full-nuke and --keep-eks, the
+# cluster exists at script start and isolation is required so phase_k8s_cleanup
+# cannot accidentally hit a non-workshop cluster.
+#-------------------------------------------------------------------------------
+if [ "$AWS_ONLY" = true ] || [ "$POST_DESTROY_ONLY" = true ]; then
+    export WORKSHOP_CONTEXT_SKIP=true
+fi
+# shellcheck source=./lib-workshop-context.sh
+source "$SCRIPT_DIR/lib-workshop-context.sh"
 
 #-------------------------------------------------------------------------------
 # Region resolution (canonical contract: terraform.tfvars carries the literal
@@ -1566,6 +1587,200 @@ phase_verify_zero_residuals() {
 }
 
 #===============================================================================
+# --keep-eks MODE — surgical teardown that preserves EKS cluster + VPC + addons
+#
+# Workshop attendees + dev iteration both benefit from a "wipe everything except
+# the slow-to-build infra" mode: keep the EKS cluster, node group, VPC, subnets,
+# and EKS add-ons (the bits that take 15-20 min to (re)build); destroy every
+# other workshop resource (RDS, Bedrock KB, Vault, IVIA, ECR, S3, KMS, IAM,
+# all in-cluster helm releases + PVCs).
+#
+# Strategy: targeted `terraform destroy` for every module EXCEPT module.eks /
+# module.vpc / module.addons (and the time_sleep that gates them). Terraform's
+# dependency graph then unwinds the rest in the correct order. AWS sweep is
+# limited to orphan classes that terraform doesn't track (StatefulSet PVCs,
+# orphan target groups from ALB churn) — the per-module IAM/KMS/S3/RDS cleanup
+# is done by terraform itself, so we don't risk killing EKS-tied IAM/KMS.
+#===============================================================================
+_keep_eks_targets() {
+    # Emit `-target=ADDR` lines for every state entry to destroy.
+    # Preserves: module.eks (cluster + node group + IAM), module.vpc (VPC +
+    # subnets + IGW + NAT), module.addons (vpc-cni, kube-proxy, coredns, EBS
+    # CSI, LB controller), time_sleep.alb_webhook_ready (no-op preserved with
+    # the LB controller install), and pure-data sources.
+    terraform -chdir="$REPO_ROOT/infrastructure" state list 2>/dev/null | while IFS= read -r addr; do
+        case "$addr" in
+            module.eks|module.eks.*) continue ;;
+            module.vpc|module.vpc.*) continue ;;
+            module.addons|module.addons.*) continue ;;
+            time_sleep.alb_webhook_ready) continue ;;
+            data.*) continue ;;
+            *) printf -- '-target=%s\n' "$addr" ;;
+        esac
+    done
+}
+
+phase_aws_sweep_keep_eks() {
+    phase_header "AWS Orphan Sweep (PVCs + EBS + orphan TGs — EKS/VPC preserved)"
+
+    if [ "$DRY_RUN" = true ]; then
+        print_info "[DRY-RUN] Would sweep: Vault PVCs, orphan EBS volumes, orphan target groups"
+        return 0
+    fi
+
+    if ! aws sts get-caller-identity &>/dev/null; then
+        print_error "AWS credentials not configured"; exit 1
+    fi
+
+    # PVCs that aren't tracked by terraform (StatefulSet/Operator-managed).
+    step_header "Vault PVCs (Raft StatefulSet — Helm leaves these behind)"
+    sweep_vault_pvcs || true
+
+    # EBS volumes orphaned from any PVC the StatefulSet sweep just released.
+    step_header "EBS volumes (orphaned from PVCs)"
+    sweep_ebs_volumes || true
+
+    # Orphan target groups from ALB churn (LBC v2.7.x doesn't GC the old TG on
+    # group.name change — same issue handled in workshop-e2e's TGB sweep).
+    step_header "Orphan target groups (workshop-named, no VPC binding)"
+    sweep_orphan_target_groups || true
+
+    print_success "Orphan sweep complete"
+}
+
+phase_verify_keep_eks() {
+    phase_header "Post-Teardown Verification (--keep-eks zero-residual audit)"
+
+    if [ "$DRY_RUN" = true ]; then
+        print_info "[DRY-RUN] Would run --keep-eks verification audit"
+        return 0
+    fi
+
+    local failures=0
+
+    _check() {
+        local label=$1 result=$2
+        if [[ -z "$result" || "$result" == "None" || "$result" == "0" ]]; then
+            echo -e "    ${GREEN}PASS${NC}  $label"
+        else
+            echo -e "    ${RED}FAIL${NC}  $label: $result"
+            failures=$((failures + 1))
+        fi
+    }
+
+    # Positive check — EKS cluster must STILL be active (we preserved it).
+    local eks_status
+    eks_status=$(aws eks describe-cluster --name "$DEFAULT_CLUSTER" --region "$REGION" \
+        --query 'cluster.status' --output text 2>/dev/null || true)
+    if [[ "$eks_status" == "ACTIVE" ]]; then
+        echo -e "    ${GREEN}PASS${NC}  EKS cluster $DEFAULT_CLUSTER preserved (ACTIVE)"
+    else
+        echo -e "    ${RED}FAIL${NC}  EKS cluster $DEFAULT_CLUSTER status: ${eks_status:-MISSING}"
+        failures=$((failures + 1))
+    fi
+
+    # RDS instance(s)
+    local rds
+    rds=$(aws rds describe-db-instances --region "$REGION" \
+        --query "DBInstances[?TagList[?Key=='${WORKSHOP_TAG_KEY}' && Value=='${WORKSHOP_TAG_VAL}']].DBInstanceIdentifier" \
+        --output text 2>/dev/null)
+    [[ "$rds" == "None" ]] && rds=""
+    _check "RDS instances (tagged)" "$rds"
+
+    # Bedrock KB
+    local kbs
+    kbs=$(aws bedrock-agent list-knowledge-bases --region "$KB_REGION" \
+        --query 'knowledgeBaseSummaries[].name' --output text 2>/dev/null)
+    [[ "$kbs" == "None" ]] && kbs=""
+    _check "Bedrock knowledge bases ($KB_REGION)" "$kbs"
+
+    # AOSS collections
+    local aoss
+    aoss=$(aws opensearchserverless list-collections --region "$KB_REGION" \
+        --query 'collectionSummaries[].name' --output text 2>/dev/null)
+    [[ "$aoss" == "None" ]] && aoss=""
+    _check "AOSS collections ($KB_REGION)" "$aoss"
+
+    # S3 buckets
+    local s3=""
+    for prefix in "${S3_BUCKET_PREFIXES[@]}"; do
+        local b
+        b=$(aws s3api list-buckets --query "Buckets[?starts_with(Name,'${prefix}')].Name" --output text 2>/dev/null)
+        [[ -n "$b" && "$b" != "None" ]] && s3="$s3 $b"
+    done
+    _check "S3 buckets (workshop-named)" "$(echo "$s3" | xargs)"
+
+    # ECR repos
+    local ecr_residual=""
+    for repo in "${ECR_REPO_NAMES[@]}"; do
+        aws ecr describe-repositories --repository-names "$repo" --region "$REGION" &>/dev/null \
+            && ecr_residual="$ecr_residual $repo"
+    done
+    _check "ECR repositories" "$(echo "$ecr_residual" | xargs)"
+
+    # Workshop namespaces (in-cluster workloads — must be drained)
+    local ns_residual=""
+    for ns in vault verify-access banking-app uc1 uc3; do
+        kubectl get namespace "$ns" &>/dev/null && ns_residual="$ns_residual $ns"
+    done
+    _check "Workshop namespaces (drained)" "$(echo "$ns_residual" | xargs)"
+
+    # PVCs in workshop namespaces (StatefulSet leftovers)
+    local pvc_residual=""
+    for ns in vault verify-access banking-app uc1 uc3; do
+        local p
+        p=$(kubectl get pvc -n "$ns" --no-headers 2>/dev/null | awk '{print $1}' | xargs)
+        [[ -n "$p" ]] && pvc_residual="$pvc_residual ${ns}/${p}"
+    done
+    _check "Workshop PVCs (drained)" "$(echo "$pvc_residual" | xargs)"
+
+    # KMS keys (active, tagged) — vault-unseal + KB KMS should be gone
+    local kms_active=""
+    for k in $(aws kms list-keys --region "$REGION" --query 'Keys[].KeyId' --output text 2>/dev/null); do
+        local state
+        state=$(aws kms describe-key --region "$REGION" --key-id "$k" --query 'KeyMetadata.KeyState' --output text 2>/dev/null)
+        [[ "$state" == "PendingDeletion" ]] && continue
+        local tag
+        tag=$(aws kms list-resource-tags --region "$REGION" --key-id "$k" \
+            --query "Tags[?TagKey=='${WORKSHOP_TAG_KEY}' && TagValue=='${WORKSHOP_TAG_VAL}'].TagValue" \
+            --output text 2>/dev/null)
+        [[ -n "$tag" && "$tag" != "None" ]] && kms_active="$kms_active $k"
+    done
+    _check "KMS keys (active, tagged — Vault + KB)" "$(echo "$kms_active" | xargs)"
+
+    # Orphan target groups
+    local orphan_tgs
+    orphan_tgs=$(aws elbv2 describe-target-groups --region "$REGION" \
+        --query "TargetGroups[?length(LoadBalancerArns)==\`0\` && (starts_with(TargetGroupName,'k8s-bankinga-') || starts_with(TargetGroupName,'k8s-verifyac-') || starts_with(TargetGroupName,'k8s-banking') || starts_with(TargetGroupName,'k8s-verify'))].TargetGroupName" \
+        --output text 2>/dev/null)
+    [[ "$orphan_tgs" == "None" ]] && orphan_tgs=""
+    _check "Orphan target groups (workshop-named)" "$orphan_tgs"
+
+    # ACM cert (self-signed wildcard) — gone, we kill it in targeted destroy
+    local acm=""
+    for arn in $(aws acm list-certificates --region "$REGION" \
+            --query "CertificateSummaryList[?DomainName=='*.${REGION}.elb.amazonaws.com'].CertificateArn" \
+            --output text 2>/dev/null); do
+        [[ -z "$arn" || "$arn" == "None" ]] && continue
+        local t
+        t=$(aws acm list-tags-for-certificate --certificate-arn "$arn" --region "$REGION" \
+            --query "Tags[?Key=='${WORKSHOP_TAG_KEY}' && Value=='${WORKSHOP_TAG_VAL}'].Value" \
+            --output text 2>/dev/null)
+        [[ -n "$t" && "$t" != "None" ]] && acm="$acm ${arn##*/}"
+    done
+    _check "ACM certs (workshop ALB wildcard)" "$(echo "$acm" | xargs)"
+
+    echo ""
+    if [[ $failures -eq 0 ]]; then
+        print_success "Verification PASSED — EKS preserved, zero workshop residuals"
+        return 0
+    else
+        print_error "Verification FAILED — $failures resource type(s) still have residuals"
+        return 1
+    fi
+}
+
+#===============================================================================
 # MAIN
 #===============================================================================
 echo ""
@@ -1584,6 +1799,49 @@ elif [ "$AWS_ONLY" = true ]; then
     phase_k8s_cleanup
     phase_aws_sweep
     phase_verify_zero_residuals || VERIFY_FAILED=true
+elif [ "$KEEP_EKS" = true ]; then
+    print_info "Mode: KEEP-EKS (preserves EKS cluster + node group + VPC + addons;"
+    print_info "                wipes RDS, Vault, IVIA, Bedrock KB, S3, ECR, KMS, IAM, workloads)"
+
+    # Sanity: EKS cluster must exist + be ACTIVE — otherwise --keep-eks is a no-op
+    # and the targeted destroy fails. Fail fast with a clear message.
+    if ! aws eks describe-cluster --name "$DEFAULT_CLUSTER" --region "$REGION" &>/dev/null; then
+        print_error "EKS cluster $DEFAULT_CLUSTER not found — --keep-eks requires a live cluster to preserve."
+        print_error "Either run a full nuke (drop --keep-eks) or deploy the foundation first."
+        exit 1
+    fi
+
+    # Step 1: K8s drain workshop namespaces FIRST so LB controller releases ALBs
+    # before terraform destroys it.
+    phase_k8s_cleanup
+
+    # Step 2: targeted terraform destroy — everything except EKS/VPC/addons
+    step_header "Terraform destroy (targeted — keep EKS + VPC + addons)..."
+    infra_dir="$REPO_ROOT/infrastructure"
+    if [ -f "$infra_dir/.terraform/terraform.tfstate" ] || [ -d "$infra_dir/.terraform" ]; then
+        # Build a stable target list and pass it as one batch so terraform's
+        # dependency graph resolves the destroy order in a single plan.
+        mapfile -t TARGETS < <(_keep_eks_targets)
+        if [ "${#TARGETS[@]}" -eq 0 ]; then
+            print_info "No destroy targets — terraform state already aligned with --keep-eks (preserves match)"
+        else
+            print_info "Targeting ${#TARGETS[@]} state addresses (eks/vpc/addons preserved)"
+            if [ "$DRY_RUN" = true ]; then
+                print_info "[DRY-RUN] Would run: terraform destroy ${TARGETS[*]} -auto-approve"
+            else
+                terraform -chdir="$infra_dir" destroy "${TARGETS[@]}" -auto-approve \
+                    || print_warn "terraform destroy had errors — falling back to sweep"
+            fi
+        fi
+    else
+        print_info "No terraform state — skipping terraform destroy"
+    fi
+
+    # Step 3: Minimal orphan sweep (PVCs, EBS volumes, orphan target groups)
+    phase_aws_sweep_keep_eks
+
+    # Step 4: Verify zero workshop residuals (EKS preserved)
+    phase_verify_keep_eks || VERIFY_FAILED=true
 else
     print_info "Mode: FULL (terraform destroy + AWS sweep)"
 
@@ -1607,6 +1865,20 @@ else
 fi
 
 echo ""
+
+# Local-only state cleanup: Phase 07.8's `.acme-state` caches the FQDN
+# tied to the destroyed ALB's IP. Leaving it on disk causes the next deploy's
+# configure-workshop.sh Step 4 to skip re-issuance and bake a stale FQDN.
+acme_state="$REPO_ROOT/infrastructure/.acme-state"
+acme_rerun="$REPO_ROOT/infrastructure/.acme-rerun-marker"
+if [ "$DRY_RUN" = true ]; then
+    [ -f "$acme_state" ] && print_info "[DRY-RUN] Would remove $acme_state"
+    [ -f "$acme_rerun" ] && print_info "[DRY-RUN] Would remove $acme_rerun"
+else
+    rm -f "$acme_state" "$acme_rerun"
+    print_info "Removed local Phase 07.8 ACME cache (.acme-state, .acme-rerun-marker)"
+fi
+
 phase_header "Teardown Complete"
 if [ "$DRY_RUN" = true ]; then
     print_warn "DRY RUN — no changes were made"
