@@ -3,24 +3,10 @@ title: 'Configure kubectl'
 weight: 32
 ---
 
-The `eks` module emits a one-liner output. Read it from the Terraform output:
+The `eks` module emits a ready-to-run `aws eks update-kubeconfig` command. Run it in one shot — no substitution needed — and verify nodes:
 
 ```bash
-terraform -chdir=infrastructure output -raw kubectl_config_command
-```
-
-Run the command it prints:
-
-```bash
-aws eks update-kubeconfig \
-  --region <REGION> \
-  --name <CLUSTER_NAME> \
-  --alias workshop
-```
-
-Substitute `<REGION>` and `<CLUSTER_NAME>` from the run output, then verify:
-
-```bash
+$(terraform -chdir=infrastructure output -raw kubectl_config_command)
 kubectl get nodes
 ```
 

@@ -127,6 +127,84 @@ Phases: shebang consistency, `bash -n` syntax, optional shellcheck (skipped if n
 
 `check-prerequisites.sh` and `test-*.sh` emit colored terminal output with `✓ PASS` / `✗ FAIL` / `⚠ WARN` markers via the shared `common-checks.sh` library, plus a single consolidated summary block at the end listing every failure with full inline copy-paste remediation. Default mode is non-interactive (no prompts) so it is CI-safe / Workshop Studio attendee-VM-safe out of the box.
 
+### Phase 07.8 — Trusted TLS Cert (Let's Encrypt + nip.io)
+
+`configure-workshop.sh` Step 4 provisions a publicly trusted Let's Encrypt
+certificate for the workshop ALB so attendees see a lock icon — no
+"click through self-signed warning" step. The cert is bound to two nip.io
+FQDNs (`wrp.<DEPLOY_ID>.<ALB_IP_DASHED>.nip.io` for the IVIA WRP,
+`banking.<DEPLOY_ID>.<ALB_IP_DASHED>.nip.io` for the banking-UI), both
+fronted by the same shared ALB (Plan 02's `workshop-acme` IngressGroup).
+The cert is issued by the `letsencrypt-prod` cert-manager `ClusterIssuer`
+(Plan 03), wait-confirmed `Ready=true`, and bootstrap-imported into ACM at
+the stable ARN (`output "tls_certificate_arn"`). The ARN is preserved
+across LE renewals via `lifecycle.ignore_changes` on
+`aws_acm_certificate.workshop_tls` (Plan 02, D-10). A cluster-internal
+CronJob re-syncs the LE Secret into ACM every 6h (Plan 03).
+
+#### `--skip-acme` flag
+
+Skip Step 4 (ACME cert issuance + ACM first-sync). Use when:
+
+- cert-manager has already issued a valid Let's Encrypt cert for the
+  current cluster's nip.io FQDNs (`kubectl get certificate -n cert-manager
+  workshop-le-tls -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'`
+  returns `True`).
+- The ACM cert at the workshop's stable ARN already has
+  `Issuer: CN=R3,O=Let's Encrypt` (`aws acm describe-certificate
+  --certificate-arn $STABLE_ACM_ARN --query 'Certificate.Issuer'`).
+- You are iterating on a downstream step (Vault config, image build) and
+  don't need to re-issue or re-import the cert.
+
+When set, Step 4 short-circuits with a single `print_info "Step 4: ACME
+skipped (--skip-acme)"` and `return 0` from `_run_acme_step()` — no
+cluster mutation, no AWS call, no `.acme-state` write, no `terraform
+apply -target=module.ivia`. Steps 5–8 still run.
+
+#### Idempotency floor (D-12)
+
+A second `bash configure-workshop.sh` (without any flags) exits 0 with:
+
+- NO Let's Encrypt re-issuance request (the existing cert is still valid).
+- NO `aws acm import-certificate` invocation (the ARN already serves LE).
+- NO `terraform apply -target=module.ivia` re-run that would flip
+  `wrp_effective_host` (the value in `.acme-state` is unchanged).
+- A working browser + mobile trust chain (lock icon on every page; IBM
+  Verify accepts the cert without a trust-override prompt).
+
+Mechanism: Step 4 begins with `aws acm describe-certificate
+--certificate-arn $STABLE_ACM_ARN --query 'Certificate.Issuer' --output
+text 2>/dev/null | grep -q "Let's Encrypt"` — when this returns 0, the
+function emits `print_pass` and `return 0` before any mutating call. This
+satisfies the project-wide rule that every script in this directory is
+safe to re-run end-to-end (see `Code conventions` in `CLAUDE.md`).
+
+#### `.acme-state` file
+
+`infrastructure/.acme-state` (gitignored — see `infrastructure/.gitignore`)
+records the deploy-id and nip.io FQDNs for the current deploy. It is a
+shell-sourceable `KEY=value` file written by Step 4 with six entries:
+`DEPLOY_ID`, `ALB_IP`, `ALB_IP_DASHED`, `NIP_FQDN_WRP`, `NIP_FQDN_BANKING`,
+`STABLE_ACM_ARN`. Step 4 sources the file at start so the DEPLOY_ID is
+preserved across reruns (the nip.io FQDNs stay stable — required so the
+LE cert's `dnsNames` keep matching). Consumers:
+
+- `verify-tls.sh` reads it for the `arn-stable`, `idempotent-rerun`, and
+  `skip-acme-honored` behavioral checks.
+- Workshop content pages tell attendees: "look for `NIP_FQDN_WRP` or
+  `NIP_FQDN_BANKING` printed at the end of `bash
+  infrastructure/scripts/configure-workshop.sh`, or read them back from
+  `infrastructure/.acme-state`."
+
+To force fresh cert issuance and a new DEPLOY_ID (e.g. after a
+teardown+redeploy that rotated the ALB IP), delete the file before
+running `configure-workshop.sh`:
+
+```bash
+rm -f infrastructure/.acme-state
+bash infrastructure/scripts/configure-workshop.sh
+```
+
 ## SVG Regeneration
 
 ```bash

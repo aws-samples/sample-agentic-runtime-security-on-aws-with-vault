@@ -504,14 +504,17 @@ access_control:
       - "https://${wrp_alb_host}/mga/sps/mmfa/user/mgmt/html/mmfa/qr_code.html?client_id=AuthenticatorClient"
       definition: "Authenticator"
   # MMFA endpoints embedded in the enrollment QR code. The IBM Verify app reaches
-  # these over the WRP ALB. options below sets ignoreSslCerts=true UNCONDITIONALLY,
-  # i.e. on the public-FQDN path (var.wrp_public_fqdn) too — NOT only the fallback.
-  # On the self-signed ELB-hostname fallback it is required (the app would reject
-  # the ALB cert SAN). On the public-FQDN path the ACM public cert is trusted, so
-  # the flag is not needed there and currently skips chain validation on Android
-  # anyway (iOS enforces via ATS regardless). Hardening — drop the flag on the
-  # public-FQDN path — is a deliberate follow-up; left on here so as not to change
-  # working enrollment.
+  # these over the WRP ALB at the nip.io FQDN (${wrp_alb_host} is rendered against
+  # the Plan 05 wrp_effective_host local: var.nip_io_wrp_host when .acme-state is
+  # populated, Ingress-status hostname as a first-deploy fallback).
+  #
+  # options: "ignoreSslCerts=true" — RESTORED 2026-06-07 after Plan 05 deletion
+  # broke iOS enrollment empirically (camera vibrated on scan, IBM Verify silently
+  # rejected the QR before any network call). The opaque options string is
+  # serialized into the QR JSON; iOS IBM Verify treats its absence as a malformed
+  # enrollment QR even when the chain is publicly trusted. The earlier theory
+  # ("not needed with trusted certs") was wrong: empirically the field is part of
+  # the QR schema contract, not a TLS-only knob. Keep this line; do not re-delete.
   mmfa:
     client_id: "AuthenticatorClient"
     endpoints:

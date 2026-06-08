@@ -9,14 +9,13 @@ Query the Use Case 1 agent, watch Vault issue just-in-time credentials, prove th
 
 ## Step 1 — Ask the agent (no sign-in)
 
-The agent is exposed through a public, read-only chat page. Get the banking app URL and open `/ask`:
+The agent is exposed through a public, read-only chat page. At the end of `bash infrastructure/scripts/configure-workshop.sh` the script prints `NIP_FQDN_BANKING` (the banking-UI nip.io URL backed by a Let's Encrypt cert). Use that URL — or read it back from `infrastructure/.acme-state`:
 
 ```bash
-kubectl get ingress -n banking-app \
-  -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}'
+grep '^NIP_FQDN_BANKING=' infrastructure/.acme-state
 ```
 
-Open `https://<that-hostname>/ask` in your browser (accept the self-signed certificate prompt once). No login is required — the page is workload-identity only. Ask a knowledge-base question, for example:
+Open `https://<NIP_FQDN_BANKING>/ask` in your browser. You should see a lock icon in your browser address bar (the page is served with a Let's Encrypt-issued certificate the OS trusts out of the box). If you see a "Your connection is not private" warning, this is a regression — re-run `bash infrastructure/scripts/configure-workshop.sh` to re-issue the cert. No login is required — the page is workload-identity only. Ask a knowledge-base question, for example:
 
 > Summarize the employee PTO policy, including accrual by tenure.
 

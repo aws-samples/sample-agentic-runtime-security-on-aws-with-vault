@@ -39,6 +39,22 @@ fi
 # Disable AWS CLI pager so commands don't block on `less`
 export AWS_PAGER=""
 
+# Workshop kubectl/helm context isolation — BLOCKING safety.
+# Sources lib-workshop-context.sh which writes a PROCESS-ISOLATED kubeconfig
+# at /tmp/workshop-kubeconfig-<cluster>.yaml containing ONLY the workshop EKS
+# cluster, then exports KUBECONFIG to it. After this, bare `kubectl` and
+# `helm` can no longer hit a non-workshop cluster (GKE / AKS / other AWS).
+# Scripts that run before the cluster exists (e.g. check-prerequisites.sh)
+# must set WORKSHOP_CONTEXT_SKIP=true BEFORE sourcing this file.
+# Reason: 2026-06-07 — bare kubectl in vault-init.sh routed to a GKE Vault
+# instead of the workshop EKS Vault, falsely reporting "already initialized".
+_common_checks_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "${_common_checks_lib_dir}/lib-workshop-context.sh" ]; then
+    # shellcheck source=./lib-workshop-context.sh
+    source "${_common_checks_lib_dir}/lib-workshop-context.sh"
+fi
+unset _common_checks_lib_dir
+
 # Terminal capability probe (Plan 01-09 hardening)
 #
 # If the controlling terminal does not support color (tput colors < 8) OR

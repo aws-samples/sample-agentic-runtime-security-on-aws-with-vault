@@ -39,7 +39,7 @@ Key fields:
 
 | Field | Value | Meaning |
 |---|---|---|
-| `jwks_url` | IVIA's JWKS endpoint URL | Vault is given the JWKS URL directly rather than an OIDC discovery URL. This is necessary because OIDC discovery validation fails with IVIA's self-signed certificate; providing the JWKS URL directly (paired with `jwks_ca_pem`) bypasses that step. |
+| `jwks_url` | IVIA's JWKS endpoint URL | Vault is given the JWKS URL directly rather than an OIDC discovery URL. This is necessary because OIDC discovery validation fails against IVIA's cluster-internal certificate (the iviaop pod's TLS is a cluster-issued cert from IVIA's PKI, not the public Let's Encrypt cert that fronts the ALB); providing the JWKS URL directly (paired with `jwks_ca_pem`) bypasses that step. |
 | `bound_issuer` | External WRP ALB issuer URL (e.g., `https://<ivia-ingress-hostname>`) | JWT `iss` claim must match this external WRP ALB hostname. The issuer is the public-facing ALB URL, not an in-cluster address. |
 | `default_role` | _(empty)_ | Role must be specified explicitly on each login call. |
 
@@ -212,7 +212,7 @@ The `bound_audiences` check is the critical guard: Vault rejects any JWT whose `
 
 IVIA JWKS validation happens at the `jwt` auth backend level, not at the role level. Vault fetches IVIA's JWKS from the `jwks_url` and caches the signing keys. Each incoming JWT is verified against these cached keys before the role's `bound_audiences` check runs.
 
-The `jwks_ca_pem` field on the Vault jwt auth backend supplies IVIA's CA certificate PEM, allowing Vault to trust the IVIA JWKS endpoint's self-signed certificate. This is used instead of `insecure_tls` — Vault is given the CA bundle explicitly rather than disabling TLS verification. In production, replace this with a properly signed certificate from a trusted CA.
+The `jwks_ca_pem` field on the Vault jwt auth backend supplies IVIA's CA certificate PEM, allowing Vault to trust the IVIA JWKS endpoint's cluster-internal TLS certificate (issued by IVIA's internal PKI for the in-cluster `iviaop.verify-access.svc.cluster.local` service — distinct from the publicly trusted Let's Encrypt cert on the workshop ALB). This is used instead of `insecure_tls` — Vault is given the CA bundle explicitly rather than disabling TLS verification. In production, replace this with a certificate from a CA Vault already trusts.
 
 Key design decision: **Vault validates the JWT signature; the MCP Server does not.** This keeps the MCP Server code simple and puts the cryptographic validation responsibility on Vault, which has battle-tested JWT validation logic.
 :::

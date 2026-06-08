@@ -51,21 +51,23 @@ module "ecr" {
 }
 
 #-------------------------------------------------------------------------------
-# Wave 0 — TLS (self-signed cert for the browser-facing ALB HTTPS listeners)
+# Wave 0 — TLS (self-signed bootstrap cert for the browser-facing ALB HTTPS
+# listeners; replaced in-place by Phase 07.8 Plan 04 with a Let's Encrypt cert).
 #
-# Browsers tolerate a self-signed cert (one-time "not trusted" click-through),
-# so the raw ALB DNS names (k8s-...<region>.elb.amazonaws.com) get a self-signed
-# wildcard cert imported into ACM. This is the baseline that always works with
-# no domain. IVIAOP requires https (not http) redirect_uris for non-localhost
-# hosts, which this satisfies. NOT Vault PKI.
+# This resource MINTS the ACM ARN that both attendee-facing ALB Ingresses
+# (IVIA WRP + banking-UI) bind via the `alb.ingress.kubernetes.io/certificate-arn`
+# annotation. At first apply the cert content is the self-signed wildcard
+# (`*.<region>.elb.amazonaws.com`) below; Phase 07.8 Plan 04's ACM-sync CronJob
+# then upserts the LE-issued cert body into THIS SAME ARN via
+# `aws acm import-certificate --certificate-arn ...`. The `lifecycle.ignore_changes`
+# below (Plan 02) protects that import from being undone by Terraform re-apply.
 #
-# EXCEPTION — MMFA mobile-push enrollment. The IBM Verify mobile app enforces
-# Apple ATS and rejects the self-signed chain mid-enrollment ("A TLS error
-# caused the secure connection to fail"), leaving the device with empty
-# auth_methods (no Approve/Deny). For that path a publicly-trusted cert is
-# mandatory, so when var.wrp_dns_zone_name is set we additionally mint a
-# DNS-validated ACM public cert for <wrp_public_hostname>.<zone> and add it as
-# the WRP ALB's default listener cert (see aws_acm_certificate.wrp_public below).
+# Phase 07.8 replaces the historical Route53+ACM-DNS-validation path that used
+# to mint a separate publicly-trusted cert for an attendee-provided Route53 zone
+# (var.wrp_dns_zone_name / var.wrp_public_hostname). That path is RETIRED as
+# part of Plan 02 — see Phase 07.8 CONTEXT D-06. Workshop Studio attendees do
+# not own a DNS zone; nip.io + Let's Encrypt via cert-manager (Plans 03-04) is
+# the only attendee-trusted path going forward.
 #-------------------------------------------------------------------------------
 
 resource "tls_private_key" "workshop_tls" {
@@ -102,68 +104,73 @@ resource "aws_acm_certificate" "workshop_tls" {
 
   lifecycle {
     create_before_destroy = true
+    # Phase 07.8 Plan 02 (D-10): protect the cert body from Terraform drift after
+    # Plan 04's ACM-sync CronJob upserts the Let's Encrypt-issued cert into this
+    # same ARN. Without ignore_changes Terraform would see the post-import body
+    # diverge from tls_self_signed_cert.workshop_tls.cert_pem and re-apply the
+    # self-signed material, undoing the trusted chain. The ARN stays stable so
+    # the ALB Ingress annotation never needs to change across renewals.
+    ignore_changes = [
+      private_key,
+      certificate_body,
+      certificate_chain,
+    ]
   }
 }
 
 locals {
-  # Imported self-signed cert ARN bound to both browser-facing ALB HTTPS:443
-  # listeners (banking-ui + ivia-wrp).
+  # Imported ACM cert ARN bound to both browser-facing ALB HTTPS:443 listeners
+  # (banking-ui + ivia-wrp). Phase 07.8 Plan 02 retired the old Route53+ACM-DNS
+  # public-FQDN path; Plan 04 in-place upserts a Let's Encrypt-issued cert into
+  # THIS SAME ARN so the listener annotation never needs to change.
   tls_certificate_arn = aws_acm_certificate.workshop_tls.arn
 
-  # Public-FQDN path for MMFA mobile-push enrollment. Enabled only when a real
-  # Route53 zone is supplied; the WRP ALB then serves a publicly-trusted cert
-  # under this name so the IBM Verify app trusts it during method enrollment.
-  wrp_public_enabled = var.wrp_dns_zone_name != ""
-  wrp_public_fqdn    = local.wrp_public_enabled ? "${var.wrp_public_hostname}.${var.wrp_dns_zone_name}" : ""
-}
+  # Phase 07.8 Plan 05 — nip.io FQDN propagation for IVIA WRP MMFA endpoints.
+  #
+  # Bootstrap order (NO operator-manual second `terraform apply` — all converge
+  # work goes through configure-workshop.sh per project rule
+  # feedback_changes_through_existing_scripts.md):
+  #   1. First `terraform apply`: .acme-state ABSENT → _acme_state_exists=false
+  #      → _acme_state_content="" → nip_io_wrp_host="" → module.ivia receives
+  #      empty string → verify_access falls back to the Ingress-status hostname
+  #      so base_layer is still rendered with a resolvable host (degraded but
+  #      working). The ALB Ingress + LBC stand up so an ALB IP exists.
+  #   2. `bash configure-workshop.sh` runs. Its ACME step (Plan 04) writes
+  #      .acme-state (with NIP_FQDN_WRP=wrp.<deploy_id>.<alb_ip_dashed>.nip.io),
+  #      then invokes `terraform -chdir=infrastructure apply -auto-approve
+  #      -target=module.ivia` inside the same step.
+  #   3. Second apply: _acme_state_exists=true → file() reads the content →
+  #      regex() extracts NIP_FQDN_WRP → nip_io_wrp_host populated → module.ivia
+  #      re-wires wrp_effective_host to nip.io → base_layer_hash recomputes →
+  #      ConfigMap recreates → autoconf Job re-runs → AAC DB MMFA endpoint URLs
+  #      flip to the nip.io FQDN. IBM Verify mobile app validates the LE chain
+  #      during enrollment.
+  #
+  # Implementation notes: hashicorp/local's data.local_file FAILS HARD on a
+  # missing file (no try() around the data source helps), so we use the
+  # Terraform built-ins fileexists() + file() — both pure functions, no provider
+  # involvement, no failure on absent file. regex() returns the captured group
+  # as a list; try() unwraps with "" fallback when the file is empty or doesn't
+  # contain NIP_FQDN_WRP yet.
+  _acme_state_exists  = fileexists(var.deploy_id_state_path)
+  _acme_state_content = local._acme_state_exists ? file(var.deploy_id_state_path) : ""
+  nip_io_wrp_host     = try(regex("NIP_FQDN_WRP=([^\n]+)", local._acme_state_content)[0], "")
+  nip_io_banking_host = try(regex("NIP_FQDN_BANKING=([^\n]+)", local._acme_state_content)[0], "")
 
-#-------------------------------------------------------------------------------
-# Wave 0 — WRP public TLS (MMFA mobile-push). DNS-validated ACM PUBLIC cert for
-# the WRP FQDN + Route53 validation records + a CNAME (added after module.ivia)
-# pointing the FQDN at the WRP ALB. The ALB serves this cert as its default 443
-# cert (self-signed kept as SNI fallback) so the IBM Verify app validates a real
-# chain. ACM cert for an ALB must live in the ALB's region (default provider =
-# var.region). All conditional on var.wrp_dns_zone_name being set.
-#-------------------------------------------------------------------------------
-
-data "aws_route53_zone" "wrp" {
-  count        = local.wrp_public_enabled ? 1 : 0
-  name         = var.wrp_dns_zone_name
-  private_zone = false
-}
-
-resource "aws_acm_certificate" "wrp_public" {
-  count             = local.wrp_public_enabled ? 1 : 0
-  domain_name       = local.wrp_public_fqdn
-  validation_method = "DNS"
-  tags              = var.tags
-
-  lifecycle {
-    create_before_destroy = true
-  }
-}
-
-resource "aws_route53_record" "wrp_cert_validation" {
-  for_each = {
-    for dvo in(local.wrp_public_enabled ? aws_acm_certificate.wrp_public[0].domain_validation_options : []) :
-    dvo.domain_name => {
-      name   = dvo.resource_record_name
-      type   = dvo.resource_record_type
-      record = dvo.resource_record_value
-    }
-  }
-  zone_id         = data.aws_route53_zone.wrp[0].zone_id
-  name            = each.value.name
-  type            = each.value.type
-  records         = [each.value.record]
-  ttl             = 60
-  allow_overwrite = true
-}
-
-resource "aws_acm_certificate_validation" "wrp_public" {
-  count                   = local.wrp_public_enabled ? 1 : 0
-  certificate_arn         = aws_acm_certificate.wrp_public[0].arn
-  validation_record_fqdns = [for r in aws_route53_record.wrp_cert_validation : r.fqdn]
+  # CR-01 fix (Phase 07.8 code review) — OAuth/OIDC issuer wiring MUST prefer
+  # the LE-trusted nip.io FQDNs once .acme-state is populated. The LE cert SANs
+  # cover ONLY the nip.io hosts; binding wiring to the raw ALB DNS while the
+  # cert is bound to nip.io makes the browser fail TLS hostname validation
+  # (SSL_ERROR_BAD_CERT_DOMAIN / ERR_CERT_COMMON_NAME_INVALID) — the exact
+  # symptom Phase 07.8 was built to eliminate.
+  #
+  # Bootstrap fallback: before .acme-state exists, nip_io_*_host = "" — so
+  # coalesce("", <raw-ALB>) returns the raw ALB hostname and the first-deploy
+  # bootstrap doesn't break (browser warns at this stage; that is the expected
+  # pre-Step-4 state per workshop page 36). Terraform's coalesce() treats
+  # empty strings as null, so the empty nip_io_*_host slot is skipped.
+  effective_ivia_host    = coalesce(local.nip_io_wrp_host, module.ivia.ivia_ingress_hostname)
+  effective_banking_host = coalesce(local.nip_io_banking_host, module.uc2_app.banking_ui_alb_hostname)
 }
 
 #-------------------------------------------------------------------------------
@@ -263,6 +270,19 @@ module "addons" {
   cluster_version   = module.eks.cluster_version
   oidc_provider_arn = module.eks.oidc_provider_arn
   tags              = var.tags
+  # Phase 07.8 Plan 01 Task 2: ACME email pass-through. Plan 03 cert-manager
+  # ClusterIssuer (new resource added there) consumes module.addons.acme_email
+  # in spec.acme.email. No default per CLAUDE.md identity-defaults rule.
+  acme_email = var.acme_email
+  # Phase 07.8 Plan 03: stable ACM cert ARN pass-through. The addons module
+  # uses this in two places: (1) the ACM-sync CronJob's IAM policy is scoped
+  # to acm:ImportCertificate on THIS resource ARN only (single-resource IAM
+  # scope; STRIDE T-cronjob-iam-overprivilege mitigation, NOT wildcard); (2)
+  # the CronJob in-place upserts the Let's Encrypt cert content into THIS
+  # SAME ARN every 6h so the ALB listener annotation never changes across
+  # cert-manager-driven renewals (D-03 stable-ARN contract). Drift on the
+  # ARN's cert body is suppressed by lifecycle.ignore_changes set by Plan 02.
+  workshop_tls_arn = local.tls_certificate_arn
 
   depends_on = [module.eks]
 }
@@ -432,28 +452,14 @@ module "ivia" {
   ivia_mmfa_push_client_secret = var.ivia_mmfa_push_client_secret
   node_security_group_id       = module.eks.node_security_group_id
   tls_certificate_arn          = local.tls_certificate_arn
-  wrp_public_fqdn              = local.wrp_public_fqdn
-  wrp_public_certificate_arn   = local.wrp_public_enabled ? aws_acm_certificate_validation.wrp_public[0].certificate_arn : ""
-  tags                         = var.tags
+  # Phase 07.8 Plan 05: nip.io FQDN parsed from .acme-state. Empty on first
+  # apply (file absent) → verify_access falls back to Ingress-status hostname;
+  # populated after Plan 04's ACME step → wrp_effective_host flips → autoconf
+  # re-runs against the LE-trusted endpoints.
+  nip_io_wrp_host = local.nip_io_wrp_host
+  tags            = var.tags
 
   depends_on = [time_sleep.alb_webhook_ready]
-}
-
-#-------------------------------------------------------------------------------
-# WRP public CNAME — points <wrp_public_hostname>.<zone> at the WRP ALB hostname
-# (only known after module.ivia creates the Ingress). The MMFA endpoints in
-# base_layer are rendered against this FQDN, so the phone resolves here, the ALB
-# serves the publicly-trusted cert, and method enrollment completes. Conditional
-# on var.wrp_dns_zone_name.
-#-------------------------------------------------------------------------------
-
-resource "aws_route53_record" "wrp_cname" {
-  count   = local.wrp_public_enabled ? 1 : 0
-  zone_id = data.aws_route53_zone.wrp[0].zone_id
-  name    = local.wrp_public_fqdn
-  type    = "CNAME"
-  ttl     = 60
-  records = [module.ivia.ivia_wrp_alb_hostname]
 }
 
 #-------------------------------------------------------------------------------
@@ -516,9 +522,15 @@ module "uc2_app" {
   ivia_client_id        = "agent-uc2"
   ivia_client_secret    = module.ivia.ivia_client_secret
   tls_certificate_arn   = local.tls_certificate_arn
-  ivia_public_issuer    = "https://${module.ivia.ivia_ingress_hostname}"
-  ivia_oidc_ca_pem      = module.ivia.ivia_oidc_ca_pem
-  tags                  = var.tags
+  # CR-01 fix: use LE-trusted nip.io FQDN when available; raw ALB only as
+  # pre-Step-4 bootstrap fallback. See locals.effective_ivia_host above.
+  ivia_public_issuer = "https://${local.effective_ivia_host}"
+  ivia_oidc_ca_pem   = module.ivia.ivia_oidc_ca_pem
+  # Phase 07.8 D-02: pass the nip.io banking FQDN so banking-ui's REDIRECT_URI
+  # + ORIGIN are LE-trusted instead of raw ALB. Empty string until
+  # configure-workshop.sh Step 4 writes .acme-state (pre-bootstrap fallback).
+  nip_io_banking_host = local.nip_io_banking_host
+  tags                = var.tags
 
   depends_on = [time_sleep.alb_webhook_ready]
 }
@@ -539,20 +551,22 @@ module "uc3_agent" {
   ivia_client_id         = "agent-uc3"
   ivia_id_token_audience = "agent-uc2"
   ivia_client_secret     = module.ivia.ivia_client_secret
-  ivia_external_url      = "https://${module.ivia.ivia_ingress_hostname}"
-  db_host                = module.rds.address
-  db_name                = "workshop"
-  uc3_agent_image        = var.uc3_agent_image
-  bedrock_model_id       = var.bedrock_model_id
-  region                 = var.region
-  rds_cidr               = module.vpc.vpc_cidr
-  ivia_oidc_ca_pem       = module.ivia.ivia_oidc_ca_pem
-  ivia_runtime_url       = "https://iviaruntime.${module.ivia.namespace}.svc.cluster.local:9443"
-  ivia_scim_user         = module.ivia.ivia_runtime_user
-  ivia_scim_password     = module.ivia.ivia_runtime_user_password
-  ivia_runtime_ca_pem    = module.ivia.ivia_runtime_ca_pem
-  ivia_namespace         = module.ivia.namespace
-  tags                   = var.tags
+  # CR-01 fix: use LE-trusted nip.io FQDN when available; raw ALB only as
+  # pre-Step-4 bootstrap fallback. See locals.effective_ivia_host above.
+  ivia_external_url   = "https://${local.effective_ivia_host}"
+  db_host             = module.rds.address
+  db_name             = "workshop"
+  uc3_agent_image     = var.uc3_agent_image
+  bedrock_model_id    = var.bedrock_model_id
+  region              = var.region
+  rds_cidr            = module.vpc.vpc_cidr
+  ivia_oidc_ca_pem    = module.ivia.ivia_oidc_ca_pem
+  ivia_runtime_url    = "https://iviaruntime.${module.ivia.namespace}.svc.cluster.local:9443"
+  ivia_scim_user      = module.ivia.ivia_runtime_user
+  ivia_scim_password  = module.ivia.ivia_runtime_user_password
+  ivia_runtime_ca_pem = module.ivia.ivia_runtime_ca_pem
+  ivia_namespace      = module.ivia.namespace
+  tags                = var.tags
 
   depends_on = [module.vault, module.rds, module.ivia, module.uc2_app]
 }
@@ -579,11 +593,21 @@ module "uc3_agent" {
 #-------------------------------------------------------------------------------
 
 locals {
-  # Browser-facing https issuer = the ivia-wrp (login) ALB; redirect_uri host =
-  # the banking-ui ALB. Both ALB hostnames are real post-apply values
-  # (wait_for_load_balancer = true on each Ingress).
-  ivia_public_issuer = "https://${module.ivia.ivia_ingress_hostname}"
-  uc2_redirect_uri   = "https://${module.uc2_app.banking_ui_alb_hostname}/callback"
+  # CR-01 fix (Phase 07.8 code review): the browser-facing https issuer and
+  # OAuth redirect_uri MUST use the LE-trusted nip.io FQDNs once .acme-state
+  # exists. The LE cert SANs cover ONLY nip.io hosts (configure-workshop.sh
+  # writes NIP_FQDN_WRP and NIP_FQDN_BANKING into .acme-state); binding wiring
+  # to raw ALB DNS while the cert is bound to nip.io makes the browser fail
+  # TLS hostname validation (SSL_ERROR_BAD_CERT_DOMAIN). See effective_*_host
+  # locals at the top of this file for the coalesce(nullif(...), ...) shape
+  # that provides a pre-Step-4 bootstrap fallback to the raw ALB DNS.
+  #
+  # outputs.tf:142 (ivia_issuer) sources local.ivia_public_issuer, so the
+  # Vault JWT auth backend's bound_issuer auto-tracks this value via the
+  # vault-config remote-state read — iviaop's iss claim and Vault's
+  # bound_issuer flip together, preserving coherence.
+  ivia_public_issuer = "https://${local.effective_ivia_host}"
+  uc2_redirect_uri   = "https://${local.effective_banking_host}/callback"
 
   iviaop_provider_yml_resolved = templatefile(
     "${path.module}/modules/verify_access/iviaop-config/provider.yml.tftpl",

@@ -125,7 +125,6 @@ def _check_account_owner(
 IVIA_BASE_URL = os.getenv("IVIA_BASE_URL", "https://iviaop.verify-access.svc.cluster.local:8436")
 IVIA_CLIENT_ID = os.getenv("IVIA_CLIENT_ID", "uc3-agent")
 IVIA_CLIENT_SECRET = os.getenv("IVIA_CLIENT_SECRET", "")
-IVIA_EXTERNAL_URL = os.getenv("IVIA_EXTERNAL_URL", "")
 IVIA_ACTOR_CLIENT_ID = os.getenv("IVIA_ACTOR_CLIENT_ID", "uc3-actor")
 IVIA_ACTOR_CLIENT_SECRET = os.getenv("IVIA_ACTOR_CLIENT_SECRET", IVIA_CLIENT_SECRET)
 # Path to the iviaop self-signed CA PEM mounted at /etc/ssl/ivia/iviaop.pem.

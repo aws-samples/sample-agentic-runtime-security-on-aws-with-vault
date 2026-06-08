@@ -24,28 +24,6 @@ variable "kb_region" {
 }
 
 #-------------------------------------------------------------------------------
-# WRP public TLS (MMFA mobile-push enrollment)
-# The IBM Verify mobile app requires a publicly-trusted TLS chain during method
-# enrollment; the self-signed ALB cert is rejected ("A TLS error caused the
-# secure connection to fail"). Setting wrp_dns_zone_name turns on a DNS-validated
-# ACM public cert + Route53 record fronting the WRP ALB so the phone trusts it.
-# Leave wrp_dns_zone_name = "" to keep the self-signed-only, browser-clickthrough
-# posture (no domain required — but mobile-push enrollment will not complete).
-#-------------------------------------------------------------------------------
-
-variable "wrp_dns_zone_name" {
-  type        = string
-  default     = ""
-  description = "Name of an existing public Route53 hosted zone (e.g. \"oscar-medina.sbx.hashidemos.io\") that is internet-delegated. When non-empty, a publicly-trusted ACM cert + CNAME for <wrp_public_hostname>.<zone> are created and bound to the WRP ALB. Empty = self-signed only."
-}
-
-variable "wrp_public_hostname" {
-  type        = string
-  default     = "ivia"
-  description = "Left-most label of the WRP public FQDN within wrp_dns_zone_name. The full FQDN is \"<wrp_public_hostname>.<wrp_dns_zone_name>\". Ignored when wrp_dns_zone_name is empty."
-}
-
-#-------------------------------------------------------------------------------
 # EKS Cluster Configuration
 #-------------------------------------------------------------------------------
 
@@ -119,6 +97,28 @@ variable "ivia_mmfa_push_client_secret" {
   sensitive   = true
   default     = ""
   description = "VerifyPushCreds API Key for IBM Verify mobile-push (MMFA). For ISVA 10.0.3+ the API Key IS the push provider Client Secret. Stored as the 'ivia-mmfa-push' Secret in 'verify-access'. Leave empty until MMFA is enabled. Supply via gitignored terraform.tfvars."
+}
+
+#-------------------------------------------------------------------------------
+# Phase 07.8 — Attendee-trusted TLS via nip.io + Let's Encrypt
+# acme_email: Let's Encrypt ACME account contact email. NO default (per project
+#   rule never-hardcode-identity-defaults — identity-bearing inputs are caller-
+#   supplied, never defaulted). Workshop owner / Workshop Studio attendees
+#   provide via terraform.tfvars. Consumed by Plan 03 ClusterIssuer.
+# deploy_id_state_path: relative path (resolved from infrastructure/) to the
+#   local .acme-state file written by Plan 04 configure-workshop.sh ACME step
+#   and read by verify-tls.sh. Gitignored (D-10 no-cross-deploy-cache).
+#-------------------------------------------------------------------------------
+
+variable "acme_email" {
+  type        = string
+  description = "Let's Encrypt ACME account contact email. Required input — per the project's CLAUDE.md identity-fallback rule, this MUST be supplied by the caller via terraform.tfvars; no fallback value is shipped. Consumed by Plan 03 cert-manager ClusterIssuer."
+}
+
+variable "deploy_id_state_path" {
+  type        = string
+  default     = ".acme-state"
+  description = "Relative path (resolved from infrastructure/) to the local .acme-state file. Written by Plan 04 configure-workshop.sh ACME step (DEPLOY_ID, STABLE_ACM_ARN, ALB_IP, NIP_FQDN_WRP, NIP_FQDN_BANKING) and read by verify-tls.sh. Gitignored per D-10."
 }
 
 #-------------------------------------------------------------------------------

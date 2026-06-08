@@ -74,3 +74,9 @@ uc3_agent_image = "ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/uc3-agent:latest"
 # when empty the 'ivia-mmfa-push' Secret is not created (no-op).
 # ivia_mmfa_push_client_secret = ""
 
+# Phase 07.8 — Let's Encrypt account contact email for the cert-manager
+# ClusterIssuer (Plan 03). REQUIRED — no default, per project rule
+# never-hardcode-identity-defaults. Workshop owner / Workshop Studio attendees
+# supply their own; LE uses this for renewal and revocation notices only.
+# acme_email = "you@example.com"
+

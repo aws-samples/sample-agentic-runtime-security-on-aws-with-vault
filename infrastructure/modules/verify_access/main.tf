@@ -1434,16 +1434,30 @@ resource "kubernetes_ingress_v1" "ivia_wrp" {
       "alb.ingress.kubernetes.io/scheme"               = "internet-facing"
       "alb.ingress.kubernetes.io/target-type"          = "ip"
       "alb.ingress.kubernetes.io/listen-ports"         = "[{\"HTTP\":80},{\"HTTPS\":443}]"
-      "alb.ingress.kubernetes.io/certificate-arn"      = join(",", compact([var.wrp_public_certificate_arn, var.tls_certificate_arn]))
-      "alb.ingress.kubernetes.io/ssl-redirect"         = "443"
+      "alb.ingress.kubernetes.io/certificate-arn"      = var.tls_certificate_arn
       "alb.ingress.kubernetes.io/backend-protocol"     = "HTTPS"
       "alb.ingress.kubernetes.io/healthcheck-protocol" = "HTTPS"
       "alb.ingress.kubernetes.io/healthcheck-port"     = "9443"
+      # Phase 07.8 Plan 02 (D-01): join the shared ALB IngressGroup so this
+      # Ingress and the banking-UI Ingress (uc2_agent) co-tenant ONE ALB. Plan 03
+      # cert-manager Certificate's HTTP-01 solver Ingress will land in the same
+      # group with group.order=1 so /.well-known/acme-challenge/* wins before
+      # this Ingress's /* catch-all (group.order=10).
+      "alb.ingress.kubernetes.io/group.name"  = "workshop-acme"
+      "alb.ingress.kubernetes.io/group.order" = "10"
     }
   }
   spec {
     ingress_class_name = "alb"
     rule {
+      # Phase 07.8 D-02: scope this Ingress to the nip.io WRP FQDN so the
+      # shared workshop-acme ALB installs a host-discriminating rule. Without
+      # this, both Ingresses default to host=* and the ALB's priority-1 rule
+      # wins for ALL hostnames — see uc2_agent's banking-ui Ingress comment
+      # for the redirect-loop trace. Pre-bootstrap fallback (empty
+      # nip_io_wrp_host) leaves host=wildcard so the raw ALB hostname still
+      # resolves during the bootstrap window.
+      host = var.nip_io_wrp_host
       http {
         path {
           path      = "/"
@@ -1566,14 +1580,16 @@ locals {
   ivia_runtime_user = "easuser"
   ivia_scim_bind_dn = "cn=root,secAuthority=Default"
 
-  # Host that every MMFA endpoint URL in base_layer is rendered against. When a
-  # publicly-trusted FQDN is provided (Route53 + ACM public cert), use it so the
-  # IBM Verify mobile app validates a real chain during method enrollment (Face
-  # ID / approve-key setup). Without it the app rejects the WRP ALB's self-signed
-  # cert mid-enrollment ("A TLS error caused the secure connection to fail") and
-  # the device is left with empty auth_methods (no Approve/Deny). Falls back to
-  # the raw ELB hostname when no domain is configured (browser-only, self-signed).
-  wrp_effective_host = var.wrp_public_fqdn != "" ? var.wrp_public_fqdn : kubernetes_ingress_v1.ivia_wrp.status[0].load_balancer[0].ingress[0].hostname
+  # Host that every MMFA endpoint URL in base_layer is rendered against. Phase
+  # 07.8 Plan 05 re-wires this to var.nip_io_wrp_host (the nip.io FQDN the root
+  # module parsed from .acme-state). On first deploy .acme-state is absent so
+  # the variable is empty — the ternary falls back to the Ingress-status hostname
+  # (the same self-signed-ELB path Plan 02 left in place) so the autoconf
+  # base_layer always renders a resolvable host. After Plan 04's ACME step
+  # writes .acme-state and re-applies module.ivia, this flips to the nip.io
+  # FQDN, base_layer_hash recomputes, the autoconf Job re-runs, and IBM Verify
+  # validates the LE-trusted chain during MMFA enrollment.
+  wrp_effective_host = var.nip_io_wrp_host != "" ? var.nip_io_wrp_host : kubernetes_ingress_v1.ivia_wrp.status[0].load_balancer[0].ingress[0].hostname
 
   base_layer_files = sort(tolist(fileset("${path.module}/base_layer", "*")))
   base_layer_hash = sha256(join("", concat(

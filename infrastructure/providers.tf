@@ -28,6 +28,17 @@ terraform {
       version = "~> 2.25"
     }
 
+    # gavinbunney/kubectl — lazy-connects at apply time. Required for CRD
+    # resources (e.g. cert-manager ClusterIssuer) that don't exist at plan
+    # time on a from-scratch deploy. hashicorp/kubernetes `kubernetes_manifest`
+    # dry-runs against the live cluster at PLAN time → fails with
+    # "Failed to construct REST client: no client config" when the cluster
+    # hasn't been created yet (provider issue #1391).
+    kubectl = {
+      source  = "gavinbunney/kubectl"
+      version = "~> 1.14"
+    }
+
     tls = {
       source  = "hashicorp/tls"
       version = "~> 4.0"
@@ -106,6 +117,22 @@ provider "helm" {
       command     = "aws"
       args        = ["eks", "get-token", "--cluster-name", var.cluster_name, "--region", var.region]
     }
+  }
+}
+
+# kubectl provider — same exec-based EKS auth. `load_config_file = false`
+# tells it NOT to read ~/.kube/config; the host/CA/exec block here is the
+# only auth source. Used by `kubectl_manifest` resources that must lazy-
+# connect at apply time (e.g. cert-manager ClusterIssuer in modules/addons).
+provider "kubectl" {
+  host                   = module.eks.cluster_endpoint
+  cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
+  load_config_file       = false
+
+  exec {
+    api_version = "client.authentication.k8s.io/v1beta1"
+    command     = "aws"
+    args        = ["eks", "get-token", "--cluster-name", var.cluster_name, "--region", var.region]
   }
 }
 
