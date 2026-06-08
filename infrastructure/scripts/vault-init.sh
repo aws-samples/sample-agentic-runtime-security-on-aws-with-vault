@@ -24,6 +24,16 @@
 #===============================================================================
 set -euo pipefail
 
+# BLOCKING: pin kubectl to the workshop EKS cluster (lib-workshop-context.sh
+# writes a process-isolated KUBECONFIG containing only the workshop cluster).
+# Without this, bare `kubectl` would route to the user's default context,
+# which on dev machines is often a GKE / other-AWS cluster — corrupting that
+# unrelated work and breaking vault init detection.
+_vault_init_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./lib-workshop-context.sh
+source "${_vault_init_script_dir}/lib-workshop-context.sh"
+unset _vault_init_script_dir
+
 #--- Defaults ------------------------------------------------------------------
 OUTPUT_FILE="${HOME}/vault-init.json"
 VAULT_NS="vault"

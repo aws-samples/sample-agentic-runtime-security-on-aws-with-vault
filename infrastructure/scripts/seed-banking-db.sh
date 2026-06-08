@@ -31,6 +31,22 @@ source "${SCRIPT_DIR}/common-checks.sh"
 # shellcheck source=resolve-region.sh
 source "${SCRIPT_DIR}/resolve-region.sh"
 
+#--- Workshop kubectl context preflight ---------------------------------------
+# Ensure kubectl + aws point at the workshop EKS cluster regardless of the
+# operator's default shell context. Bare `kubectl run` and `kubectl create
+# configmap` below would otherwise hit whichever cluster is currently
+# selected (GKE / another EKS / etc.) and the seed pod would create against
+# the wrong cluster — Step 8 fail-mode is "Namespace not found" or
+# "Database seed failed" on a healthy workshop deploy. Terraform output is
+# the canonical source of cluster_name + region. Idempotent.
+_WORKSHOP_CLUSTER=$(terraform -chdir="${PROJECT_ROOT}/infrastructure" output -raw cluster_name 2>/dev/null || echo "")
+_WORKSHOP_REGION=$(terraform -chdir="${PROJECT_ROOT}/infrastructure" output -raw region 2>/dev/null || echo "")
+if [ -n "${_WORKSHOP_CLUSTER}" ] && [ -n "${_WORKSHOP_REGION}" ]; then
+    aws eks update-kubeconfig --name "${_WORKSHOP_CLUSTER}" --region "${_WORKSHOP_REGION}" --alias workshop >/dev/null 2>&1 || true
+    kubectl config use-context workshop >/dev/null 2>&1 || true
+fi
+unset _WORKSHOP_CLUSTER _WORKSHOP_REGION
+
 NAMESPACE="banking-app"
 SEED_SQL="${PROJECT_ROOT}/applications/banking-app/db/seed.sql"
 CONFIGMAP_NAME="seed-sql"

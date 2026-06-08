@@ -45,6 +45,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 VAULT_CONFIG_DIR="${REPO_ROOT}/infrastructure/vault-config"
 
+#--- Workshop kubectl/helm context isolation (BLOCKING) -----------------------
+# lib-workshop-context.sh writes a PROCESS-ISOLATED kubeconfig with ONLY the
+# workshop EKS cluster (alias `workshop`) and exports KUBECONFIG to it. After
+# this, bare kubectl + `--context workshop` + helm all hit the workshop cluster
+# and CANNOT escape to a non-workshop cluster (GKE / other AWS / etc).
+# Reason: 2026-06-07 — the previous preflight here used `kubectl config
+# use-context workshop` which silently no-op'd when the alias was missing,
+# falling back to the user's default context (a GKE cluster) and routing
+# vault-init.sh to a non-workshop Vault.
+# shellcheck source=./lib-workshop-context.sh
+source "${SCRIPT_DIR}/lib-workshop-context.sh"
+
 #--- Defaults ------------------------------------------------------------------
 VAULT_TOKEN=""
 DRY_RUN=false
