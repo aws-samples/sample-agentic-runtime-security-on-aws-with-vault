@@ -23,6 +23,31 @@
 #     Passed in as var.kms_key_arn.
 ################################################################################
 
+terraform {
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+    helm = {
+      source  = "hashicorp/helm"
+      version = "~> 2.17"
+    }
+    kubernetes = {
+      source  = "hashicorp/kubernetes"
+      version = "~> 2.25"
+    }
+    null = {
+      source  = "hashicorp/null"
+      version = "~> 3.0"
+    }
+    time = {
+      source  = "hashicorp/time"
+      version = "~> 0.9"
+    }
+  }
+}
+
 data "aws_caller_identity" "this" {}
 
 data "aws_eks_cluster" "this" {
@@ -97,6 +122,19 @@ resource "aws_eks_pod_identity_association" "fluent_bit" {
   depends_on = [kubernetes_namespace.logging]
 }
 
+# EKS Pod Identity propagation barrier. The admission webhook must observe the
+# association above BEFORE a fluent-bit pod is admitted; otherwise no AWS_* creds
+# are injected, the pod silently falls back to the node role, CreateLogStream on
+# /workshop/* is AccessDenied, and the vault_audit plane (hence the
+# audit_correlation VIEW) stays empty. depends_on orders only the API call, not
+# webhook propagation; this 30s barrier covers the gap (observed race was ~4s).
+# Mirrors the time_sleep barriers in modules/bedrock_kb_aoss + modules/addons.
+resource "time_sleep" "fluent_bit_pod_identity_propagate" {
+  create_duration = "30s"
+
+  depends_on = [aws_eks_pod_identity_association.fluent_bit]
+}
+
 #-------------------------------------------------------------------------------
 # fluent-bit Helm release (aws-for-fluent-bit chart)
 #-------------------------------------------------------------------------------
@@ -116,7 +154,7 @@ resource "helm_release" "fluent_bit" {
 
   depends_on = [
     kubernetes_namespace.logging,
-    aws_eks_pod_identity_association.fluent_bit,
+    time_sleep.fluent_bit_pod_identity_propagate,
   ]
 }
 

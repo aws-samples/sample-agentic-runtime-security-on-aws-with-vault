@@ -22,6 +22,7 @@ Glue catalog tables layer an external schema over the S3 prefixes, enabling Athe
 |---|---|---|
 | `helm_release.fluent_bit` | Helm (aws-for-fluent-bit) | Routes pod logs to CloudWatch |
 | `aws_eks_pod_identity_association.fluent_bit` | Pod Identity | CloudWatch write permissions for fluent-bit SA |
+| `time_sleep.fluent_bit_pod_identity_propagate` | time (30s) | Barrier: lets the Pod Identity association propagate to the admission webhook before fluent-bit pods are admitted |
 | `aws_s3_bucket.logs` | S3 | Log export destination with 30-day lifecycle |
 | `aws_kinesis_firehose_delivery_stream.*` | Firehose (×3) | Near-real-time delivery to S3 |
 | `aws_cloudwatch_log_subscription_filter.*` | CW Subscription (×3) | Fan-out: log group → Firehose |
@@ -33,6 +34,7 @@ Glue catalog tables layer an external schema over the S3 prefixes, enabling Athe
 
 - **auto_create_group = false** in fluent-bit config — log group lifecycle is owned by the `audit` module (prevents orphan resources on destroy).
 - **Pod Identity over IRSA** — consistent with workshop EKS identity pattern (Phase 2 managed addons, Phase 3 Vault).
+- **30s Pod Identity propagation barrier** — `time_sleep.fluent_bit_pod_identity_propagate` gates `helm_release.fluent_bit` on the association. The EKS Pod Identity admission webhook must observe the association before a fluent-bit pod is admitted; `depends_on` orders only the API call, not webhook propagation. Without the barrier the pod can be admitted ~4s after the association is written, gets no `AWS_*` creds, falls back to the node role, and is `AccessDenied` on `/workshop/*` — leaving `vault_audit` (and the `audit_correlation` VIEW) empty. Mirrors the `time_sleep` barriers in `bedrock_kb_aoss` and `addons`.
 - **Athena VIEW auto-created at apply** — `null_resource.audit_correlation_view` runs the stored `CREATE OR REPLACE VIEW` DDL during the tier-1 apply (`deploy-workshop.sh` Step 1), in the deployer's Athena-permissioned context, so the view exists before attendees query it. The named query retains the same DDL as a console/manual fallback and for `verify-uc3.sh`.
 - **30-day S3 lifecycle** — workshop ephemeral cost control; Firehose buffering set to 60s/5MB for near-real-time availability.
 - **JSON SerDe with `ignore.malformed.json = TRUE`** — tolerates startup noise and partial log lines without breaking Athena queries.
