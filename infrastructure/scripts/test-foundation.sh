@@ -5,17 +5,19 @@
 # Calls test-eks.sh, test-rds.sh, test-bedrock-kb.sh, then checks audit log
 # groups, in-cluster OpenLDAP user registry, and the region contract. Aggregates results.
 #
-# Usage:
-#   ./test-foundation.sh \
-#       --cluster-name <name> \
-#       --knowledge-base-id <kb_id> \
-#       [--db-instance-id <id>] \
-#       [--region <region>]
+# Usage (zero args — everything auto-derived):
+#   ./test-foundation.sh
+#
+# Optional overrides:
+#   [--cluster-name <name>] [--knowledge-base-id <kb_id>]
+#   [--db-instance-id <id>] [--region <region>]
 #
 # Auto-derived when not provided:
-#   --db-instance-id  defaults to ${cluster_name}-pg (naming convention)
-#   --region          resolved from terraform.tfvars
-#   KB region         parsed from kb_region in terraform.tfvars
+#   --cluster-name       parsed from cluster_name in terraform.tfvars
+#   --knowledge-base-id  resolved from AWS (KB named workshop-kb in kb_region)
+#   --db-instance-id     defaults to ${cluster_name}-pg (naming convention)
+#   --region             resolved from terraform.tfvars
+#   KB region            parsed from kb_region in terraform.tfvars
 #
 # Env-var fallback:
 #   WORKSHOP_CLUSTER_NAME, WORKSHOP_DB_INSTANCE_ID, WORKSHOP_KB_ID
@@ -37,14 +39,17 @@ while [ $# -gt 0 ]; do
         --region)            CLI_REGION="$2"; shift ;;
         --help|-h)
             cat <<USAGE
-Usage: $0 --cluster-name <name> --knowledge-base-id <kb> [--db-instance-id <id>] [--region <region>]
+Usage: $0   (zero args — everything auto-derived)
+       $0 [--cluster-name <name>] [--knowledge-base-id <kb>] [--db-instance-id <id>] [--region <region>]
 
 Verifies foundation: EKS, RDS, Bedrock KB, audit log groups, in-cluster OpenLDAP, region contract.
 
-Auto-derived:
-  --db-instance-id  defaults to \${cluster_name}-pg
-  --region          from terraform.tfvars
-  KB region         from kb_region in terraform.tfvars
+Auto-derived when not provided:
+  --cluster-name       from cluster_name in terraform.tfvars
+  --knowledge-base-id  from AWS (KB named workshop-kb in kb_region)
+  --db-instance-id     defaults to \${cluster_name}-pg
+  --region             from terraform.tfvars
+  KB region            from kb_region in terraform.tfvars
 
 Env-var fallback:
   WORKSHOP_CLUSTER_NAME, WORKSHOP_DB_INSTANCE_ID, WORKSHOP_KB_ID
@@ -70,13 +75,25 @@ source "$SCRIPT_DIR/resolve-region.sh"
 resolve_region "$CLI_REGION" || exit 1
 REGION="$RESOLVED_REGION"
 
+# Auto-derive cluster name from terraform.tfvars (or .example fallback) when not supplied
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+if [ -z "$CLUSTER_NAME" ]; then
+    for _f in "${REPO_ROOT}/infrastructure/terraform.tfvars" "${REPO_ROOT}/infrastructure/terraform.tfvars.example"; do
+        if [ -f "$_f" ]; then
+            CLUSTER_NAME=$(grep -E '^\s*cluster_name\s*=\s*"' "$_f" 2>/dev/null \
+                | head -1 \
+                | sed -E 's/.*"([^"]+)".*/\1/')
+            [ -n "$CLUSTER_NAME" ] && break
+        fi
+    done
+fi
+
 # Auto-derive DB instance ID from cluster name convention
 if [ -z "$DB_ID" ] && [ -n "$CLUSTER_NAME" ]; then
     DB_ID="${CLUSTER_NAME}-pg"
 fi
 
 # Resolve KB region from terraform.tfvars (or .example fallback)
-REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 KB_REGION=""
 for _f in "${REPO_ROOT}/infrastructure/terraform.tfvars" "${REPO_ROOT}/infrastructure/terraform.tfvars.example"; do
     if [ -f "$_f" ]; then
@@ -88,6 +105,15 @@ for _f in "${REPO_ROOT}/infrastructure/terraform.tfvars" "${REPO_ROOT}/infrastru
 done
 if [ -z "$KB_REGION" ]; then
     KB_REGION="$REGION"
+fi
+
+# Auto-derive Knowledge Base id from AWS when not supplied (KB name is workshop-kb)
+if [ -z "$KB_ID" ]; then
+    KB_ID=$(aws bedrock-agent list-knowledge-bases \
+        --region "$KB_REGION" \
+        --query 'knowledgeBaseSummaries[?name==`workshop-kb`].knowledgeBaseId | [0]' \
+        --output text 2>/dev/null)
+    [ "$KB_ID" = "None" ] && KB_ID=""
 fi
 
 missing=()

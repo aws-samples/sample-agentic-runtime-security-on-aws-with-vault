@@ -129,7 +129,7 @@ Phases: shebang consistency, `bash -n` syntax, optional shellcheck (skipped if n
 
 ### Phase 07.8 — Trusted TLS Cert (Let's Encrypt + nip.io)
 
-`configure-workshop.sh` Step 4 provisions a publicly trusted Let's Encrypt
+`deploy-workshop.sh` Step 4 provisions a publicly trusted Let's Encrypt
 certificate for the workshop ALB so attendees see a lock icon — no
 "click through self-signed warning" step. The cert is bound to two nip.io
 FQDNs (`wrp.<DEPLOY_ID>.<ALB_IP_DASHED>.nip.io` for the IVIA WRP,
@@ -163,7 +163,7 @@ apply -target=module.ivia`. Steps 5–8 still run.
 
 #### Idempotency floor (D-12)
 
-A second `bash configure-workshop.sh` (without any flags) exits 0 with:
+A second `bash deploy-workshop.sh` (without any flags) exits 0 with:
 
 - NO Let's Encrypt re-issuance request (the existing cert is still valid).
 - NO `aws acm import-certificate` invocation (the ARN already serves LE).
@@ -193,16 +193,16 @@ LE cert's `dnsNames` keep matching). Consumers:
   `skip-acme-honored` behavioral checks.
 - Workshop content pages tell attendees: "look for `NIP_FQDN_WRP` or
   `NIP_FQDN_BANKING` printed at the end of `bash
-  infrastructure/scripts/configure-workshop.sh`, or read them back from
+  infrastructure/scripts/deploy-workshop.sh`, or read them back from
   `infrastructure/.acme-state`."
 
 To force fresh cert issuance and a new DEPLOY_ID (e.g. after a
 teardown+redeploy that rotated the ALB IP), delete the file before
-running `configure-workshop.sh`:
+running `deploy-workshop.sh`:
 
 ```bash
 rm -f infrastructure/.acme-state
-bash infrastructure/scripts/configure-workshop.sh
+bash infrastructure/scripts/deploy-workshop.sh
 ```
 
 ## SVG Regeneration

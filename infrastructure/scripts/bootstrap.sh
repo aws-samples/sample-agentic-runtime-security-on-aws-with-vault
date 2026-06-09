@@ -8,7 +8,7 @@
 # Steps:
 #   1. Ensure EC2 Spot service-linked role (AWSServiceRoleForEC2Spot)
 #   2. Resolve admin principal ARN (assumed-role → IAM role rewrite)
-#   3. Generate infrastructure/terraform.tfvars + terraform init (local state)
+#   3. Seed terraform.tfvars + terraform init in all 3 roots (tier-1/2/3, local state)
 #   4. Print success summary
 #
 # Usage:
@@ -139,38 +139,64 @@ step_get_admin_arn() {
 }
 
 #===============================================================================
-# STEP 3: Generate infrastructure/terraform.tfvars + terraform init
+# STEP 3: Generate terraform.tfvars (all 3 roots) + terraform init (all 3 roots)
+#
+# The provisioning order refactor splits the deploy into three local-state roots:
+#   tier-1  infrastructure/            core infra (VPC/EKS/RDS/KB/IAM/addons)
+#   tier-2  infrastructure/services/   Vault server + IVIA
+#   tier-3  infrastructure/workloads/  uc1/uc2/uc3 apps
+# Only tier-1 needs admin_principal_arn stamped in. tier-2/tier-3 tfvars carry
+# secrets / image URIs the user (or deploy-workshop.sh) fills in later, so
+# bootstrap just seeds them from .example when absent and never overwrites.
 #===============================================================================
 step_generate_tfvars_and_init() {
-    step_header "3/3" "Generate terraform.tfvars + terraform init"
+    step_header "3/3" "Generate terraform.tfvars + terraform init (3 roots)"
 
-    local TFVARS_FILE="$PROJECT_ROOT/infrastructure/terraform.tfvars"
-    local TFVARS_EXAMPLE="$PROJECT_ROOT/infrastructure/terraform.tfvars.example"
+    local TIER1_DIR="$PROJECT_ROOT/infrastructure"
+    local TIER2_DIR="$PROJECT_ROOT/infrastructure/services"
+    local TIER3_DIR="$PROJECT_ROOT/infrastructure/workloads"
 
     if [ "$DRY_RUN" = true ]; then
-        echo -e "${YELLOW}[DRY-RUN] Would generate $TFVARS_FILE from .example${NC}"
-        echo -e "${YELLOW}[DRY-RUN] Would run: terraform init${NC}"
+        echo -e "${YELLOW}[DRY-RUN] Would seed terraform.tfvars in tier-1/2/3 from .example${NC}"
+        echo -e "${YELLOW}[DRY-RUN] Would stamp admin_principal_arn into tier-1 tfvars${NC}"
+        echo -e "${YELLOW}[DRY-RUN] Would run terraform init in all 3 roots${NC}"
         return 0
     fi
 
-    if [ -f "$TFVARS_FILE" ]; then
-        echo -e "${GREEN}OK: $TFVARS_FILE already exists — updating admin_principal_arn${NC}"
-        sed -i.bak "s|admin_principal_arn[[:space:]]*=.*|admin_principal_arn = \"${ADMIN_PRINCIPAL_ARN}\"|" "$TFVARS_FILE"
-        rm -f "${TFVARS_FILE}.bak"
-    elif [ -f "$TFVARS_EXAMPLE" ]; then
-        echo -e "${BLUE}  Copying terraform.tfvars.example → terraform.tfvars${NC}"
-        cp "$TFVARS_EXAMPLE" "$TFVARS_FILE"
-        sed -i.bak "s|admin_principal_arn[[:space:]]*=.*|admin_principal_arn = \"${ADMIN_PRINCIPAL_ARN}\"|" "$TFVARS_FILE"
-        rm -f "${TFVARS_FILE}.bak"
-        echo -e "${GREEN}OK: Generated $TFVARS_FILE${NC}"
+    # --- tier-1: seed from .example (if absent) + stamp admin_principal_arn ----
+    local T1_FILE="$TIER1_DIR/terraform.tfvars"
+    local T1_EXAMPLE="$TIER1_DIR/terraform.tfvars.example"
+    if [ -f "$T1_FILE" ]; then
+        echo -e "${GREEN}OK: $T1_FILE exists — updating admin_principal_arn${NC}"
+    elif [ -f "$T1_EXAMPLE" ]; then
+        echo -e "${BLUE}  Copying tier-1 terraform.tfvars.example → terraform.tfvars${NC}"
+        cp "$T1_EXAMPLE" "$T1_FILE"
     else
-        echo -e "${RED}Error: Neither terraform.tfvars nor terraform.tfvars.example found${NC}"
+        echo -e "${RED}Error: tier-1 has neither terraform.tfvars nor terraform.tfvars.example${NC}"
         return 1
     fi
+    sed -i.bak "s|admin_principal_arn[[:space:]]*=.*|admin_principal_arn = \"${ADMIN_PRINCIPAL_ARN}\"|" "$T1_FILE"
+    rm -f "${T1_FILE}.bak"
 
-    echo -e "${BLUE}  Running terraform init (local state)...${NC}"
-    terraform -chdir="$PROJECT_ROOT/infrastructure" init -input=false
-    echo -e "${GREEN}OK: terraform init complete${NC}"
+    # --- tier-2 / tier-3: seed from .example only if absent (never overwrite) --
+    local dir
+    for dir in "$TIER2_DIR" "$TIER3_DIR"; do
+        if [ -f "$dir/terraform.tfvars" ]; then
+            echo -e "${GREEN}OK: $dir/terraform.tfvars exists — leaving as-is${NC}"
+        elif [ -f "$dir/terraform.tfvars.example" ]; then
+            echo -e "${BLUE}  Copying $dir terraform.tfvars.example → terraform.tfvars${NC}"
+            cp "$dir/terraform.tfvars.example" "$dir/terraform.tfvars"
+        else
+            echo -e "${YELLOW}WARN: $dir has no terraform.tfvars.example — skipping seed${NC}"
+        fi
+    done
+
+    # --- terraform init all 3 roots (bare init, NEVER -upgrade) ---------------
+    echo -e "${BLUE}  Running terraform init in all 3 roots (local state)...${NC}"
+    terraform -chdir="$TIER1_DIR" init -input=false
+    terraform -chdir="$TIER2_DIR" init -input=false
+    terraform -chdir="$TIER3_DIR" init -input=false
+    echo -e "${GREEN}OK: terraform init complete (tier-1, tier-2, tier-3)${NC}"
 }
 
 #===============================================================================
@@ -189,11 +215,12 @@ step_summary() {
     fi
     echo -e "${GREEN}What was created (or verified idempotently):${NC}"
     echo -e "  - EC2 Spot Service-Linked Role"
-    echo -e "  - infrastructure/terraform.tfvars (from .example template)"
+    echo -e "  - terraform.tfvars in all 3 roots (tier-1/2/3, from .example templates)"
+    echo -e "  - terraform init in all 3 roots (local state)"
     echo
     echo -e "${GREEN}Next steps:${NC}"
-    echo -e "  1. Review and fill in terraform.tfvars: ${BLUE}${PROJECT_ROOT}/infrastructure/terraform.tfvars${NC}"
-    echo -e "  2. Deploy: ${BLUE}cd infrastructure && terraform apply${NC}"
+    echo -e "  1. Fill in secrets/images: ${BLUE}${PROJECT_ROOT}/infrastructure/services/terraform.tfvars${NC} (ICR key)"
+    echo -e "  2. Deploy everything: ${BLUE}./infrastructure/scripts/deploy-workshop.sh${NC}"
     echo -e "  3. Or run the full e2e: ${BLUE}./infrastructure/scripts/workshop-e2e.sh --skip-teardown${NC}"
     echo
     echo -e "${GREEN}===============================================================================${NC}"

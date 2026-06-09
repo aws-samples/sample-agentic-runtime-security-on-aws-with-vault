@@ -20,8 +20,8 @@
 #   --check no-extra-ca              Dimension C: NODE_EXTRA_CA_CERTS removed from code
 #   --check cookie-secure            Dimension C: cookie secure:true flip (no secure:false in locked scope)
 #   --check arn-stable               Dimension D: existing ACM ARN preserved across LE renewal
-#   --check idempotent-rerun         Dimension E: configure-workshop.sh second run exits 0 (D-12)
-#   --check skip-acme-honored        Dimension E: configure-workshop.sh --skip-acme honored (D-11)
+#   --check idempotent-rerun         Dimension E: deploy-workshop.sh second run exits 0 (D-12)
+#   --check skip-acme-honored        Dimension E: deploy-workshop.sh --skip-acme honored (D-11)
 #
 # Flags:
 #   --quick                          Run trust-chain + workaround-grep subset (~10s)
@@ -73,7 +73,7 @@ fi
 #-------------------------------------------------------------------------------
 # .acme-state loader
 #
-# .acme-state is written by Plan 04 (configure-workshop.sh ACME step). It is
+# .acme-state is written by Plan 04 (deploy-workshop.sh ACME step). It is
 # gitignored, local-only, and re-generated when missing (fresh cluster → fresh
 # DEPLOY_ID — D-10 no-cross-deploy-cache).
 #
@@ -114,8 +114,8 @@ Sub-commands (per 07.8-VALIDATION.md Dimensions A–E):
   --check no-extra-ca              NODE_EXTRA_CA_CERTS removed from code (Dim C)
   --check cookie-secure            cookie secure:true flip (no secure:false) (Dim C)
   --check arn-stable               existing ACM ARN preserved across LE renewal (Dim D)
-  --check idempotent-rerun         configure-workshop.sh second run exits 0 (Dim E, D-12)
-  --check skip-acme-honored        configure-workshop.sh --skip-acme honored (Dim E, D-11)
+  --check idempotent-rerun         deploy-workshop.sh second run exits 0 (Dim E, D-12)
+  --check skip-acme-honored        deploy-workshop.sh --skip-acme honored (Dim E, D-11)
 
 Flags:
   --quick                          Run trust-chain + workaround-grep subset (~10s)
@@ -146,7 +146,7 @@ USAGE
 # Dimension A — browser trust chain (IVIA WRP)
 check_browser_trust() {
     if [ "${ACME_STATE_LOADED}" != "true" ] || [ -z "${NIP_FQDN_WRP:-}" ]; then
-        print_info "Check pending: browser-trust (requires Wave 4 — .acme-state populated by Plan 04 configure-workshop.sh ACME step; NIP_FQDN_WRP not yet set)"
+        print_info "Check pending: browser-trust (requires Wave 4 — .acme-state populated by Plan 04 deploy-workshop.sh ACME step; NIP_FQDN_WRP not yet set)"
         return
     fi
     # TLS-01 + TLS-03 from RESEARCH §Validation Architecture
@@ -187,7 +187,7 @@ check_mmfa_endpoint() {
     fi
     # Query the AAC DB via LMI for the registered MMFA endpoint hostname.
     # Pin --context workshop so the check works regardless of the caller's
-    # default kubeconfig (mirrors the CR-02 fix in configure-workshop.sh).
+    # default kubeconfig (mirrors the CR-02 fix in deploy-workshop.sh).
     # Use base64 --decode for BSD/macOS portability (mirrors CR-04).
     ivia_admin_pw=$(kubectl --context workshop get secret iviaadmin -n "${VERIFY_ACCESS_NAMESPACE}" \
         -o jsonpath='{.data.adminpw}' 2>/dev/null | base64 --decode 2>/dev/null || echo "")
@@ -308,7 +308,7 @@ ${insecure_matches}"
 # Dimension D — ACM ARN stability across LE renewal
 check_arn_stable() {
     if [ "${ACME_STATE_LOADED}" != "true" ] || [ -z "${STABLE_ACM_ARN:-}" ]; then
-        print_info "Check pending: arn-stable (requires Wave 4 — STABLE_ACM_ARN recorded in .acme-state by Plan 04 configure-workshop.sh ACME first-sync)"
+        print_info "Check pending: arn-stable (requires Wave 4 — STABLE_ACM_ARN recorded in .acme-state by Plan 04 deploy-workshop.sh ACME first-sync)"
         return
     fi
     if [ -z "${AWS_REGION:-}" ]; then
@@ -331,9 +331,9 @@ check_arn_stable() {
     fi
 }
 
-# Dimension E — idempotency floor (D-12): second configure-workshop.sh run exit 0
+# Dimension E — idempotency floor (D-12): second deploy-workshop.sh run exit 0
 check_idempotent_rerun() {
-    # This check is BEHAVIORAL: it does NOT itself re-run configure-workshop.sh
+    # This check is BEHAVIORAL: it does NOT itself re-run deploy-workshop.sh
     # (that would be ~20+ min, way over the 45s SLA). Instead, after the
     # operator has performed the second run, this check asserts the operator's
     # last-run record (idempotent-rerun marker file written by Plan 04 step)
@@ -341,15 +341,15 @@ check_idempotent_rerun() {
     # check is `print_info pending`.
     marker="${ACME_STATE_FILE%.acme-state}.acme-rerun-marker"
     if [ ! -f "${marker}" ]; then
-        print_info "Check pending: idempotent-rerun (requires Plan 04 configure-workshop.sh second-run marker at ${marker} — operator runs configure-workshop.sh twice; the script writes this marker on the second run with the exit code and re-issuance count)"
+        print_info "Check pending: idempotent-rerun (requires Plan 04 deploy-workshop.sh second-run marker at ${marker} — operator runs deploy-workshop.sh twice; the script writes this marker on the second run with the exit code and re-issuance count)"
         return
     fi
     last_rc=$(grep -E '^EXIT_CODE=' "${marker}" 2>/dev/null | head -1 | cut -d= -f2)
     le_reissue=$(grep -E '^LE_REISSUE_COUNT=' "${marker}" 2>/dev/null | head -1 | cut -d= -f2)
     if [ "${last_rc}" = "0" ] && [ "${le_reissue:-0}" = "0" ]; then
-        print_pass "idempotent-rerun: second configure-workshop.sh run exited 0 with no LE re-issuance (D-12 floor held)"
+        print_pass "idempotent-rerun: second deploy-workshop.sh run exited 0 with no LE re-issuance (D-12 floor held)"
     else
-        print_fail "idempotent-rerun: second configure-workshop.sh run did NOT meet the idempotency floor (exit=${last_rc:-?}, LE reissues=${le_reissue:-?})" \
+        print_fail "idempotent-rerun: second deploy-workshop.sh run did NOT meet the idempotency floor (exit=${last_rc:-?}, LE reissues=${le_reissue:-?})" \
             "D-12 floor violated. Investigate which step is not idempotent on re-run. Check: cat ${marker}"
     fi
 }
@@ -360,9 +360,9 @@ check_skip_acme_honored() {
     # lands in Plan 04. Until Plan 04 adds the body, this check asserts the
     # FLAG WIRING is present (Task 2 contract) — sufficient to prove D-11
     # scaffolding without requiring the full ACME step.
-    cw="${PROJECT_ROOT}/infrastructure/scripts/configure-workshop.sh"
+    cw="${PROJECT_ROOT}/infrastructure/scripts/deploy-workshop.sh"
     if [ ! -f "${cw}" ]; then
-        print_fail "skip-acme-honored: configure-workshop.sh not found at ${cw}" \
+        print_fail "skip-acme-honored: deploy-workshop.sh not found at ${cw}" \
             "This is a hard regression — the script must exist. Check: ls ${cw}"
         return
     fi
@@ -380,7 +380,7 @@ check_skip_acme_honored() {
             # ACM re-import. Marker is written by Plan 04.
             marker="${ACME_STATE_FILE%.acme-state}.acme-rerun-marker"
             if [ ! -f "${marker}" ]; then
-                print_info "Check pending: skip-acme-honored behavioral assertion (requires operator to re-run configure-workshop.sh --skip-acme; Plan 04 writes the rerun marker)"
+                print_info "Check pending: skip-acme-honored behavioral assertion (requires operator to re-run deploy-workshop.sh --skip-acme; Plan 04 writes the rerun marker)"
                 return
             fi
             skip_seen=$(grep -E '^SKIP_ACME_HONORED=' "${marker}" 2>/dev/null | head -1 | cut -d= -f2)
@@ -392,7 +392,7 @@ check_skip_acme_honored() {
             fi
         fi
     else
-        print_fail "skip-acme-honored: --skip-acme flag is NOT fully wired into configure-workshop.sh (initializer=${has_init}, case=${has_case})" \
+        print_fail "skip-acme-honored: --skip-acme flag is NOT fully wired into deploy-workshop.sh (initializer=${has_init}, case=${has_case})" \
             "Add SKIP_ACME=false initializer and --skip-acme) SKIP_ACME=true ;; case branch. Check: grep -n 'SKIP_ACME\\|--skip-acme' ${cw}"
     fi
 }

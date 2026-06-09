@@ -1,12 +1,10 @@
 ################################################################################
-# Root Module — Input Variables
-# Agentic Runtime Security Workshop
-# Migrated from Stacks variables.tfcomponent.hcl → standard Terraform variables.tf
+# Root Module — Input Variables (tier 1, core infrastructure)
 #
-# Removed from Stacks version:
-#   - role_arn (Stacks OIDC auth — attendees use local AWS creds)
-#   - identity_token (Stacks OIDC auth — attendees use local AWS creds)
-#   - ephemeral = true attributes (Stacks-specific syntax)
+# IVIA credentials, the .acme-state path, container image URIs, and
+# bedrock_model_id moved to the tier-2 (infrastructure/services/) and tier-3
+# (infrastructure/workloads/) roots — they are only consumed by the modules
+# that moved there.
 ################################################################################
 
 #-------------------------------------------------------------------------------
@@ -43,7 +41,7 @@ variable "vpc_cidr" {
 
 variable "azs" {
   type        = list(string)
-  description = "List of availability zones for the VPC subnets (3 AZs to match Vault Raft topology in Phase 3)."
+  description = "List of availability zones for the VPC subnets (3 AZs to match Vault Raft topology)."
 }
 
 #-------------------------------------------------------------------------------
@@ -67,7 +65,7 @@ variable "enable_edr" {
 
 variable "audit_retention_days" {
   type        = number
-  description = "CloudWatch log group retention in days for /workshop/* audit log groups (Pitfall R2 mitigation: short retention controls workshop ingestion costs)."
+  description = "CloudWatch log group retention in days for /workshop/* audit log groups."
   default     = 7
 }
 
@@ -82,91 +80,17 @@ variable "rds_instance_class" {
 }
 
 #-------------------------------------------------------------------------------
-# IBM Verify Identity Access (IVIA) Configuration
-#-------------------------------------------------------------------------------
-
-variable "icr_entitlement_key" {
-  type        = string
-  sensitive   = true
-  default     = ""
-  description = "IBM Container Registry entitlement key for pulling IVIA images (icr.io/ivia/ivia-oidc-provider). Attendees obtain from IBM."
-}
-
-variable "ivia_mmfa_push_client_secret" {
-  type        = string
-  sensitive   = true
-  default     = ""
-  description = "VerifyPushCreds API Key for IBM Verify mobile-push (MMFA). For ISVA 10.0.3+ the API Key IS the push provider Client Secret. Stored as the 'ivia-mmfa-push' Secret in 'verify-access'. Leave empty until MMFA is enabled. Supply via gitignored terraform.tfvars."
-}
-
-#-------------------------------------------------------------------------------
-# Phase 07.8 — Attendee-trusted TLS via nip.io + Let's Encrypt
+# Attendee-trusted TLS via nip.io + Let's Encrypt
 # acme_email: Let's Encrypt ACME account contact email. NO default (per project
 #   rule never-hardcode-identity-defaults — identity-bearing inputs are caller-
-#   supplied, never defaulted). Workshop owner / Workshop Studio attendees
-#   provide via terraform.tfvars. Consumed by Plan 03 ClusterIssuer.
-# deploy_id_state_path: relative path (resolved from infrastructure/) to the
-#   local .acme-state file written by Plan 04 configure-workshop.sh ACME step
-#   and read by verify-tls.sh. Gitignored (D-10 no-cross-deploy-cache).
+#   supplied, never defaulted). Consumed by the cert-manager ClusterIssuer in
+#   module.addons. The .acme-state file written by deploy-workshop.sh is read
+#   by the tier-2 services root (IVIA nip.io FQDN), not here.
 #-------------------------------------------------------------------------------
 
 variable "acme_email" {
   type        = string
-  description = "Let's Encrypt ACME account contact email. Required input — per the project's CLAUDE.md identity-fallback rule, this MUST be supplied by the caller via terraform.tfvars; no fallback value is shipped. Consumed by Plan 03 cert-manager ClusterIssuer."
-}
-
-variable "deploy_id_state_path" {
-  type        = string
-  default     = ".acme-state"
-  description = "Relative path (resolved from infrastructure/) to the local .acme-state file. Written by Plan 04 configure-workshop.sh ACME step (DEPLOY_ID, STABLE_ACM_ARN, ALB_IP, NIP_FQDN_WRP, NIP_FQDN_BANKING) and read by verify-tls.sh. Gitignored per D-10."
-}
-
-#-------------------------------------------------------------------------------
-# UC1 Agent Configuration
-# uc1_agent_image: set by attendees after ECR push (Phase 4 lab step).
-# bedrock_model_id: defaults to Nova Pro CRIS profile — no tfvars override needed.
-#-------------------------------------------------------------------------------
-
-variable "uc1_agent_image" {
-  type        = string
-  description = "ECR image URI for the UC1 agent container. Built from infrastructure/modules/uc1_agent/agent/Dockerfile."
-}
-
-variable "bedrock_model_id" {
-  type        = string
-  description = "Bedrock model ID for agent LLM calls. Uses cross-region inference profile."
-  default     = "us.amazon.nova-pro-v1:0"
-}
-
-#-------------------------------------------------------------------------------
-# UC2 Banking App Configuration
-# 3 images: set by attendees after ECR push (Phase 5 lab step).
-# Single ECR repo with :ui, :agent, :mcp tags.
-#-------------------------------------------------------------------------------
-
-variable "banking_app_ui_image" {
-  type        = string
-  description = "ECR image URI for the banking app UI container (tag: ui)."
-}
-
-variable "banking_app_agent_image" {
-  type        = string
-  description = "ECR image URI for the banking app agent container (tag: agent)."
-}
-
-variable "banking_app_mcp_image" {
-  type        = string
-  description = "ECR image URI for the banking app MCP server container (tag: mcp)."
-}
-
-#-------------------------------------------------------------------------------
-# UC3 Agent Configuration
-# uc3_agent_image: set by attendees after ECR push (Phase 6 lab step).
-#-------------------------------------------------------------------------------
-
-variable "uc3_agent_image" {
-  type        = string
-  description = "ECR image URI for the UC3 privileged-action agent container. Built from applications/uc3-agent/Dockerfile."
+  description = "Let's Encrypt ACME account contact email. Required input — no fallback value is shipped (CLAUDE.md identity-fallback rule). Consumed by the cert-manager ClusterIssuer in module.addons."
 }
 
 #-------------------------------------------------------------------------------

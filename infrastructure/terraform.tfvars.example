@@ -1,17 +1,21 @@
 ################################################################################
-# Root Module — Variable Values (EXAMPLE)
+# Tier-1 (core infrastructure) — Variable Values (EXAMPLE)
 # Agentic Runtime Security Workshop
 #
 # USAGE: Copy this file to terraform.tfvars and fill in your values.
 #   cp terraform.tfvars.example terraform.tfvars
 #
 # terraform.tfvars is gitignored (contains account-specific values).
-# This .example file is the committed reference.
+# This .example file is the committed reference. bootstrap.sh copies it to
+# terraform.tfvars as the starting point.
 #
-# SENSITIVE VARIABLES (icr_entitlement_key, simple_ad_admin_password,
-# ivia_mmfa_push_client_secret) are set directly in your local terraform.tfvars
-# (gitignored, never committed).
-# bootstrap.sh copies this file to terraform.tfvars as the starting point.
+# 3-TIER SPLIT (provisioning-order refactor)
+# This root (infrastructure/) provisions core infra ONLY — VPC, EKS, addons,
+# RDS, Bedrock KB, ECR, IAM (incl. Vault IAM/KMS), ACM bootstrap cert, EDR,
+# observability. The Vault server + IVIA (tier 2) and the end-user apps (tier 3)
+# are separate roots with their own terraform.tfvars:
+#   - infrastructure/services/terraform.tfvars  (icr_entitlement_key, ivia_mmfa_push_client_secret)
+#   - infrastructure/workloads/terraform.tfvars (image URIs, bedrock_model_id)
 #
 # CANONICAL REGION CONTRACT
 # The string literals "us-west-2" and "us-east-1" appear ONLY in this file.
@@ -21,12 +25,17 @@
 # Canonical region — every module receives this via var.region.
 region = "us-west-2"
 
-cluster_name = "agentic-runtime-usw2"
+cluster_name = "ars-workshop"
 vpc_cidr     = "10.1.0.0/16"
 azs          = ["us-west-2a", "us-west-2b", "us-west-2c"]
 
 # Bedrock KB region — Nova 2 Multimodal Embeddings is us-east-1 only.
 kb_region = "us-east-1"
+
+# Let's Encrypt account contact email for the cert-manager ClusterIssuer.
+# REQUIRED — the variable has NO default (project rule: never hardcode an
+# identity value as a default). LE uses this for renewal/revocation notices.
+acme_email = "you@example.com"
 
 # Audit retention (workshop ephemeral; 7-day default)
 audit_retention_days = 7
@@ -36,7 +45,7 @@ rds_instance_class = "db.t3.medium"
 
 # Admin kubectl access — set to the IAM user/role ARN for the attendee account.
 # bootstrap.sh auto-resolves this from `aws sts get-caller-identity`.
-admin_principal_arn = "arn:aws:iam::<account-id>:root"
+admin_principal_arn = "arn:aws:iam::<account-id>:role/<your-role>"
 
 tags = {
   Environment = "workshop"
@@ -45,38 +54,6 @@ tags = {
   ManagedBy   = "terraform"
 }
 
-# UC1 Agent image — set after ECR push (build-uc1-agent.sh).
-# Placeholder is fine for initial deploy — deployment will fail to pull but the
-# Kubernetes resources are created. The e2e script updates this automatically.
-uc1_agent_image = "placeholder"
-
-# UC2 Banking App images — set after ECR push (build-banking-app.sh).
-banking_app_ui_image    = "placeholder"
-banking_app_agent_image = "placeholder"
-banking_app_mcp_image   = "placeholder"
-
-# UC2 OAuth redirect URI — set to the banking app ALB hostname after deploy.
-# Example: http://k8s-bankinga-banking-xxxxx.us-west-2.elb.amazonaws.com/callback
-uc2_redirect_uri = "http://localhost:3000/callback"
-
-# IVIA trial certificate filename for Config container module activation (wga, mga, federation).
-# The trial cert is committed in infrastructure/ISAM-Trial-HashiCorp.cer.
-# If expired, obtain a new one from https://isva-trial.verify.ibm.com/ and replace the file.
-ivia_trial_cert = "ISAM-Trial-HashiCorp.cer"
-
-# UC3 Agent image — set after ECR push (build-uc3-agent.sh).
-# Placeholder is fine for initial deploy; the e2e script updates this automatically.
-uc3_agent_image = "ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/uc3-agent:latest"
-
-# IBM Verify mobile-push (MMFA) — VerifyPushCreds API Key (= push provider Client
-# Secret for ISVA 10.0.3+). SENSITIVE: set the real value ONLY in your gitignored
-# terraform.tfvars, never here. Leave empty until Use Case 3 MMFA push is enabled;
-# when empty the 'ivia-mmfa-push' Secret is not created (no-op).
-# ivia_mmfa_push_client_secret = ""
-
-# Phase 07.8 — Let's Encrypt account contact email for the cert-manager
-# ClusterIssuer (Plan 03). REQUIRED — no default, per project rule
-# never-hardcode-identity-defaults. Workshop owner / Workshop Studio attendees
-# supply their own; LE uses this for renewal and revocation notices only.
-# acme_email = "you@example.com"
-
+# EDR (Uptycs KSPM) — deploy k8sosquery DaemonSet + kubequery Deployment for
+# HC-COMPUTE-011 compliance. Values files in modules/edr/values/ are tenant-specific.
+enable_edr = true

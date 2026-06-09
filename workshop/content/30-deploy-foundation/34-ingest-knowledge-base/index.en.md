@@ -3,6 +3,10 @@ title: 'Ingest Knowledge Base'
 weight: 34
 ---
 
+:::alert{header="Already run by deploy-workshop.sh" type="info"}
+Step 14 of `deploy-workshop.sh` (`sync-bedrock-kb.sh`) already triggered this ingestion during the deploy. This page lets you confirm it completed — and re-trigger it if needed. Starting a fresh ingestion job is idempotent: it re-embeds the same corpus and converges.
+:::
+
 The `aws_bedrockagent_data_source` resources create the binding between the KB and the S3 corpus, but they do **not** run the ingestion. Set your KB ID (retrieved in the previous step) and trigger one ingestion job per data source:
 
 ```bash

@@ -69,18 +69,16 @@ terraform -chdir=infrastructure apply
 kubectl get ingress -n verify-access
 ```
 
-Expected — one ALB Ingress addressed. The shared `workshop-acme` IngressGroup also fronts the banking-UI Ingress in the `banking-app` namespace; both share the same ALB hostname so a single Let's Encrypt cert covers both nip.io FQDNs. The `ADDRESS` column will show a hostname of the form `k8s-workshop-acme-<hash>-<num>.<region>.elb.amazonaws.com` (exact value is per-deploy; not captured live in this doc).
+Expected — one ALB Ingress with an `ADDRESS` like `k8s-workshop-acme-<hash>.<region>.elb.amazonaws.com`. The shared `workshop-acme` IngressGroup fronts both this WRP Ingress and the banking-UI Ingress, so one Let's Encrypt cert covers both nip.io FQDNs.
 
-Save the WRP hostname for the next check. The trusted hostname is the **nip.io FQDN** that Let's Encrypt issued the cert for — sourced from `.acme-state` (written by `configure-workshop.sh` Step 4), **not** the raw ALB hostname above:
+The hostname the browser trusts is the **nip.io FQDN** the cert was issued for — read it from `.acme-state`, not the raw ALB hostname:
 
 ```bash
-source infrastructure/.acme-state
-WRP_HOST="$NIP_FQDN_WRP"
-echo "WRP host: $WRP_HOST"
+source infrastructure/.acme-state && WRP_HOST="$NIP_FQDN_WRP" && echo "WRP host: $WRP_HOST"
 ```
 
-:::alert{header="When does the trusted cert appear?" type="info"}
-The `PORTS` column shows `80`, but the ALB also listens on port 443. By this point in the walkthrough you have already run `bash infrastructure/scripts/configure-workshop.sh` (page 31, Step 3). That script's Step 4 (`ACME cert issuance + ACM bootstrap sync`) is what provisions the publicly-trusted Let's Encrypt cert for the nip.io FQDN and imports it into the workshop ACM cert. The trusted hostname the browser and mobile app will validate against is `NIP_FQDN_WRP` recorded in `infrastructure/.acme-state` — **not** the raw `k8s-workshop-acme-*.elb.amazonaws.com` hostname above. If you skipped `configure-workshop.sh` or its Step 4 failed, browser navigation to the raw ALB hostname will show a TLS warning instead of the lock icon — return to page 31 and re-run before continuing.
+:::alert{header="Trusted cert vs. raw ALB" type="info"}
+The browser and mobile app validate against the nip.io FQDN (`NIP_FQDN_WRP`), not the raw `k8s-workshop-acme-*.elb.amazonaws.com` hostname — hitting the raw host shows a TLS warning, which is expected. `deploy-workshop.sh` Step 7 issued that trusted Let's Encrypt cert and wrote `.acme-state`. If Step 7 failed, return to page 31 and re-run.
 :::
 
 ## Step 3 — Confirm OIDC discovery via WRP junction
@@ -105,7 +103,7 @@ Vault and agent workloads reach the OIDC Provider via its ClusterIP service. Ver
 kubectl run oidc-check --image=curlimages/curl --rm -i --restart=Never --quiet -n verify-access -- curl -sk https://iviaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration </dev/null | jq .issuer
 ```
 
-Expected — the **same** canonical issuer Step 3 returned, even though you reached the provider over its internal ClusterIP. The OIDC Provider always advertises the one public WRP issuer, which is exactly what lets Vault validate IVIA-issued tokens against a single `bound_issuer`:
+Expected — the **same** issuer as Step 3, even reached over ClusterIP. The provider always advertises the one public WRP issuer, which lets Vault validate IVIA tokens against a single `bound_issuer`:
 
 ```
 "https://<wrp-alb-hostname>"

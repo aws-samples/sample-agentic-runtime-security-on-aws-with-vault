@@ -10,7 +10,7 @@
 # Run AFTER `terraform apply` (which creates the ECR repositories). The apply
 # provisions the Deployments that reference these images; until the images are
 # pushed those pods sit in ImagePullBackOff. This script populates ECR; the
-# caller (configure-workshop.sh) then rolls the Deployments so they pull.
+# caller (deploy-workshop.sh) then rolls the Deployments so they pull.
 #
 # All images build with --platform linux/amd64 (delegated to the per-component
 # scripts) so ARM Macs produce x86_64 images for the EKS nodes.
@@ -24,13 +24,15 @@
 #   --region VALUE  Override AWS region (default: auto-resolved)
 #
 # Idempotent: re-running rebuilds and re-pushes :latest safely. Exits nonzero
-# if any component build fails (so configure-workshop.sh marks the step failed).
+# if any component build fails (so deploy-workshop.sh marks the step failed).
 #===============================================================================
 
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Suppress the common-checks EXIT trap — build-images emits its own summary.
+# shellcheck disable=SC2034
 COMMON_CHECKS_SUMMARY=0
 # shellcheck source=common-checks.sh
 source "${SCRIPT_DIR}/common-checks.sh"

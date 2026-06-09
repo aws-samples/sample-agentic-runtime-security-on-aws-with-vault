@@ -14,7 +14,7 @@ uc3-agent-* containers ─────▶  /workshop/agent-trace   ────�
 
 fluent-bit runs as a DaemonSet on every EKS node, tails `/var/log/containers/*.log`, and routes structured JSON to the three pre-created `/workshop/*` CloudWatch log groups (owned by the `audit` module). CloudWatch subscription filters forward each log group to a dedicated Kinesis Data Firehose delivery stream. Each stream delivers to an S3 prefix with date-partitioned keys.
 
-Glue catalog tables layer an external schema over the S3 prefixes, enabling Athena SQL. The `audit_correlation` VIEW (created via the stored named query) joins all four log planes on the W3C `traceparent` `request_id`.
+Glue catalog tables layer an external schema over the S3 prefixes, enabling Athena SQL. The `audit_correlation` VIEW joins three planes — `ivia_decisions`, `vault_audit`, and `pgaudit_logs` — on the shared `request_id`. Its DDL is stored as a named query and executed automatically at apply by `null_resource.audit_correlation_view`, so the view exists before any attendee reaches the Use Case 3 audit page.
 
 ## Components
 
@@ -22,17 +22,20 @@ Glue catalog tables layer an external schema over the S3 prefixes, enabling Athe
 |---|---|---|
 | `helm_release.fluent_bit` | Helm (aws-for-fluent-bit) | Routes pod logs to CloudWatch |
 | `aws_eks_pod_identity_association.fluent_bit` | Pod Identity | CloudWatch write permissions for fluent-bit SA |
+| `time_sleep.fluent_bit_pod_identity_propagate` | time (30s) | Barrier: lets the Pod Identity association propagate to the admission webhook before fluent-bit pods are admitted |
 | `aws_s3_bucket.logs` | S3 | Log export destination with 30-day lifecycle |
 | `aws_kinesis_firehose_delivery_stream.*` | Firehose (×3) | Near-real-time delivery to S3 |
 | `aws_cloudwatch_log_subscription_filter.*` | CW Subscription (×3) | Fan-out: log group → Firehose |
-| `aws_glue_catalog_table.*` | Glue (×4) | Schema for vault_audit, ivia_decisions, agent_traces, cloudtrail_events |
-| `aws_athena_named_query.audit_correlation_view` | Athena | CREATE OR REPLACE VIEW DDL for attendees |
+| `aws_glue_catalog_table.*` | Glue (×4) | Schema for vault_audit, ivia_decisions, agent_traces, pgaudit_logs |
+| `aws_athena_named_query.audit_correlation_view` | Athena | Stores the CREATE OR REPLACE VIEW DDL (console/manual fallback + verify-uc3.sh) |
+| `null_resource.audit_correlation_view` | local-exec | Executes the stored DDL at apply so the view exists automatically |
 
 ## Design Decisions
 
 - **auto_create_group = false** in fluent-bit config — log group lifecycle is owned by the `audit` module (prevents orphan resources on destroy).
 - **Pod Identity over IRSA** — consistent with workshop EKS identity pattern (Phase 2 managed addons, Phase 3 Vault).
-- **Athena VIEW as named query** — avoids `null_resource`/`local-exec` dependency on Athena at apply time; attendees execute it as a lab step.
+- **30s Pod Identity propagation barrier** — `time_sleep.fluent_bit_pod_identity_propagate` gates `helm_release.fluent_bit` on the association. The EKS Pod Identity admission webhook must observe the association before a fluent-bit pod is admitted; `depends_on` orders only the API call, not webhook propagation. Without the barrier the pod can be admitted ~4s after the association is written, gets no `AWS_*` creds, falls back to the node role, and is `AccessDenied` on `/workshop/*` — leaving `vault_audit` (and the `audit_correlation` VIEW) empty. Mirrors the `time_sleep` barriers in `bedrock_kb_aoss` and `addons`.
+- **Athena VIEW auto-created at apply** — `null_resource.audit_correlation_view` runs the stored `CREATE OR REPLACE VIEW` DDL during the tier-1 apply (`deploy-workshop.sh` Step 1), in the deployer's Athena-permissioned context, so the view exists before attendees query it. The named query retains the same DDL as a console/manual fallback and for `verify-uc3.sh`.
 - **30-day S3 lifecycle** — workshop ephemeral cost control; Firehose buffering set to 60s/5MB for near-real-time availability.
 - **JSON SerDe with `ignore.malformed.json = TRUE`** — tolerates startup noise and partial log lines without breaking Athena queries.
 

@@ -6,16 +6,20 @@
 # Uses local Terraform state (no remote backend required).
 #
 #   Phase 0: Prerequisites (calls check-prerequisites.sh)
-#   Phase 1: Bootstrap (calls bootstrap.sh — EC2 Spot SLR + terraform.tfvars)
-#   Phase 2: Foundation deploy (local terraform apply)
+#   Phase 1: Bootstrap (calls bootstrap.sh — EC2 Spot SLR + terraform.tfvars, 3 roots)
+#   Phase 2: Full workshop deploy (calls deploy-workshop.sh — tier-1 → tier-2 →
+#            tier-3 + ACME + Vault + IVIA + DB seed + KB ingest)
 #   Phase 3: Configure kubectl
 #   Phase 4: Foundation verify (calls test-foundation.sh — EKS + RDS + Bedrock KB + OpenLDAP)
 #   Phase 5: Identity (IVIA) — verify IVIA pods + OIDC discovery
-#   Phase 6: Vault — init + configure (local via port-forward)
-#   Phase 7a: Use Case 1 — Non-Personalized Read-Only (build images, deploy, verify)
-#   Phase 7b: Use Case 2 — OAuth Personalized Read-Only (build images, deploy, configure, verify)
-#   Phase 7c: Use Case 3 — CIBA Privileged (build+push, deploy, verify, bypass test)
+#   Phase 6: Vault — verify (calls test-vault-verify.sh)
+#   Phase 7a: Use Case 1 — Non-Personalized Read-Only (verify-uc1.sh)
+#   Phase 7b: Use Case 2 — OAuth Personalized Read-Only (verify-uc2.sh)
+#   Phase 7c: Use Case 3 — CIBA Privileged (verify-uc3.sh + bypass test)
 #   Phase 8: Teardown (calls teardown.sh — unless --skip-teardown)
+#
+# Phases 4-7 are verify-only: Phase 2 (deploy-workshop.sh) owns every image
+# build, terraform apply, and post-deploy configuration step.
 #
 # Usage: ./workshop-e2e.sh [OPTIONS]
 #
@@ -353,34 +357,36 @@ phase_bootstrap() {
 }
 
 #===============================================================================
-# PHASE 2: Foundation Deploy
+# PHASE 2: Full Workshop Deploy (3-tier, owned by deploy-workshop.sh)
+#
+# The provisioning-order refactor makes deploy-workshop.sh the single
+# full-deploy entry point: it applies tier-1 (core infra) → tier-2 (Vault +
+# IVIA) → tier-3 (uc1/uc2/uc3 apps) in dependency order, building images, issuing
+# the ACME cert, configuring Vault/IVIA, seeding the DB, and ingesting the KB.
+# This phase no longer runs its own `terraform apply` against infrastructure/ —
+# that root is tier-1-only now and deploy-workshop.sh owns every tier apply.
 #===============================================================================
 phase_deploy_foundation() {
-    phase_header "Phase 2: Foundation Deploy (EKS + RDS + Bedrock KB)"
+    phase_header "Phase 2: Full Workshop Deploy (3-tier via deploy-workshop.sh)"
 
     if [ "$DRY_RUN" = true ]; then
         print_info "[DRY-RUN] Would sweep orphan TargetGroupBindings (Phase 07.8 IngressGroup transition)"
-        print_info "[DRY-RUN] Would run: terraform -chdir=infrastructure apply -auto-approve"
-        print_info "[DRY-RUN] Would call configure-workshop.sh after apply completes"
+        print_info "[DRY-RUN] Would run: deploy-workshop.sh (tier-1 → tier-2 → tier-3 + config)"
         print_info "[DRY-RUN] Would call verify-tls.sh as a strict Phase 2 trusted-cert gate (Phase 07.8)"
         return 0
     fi
 
-    step_header "Running terraform init..."
-    terraform -chdir="$PROJECT_ROOT/infrastructure" init -upgrade || {
-        print_error "Terraform init failed."
-        exit 1
-    }
-
-    # Phase 07.8 transition gate — sweep orphan TargetGroupBindings before apply.
-    # When an Ingress's alb.ingress.kubernetes.io/group.name annotation changes,
-    # AWS Load Balancer Controller creates new TargetGroupBindings + TGs + ALB
-    # but does NOT garbage-collect the old TGBs. The old TGBs keep the old ALB
-    # alive, which keeps the old DNS-validated ACM cert attached, which blocks
+    # Phase 07.8 transition gate — sweep orphan TargetGroupBindings before the
+    # tier-1 apply (run by deploy-workshop.sh Step 1). When an Ingress's
+    # alb.ingress.kubernetes.io/group.name annotation changes, AWS Load Balancer
+    # Controller creates new TargetGroupBindings + TGs + ALB but does NOT
+    # garbage-collect the old TGBs. The old TGBs keep the old ALB alive, which
+    # keeps the old DNS-validated ACM cert attached, which blocks
     # `aws_acm_certificate.wrp_public` destroy with ResourceInUseException.
     # Sweep deletes any TGB whose backing ALB hostname differs from its parent
     # Ingress's current load-balancer hostname, then waits for LBC to GC the
-    # now-empty ALB so the cert destroy can proceed.
+    # now-empty ALB so the cert destroy can proceed. No-op on a fresh deploy
+    # (cluster does not exist yet).
     step_header "Sweeping orphan TargetGroupBindings (Phase 07.8 IngressGroup transition)..."
     _sweep_orphan_tgbs
     if [ "${ORPHAN_TGBS_SWEPT:-0}" -gt 0 ]; then
@@ -388,20 +394,16 @@ phase_deploy_foundation() {
         sleep 90
     fi
 
-    step_header "Running terraform apply..."
-    terraform -chdir="$PROJECT_ROOT/infrastructure" apply -auto-approve || {
-        print_error "Foundation deploy failed. Check terraform output above."
-        exit 1
-    }
-    print_success "Foundation infrastructure deployed"
-
-    # Call configure-workshop.sh after apply completes
-    step_header "Running post-deploy configuration (configure-workshop.sh)..."
-    bash "$SCRIPT_DIR/configure-workshop.sh" \
+    # Full 3-tier deploy + post-deploy configuration. Fatal on failure — this IS
+    # the deploy, not a post-apply afterthought.
+    step_header "Running deploy-workshop.sh (full 3-tier deploy)..."
+    bash "$SCRIPT_DIR/deploy-workshop.sh" \
         --region "$WORKSHOP_REGION" \
         --cluster-name "$CLUSTER_NAME" || {
-        print_warn "configure-workshop.sh reported failures — see above for details"
+        print_error "deploy-workshop.sh failed — workshop not fully deployed. See above for the failing step."
+        exit 1
     }
+    print_success "Workshop fully deployed (tier-1 + tier-2 + tier-3 + config)"
 
     # Phase 07.8 — strict trusted-cert gate. verify-tls.sh is wave-aware: pending
     # preconditions emit info notices and exit 0; a check failing AFTER its
@@ -501,38 +503,18 @@ phase_verify_foundation() {
 # PHASE 5: Identity (IVIA) — verify full IVIA stack (OIDC Provider + Config + Runtime + WRP)
 #===============================================================================
 phase_identity() {
-    phase_header "Phase 5: Identity (IVIA)"
+    phase_header "Phase 5: Identity (IVIA) — verify"
 
+    # The IVIA stack (module.ivia, tier-2) is applied by deploy-workshop.sh
+    # Step 5, re-applied on nip.io + WRP/runtime restarted in Step 7, and its
+    # OIDC discovery exit gate run in Step 9. This phase is verify-only:
+    # confirm the 7 deployments are Ready and OIDC discovery still resolves.
     if [ "$DRY_RUN" = true ]; then
-        print_info "[DRY-RUN] Would terraform apply -target=module.ivia, then kubectl rollout restart deploy/iviawrprp1, then ivia-configure.sh"
+        print_info "[DRY-RUN] Would verify IVIA deployments Ready + run ivia-configure.sh OIDC exit gate"
         return 0
     fi
 
     local ivia_ns="verify-access"
-
-    # Verify trial cert is in its Phase 7 location
-    local trial_cert="$PROJECT_ROOT/infrastructure/modules/verify_access/base_layer/ISAM-Trial-HashiCorp.cer"
-    if [ ! -f "${trial_cert}" ]; then
-        print_error "IVIA trial cert not found at ${trial_cert} — obtain from https://isva-trial.verify.ibm.com/ and place at that path"
-        return 1
-    fi
-
-    # Apply only the verify_access module (and its transitive deps).
-    step_header "terraform apply -target=module.ivia"
-    (
-        cd "$PROJECT_ROOT/infrastructure"
-        terraform apply -target=module.ivia -auto-approve
-    ) || { print_error "terraform apply -target=module.ivia failed"; return 1; }
-
-    # The kubernetes_job_v1.ivia_autoconf inside module.ivia uses
-    # wait_for_completion=true, so the apply above already blocked until
-    # autoconf finished. Now restart WRP to clear stale snapshot backoff
-    # (RESEARCH Pitfall 6, sibling-locked post-step).
-    step_header "kubectl rollout restart deploy/iviawrprp1 (post-autoconf snapshot reload)"
-    kubectl rollout restart deploy/iviawrprp1 -n "${ivia_ns}" \
-        || { print_error "rollout restart deploy/iviawrprp1 failed"; return 1; }
-    kubectl rollout status deploy/iviawrprp1 -n "${ivia_ns}" --timeout=300s \
-        || { print_error "WRP did not become Ready within 5min post-restart"; return 1; }
 
     # Verify the 7 deployments by app label (Phase 7 uses `app:` keys, not
     # `app.kubernetes.io/name:`).
@@ -547,7 +529,7 @@ phase_identity() {
         fi
     done
 
-    # Exit gate — OIDC discovery via WRP exec.
+    # Exit gate — OIDC discovery via WRP exec (idempotent re-run of Step 9 gate).
     step_header "OIDC discovery exit gate"
     bash "$SCRIPT_DIR/ivia-configure.sh" \
         || { print_error "ivia-configure.sh failed — exit gate not met"; return 1; }
@@ -562,26 +544,16 @@ phase_identity() {
 # Step 3: test-vault-verify.sh — verify pods, seal status, Raft peers, audit
 #===============================================================================
 phase_vault() {
-    phase_header "Phase 6: Vault"
+    phase_header "Phase 6: Vault — verify"
 
+    # Vault is initialized (Step 6) and configured (Step 8) by
+    # deploy-workshop.sh. This phase is verify-only: run test-vault-verify.sh
+    # to confirm pods, seal status, Raft peers, audit device, and auth methods.
     if [ "$DRY_RUN" = true ]; then
-        print_info "[DRY-RUN] Would run: vault-init.sh"
-        print_info "[DRY-RUN] Would run: vault-configure.sh"
-        print_info "[DRY-RUN] Would run: test-vault-verify.sh"
+        print_info "[DRY-RUN] Would run: test-vault-verify.sh (init/configure owned by deploy-workshop.sh)"
         return 0
     fi
 
-    # Step 1: Initialize Vault
-    step_header "Initializing Vault..."
-    bash "$SCRIPT_DIR/vault-init.sh" \
-        || { print_error "vault-init.sh failed"; return 1; }
-
-    # Step 2: Configure Vault + IVIA (local terraform apply via port-forward)
-    step_header "Configuring Vault + IVIA (local port-forward)..."
-    bash "$SCRIPT_DIR/vault-configure.sh" --skip-ivia \
-        || print_warn "vault-configure.sh reported failures (see above)"
-
-    # Step 3: Verify Vault
     step_header "Verifying Vault configuration..."
     bash "$SCRIPT_DIR/test-vault-verify.sh" \
         || print_warn "Vault verification reported failures (see above)"
@@ -593,93 +565,16 @@ phase_vault() {
 # PHASE 7a: Use Case 1 — Non-Personalized Read-Only
 #===============================================================================
 phase_uc1() {
-    phase_header "Phase 7a: Use Case 1 — Non-Personalized Read-Only"
+    phase_header "Phase 7a: Use Case 1 — Non-Personalized Read-Only (verify)"
 
+    # Build + deploy + KB ingest are owned by deploy-workshop.sh (Phase 2):
+    # Step 3 builds/pushes all images, Step 10 applies tier-3 (uc1-agent),
+    # Step 14 ingests the Bedrock KB corpus. This phase is verify-only.
     if [ "$DRY_RUN" = true ]; then
-        print_info "[DRY-RUN] Would build+push UC1 agent image (build-uc1-agent.sh)"
-        print_info "[DRY-RUN] Would update uc1_agent_image in terraform.tfvars"
-        print_info "[DRY-RUN] Would run terraform apply, ingest KB (sync-bedrock-kb.sh), then verify-uc1.sh"
+        print_info "[DRY-RUN] Would run verify-uc1.sh (build/deploy/KB owned by deploy-workshop.sh)"
         return 0
     fi
 
-    # Step 1: Build + push UC1 agent image
-    step_header "Building and pushing UC1 agent image..."
-    bash "$SCRIPT_DIR/build-uc1-agent.sh" \
-        --region "$WORKSHOP_REGION" || {
-        print_error "build-uc1-agent.sh failed"
-        return 1
-    }
-    print_success "UC1 agent image built and pushed to ECR"
-    pause_if_interactive "UC1 agent image pushed to ECR. Verify in AWS Console before continuing."
-
-    # Step 2: Resolve ECR URI and update terraform.tfvars
-    local account_id
-    account_id=$(aws sts get-caller-identity --query 'Account' --output text 2>/dev/null)
-    local ecr_uri="${account_id}.dkr.ecr.${WORKSHOP_REGION}.amazonaws.com/workshop/uc1-agent:latest"
-
-    step_header "Updating uc1_agent_image in terraform.tfvars..."
-    local deploy_file="$PROJECT_ROOT/infrastructure/terraform.tfvars"
-    local current_image
-    current_image=$(grep 'uc1_agent_image' "$deploy_file" 2>/dev/null | sed -E 's/.*"([^"]+)".*/\1/')
-
-    if [ "$current_image" = "$ecr_uri" ]; then
-        print_info "uc1_agent_image already set to $ecr_uri"
-    elif [ -n "$current_image" ]; then
-        sed -i.bak "s|uc1_agent_image *= *\"[^\"]*\"|uc1_agent_image = \"${ecr_uri}\"|" "$deploy_file"
-        rm -f "${deploy_file}.bak"
-        print_success "uc1_agent_image = $ecr_uri"
-    else
-        echo "uc1_agent_image = \"${ecr_uri}\"" >> "$deploy_file"
-        print_success "uc1_agent_image = $ecr_uri (appended)"
-    fi
-
-    # Step 3: Terraform apply
-    step_header "Running terraform apply for UC1 deployment..."
-    terraform -chdir="$PROJECT_ROOT/infrastructure" apply -auto-approve || {
-        print_error "UC1 terraform apply failed"
-        return 1
-    }
-    print_success "UC1 agent deployed via terraform apply"
-
-    # Rollout restart to pick up new image (tag :latest may be cached by kubelet)
-    step_header "Restarting UC1 deployment to pull latest image..."
-    kubectl rollout restart deployment/uc1-agent -n uc1 2>/dev/null || true
-    pause_if_interactive "Deployment restarted. Waiting for pod to become ready."
-
-    # Step 4: Wait for pod readiness
-    step_header "Waiting for UC1 agent pod to be ready..."
-    local uc1_ready=false
-    local wait_elapsed=0
-    while [ $wait_elapsed -lt 120 ]; do
-        if kubectl get pods -n uc1 -l app=uc1-agent --no-headers 2>/dev/null | grep -q Running; then
-            uc1_ready=true
-            break
-        fi
-        sleep 10
-        wait_elapsed=$((wait_elapsed + 10))
-        if [ $((wait_elapsed % 30)) -eq 0 ]; then
-            print_info "Waiting for UC1 pod (${wait_elapsed}s/120s)..."
-        fi
-    done
-
-    if [ "$uc1_ready" = true ]; then
-        print_success "UC1 agent pod is Running"
-    else
-        print_warn "UC1 agent pod not Running after 120s — verify-uc1.sh will report details"
-    fi
-
-    # Step 5: Ingest the Bedrock Knowledge Base corpus.
-    # Creating the KB data sources (Terraform) does NOT embed the S3 corpus into
-    # the vector index — an explicit ingestion job is required, or the agent's
-    # retrieve_from_knowledge_base tool returns zero passages. Idempotent.
-    step_header "Ingesting Bedrock Knowledge Base corpus (sync-bedrock-kb.sh)..."
-    bash "$SCRIPT_DIR/sync-bedrock-kb.sh" || {
-        print_error "sync-bedrock-kb.sh failed — KB will be empty and verify-uc1 Check 9 will fail"
-        return 1
-    }
-    print_success "Knowledge Base corpus ingested"
-
-    # Step 6: Verify
     pause_if_interactive "About to verify UC1 deployment"
     bash "$SCRIPT_DIR/verify-uc1.sh" 2>&1 || print_warn "UC1 verification had warnings"
     print_success "UC1 verification complete"
@@ -689,109 +584,17 @@ phase_uc1() {
 # PHASE 7b: Use Case 2 — OAuth Personalized Read-Only
 #===============================================================================
 phase_uc2() {
-    phase_header "Phase 7b: Use Case 2 — OAuth Personalized Read-Only"
+    phase_header "Phase 7b: Use Case 2 — OAuth Personalized Read-Only (verify)"
 
+    # Build + deploy are owned by deploy-workshop.sh (Phase 2): Step 3 builds/
+    # pushes the banking UI/agent/MCP images, Step 10 applies tier-3 + rolls them,
+    # Step 11 reconciles the iviaop agent-uc2 redirect_uri, Step 13 seeds the DB.
+    # This phase is verify-only.
     if [ "$DRY_RUN" = true ]; then
-        print_info "[DRY-RUN] Would build+push banking app images (UI, Agent, MCP Server)"
-        print_info "[DRY-RUN] Would update banking_app_*_image in terraform.tfvars"
-        print_info "[DRY-RUN] Would run terraform apply for UC2 deployment"
-        print_info "[DRY-RUN] Would wait for banking-app pods to be ready"
-        print_info "[DRY-RUN] Would run verify-uc2.sh"
+        print_info "[DRY-RUN] Would run verify-uc2.sh (build/deploy owned by deploy-workshop.sh)"
         return 0
     fi
 
-    # Step 1: Build + push banking app images
-    step_header "Building and pushing banking app images..."
-    bash "$SCRIPT_DIR/build-banking-app.sh" \
-        --region "$WORKSHOP_REGION" || {
-        print_error "build-banking-app.sh failed"
-        return 1
-    }
-    print_success "Banking app images built and pushed to ECR"
-    pause_if_interactive "Banking app images pushed to ECR. Verify in AWS Console before continuing."
-
-    # Step 2: Resolve ECR URIs and update terraform.tfvars
-    step_header "Resolving banking app ECR image URIs..."
-    local account_id
-    account_id=$(aws sts get-caller-identity --query 'Account' --output text 2>/dev/null)
-    local ecr_base="${account_id}.dkr.ecr.${WORKSHOP_REGION}.amazonaws.com/workshop-banking-app"
-    local ui_image="${ecr_base}:ui"
-    local agent_image="${ecr_base}:agent"
-    local mcp_image="${ecr_base}:mcp"
-
-    local deploy_file="$PROJECT_ROOT/infrastructure/terraform.tfvars"
-
-    for var_name in banking_app_ui_image banking_app_agent_image banking_app_mcp_image; do
-        local var_image=""
-        case "$var_name" in
-            banking_app_ui_image)    var_image="$ui_image" ;;
-            banking_app_agent_image) var_image="$agent_image" ;;
-            banking_app_mcp_image)   var_image="$mcp_image" ;;
-        esac
-        local current_val
-        current_val=$(grep "${var_name}" "$deploy_file" 2>/dev/null | sed -E 's/.*"([^"]+)".*/\1/')
-        if [ "$current_val" = "$var_image" ]; then
-            print_info "${var_name} already set to ${var_image}"
-        elif [ -n "$current_val" ]; then
-            sed -i.bak "s|${var_name}[[:space:]]*=[[:space:]]*\"[^\"]*\"|${var_name} = \"${var_image}\"|" "$deploy_file"
-            rm -f "${deploy_file}.bak"
-            print_success "${var_name} = ${var_image}"
-        else
-            echo "${var_name} = \"${var_image}\"" >> "$deploy_file"
-            print_success "${var_name} = ${var_image} (appended)"
-        fi
-    done
-
-    # Step 3: Terraform apply
-    step_header "Running terraform apply for UC2 deployment..."
-    terraform -chdir="$PROJECT_ROOT/infrastructure" apply -auto-approve || {
-        print_error "UC2 terraform apply failed"
-        return 1
-    }
-    print_success "UC2 banking app deployed via terraform apply"
-    pause_if_interactive "Terraform apply complete. Verify uc2 resources before continuing."
-
-    # Rollout restart to pick up new images (tag may be cached by kubelet)
-    step_header "Restarting banking-app deployments to pull latest images..."
-    kubectl rollout restart deployment/banking-ui -n banking-app 2>/dev/null || true
-    kubectl rollout restart deployment/banking-agent -n banking-app 2>/dev/null || true
-    kubectl rollout restart deployment/banking-mcp-server -n banking-app 2>/dev/null || true
-    pause_if_interactive "Deployments restarted. Waiting for pods to become ready."
-
-    # Step 4: Wait for all banking-app pods to be ready
-    step_header "Waiting for banking-app pods to be ready..."
-    local pods_ready=false
-    local wait_elapsed=0
-    while [ $wait_elapsed -lt 180 ]; do
-        local ui_running agent_running mcp_running
-        ui_running=$(kubectl get pods -n banking-app -l app=banking-ui \
-            --no-headers 2>/dev/null | grep -c Running || true)
-        agent_running=$(kubectl get pods -n banking-app -l app=banking-agent \
-            --no-headers 2>/dev/null | grep -c Running || true)
-        mcp_running=$(kubectl get pods -n banking-app -l app=banking-mcp-server \
-            --no-headers 2>/dev/null | grep -c Running || true)
-
-        if [ "${ui_running:-0}" -ge 1 ] && \
-           [ "${agent_running:-0}" -ge 1 ] && \
-           [ "${mcp_running:-0}" -ge 1 ]; then
-            pods_ready=true
-            break
-        fi
-        sleep 15
-        wait_elapsed=$((wait_elapsed + 15))
-        if [ $((wait_elapsed % 45)) -eq 0 ]; then
-            print_info "Waiting for banking-app pods (${wait_elapsed}s/180s)..."
-        fi
-    done
-
-    if [ "$pods_ready" = true ]; then
-        print_success "All banking-app pods are Running (ui + agent + mcp-server)"
-    else
-        print_warn "Some banking-app pods not Running after 180s — verify-uc2.sh will report details"
-    fi
-    pause_if_interactive "Pods ready. Verify with 'kubectl get pods -n banking-app' before continuing."
-
-    # Step 5: Run verify-uc2.sh
     pause_if_interactive "About to verify UC2 deployment"
     bash "$SCRIPT_DIR/verify-uc2.sh" 2>&1 || print_warn "UC2 verification had warnings"
     print_success "UC2 verification complete"
@@ -801,113 +604,24 @@ phase_uc2() {
 # PHASE 7c: Use Case 3 — CIBA Privileged
 #===============================================================================
 phase_uc3() {
-    phase_header "Phase 7c: Use Case 3 — CIBA Privileged"
+    phase_header "Phase 7c: Use Case 3 — CIBA Privileged (verify)"
 
+    # Build + deploy are owned by deploy-workshop.sh (Phase 2): Step 3 builds/
+    # pushes the uc3-agent image, Step 10 applies tier-3 + rolls uc3-agent, and
+    # Step 13 seeds the DB (seed.sql creates banking.refunds up-front). The
+    # observability plane (fluent-bit DaemonSet, Firehose) is tier-1. This phase
+    # is verify-only: the normal CIBA chain plus the forged-JWT bypass test.
     if [ "$DRY_RUN" = true ]; then
-        print_info "[DRY-RUN] Would build+push UC3 agent image (build-uc3-agent.sh)"
-        print_info "[DRY-RUN] Would update uc3_agent_image in terraform.tfvars"
-        print_info "[DRY-RUN] Would run terraform apply for UC3 + observability modules"
-        print_info "[DRY-RUN] Would wait for uc3-agent deployment rollout"
-        print_info "[DRY-RUN] Would wait for fluent-bit DaemonSet rollout"
-        print_info "[DRY-RUN] Would run verify-uc3.sh (normal + bypass)"
+        print_info "[DRY-RUN] Would run verify-uc3.sh normal + --bypass (build/deploy owned by deploy-workshop.sh)"
         return 0
     fi
 
-    # Step 1: Build + push UC3 agent image
-    step_header "Building and pushing UC3 agent image..."
-    bash "$SCRIPT_DIR/build-uc3-agent.sh" \
-        --region "$WORKSHOP_REGION" || {
-        print_error "build-uc3-agent.sh failed"
-        return 1
-    }
-    print_success "UC3 agent image built and pushed to ECR"
-    pause_if_interactive "UC3 agent image pushed to ECR. Verify in AWS Console before continuing."
-
-    # Step 2: Resolve ECR URI and update terraform.tfvars
-    local account_id
-    account_id=$(aws sts get-caller-identity --query 'Account' --output text 2>/dev/null)
-    local ecr_uri="${account_id}.dkr.ecr.${WORKSHOP_REGION}.amazonaws.com/workshop/uc3-agent:latest"
-
-    step_header "Updating uc3_agent_image in terraform.tfvars..."
-    local deploy_file="$PROJECT_ROOT/infrastructure/terraform.tfvars"
-    local current_image
-    current_image=$(grep 'uc3_agent_image' "$deploy_file" 2>/dev/null | sed -E 's/.*"([^"]+)".*/\1/')
-    if [ "$current_image" = "$ecr_uri" ]; then
-        print_info "uc3_agent_image already set to $ecr_uri"
-    elif [ -n "$current_image" ]; then
-        sed -i.bak "s|uc3_agent_image *= *\"[^\"]*\"|uc3_agent_image = \"${ecr_uri}\"|" "$deploy_file"
-        rm -f "${deploy_file}.bak"
-        print_success "uc3_agent_image = $ecr_uri"
-    else
-        echo "uc3_agent_image = \"${ecr_uri}\"" >> "$deploy_file"
-        print_success "uc3_agent_image = $ecr_uri (appended)"
-    fi
-
-    # Step 3: Init (new modules) + apply
-    step_header "Running terraform init for new UC3 + observability modules..."
-    terraform -chdir="$PROJECT_ROOT/infrastructure" init -upgrade || {
-        print_error "UC3 terraform init failed"
-        return 1
-    }
-
-    step_header "Running terraform apply for UC3 + observability deployment..."
-    terraform -chdir="$PROJECT_ROOT/infrastructure" apply -auto-approve || {
-        print_error "UC3 terraform apply failed"
-        return 1
-    }
-    print_success "UC3 agent and observability deployed via terraform apply"
-    pause_if_interactive "Terraform apply complete. Verify uc3 + observability resources before continuing."
-
-    # Step 3b: Ensure banking.refunds table exists in RDS
-    step_header "Ensuring banking.refunds table exists..."
-    local rds_secret_arn
-    rds_secret_arn=$(aws rds describe-db-instances --region "$WORKSHOP_REGION" \
-        --query "DBInstances[?DBInstanceIdentifier=='${CLUSTER_NAME}-pg'].MasterUserSecret.SecretArn | [0]" \
-        --output text 2>/dev/null)
-    if [ -n "$rds_secret_arn" ] && [ "$rds_secret_arn" != "None" ]; then
-        local rds_pass rds_host
-        rds_pass=$(aws secretsmanager get-secret-value --secret-id "$rds_secret_arn" \
-            --region "$WORKSHOP_REGION" --query 'SecretString' --output text 2>/dev/null | jq -r '.password')
-        rds_host=$(aws rds describe-db-instances --region "$WORKSHOP_REGION" \
-            --query "DBInstances[?DBInstanceIdentifier=='${CLUSTER_NAME}-pg'].Endpoint.Address | [0]" \
-            --output text 2>/dev/null)
-        kubectl run psql-refunds-$$ --rm -i --restart=Never -n banking-app \
-            --image=postgres:16-alpine \
-            --env="PGPASSWORD=$rds_pass" \
-            -- psql "postgresql://vault_root@${rds_host}:5432/workshop?sslmode=require" \
-            -c "CREATE TABLE IF NOT EXISTS banking.refunds (
-                refund_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                account_id UUID NOT NULL REFERENCES banking.accounts(id),
-                transaction_id UUID NOT NULL REFERENCES banking.transactions(id),
-                amount DECIMAL(12,2) NOT NULL,
-                currency VARCHAR(3) NOT NULL DEFAULT 'USD',
-                approved_by VARCHAR(255) NOT NULL,
-                request_id UUID NOT NULL,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            );" &>/dev/null && print_success "banking.refunds table ready" \
-            || print_warn "Could not create banking.refunds table — may already exist"
-    else
-        print_warn "Could not find RDS secret ARN — skipping refunds table creation"
-    fi
-
-    # Step 4: Wait for UC3 agent deployment rollout
-    step_header "Waiting for UC3 agent deployment rollout..."
-    kubectl rollout status deployment/uc3-agent -n banking-app --timeout=300s 2>/dev/null || {
-        print_warn "UC3 agent rollout timed out — verify-uc3.sh will report details"
-    }
-
-    # Step 5: Wait for fluent-bit DaemonSet
-    step_header "Waiting for fluent-bit DaemonSet rollout..."
-    kubectl rollout status daemonset/aws-for-fluent-bit -n logging --timeout=120s 2>/dev/null || {
-        print_warn "fluent-bit DaemonSet rollout timed out — check: kubectl get pods -n logging"
-    }
-
-    # Step 6: Run UC3 verification
+    # Step 1: Run UC3 verification (normal CIBA chain)
     pause_if_interactive "About to verify UC3 deployment"
     bash "$SCRIPT_DIR/verify-uc3.sh" 2>&1 || print_warn "UC3 verification had warnings"
     print_success "UC3 verification complete"
 
-    # Step 7: Run bypass test
+    # Step 2: Run bypass test (forged JWT rejection)
     pause_if_interactive "About to run UC3 bypass test (forged JWT rejection)"
     bash "$SCRIPT_DIR/verify-uc3.sh" --bypass 2>&1 || print_warn "UC3 bypass test had warnings"
     print_success "UC3 bypass test complete"
@@ -941,6 +655,11 @@ phase_observability() {
             all_cw_ok=false
         fi
     done
+    if [ "$all_cw_ok" = true ]; then
+        print_success "All 3 CloudWatch log groups have streams"
+    else
+        print_warn "One or more CloudWatch log groups have no streams yet (fluent-bit may still be warming up)"
+    fi
 
     # Step 2: Verify fluent-bit DaemonSet is healthy
     step_header "Verifying fluent-bit DaemonSet..."
@@ -1202,10 +921,20 @@ phase_nuke() {
     fi
 
     if [ "$cluster_active" = true ]; then
-        step_header "Running terraform destroy..."
-        terraform -chdir="$PROJECT_ROOT/infrastructure" destroy -auto-approve || {
-            print_warn "Terraform destroy did not fully complete — continuing with cleanup"
-        }
+        # Reverse dependency order across the three roots so terraform uninstalls
+        # in-cluster Helm/K8s resources (workloads, Vault server, IVIA) via the
+        # LIVE cluster API before the tier-1 destroy tears down EKS + VPC.
+        step_header "Running terraform destroy (3 roots, reverse: workloads → services → infra)..."
+        local _dir
+        for _dir in \
+            "$PROJECT_ROOT/infrastructure/workloads" \
+            "$PROJECT_ROOT/infrastructure/services" \
+            "$PROJECT_ROOT/infrastructure"; do
+            [ -d "$_dir" ] || continue
+            [ -d "$_dir/.terraform" ] || terraform -chdir="$_dir" init -input=false >/dev/null 2>&1 || true
+            terraform -chdir="$_dir" destroy -auto-approve \
+                || print_warn "terraform destroy in ${_dir} did not fully complete — continuing with cleanup"
+        done
 
         # Verify cluster is actually gone
         step_header "Verifying EKS cluster is destroyed..."

@@ -1,0 +1,25 @@
+################################################################################
+# Tier-3 (workloads) — Variable Values (EXAMPLE)
+#
+# USAGE: cp terraform.tfvars.example terraform.tfvars  (terraform.tfvars is gitignored)
+#
+# This root (infrastructure/workloads/) deploys the end-user apps: uc1 agent,
+# uc2 banking (UI + agent + MCP), uc3 agent, plus the iviaop agent-uc2
+# redirect_uri patch. region / cluster / RDS / KB / ACM cert come from tier-1
+# state; Vault + IVIA wiring comes from tier-2 state. The ONLY inputs here are
+# the ECR image URIs (built by build-images.sh) and the Bedrock model id.
+#
+# Placeholders are fine for an initial plan — deploy-workshop.sh builds +
+# pushes the images before the tier-3 apply.
+################################################################################
+
+uc1_agent_image = "<account>.dkr.ecr.<region>.amazonaws.com/workshop/uc1-agent:latest"
+
+banking_app_ui_image    = "<account>.dkr.ecr.<region>.amazonaws.com/workshop-banking-app:ui"
+banking_app_agent_image = "<account>.dkr.ecr.<region>.amazonaws.com/workshop-banking-app:agent"
+banking_app_mcp_image   = "<account>.dkr.ecr.<region>.amazonaws.com/workshop-banking-app:mcp"
+
+uc3_agent_image = "<account>.dkr.ecr.<region>.amazonaws.com/workshop/uc3-agent:latest"
+
+# Bedrock LLM — cross-region inference profile id for Amazon Nova Pro.
+bedrock_model_id = "us.amazon.nova-pro-v1:0"

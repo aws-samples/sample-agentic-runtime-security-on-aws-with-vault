@@ -192,7 +192,7 @@ resource "kubernetes_deployment" "uc3_agent" {
         }
         annotations = {
           # Phase 07.8 D-02: roll uc3-agent whenever IVIA's public issuer flips
-          # (e.g. configure-workshop.sh Step 4 flipping wrp from raw ALB → nip.io
+          # (e.g. deploy-workshop.sh Step 4 flipping wrp from raw ALB → nip.io
           # FQDN). auth.py:_init_jwks_client lazily caches _OIDC_ISSUER from the
           # discovery doc at first verify; with no restart trigger it kept the
           # boot-time issuer and rejected new id_tokens with issuer_mismatch

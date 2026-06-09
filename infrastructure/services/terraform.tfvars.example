@@ -1,0 +1,20 @@
+################################################################################
+# Tier-2 (services) — Variable Values (EXAMPLE)
+#
+# USAGE: cp terraform.tfvars.example terraform.tfvars  (terraform.tfvars is gitignored)
+#
+# This root (infrastructure/services/) deploys the shared identity/secrets
+# fabric: the Vault server (modules/vault_server) and IVIA OIDC provider
+# (modules/verify_access). region / cluster wiring / KMS key / tags all come
+# from tier-1 state via terraform_remote_state — the ONLY inputs here are the
+# two registry/MMFA secrets below (sensitive, never in tier-1 state).
+################################################################################
+
+# IBM Container Registry entitlement key for pulling IVIA images
+# (icr.io/ivia/ivia-oidc-provider). Obtain from your IBM entitlement.
+icr_entitlement_key = "<your-icr-entitlement-key>"
+
+# IBM Verify mobile-push (MMFA) — VerifyPushCreds API Key (= push provider Client
+# Secret for ISVA 10.0.3+). Leave empty until Use Case 3 MMFA push is enabled;
+# when empty the 'ivia-mmfa-push' Secret is not created (no-op).
+ivia_mmfa_push_client_secret = ""
