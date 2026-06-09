@@ -1,65 +1,51 @@
 ---
-title: 'Terraform Apply'
+title: 'Deploy the Workshop'
 weight: 31
 ---
 
-Terraform state is stored locally under `infrastructure/terraform.tfstate`. In this step, you run `terraform apply` locally to deploy all foundation infrastructure, then run `configure-workshop.sh` to complete post-deploy configuration.
+One command deploys the whole workshop. `deploy-workshop.sh` provisions all three Terraform tiers and runs every post-deploy configuration step — you never run `terraform apply` by hand.
 
-## Step 1 — Initialize Terraform
+The deploy is split into three local-state roots, applied in dependency order. Each downstream root reads the upstream root's state, so Terraform enforces the order for you:
 
-Initialize the working directory to download providers and modules. Run this once before your first apply:
+- **Tier 1** — `infrastructure/` — VPC, EKS, add-ons, RDS, Bedrock Knowledge Base, ECR, IAM
+- **Tier 2** — `infrastructure/services/` — Vault server + IBM Verify Identity Access
+- **Tier 3** — `infrastructure/workloads/` — the Use Case 1, 2, and 3 agent pods
+
+## Step 1 — Confirm the roots are initialized
+
+`bootstrap.sh` already ran `terraform init` in all three roots. If you skipped it, init them now:
 
 ```bash
-terraform -chdir=infrastructure init
+terraform -chdir=infrastructure init && terraform -chdir=infrastructure/services init && terraform -chdir=infrastructure/workloads init
 ```
 
-## Step 2 — Run terraform apply
+## Step 2 — Deploy
 
 ```bash
-terraform -chdir=infrastructure apply -auto-approve
+bash infrastructure/scripts/deploy-workshop.sh
 ```
 
-Terraform provisions ~80-120 resources. `-auto-approve` skips the interactive confirmation.
+The script prints a pass/fail summary per step. Every step must pass before you continue to verification.
 
-:::alert{header="First deploy timing" type="info"}
-Total time: ~25-35 minutes (EKS ~12 min, RDS ~10 min including pgaudit reboot, Bedrock KB ~3 min, addons ~5 min). The apply runs locally but provisions AWS resources remotely — timing depends on AWS API response times, not your machine.
+:::alert{header="Timing & re-runs" type="info"}
+First deploy takes ~35–50 min (EKS ~12, RDS ~10 incl. pgaudit reboot, Bedrock KB ~3, add-ons ~5, then Vault + IVIA + ACME + workloads) — timing tracks AWS API response, not your machine. The script is idempotent: if a step fails, fix the cause and re-run; converged work is skipped.
 :::
 
-## Step 3 — Run configure-workshop.sh
+## What it runs, in order
 
-After the apply completes, run the post-deploy configuration script. It performs six steps in order:
+1. **Apply tier-1** — VPC, EKS, add-ons (cert-manager, external-dns, AWS Load Balancer Controller), RDS, Bedrock KB, ECR, IAM, audit substrate. *No pods yet.*
+2. **Configure kubectl** (`aws eks update-kubeconfig`)
+3. **Build & push** the Use Case 1/2/3 images (`build-images.sh`)
+4. **Load Balancer Controller readiness gate**
+5. **Apply tier-2** — Vault server + IVIA
+6. **Initialize Vault** (`vault-init.sh`) — writes `~/vault-init.json`
+7. **Issue ACME cert**, sync to ACM, re-apply IVIA on the trusted `nip.io` host
+8. **Configure Vault** (`vault-configure.sh`) — auth, policies, secrets engines
+9. **Configure IVIA** (`ivia-configure.sh`) — verify OIDC discovery
+10. **Apply tier-3** — Use Case agent pods, then roll deployments
+11. **Shared-ALB assertion** + IVIA redirect reconcile
+12. **Verify** OpenLDAP user `oscar` was seeded
+13. **Seed the banking database** (`seed-banking-db.sh`)
+14. **Ingest the Bedrock KB corpus** (`sync-bedrock-kb.sh`)
 
-1. Configure kubectl (`aws eks update-kubeconfig`)
-2. Initialize Vault (`vault-init.sh`) — writes `~/vault-init.json` with the root token and unseal keys
-3. Configure Vault (`vault-configure.sh`) — auth methods, policies, secrets engines
-4. Configure IVIA (`ivia-configure.sh`) — verifies OIDC discovery is responding
-5. Verify the workshop user `oscar` was seeded into the in-cluster OpenLDAP directory by the IVIA autoconf job
-6. Seed the banking database (`seed-banking-db.sh`)
-
-```bash
-bash infrastructure/scripts/configure-workshop.sh
-```
-
-The script prints a pass/fail summary for each configuration step. All steps must pass before continuing to the verification module.
-
-:::alert{header="Script is idempotent" type="info"}
-`configure-workshop.sh` is safe to re-run at any point. If a step fails, fix the root cause and re-run — already-completed steps are skipped or produce the same outcome.
-:::
-
-## What is Provisioned
-
-You don't sequence this yourself; Terraform's dependency graph handles ordering. Broadly, resources flow through these waves:
-
-1. **Networking, audit & registry foundation** — `vpc`, `audit`, `ecr`
-2. **EKS cluster** — `eks` (needs the VPC)
-3. **Cluster add-ons & data services** — `addons` (cert-manager, external-dns, AWS Load Balancer Controller), `rds`, and the Bedrock Knowledge Base
-4. **HashiCorp Vault** — needs the add-ons (ALB controller / cert-manager) ready
-5. **IBM Verify Access** — needs the ALB controller webhook ready
-6. **Vault configuration** — auth methods, policies, secrets engines (needs Vault running)
-7. **Use-case workloads** — the Use Case 1, 2, and 3 agent pods (need Vault configured)
-
-When the apply completes, note these outputs — you will need them in the next sub-modules:
-
-- `kubectl_config_command` — the `aws eks update-kubeconfig` one-liner
-- `kb_id` — the Bedrock KB ID for ingestion
-- `rds_endpoint` — the PostgreSQL connection endpoint
+Tier-1 outputs referenced later: `kubectl_config_command`, `kb_id`, `rds_endpoint`.

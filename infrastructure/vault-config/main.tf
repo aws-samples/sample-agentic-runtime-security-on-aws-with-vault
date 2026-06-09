@@ -7,12 +7,17 @@
 # cluster-internal service that a single root apply cannot reach without a
 # live port-forward.
 #
-# All deploy-derived inputs come from the root module's outputs via
-# data.terraform_remote_state.root (local backend → ../terraform.tfstate).
-# That is the source of truth: e.g. ivia_issuer here is the SAME value the
-# root uses to stamp iviaop's iss claim, so Vault's bound_issuer can never
-# drift from the live issuer after an IVIA rebuild. The only external input
-# is vault_token (a runtime secret, not in state).
+# Deploy-derived inputs come from TWO upstream roots via remote_state (local
+# backend):
+#   - tier 1 (infrastructure/)          → ../terraform.tfstate          (local.root)
+#     cluster wiring, OIDC issuer, RDS, Bedrock + uc3-logs role ARNs, region
+#   - tier 2 (infrastructure/services/) → ../services/terraform.tfstate (local.services)
+#     ivia_issuer + ivia_oidc_ca_pem (IVIA moved out of tier 1 into shared services)
+#
+# tier-2 ivia_issuer is the source of truth: it is the SAME value tier 3 uses to
+# stamp iviaop's iss claim (both derive from tier-2 effective_ivia_host), so
+# Vault's bound_issuer can never drift from the live issuer after an IVIA
+# rebuild. The only external input is vault_token (a runtime secret, not in state).
 #
 # Usage:
 #   kubectl port-forward svc/vault 8200:8200 -n vault &
@@ -35,8 +40,9 @@ terraform {
   }
 }
 
-# Root module state (local backend). Exposes the deploy-derived inputs this
-# workspace needs. Read-only — vault-config never writes to root state.
+# Tier-1 (core infrastructure) state — local backend. Exposes cluster wiring,
+# OIDC issuer, RDS, role ARNs, region. Read-only — vault-config never writes
+# upstream state.
 data "terraform_remote_state" "root" {
   backend = "local"
   config = {
@@ -44,8 +50,20 @@ data "terraform_remote_state" "root" {
   }
 }
 
+# Tier-2 (shared services) state — local backend. Source of the IVIA OIDC
+# issuer + CA the JWT auth backend's bound_issuer / jwks_ca_pem bind to. The
+# read is a structural ordering edge: vault-config cannot apply until tier 2
+# has written ../services/terraform.tfstate (IVIA up, issuer known).
+data "terraform_remote_state" "services" {
+  backend = "local"
+  config = {
+    path = "../services/terraform.tfstate"
+  }
+}
+
 locals {
-  root = data.terraform_remote_state.root.outputs
+  root     = data.terraform_remote_state.root.outputs
+  services = data.terraform_remote_state.services.outputs
 }
 
 provider "vault" {
@@ -65,8 +83,8 @@ module "vault_config" {
   cluster_certificate_authority_data = local.root.cluster_certificate_authority_data
   cluster_oidc_issuer                = local.root.cluster_oidc_issuer
   ivia_jwks_url                      = var.ivia_jwks_url
-  ivia_issuer                        = local.root.ivia_issuer
-  ivia_oidc_ca_pem                   = local.root.ivia_oidc_ca_pem
+  ivia_issuer                        = local.services.ivia_issuer
+  ivia_oidc_ca_pem                   = local.services.ivia_oidc_ca_pem
   rds_endpoint                       = local.root.rds_endpoint
   rds_master_username                = local.root.rds_master_username
   rds_master_user_secret_arn         = local.root.rds_master_user_secret_arn

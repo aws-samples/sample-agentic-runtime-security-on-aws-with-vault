@@ -38,7 +38,7 @@ variable "tls_certificate_arn" {
 }
 
 # Phase 07.8 Plan 05 — nip.io FQDN propagation for IVIA WRP MMFA endpoints.
-# The root module reads .acme-state (written by Plan 04's configure-workshop.sh
+# The root module reads .acme-state (written by Plan 04's deploy-workshop.sh
 # ACME step) and parses the NIP_FQDN_WRP= line into this variable. When empty
 # (first-deploy bootstrap, before .acme-state exists) the verify_access module
 # falls back to the Ingress-status hostname so the autoconf base_layer always

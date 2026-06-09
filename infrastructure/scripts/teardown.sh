@@ -27,6 +27,15 @@ export AWS_PAGER=""
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
+# Three Terraform roots (provisioning-order refactor). Destroyed in REVERSE
+# dependency order: workloads (tier 3) → services (tier 2) → infrastructure
+# (tier 1), so terraform can cleanly uninstall in-cluster Helm/K8s resources
+# (Vault server, IVIA, banking app) via the live cluster API BEFORE the EKS
+# control plane is torn down and BEFORE phase_k8s_cleanup force-drains namespaces.
+TIER1_DIR="${REPO_ROOT}/infrastructure"
+TIER2_DIR="${REPO_ROOT}/infrastructure/services"
+TIER3_DIR="${REPO_ROOT}/infrastructure/workloads"
+
 #-------------------------------------------------------------------------------
 # Workshop constants
 #-------------------------------------------------------------------------------
@@ -163,6 +172,40 @@ S3_BUCKET_PREFIXES+=("${DEFAULT_CLUSTER}-workshop-logs")
 # (AOSS, Bedrock KB, S3 corpus/multimodal, CFN index stack) live there.
 KB_REGION="${KB_REGION:-us-east-1}"
 
+
+#===============================================================================
+# Per-root terraform destroy (provisioning-order refactor)
+# Destroys ONE root, best-effort. Runs a bare `terraform init` first (NEVER
+# `init -upgrade` — that silently bumps loosely-pinned modules and fabricates
+# drift). Skips cleanly when the root was never initialized / has empty state.
+#===============================================================================
+_destroy_root() {
+    local label="$1" dir="$2"
+    if [ ! -d "$dir" ]; then
+        print_info "${label}: ${dir} not present — skipping"
+        return 0
+    fi
+    if [ "$DRY_RUN" = true ]; then
+        print_info "[DRY-RUN] Would run: terraform -chdir=${dir} init && terraform -chdir=${dir} destroy -auto-approve"
+        return 0
+    fi
+    if [ ! -d "${dir}/.terraform" ]; then
+        # Not yet initialized — try a bare init so destroy can read providers/state.
+        terraform -chdir="$dir" init -input=false >/dev/null 2>&1 || {
+            print_info "${label}: no .terraform and init failed — skipping (nothing to destroy)"
+            return 0
+        }
+    fi
+    local n
+    n=$(terraform -chdir="$dir" state list 2>/dev/null | wc -l | tr -d ' ')
+    if [ "${n:-0}" -eq 0 ]; then
+        print_info "${label}: state empty — nothing to destroy"
+        return 0
+    fi
+    print_info "${label}: destroying ${n} resource(s) in ${dir}"
+    terraform -chdir="$dir" destroy -auto-approve \
+        || print_warn "${label}: terraform destroy had errors — AWS sweep will catch residuals"
+}
 
 #===============================================================================
 # K8S CLEANUP
@@ -1895,12 +1938,20 @@ elif [ "$KEEP_EKS" = true ]; then
         exit 1
     fi
 
-    # Step 1: K8s drain workshop namespaces FIRST so LB controller releases ALBs
-    # before terraform destroys it.
+    # Step 1: destroy the workload + service roots IN FULL via terraform while the
+    # cluster is live, so Vault server / IVIA / banking app Helm + K8s resources
+    # are cleanly uninstalled. tier-2/tier-3 carry NO EKS/VPC/addon state, so a
+    # full destroy here never touches the infra we are preserving.
+    step_header "Terraform destroy (tier 3 + tier 2 — workloads + services)..."
+    _destroy_root "Tier 3 (workloads)" "$TIER3_DIR"
+    _destroy_root "Tier 2 (services)"  "$TIER2_DIR"
+
+    # Step 2: K8s drain any residual workshop namespaces so LB controller releases
+    # ALBs before the tier-1 targeted destroy.
     phase_k8s_cleanup
 
-    # Step 2: targeted terraform destroy — everything except EKS/VPC/addons
-    step_header "Terraform destroy (targeted — keep EKS + VPC + addons)..."
+    # Step 3: targeted terraform destroy of tier 1 — everything except EKS/VPC/addons
+    step_header "Terraform destroy (tier 1 targeted — keep EKS + VPC + addons)..."
     infra_dir="$REPO_ROOT/infrastructure"
     if [ -f "$infra_dir/.terraform/terraform.tfstate" ] || [ -d "$infra_dir/.terraform" ]; then
         # Build a stable target list and pass it as one batch so terraform's
@@ -1921,27 +1972,22 @@ elif [ "$KEEP_EKS" = true ]; then
         print_info "No terraform state — skipping terraform destroy"
     fi
 
-    # Step 3: Minimal orphan sweep (PVCs, EBS volumes, orphan target groups)
+    # Step 4: Minimal orphan sweep (PVCs, EBS volumes, orphan target groups)
     phase_aws_sweep_keep_eks
 
-    # Step 4: Verify zero workshop residuals (EKS preserved)
+    # Step 5: Verify zero workshop residuals (EKS preserved)
     phase_verify_keep_eks || VERIFY_FAILED=true
 else
     print_info "Mode: FULL (terraform destroy + AWS sweep)"
 
-    # Primary destroy via Terraform (removes all managed resources)
-    step_header "Terraform destroy (ordered resource cleanup)..."
-    infra_dir="$REPO_ROOT/infrastructure"
-    if [ -f "$infra_dir/.terraform/terraform.tfstate" ] || [ -d "$infra_dir/.terraform" ]; then
-        if [ "$DRY_RUN" = true ]; then
-            print_info "[DRY-RUN] Would run: terraform destroy -auto-approve"
-        else
-            terraform -chdir="$infra_dir" destroy -auto-approve || \
-                print_warn "terraform destroy had errors — falling back to sweep"
-        fi
-    else
-        print_info "No terraform state — skipping terraform destroy"
-    fi
+    # Primary destroy via Terraform — REVERSE dependency order across the three
+    # roots so terraform uninstalls in-cluster Helm/K8s resources (Vault server,
+    # IVIA, banking app) via the LIVE cluster API before the EKS control plane
+    # and VPC are torn down by the tier-1 destroy.
+    step_header "Terraform destroy (3 roots, reverse order: workloads → services → infra)..."
+    _destroy_root "Tier 3 (workloads)" "$TIER3_DIR"
+    _destroy_root "Tier 2 (services)"  "$TIER2_DIR"
+    _destroy_root "Tier 1 (infrastructure)" "$TIER1_DIR"
 
     phase_k8s_cleanup
     phase_aws_sweep
@@ -1952,7 +1998,7 @@ echo ""
 
 # Local-only state cleanup: Phase 07.8's `.acme-state` caches the FQDN
 # tied to the destroyed ALB's IP. Leaving it on disk causes the next deploy's
-# configure-workshop.sh Step 4 to skip re-issuance and bake a stale FQDN.
+# deploy-workshop.sh Step 4 to skip re-issuance and bake a stale FQDN.
 acme_state="$REPO_ROOT/infrastructure/.acme-state"
 acme_rerun="$REPO_ROOT/infrastructure/.acme-rerun-marker"
 if [ "$DRY_RUN" = true ]; then

@@ -83,24 +83,43 @@ Vault writes one JSON object per API call to pod stdout. The fluent-bit DaemonSe
 
 ## Root module wiring
 
+This module is consumed by the dedicated `infrastructure/vault-config/` root,
+which runs AFTER tier-1 (`infrastructure/`) and tier-2 (`infrastructure/services/`)
+have written their state. The root reads upstream outputs via
+`data.terraform_remote_state` — the cross-tier read is itself the dependency
+barrier, so no `depends_on` is needed. Vault server (`module.vault_server`) and
+IVIA (`module.ivia`) live in tier-2; their outputs arrive through `local.services`.
+
 ```hcl
-# infrastructure/main.tf (excerpt)
+# infrastructure/vault-config/main.tf (excerpt)
+data "terraform_remote_state" "root" {
+  backend = "local"
+  config  = { path = "../terraform.tfstate" }          # tier-1
+}
+data "terraform_remote_state" "services" {
+  backend = "local"
+  config  = { path = "../services/terraform.tfstate" } # tier-2 (vault_server + ivia)
+}
+
+locals {
+  root     = data.terraform_remote_state.root.outputs
+  services = data.terraform_remote_state.services.outputs
+}
+
 module "vault_config" {
-  source = "./modules/vault_config"
+  source = "../modules/vault_config"
 
-  depends_on = [module.vault, module.ivia, module.rds]
-
-  cluster_endpoint                    = module.eks.cluster_endpoint
-  cluster_certificate_authority_data  = module.eks.cluster_certificate_authority_data
-  cluster_oidc_issuer                 = module.eks.cluster_oidc_issuer
-  ivia_oidc_discovery_url             = module.ivia.oidc_discovery_url
-  rds_endpoint                        = module.rds.endpoint
-  rds_master_username                 = module.rds.master_username
-  rds_master_user_secret_arn          = module.rds.master_user_secret_arn
-  rds_db_name                         = module.rds.db_name
-  bedrock_role_arn                    = module.bedrock_kb_aoss.kb_role_arn
-  region                              = var.region
-  tags                                = var.tags
+  cluster_endpoint                   = local.root.cluster_endpoint
+  cluster_certificate_authority_data = local.root.cluster_certificate_authority_data
+  cluster_oidc_issuer                = local.root.cluster_oidc_issuer
+  ivia_issuer                        = local.services.ivia_issuer
+  ivia_oidc_ca_pem                   = local.services.ivia_oidc_ca_pem
+  rds_endpoint                       = local.root.rds_endpoint
+  rds_master_username                = local.root.rds_master_username
+  rds_master_user_secret_arn         = local.root.rds_master_user_secret_arn
+  bedrock_role_arn                   = local.root.bedrock_role_arn
+  uc3_logs_role_arn                  = local.root.uc3_logs_role_arn
+  region                             = local.root.region
 }
 ```
 

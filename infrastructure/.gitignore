@@ -2,7 +2,7 @@
 #
 # .acme-state holds the per-deploy LE cert wiring (DEPLOY_ID, STABLE_ACM_ARN,
 # ALB_IP, NIP_FQDN_WRP, NIP_FQDN_BANKING) — written by Plan 04
-# configure-workshop.sh ACME step, read by verify-tls.sh. Per D-10 this is
+# deploy-workshop.sh ACME step, read by verify-tls.sh. Per D-10 this is
 # local-only / never cached across cluster destroy → re-deploy cycles, and
 # per the secrets-hygiene baseline it MUST be gitignored.
 #
@@ -17,7 +17,7 @@
 infrastructure/.acme-state
 
 # Also ignore the idempotent-rerun marker (sibling file written by Plan 04
-# configure-workshop.sh on the second run for verify-tls.sh --check
+# deploy-workshop.sh on the second run for verify-tls.sh --check
 # idempotent-rerun / skip-acme-honored).
 .acme-rerun-marker
 infrastructure/.acme-rerun-marker

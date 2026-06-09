@@ -127,7 +127,7 @@ variable "ivia_oidc_ca_pem" {
 }
 
 variable "nip_io_banking_host" {
-  description = "Phase 07.8 D-02: nip.io FQDN for the banking-UI (e.g. banking.<deploy_id>.<alb_ip_dashed>.nip.io). Populated by main.tf from the .acme-state file written by configure-workshop.sh Step 4. Empty string until the ACME step has run; then the banking-UI's browser-facing REDIRECT_URI/ORIGIN flips from the raw ALB hostname to this trusted FQDN so the OAuth chain serves entirely on the Let's Encrypt cert."
+  description = "Phase 07.8 D-02: nip.io FQDN for the banking-UI (e.g. banking.<deploy_id>.<alb_ip_dashed>.nip.io). Populated by main.tf from the .acme-state file written by deploy-workshop.sh Step 4. Empty string until the ACME step has run; then the banking-UI's browser-facing REDIRECT_URI/ORIGIN flips from the raw ALB hostname to this trusted FQDN so the OAuth chain serves entirely on the Let's Encrypt cert."
   type        = string
   default     = ""
 }

@@ -80,7 +80,7 @@ Database seeding runs post-deploy via `seed-banking-db.sh`. The script retrieves
 credentials from Secrets Manager, creates a ConfigMap from `seed.sql`, and
 runs a disposable `postgres:16-alpine` pod to execute psql against RDS.
 `seed.sql` is idempotent (`IF NOT EXISTS` + `ON CONFLICT DO NOTHING`).
-`configure-workshop.sh` calls this script automatically after each workspace apply.
+`deploy-workshop.sh` calls this script automatically after each workspace apply.
 
 ## Variables
 
@@ -120,13 +120,20 @@ runs a disposable `postgres:16-alpine` pod to execute psql against RDS.
 
 ## Root module wiring
 
-This module is called as `module.uc2_app` in `infrastructure/main.tf`. It depends on:
+This module is called as `module.uc2_app` in the tier-3 root
+`infrastructure/workloads/main.tf`. Tier-3 runs AFTER tier-1 (`infrastructure/`)
+and tier-2 (`infrastructure/services/`), reading their outputs via
+`data.terraform_remote_state` — the cross-tier read is the dependency barrier,
+so no `depends_on` is needed. Inputs resolve from:
 
-- `module.vault` → `vault_endpoint` (Vault addr)
-- `module.vault_config` → `uc2_role_name`, `uc2_db_role_name`
-- `module.eks` → cluster providers (via root `providers.tf` chicken-and-egg pattern)
-- `module.rds` → `db_address`, `db_master_user_secret_arn`
-- `module.bedrock_kb_index` → `knowledge_base_id`
+- `local.infra.*` (tier-1 remote state) → `rds_address`, `rds_port`, `rds_db_name`,
+  `vpc_cidr`, `kb_id`, `region`, `kb_region`, `tls_certificate_arn`
+- `local.services.*` (tier-2 remote state) → `ivia_ingress_hostname`,
+  `ivia_service_endpoint`, `ivia_client_secret`, `ivia_issuer`, `ivia_oidc_ca_pem`
+- Vault addr is the in-cluster service DNS (`http://vault.vault.svc.cluster.local:8200`);
+  the agent authenticates at runtime via its SA against the `uc2-agent` k8s role
+  and `uc2-jwt` JWT role created by the `infrastructure/vault-config/` root.
 
-Attendee-supplied values (`ui_image`, `agent_image`, `mcp_image`) are set in
-`terraform.tfvars` after running `build-banking-app.sh`.
+Attendee-supplied image URIs (`banking_app_ui_image`, `banking_app_agent_image`,
+`banking_app_mcp_image`) are set in `infrastructure/workloads/terraform.tfvars`
+after `build-images.sh` (run by deploy-workshop.sh Step 3).

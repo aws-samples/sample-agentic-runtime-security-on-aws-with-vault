@@ -1,17 +1,18 @@
 ################################################################################
-# Vault Module — Main
+# Vault Module — IAM / KMS (tier 1, core infrastructure)
 #
-# Deploys HashiCorp Vault 2.0.0 on EKS via Helm chart 0.32.0.
-# Architecture:
-#   - 3-node Raft HA in namespace "vault"
+# This module owns ONLY the foundational identity + key material for Vault:
 #   - Dedicated KMS key for auto-unseal (NOT the workshop CMK — different trust
 #     domain; workshop CMK is for storage/logs/AOSS, unseal key for Vault process)
-#   - Pod Identity IAM association (NOT IRSA) for Vault SA → KMS unseal role
-#   - Audit to stdout (-log-format=json) for fluent-bit pickup; no PVC audit device
+#   - Pod Identity IAM role + association (NOT IRSA) for Vault SA → KMS unseal
 #
-# Pitfall H1: helm provider MUST be ~> 2.17 (NOT 3.x — set{} syntax break).
-# Pitfall V1: Vault service account is created by this module via Pod Identity;
-#             set server.serviceAccount.create = false in Helm values.
+# The Vault *server* (namespace, ServiceAccount, Helm release) lives in the
+# tier-2 services root via modules/vault_server. The IAM role stays here in
+# tier 1 because module.bedrock_kb_aoss names this role as a trusted principal
+# in the KB-role trust policy (the Vault → Bedrock STS assume path), and AWS
+# rejects a trust policy that names a principal that does not yet exist. So the
+# role must be created in the same (earlier) tier as the KB role.
+#
 # Pitfall V2: KMS unseal key must be separate from workshop CMK — Vault decrypt
 #             calls would appear under the same CloudTrail key ARN as storage ops
 #             if reused, breaking audit-correlation signal clarity.
@@ -22,14 +23,6 @@ terraform {
     aws = {
       source  = "hashicorp/aws"
       version = "~> 5.0"
-    }
-    helm = {
-      source  = "hashicorp/helm"
-      version = "~> 2.17" # Pitfall H1 — DO NOT bump to 3.x
-    }
-    kubernetes = {
-      source  = "hashicorp/kubernetes"
-      version = "~> 2.35"
     }
   }
 }
@@ -131,7 +124,11 @@ resource "aws_iam_role_policy" "vault_kms" {
 ################################################################################
 # EKS Pod Identity Association
 # Binds namespace=vault, service_account=vault → vault_kms IAM role.
-# Vault Helm chart uses SA name "vault" by default (serviceAccount.name).
+# The namespace + ServiceAccount themselves are created by modules/vault_server
+# (tier 2). EKS Pod Identity associations are name-based mappings and do NOT
+# require the SA/namespace to exist at creation time — the Pod Identity Agent
+# resolves the association lazily when a vault pod requests credentials. So this
+# association is created in tier 1 and the SA it points at appears in tier 2.
 ################################################################################
 
 resource "aws_eks_pod_identity_association" "vault" {
@@ -141,79 +138,4 @@ resource "aws_eks_pod_identity_association" "vault" {
   role_arn        = aws_iam_role.vault_kms.arn
 
   tags = var.tags
-}
-
-################################################################################
-# Kubernetes Namespace
-################################################################################
-
-resource "kubernetes_namespace" "vault" {
-  metadata {
-    name = "vault"
-    labels = {
-      "app.kubernetes.io/managed-by" = "terraform"
-    }
-  }
-}
-
-################################################################################
-# Vault Service Account
-# Created explicitly because the Helm chart's serviceAccount.create is false
-# (Pitfall V1). Pod Identity does NOT create the SA — it only maps an existing
-# SA to an IAM role. Without this resource, the StatefulSet fails:
-#   "pods vault-0 is forbidden: serviceaccount vault not found"
-################################################################################
-
-resource "kubernetes_service_account" "vault" {
-  metadata {
-    name      = "vault"
-    namespace = kubernetes_namespace.vault.metadata[0].name
-    labels = {
-      "app.kubernetes.io/name"       = "vault"
-      "app.kubernetes.io/managed-by" = "terraform"
-    }
-  }
-}
-
-################################################################################
-# Vault Helm Release
-# Chart: hashicorp/vault 0.32.0 (Vault server image 2.0.0)
-# HA values rendered from vault-ha.yaml.tpl template.
-#
-# POST-DEPLOY MANUAL STEP — Two-phase bootstrap:
-#   After this Helm release deploys the 3-node Raft cluster, Vault starts
-#   sealed and uninitialized. KMS auto-unseal handles unsealing, but
-#   initialization is a one-time manual operation:
-#
-#   1. kubectl exec -n vault vault-0 -- vault operator init -format=json
-#      → Save root_token and recovery_keys (3-of-5 threshold).
-#   2. Store vault_token (root token) in HCP variable set as sensitive+ephemeral.
-#   3. Set enable_vault_config = true in deployments.tfdeploy.hcl.
-#   4. Commit + push → next Stacks run deploys vault_config + downstream.
-#
-#   Recovery keys are needed only if KMS becomes unavailable. Store securely.
-################################################################################
-
-resource "helm_release" "vault" {
-  name       = "vault"
-  repository = "https://helm.releases.hashicorp.com"
-  chart      = "vault"
-  version    = "0.32.0"
-  namespace  = kubernetes_namespace.vault.metadata[0].name
-
-  values = [
-    templatefile("${path.module}/values/vault-ha.yaml.tpl", {
-      vault_image_tag = "2.0.0"
-      kms_key_id      = aws_kms_key.vault_unseal.key_id
-      region          = var.region
-    })
-  ]
-
-  wait    = true
-  timeout = 600
-
-  depends_on = [
-    aws_eks_pod_identity_association.vault,
-    kubernetes_service_account.vault,
-  ]
 }

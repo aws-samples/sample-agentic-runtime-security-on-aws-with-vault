@@ -5,28 +5,11 @@ weight: 33
 
 Run the foundation verification script to confirm all modules deployed correctly. It checks EKS cluster status + nodes + addons, RDS status + pgaudit + encryption, Bedrock KB + data sources + retrieval, audit log groups with KMS, and the region contract.
 
-Get the two required values — `cluster_name` from `terraform.tfvars`, `knowledge_base_id` from the AWS CLI:
-
 ```bash
-grep 'cluster_name' infrastructure/terraform.tfvars
+bash infrastructure/scripts/test-foundation.sh
 ```
 
-```bash
-aws bedrock-agent list-knowledge-bases \
-  --region us-east-1 \
-  --query 'knowledgeBaseSummaries[?name==`workshop-kb`].knowledgeBaseId' \
-  --output text
-```
-
-Then run the verification:
-
-```bash
-bash infrastructure/scripts/test-foundation.sh \
-  --cluster-name <CLUSTER_NAME> \
-  --knowledge-base-id <KB_ID>
-```
-
-The script auto-derives everything else — DB instance ID (`${cluster_name}-pg`), region and KB region from `infrastructure/terraform.tfvars`.
+That single command takes no arguments — it auto-derives everything from `infrastructure/terraform.tfvars` and AWS: cluster name (`cluster_name`), Knowledge Base id (the `workshop-kb` KB), DB instance ID (`${cluster_name}-pg`), region, and KB region.
 
 When all checks pass, you will see:
 

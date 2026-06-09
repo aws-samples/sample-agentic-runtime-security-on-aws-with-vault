@@ -161,12 +161,24 @@ phase_gather() {
     ok "Vault token: provided via --vault-token"
   fi
 
-  # Confirm the root Terraform state (the source of all deploy-derived inputs)
-  # exists before vault-config tries to read it via terraform_remote_state.
+  # Confirm BOTH upstream Terraform states exist before vault-config tries to
+  # read them via terraform_remote_state. vault-config/main.tf reads tier-1
+  # (../terraform.tfstate → cluster wiring, RDS, role ARNs, region) AND tier-2
+  # (../services/terraform.tfstate → ivia_issuer + ivia_oidc_ca_pem). A missing
+  # tier-2 state means IVIA hasn't been deployed yet, so the JWT auth backend's
+  # bound_issuer would have nothing to bind to.
   if [[ -f "${VAULT_CONFIG_DIR}/../terraform.tfstate" ]]; then
-    ok "Root state present (terraform_remote_state source for vault-config inputs)"
+    ok "Tier-1 state present (terraform_remote_state source for cluster/RDS/role inputs)"
   else
-    fail "Root state ${VAULT_CONFIG_DIR}/../terraform.tfstate not found — apply the root module first; vault-config reads its inputs from those outputs."
+    fail "Tier-1 state ${VAULT_CONFIG_DIR}/../terraform.tfstate not found — apply infrastructure/ (tier 1) first; vault-config reads its inputs from those outputs."
+    record "gather" "FAIL"
+    return 1
+  fi
+
+  if [[ -f "${VAULT_CONFIG_DIR}/../services/terraform.tfstate" ]]; then
+    ok "Tier-2 state present (terraform_remote_state source for IVIA issuer + OIDC CA)"
+  else
+    fail "Tier-2 state ${VAULT_CONFIG_DIR}/../services/terraform.tfstate not found — apply infrastructure/services/ (tier 2: vault_server + ivia) first; vault-config binds the JWT bound_issuer to its ivia_issuer output."
     record "gather" "FAIL"
     return 1
   fi
@@ -360,7 +372,12 @@ main() {
 
   phase_gather || { print_summary; exit 1; }
   phase_vault_config || true
-  phase_ivia_verify || true
+  if [[ "$SKIP_IVIA" == true ]]; then
+    info "Skipping IVIA OIDC verification (--skip-ivia)"
+    record "ivia_verify" "SKIP"
+  else
+    phase_ivia_verify || true
+  fi
   print_summary
 }
 

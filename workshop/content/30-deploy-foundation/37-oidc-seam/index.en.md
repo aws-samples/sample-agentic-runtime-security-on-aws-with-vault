@@ -3,7 +3,7 @@ title: 'The OIDC Seam'
 weight: 37
 ---
 
-The OIDC seam is where an IVIA-issued JWT becomes a Vault-vended dynamic credential. `configure-workshop.sh` already wired Vault's `jwt` auth backend to trust IVIA — confirm the wiring is correct before running use cases.
+The OIDC seam is where an IVIA-issued JWT becomes a Vault-vended dynamic credential. `deploy-workshop.sh` already wired Vault's `jwt` auth backend to trust IVIA — confirm the wiring is correct before running use cases.
 
 ## The OIDC Seam at Runtime
 

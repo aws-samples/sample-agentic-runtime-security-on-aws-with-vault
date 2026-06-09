@@ -130,7 +130,7 @@ The `sub` claim in the `id_token` (e.g. `oscar`) flows to:
 
 ## Step 1 — Get the Banking UI URL
 
-At the end of `bash infrastructure/scripts/configure-workshop.sh`, the script prints `NIP_FQDN_BANKING` — the banking-UI nip.io URL backed by a Let's Encrypt certificate served on the shared workshop ALB. You can also read it back from `infrastructure/.acme-state`:
+At the end of `bash infrastructure/scripts/deploy-workshop.sh`, the script prints `NIP_FQDN_BANKING` — the banking-UI nip.io URL backed by a Let's Encrypt certificate served on the shared workshop ALB. You can also read it back from `infrastructure/.acme-state`:
 
 ```bash
 grep '^NIP_FQDN_BANKING=' infrastructure/.acme-state
@@ -143,7 +143,7 @@ https://<NIP_FQDN_BANKING>/
 ```
 
 :::alert{header="HTTPS with HTTP redirect — trusted Let's Encrypt cert" type="info"}
-The Banking UI ALB listens on both HTTP (port 80) and HTTPS (port 443). HTTP requests are automatically redirected to HTTPS (ssl-redirect annotation). The certificate is a Let's Encrypt-issued cert bound to the nip.io FQDN and imported into ACM. You should see a lock icon in your browser address bar — the cert is trusted by every major OS/browser out of the box. If you see a "Your connection is not private" warning, this is a regression — re-run `bash infrastructure/scripts/configure-workshop.sh` to re-issue the cert.
+The Banking UI ALB listens on both HTTP (port 80) and HTTPS (port 443). HTTP requests are automatically redirected to HTTPS (ssl-redirect annotation). The certificate is a Let's Encrypt-issued cert bound to the nip.io FQDN and imported into ACM. You should see a lock icon in your browser address bar — the cert is trusted by every major OS/browser out of the box. If you see a "Your connection is not private" warning, this is a regression — re-run `bash infrastructure/scripts/deploy-workshop.sh` to re-issue the cert.
 :::
 
 ## Step 2 — Sign in at the IVIA login page

@@ -1,0 +1,74 @@
+# Vault Server Module — tier 2 (shared services)
+
+Deploys the HashiCorp Vault **server runtime** on EKS: the `vault` namespace, the `vault` ServiceAccount, and the Helm release (chart `hashicorp/vault` 0.32.0, Vault image 2.0.0) in a 3-node Raft HA configuration with KMS auto-unseal.
+
+The foundational IAM role, KMS unseal key, and Pod Identity association live in the sibling [`vault`](../vault/README.md) module (tier 1) — see that README for *why* the split exists. This module receives the KMS key id via the tier-1 `terraform_remote_state` read and binds the Vault `seal "awskms"` stanza to it.
+
+## Architecture
+
+```
+EKS Cluster
+└── namespace: vault
+    ├── vault-0  (Raft leader)
+    ├── vault-1  (Raft follower)
+    └── vault-2  (Raft follower)
+        ↑
+        KMS auto-unseal (alias/vault-unseal — created in tier 1)
+        Pod Identity: SA "vault" → role <cluster>-vault-kms-unseal (association in tier 1)
+```
+
+**Raft HA:** All three pods join via retry_join entries pointing to `vault-{0,1,2}.vault-internal:8200`. The Raft storage path is `/vault/data` on a 10 Gi gp2 PVC per pod.
+
+**Audit logging:** Vault is started with `-log-format=json`. The audit device is configured by the `vault-config` root (post-deploy) to write to `/dev/stdout`. No PVC audit storage is used (`auditStorage.enabled = false`).
+
+**Service account:** The Vault SA is created by this module. Helm is instructed `server.serviceAccount.create = false` to avoid a conflicting SA (Pitfall V1). The tier-1 Pod Identity association maps this SA to the unseal IAM role.
+
+## Inputs
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `region` | `string` | yes | AWS region — rendered into the Vault KMS seal stanza. |
+| `kms_key_id` | `string` | yes | Key ID of the dedicated unseal key. From tier-1 output `vault_unseal_kms_key_id`. |
+| `tags` | `map(string)` | no | Tags applied to taggable resources. Default: `{}` |
+
+## Outputs
+
+| Name | Description |
+|------|-------------|
+| `vault_namespace` | Kubernetes namespace (`vault`). |
+| `vault_service_account` | Vault pod service account name (`vault`). |
+| `vault_endpoint` | In-cluster Vault API URL: `http://vault.vault.svc.cluster.local:8200` |
+
+## Root module wiring (tier 2 — `infrastructure/services/`)
+
+```hcl
+module "vault_server" {
+  source     = "../modules/vault_server"
+  region     = var.region
+  kms_key_id = data.terraform_remote_state.infra.outputs.vault_unseal_kms_key_id
+  tags       = var.tags
+}
+```
+
+The kubernetes + helm providers in the tier-2 root are configured from the tier-1 remote_state EKS outputs (`cluster_endpoint`, `cluster_certificate_authority_data` + `aws eks get-token` exec).
+
+## Post-Deploy — Two-phase bootstrap (handled by `deploy-workshop.sh`)
+
+Vault starts sealed + uninitialized. KMS auto-unseal handles unsealing; initialization is a one-time operation performed by `vault-init.sh`:
+
+```bash
+kubectl exec -n vault vault-0 -- vault operator init -format=json
+```
+
+The root token is captured into the runtime environment and consumed by the `vault-config` root. It is **never** written to Terraform state.
+
+## Known Pitfalls
+
+**H1 — Helm provider 3.x incompatibility:** The `helm` provider is pinned to `~> 2.17`. Helm 3.x changed the `set {}` block syntax in a breaking way. Do NOT bump to 3.x.
+
+**V1 — Conflicting service account:** If `server.serviceAccount.create` is left at the default `true`, Helm creates a SA that conflicts with the one the tier-1 Pod Identity association expects. This module sets it to `false` and names the SA `vault` explicitly.
+
+## References
+
+- [HashiCorp Vault Helm chart 0.32.0 changelog](https://github.com/hashicorp/vault-helm/releases/tag/v0.32.0)
+- [Vault Raft storage](https://developer.hashicorp.com/vault/docs/configuration/storage/raft)

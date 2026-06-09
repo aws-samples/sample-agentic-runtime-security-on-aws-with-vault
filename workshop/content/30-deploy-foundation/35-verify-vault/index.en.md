@@ -3,12 +3,12 @@ title: 'Validate Vault'
 weight: 35
 ---
 
-Vault was deployed as a 3-node Raft HA cluster, initialized, and unsealed by `terraform apply` plus `configure-workshop.sh`. Confirm it is healthy before proceeding.
+Vault was deployed as a 3-node Raft HA cluster, initialized, and unsealed by `terraform apply` plus `deploy-workshop.sh`. Confirm it is healthy before proceeding.
 
 ![Vault authorization flow — ephemeral, per-request credentials across Use Cases 1, 2, and 3](/static/images/vault-authorization-flow.svg)
 
 :::alert{header="Root token location" type="info"}
-`vault-init.sh` (run by `configure-workshop.sh`) wrote the Vault root token to `~/vault-init.json` during initialization. Load it before running the authenticated checks below:
+`vault-init.sh` (run by `deploy-workshop.sh`) wrote the Vault root token to `~/vault-init.json` during initialization. Load it before running the authenticated checks below:
 
 ```bash
 export VAULT_ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)
@@ -72,4 +72,4 @@ kubectl exec -n vault vault-0 -- \
   sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault audit list"
 ```
 
-Expected — at least one audit device listed. If the list is empty, `configure-workshop.sh` has not completed successfully — re-run it.
+Expected — at least one audit device listed. If the list is empty, `deploy-workshop.sh` has not completed successfully — re-run it.

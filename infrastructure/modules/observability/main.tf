@@ -808,16 +808,20 @@ resource "aws_glue_catalog_table" "agent_traces" {
 }
 
 #-------------------------------------------------------------------------------
-# Athena named query — audit_correlation VIEW
+# audit_correlation VIEW — DDL source of truth + auto-creation
 #
-# Mechanism: aws_athena_named_query stores the CREATE OR REPLACE VIEW DDL.
-# Attendees retrieve and execute it in the Athena console (lab step).
-# This avoids the null_resource/local-exec approach which would require
-# attendees to have Athena permissions on the workshop workspace from the
-# Terraform apply context — unreliable in Workshop Studio.
+# Two resources cooperate, both fed from the single local.athena_view_sql:
+#   1. aws_athena_named_query.audit_correlation_view STORES the CREATE OR REPLACE
+#      VIEW DDL as a named query — the Athena-console/manual fallback and the DDL
+#      that scripts/verify-uc3.sh retrieves and re-runs.
+#   2. null_resource.audit_correlation_view EXECUTES that same DDL via the AWS CLI
+#      during `terraform apply` (tier-1, deploy-workshop.sh Step 1) so the VIEW
+#      exists in the workshop_logs catalog the moment an attendee reaches the audit
+#      page — honoring the content's "created automatically during deployment".
 #
-# The SELECT query is also exposed via output.athena_correlation_query so
-# scripts/verify-uc3.sh can inject it directly.
+# The apply runs in the DEPLOYER's context (full Athena permissions), NOT an
+# attendee's, so the earlier Workshop-Studio objection (attendees lack Athena
+# perms from their own apply context) does not apply.
 #-------------------------------------------------------------------------------
 
 locals {
@@ -904,6 +908,63 @@ resource "aws_athena_named_query" "audit_correlation_view" {
   name        = "create-audit-correlation-view"
   workgroup   = var.athena_workgroup
   database    = var.glue_database_name
-  description = "Creates the audit_correlation VIEW joining ivia_decisions, vault_audit, and pgaudit_logs on the shared request_id. Execute this in Athena before running correlation queries."
+  description = "Stored CREATE OR REPLACE VIEW DDL for audit_correlation (joins ivia_decisions, vault_audit, pgaudit_logs on request_id). Auto-executed at apply by null_resource.audit_correlation_view; also runnable manually in the Athena console."
   query       = local.athena_view_sql
+}
+
+# Execute the stored DDL at apply so the VIEW exists automatically (see comment
+# above). The 'workshop' workgroup enforces its own result location, so no
+# OutputLocation is passed; Database=<glue_database_name> is required because the
+# VIEW name in the DDL is unqualified. Idempotent (CREATE OR REPLACE VIEW); the
+# trigger re-runs it only when the DDL changes.
+resource "null_resource" "audit_correlation_view" {
+  triggers = {
+    view_sql = local.athena_view_sql
+  }
+
+  provisioner "local-exec" {
+    interpreter = ["/bin/bash", "-c"]
+    environment = {
+      AWS_REGION = var.region
+      WORKGROUP  = var.athena_workgroup
+      DATABASE   = var.glue_database_name
+      VIEW_SQL   = local.athena_view_sql
+    }
+    command = <<-EOT
+      set -euo pipefail
+      qid=$(aws athena start-query-execution \
+        --region "$AWS_REGION" \
+        --work-group "$WORKGROUP" \
+        --query-execution-context "Database=$DATABASE" \
+        --query-string "$VIEW_SQL" \
+        --query 'QueryExecutionId' --output text)
+      echo "audit_correlation VIEW DDL submitted (QueryExecutionId=$qid)"
+      for _ in $(seq 1 30); do
+        state=$(aws athena get-query-execution --region "$AWS_REGION" \
+          --query-execution-id "$qid" \
+          --query 'QueryExecution.Status.State' --output text)
+        case "$state" in
+          SUCCEEDED)
+            echo "audit_correlation VIEW created/refreshed in $DATABASE"
+            exit 0 ;;
+          FAILED|CANCELLED)
+            reason=$(aws athena get-query-execution --region "$AWS_REGION" \
+              --query-execution-id "$qid" \
+              --query 'QueryExecution.Status.StateChangeReason' --output text)
+            echo "audit_correlation VIEW creation $state: $reason" >&2
+            exit 1 ;;
+        esac
+        sleep 2
+      done
+      echo "audit_correlation VIEW creation did not reach SUCCEEDED within 60s" >&2
+      exit 1
+    EOT
+  }
+
+  depends_on = [
+    aws_glue_catalog_table.ivia_decisions,
+    aws_glue_catalog_table.vault_audit,
+    aws_glue_catalog_table.pgaudit_logs,
+    aws_athena_named_query.audit_correlation_view,
+  ]
 }
