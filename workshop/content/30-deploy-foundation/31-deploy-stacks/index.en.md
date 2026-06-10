@@ -11,31 +11,25 @@ The deploy is split into three local-state roots, applied in dependency order. E
 - **Tier 2** — `infrastructure/services/` — Vault server + IBM Verify Identity Access
 - **Tier 3** — `infrastructure/workloads/` — the Use Case 1, 2, and 3 agent pods
 
-## Step 1 — Confirm the roots are initialized and tfvars seeded
+## Step 1 — Bootstrap your tfvars and roots
 
-`bootstrap.sh` already ran `terraform init` in all three roots and seeded each `terraform.tfvars` from its `.example` template. If you skipped it, run it now (idempotent):
+Run `bootstrap.sh` once. It seeds all three `terraform.tfvars` files from their templates, stamps the tier-3 ECR image URIs and the tier-1 admin ARN from your AWS account and region, and runs `terraform init` in all three roots:
 
 ```bash
 bash infrastructure/scripts/bootstrap.sh
 ```
 
-## Step 2 — Fill in your tfvars
+It is idempotent — safe to re-run, and it never overwrites values you have already set.
 
-`bootstrap.sh` seeds the tfvars with placeholders. Two roots need real values before you deploy — set them now. (Both files are gitignored, so they never came with the repo; this is the step that turns the seeded placeholders into your account's values.)
+## Step 2 — Set your one manual secret
+
+Bootstrap derived every value it could, but the IBM Container Registry entitlement key is a secret it cannot derive — set it by hand in the tier-2 file it just seeded:
 
 **Tier 2 — `infrastructure/services/terraform.tfvars`** — your IBM Container Registry entitlement key from [Obtain IVIA Licenses](../../20-prerequisites/22-ivia-licensing/):
 
 ```hcl
 icr_entitlement_key = "<your-entitlement-key>"
 ```
-
-**Tier 3 — `infrastructure/workloads/terraform.tfvars`** — the five ECR image URIs, of the form `<account>.dkr.ecr.<region>.amazonaws.com/<repo>:<tag>`. Derive them from your account and region in one command:
-
-```bash
-ACCOUNT=$(aws sts get-caller-identity --query Account --output text) && REGION=$(aws configure get region) && sed -i.bak "s|<account>|${ACCOUNT}|g; s|<region>|${REGION}|g" infrastructure/workloads/terraform.tfvars && rm -f infrastructure/workloads/terraform.tfvars.bak
-```
-
-`deploy-workshop.sh` builds and pushes these exact images before the tier-3 apply, but it does **not** write this file — so the URIs must be set first, or the tier-3 apply fails with `No value for required variable`.
 
 ## Step 3 — Deploy
 
