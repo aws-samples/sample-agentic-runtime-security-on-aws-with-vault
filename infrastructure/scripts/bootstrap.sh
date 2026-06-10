@@ -159,6 +159,7 @@ step_generate_tfvars_and_init() {
     if [ "$DRY_RUN" = true ]; then
         echo -e "${YELLOW}[DRY-RUN] Would seed terraform.tfvars in tier-1/2/3 from .example${NC}"
         echo -e "${YELLOW}[DRY-RUN] Would stamp admin_principal_arn into tier-1 tfvars${NC}"
+        echo -e "${YELLOW}[DRY-RUN] Would stamp derived ECR image URIs into tier-3 tfvars${NC}"
         echo -e "${YELLOW}[DRY-RUN] Would run terraform init in all 3 roots${NC}"
         return 0
     fi
@@ -191,6 +192,33 @@ step_generate_tfvars_and_init() {
         fi
     done
 
+    # --- tier-3: stamp the five derived ECR image URIs ------------------------
+    # Account ID comes from Step 2 (live caller identity, :127); region from the
+    # tier-1 tfvars seeded above — the region the deploy actually targets. The
+    # repo:tag halves are fixed in the .example, so we only fill <account>/<region>.
+    # Idempotent: those are literal placeholders, so a re-run (or a user's custom
+    # registry URI) is a no-op — this never overwrites already-real values. No
+    # hardcoded account/region fallback — both must resolve or we fail loud.
+    local T3_FILE="$TIER3_DIR/terraform.tfvars"
+    if [ -f "$T3_FILE" ]; then
+        # Only the image-URI lines carry placeholders; the instructional comment
+        # mentions <account>/<region> in prose, so we scope both the check and
+        # the substitution to lines containing "dkr.ecr" — never touch comments.
+        if grep -E 'dkr\.ecr' "$T3_FILE" | grep -q '<account>\|<region>'; then
+            local REGION
+            REGION=$(grep -E '^[[:space:]]*region[[:space:]]*=' "$T1_FILE" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+            if [ -z "$AWS_ACCOUNT_ID" ] || [ -z "$REGION" ]; then
+                echo -e "${RED}Error: cannot stamp tier-3 image URIs (account='${AWS_ACCOUNT_ID}', region='${REGION}')${NC}"
+                return 1
+            fi
+            sed -i.bak "/dkr\.ecr/ { s|<account>|${AWS_ACCOUNT_ID}|g; s|<region>|${REGION}|g; }" "$T3_FILE"
+            rm -f "${T3_FILE}.bak"
+            echo -e "${GREEN}OK: stamped tier-3 ECR image URIs (account ${AWS_ACCOUNT_ID}, region ${REGION})${NC}"
+        else
+            echo -e "${GREEN}OK: tier-3 image URIs already resolved — leaving as-is${NC}"
+        fi
+    fi
+
     # --- terraform init all 3 roots (bare init, NEVER -upgrade) ---------------
     echo -e "${BLUE}  Running terraform init in all 3 roots (local state)...${NC}"
     terraform -chdir="$TIER1_DIR" init -input=false
@@ -216,10 +244,11 @@ step_summary() {
     echo -e "${GREEN}What was created (or verified idempotently):${NC}"
     echo -e "  - EC2 Spot Service-Linked Role"
     echo -e "  - terraform.tfvars in all 3 roots (tier-1/2/3, from .example templates)"
+    echo -e "  - admin_principal_arn stamped into tier-1 + ECR image URIs stamped into tier-3"
     echo -e "  - terraform init in all 3 roots (local state)"
     echo
     echo -e "${GREEN}Next steps:${NC}"
-    echo -e "  1. Fill in secrets/images: ${BLUE}${PROJECT_ROOT}/infrastructure/services/terraform.tfvars${NC} (ICR key)"
+    echo -e "  1. Fill in the one manual secret: ${BLUE}${PROJECT_ROOT}/infrastructure/services/terraform.tfvars${NC} (ICR entitlement key)"
     echo -e "  2. Deploy everything: ${BLUE}./infrastructure/scripts/deploy-workshop.sh${NC}"
     echo -e "  3. Or run the full e2e: ${BLUE}./infrastructure/scripts/workshop-e2e.sh --skip-teardown${NC}"
     echo

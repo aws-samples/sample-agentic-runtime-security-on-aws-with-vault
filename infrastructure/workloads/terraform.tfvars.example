@@ -9,11 +9,13 @@
 # state; Vault + IVIA wiring comes from tier-2 state. The ONLY inputs here are
 # the ECR image URIs (built by build-images.sh) and the Bedrock model id.
 #
-# Replace <account> and <region> with your AWS account ID and region BEFORE
-# deploying — these vars have no default, so the tier-3 apply fails with
-# "No value for required variable" if left as placeholders. deploy-workshop.sh
-# builds + pushes these exact repo:tag images, but does NOT write this file.
-# See Deploy the Workshop > "Step 2 — Fill in your tfvars" for a one-line fill.
+# bootstrap.sh stamps <account>/<region> for you — it derives them from your
+# live AWS account ID and the tier-1 region, then writes them into the seeded
+# terraform.tfvars. You only need to touch this file if you seed it WITHOUT
+# bootstrap: then replace <account>/<region> by hand, because these vars have no
+# default and the tier-3 apply fails with "No value for required variable" if
+# left as placeholders. deploy-workshop.sh builds + pushes these exact repo:tag
+# images before the tier-3 apply.
 ################################################################################
 
 uc1_agent_image = "<account>.dkr.ecr.<region>.amazonaws.com/workshop/uc1-agent:latest"
