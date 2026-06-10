@@ -5,7 +5,7 @@ weight: 22
 
 IBM Verify Identity Access (IVIA) 11.0.2 runs self-hosted on EKS as the OIDC provider and CIBA authorization server for all three use cases. Before you deploy in the Deploy Foundation module, you need two licensing artifacts: an IBM Container Registry entitlement key that allows Kubernetes to pull the IVIA container image, and a 90-day trial activation certificate that unlocks the IVIA server.
 
-Obtain both secrets before running `terraform -chdir=infrastructure apply` — deploying without them causes the IVIA pod to fail at `ImagePullBackOff` or at license validation.
+Obtain both secrets before you deploy the Foundation module — deploying without them causes the IVIA pod to fail at `ImagePullBackOff` or at license validation.
 
 ## Secret 1 — IBM Container Registry Entitlement Key
 
@@ -15,15 +15,15 @@ The IVIA container image is hosted in the IBM Container Registry (`icr.io`). Kub
 
 **Where to obtain:** _TBD — see workshop maintainer_
 
-**Where to place it:** Add the key to `infrastructure/terraform.tfvars`:
+**Where to place it:** Add the key to `infrastructure/services/terraform.tfvars` (the tier-2 root that deploys IVIA):
 
 ```hcl
 icr_entitlement_key = "<your-entitlement-key>"
 ```
 
-The key has no expiry. Keep it out of version control — `infrastructure/terraform.tfvars` is already listed in `.gitignore`.
+The key has no expiry. Keep it out of version control — `infrastructure/services/terraform.tfvars` is already listed in `.gitignore`.
 
-**ImagePullBackOff symptom** — If the IVIA pod shows `ImagePullBackOff` after deploy, the entitlement key is missing or incorrect. Update `icr_entitlement_key` in `infrastructure/terraform.tfvars` and re-run `terraform -chdir=infrastructure apply`.
+**ImagePullBackOff symptom** — If the IVIA pod shows `ImagePullBackOff` after deploy, the entitlement key is missing or incorrect. Update `icr_entitlement_key` in `infrastructure/services/terraform.tfvars` and re-run `bash infrastructure/scripts/deploy-workshop.sh --skip-infra --skip-build`.
 
 ## Secret 2 — IVIA Trial Activation Certificate
 
@@ -51,7 +51,7 @@ Before continuing to the Deploy Foundation module, confirm both artifacts exist:
 
 ```bash
 # Entitlement key set in tfvars
-grep -q 'icr_entitlement_key' infrastructure/terraform.tfvars && echo "ICR key: SET" || echo "ICR key: MISSING"
+grep -q 'icr_entitlement_key' infrastructure/services/terraform.tfvars && echo "ICR key: SET" || echo "ICR key: MISSING"
 
 # Trial certificate present
 [ -f infrastructure/modules/verify_access/base_layer/ISAM-Trial-HashiCorp.cer ] \
