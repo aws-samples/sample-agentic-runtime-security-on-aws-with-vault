@@ -31,6 +31,16 @@ The script prints a pass/fail summary per step. Every step must pass before you 
 First deploy takes ~35–50 min (EKS ~12, RDS ~10 incl. pgaudit reboot, Bedrock KB ~3, add-ons ~5, then Vault + IVIA + ACME + workloads) — timing tracks AWS API response, not your machine. The script is idempotent: if a step fails, fix the cause and re-run; converged work is skipped.
 :::
 
+:::alert{header="If a step fails — resume without redoing the slow stages" type="warning"}
+The script hard-stops on the first failed step and prints a `Fix:` hint. Fix the cause (for example, **start Docker Desktop** if the image build failed), then resume. Once the cluster, images, and Vault init are already done, skip those slow stages and re-run the configuration steps:
+
+```bash
+bash infrastructure/scripts/deploy-workshop.sh --skip-infra --skip-vault-init --skip-build
+```
+
+This re-applies Tier 2 (no-op if unchanged), re-runs the ACME/issuer patch, then **Configure Vault** and everything after it. Re-running is always safe — converged work is skipped. **Configure Vault** retries the Vault connection for up to 30s and tolerates a standby Raft node; a persistent "Cannot reach Vault" means the Vault pods aren't all `Running` yet — check `kubectl -n vault get pods`, then re-run the command above.
+:::
+
 ## What it runs, in order
 
 1. **Apply tier-1** — VPC, EKS, add-ons (cert-manager, external-dns, AWS Load Balancer Controller), RDS, Bedrock KB, ECR, IAM, audit substrate. *No pods yet.*

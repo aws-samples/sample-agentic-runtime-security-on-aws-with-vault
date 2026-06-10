@@ -244,12 +244,29 @@ TFVARS
   fi
   ok "Port-forward active (PID ${VAULT_PF_PID})"
 
-  # Verify connectivity
+  # Verify connectivity — retry up to ~30s. A live-but-not-ready process
+  # (kill -0 passes) and a single probe are not enough; the one-shot probe
+  # missed two real failure modes:
+  #   1. Tunnel not passing traffic yet at the fixed sleep on higher-latency
+  #      networks (e.g. a remote attendee far from the EKS API endpoint).
+  #   2. port-forward pins to a STANDBY Vault node, whose /v1/sys/health
+  #      returns HTTP 429 — which `curl -sf` treats as a failure. standbyok/
+  #      perfstandbyok make a standby answer 200; writes are request-forwarded
+  #      to the active node, so the config apply below still succeeds.
   info "Testing Vault connectivity..."
-  if curl -sf http://127.0.0.1:8200/v1/sys/health &>/dev/null; then
+  local health_url="http://127.0.0.1:8200/v1/sys/health?standbyok=true&perfstandbyok=true"
+  local vault_reachable=false
+  for _ in $(seq 1 30); do
+    if curl -sf "${health_url}" &>/dev/null; then
+      vault_reachable=true
+      break
+    fi
+    sleep 1
+  done
+  if [[ "${vault_reachable}" == true ]]; then
     ok "Vault reachable at 127.0.0.1:8200"
   else
-    fail "Cannot reach Vault at 127.0.0.1:8200"
+    fail "Cannot reach Vault at 127.0.0.1:8200 after 30s"
     record "vault_config" "FAIL"
     return 1
   fi
