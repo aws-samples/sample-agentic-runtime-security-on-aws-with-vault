@@ -366,7 +366,6 @@ module "observability" {
 
   region             = var.region
   cluster_name       = module.eks.cluster_name
-  log_bucket_name    = "${module.eks.cluster_name}-workshop-logs"
   glue_database_name = module.audit.glue_database_name
   athena_workgroup   = module.audit.athena_workgroup_name
   kms_key_arn        = module.audit.workshop_cmk_arn
