@@ -159,8 +159,9 @@ token-exchange stage:
   CARRIES it (bc-authorize / authorize); it is returned as a token-RESPONSE field, not a
   JWT claim; `strategy` (sha512) is an identifier hash, not a propagation switch.
 - IBM `js_ciba_mapping_rule`: the `ciba` object exposes no `authorization_details` accessor;
-  the `ciba.success(meta)` enrichment path is for the external check-status authenticator,
-  which UC3 does not use (UC3 uses `InternalAuthenticator`).
+  UC3's external check-status authenticator (`ExternalAuthenticatorWithCheckStatusEndpoint`,
+  set by the `notifyuser` rule) completes via `ciba.success({sub})`, whose enrichment payload
+  carries only the subject — not `authorization_details`.
 - Live: jaime's CIBA access token (the token-exchange `subject_token`) decodes with no
   `authorization_details`; the token-exchange pre-token context exposes no such attribute.
 
