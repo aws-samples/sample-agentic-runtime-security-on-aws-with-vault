@@ -39,4 +39,18 @@ Sample output:
 
 Your IDs, amount, and timestamp will differ. What matters is that the chat returns `Status: approved` and the new row appears in your transaction list.
 
-If no push arrives: ensure notifications are enabled for IBM Verify and that you completed enrollment.
+## If the approval push never arrives
+
+The agent is an LLM — occasionally it will *say* "I've sent an approval request to your IBM Verify app" without actually calling the tool that fires the push, so nothing reaches your phone.
+
+**1. Force the agent to actually send it.** Reply in the chat:
+
+> Actually send it now — start the refund and push the approval request to my IBM Verify app. Don't just describe it.
+
+The push should land within a few seconds. Confirm the tool really fired — a `mmfa_push_fired` line appears only when the push actually went out:
+
+```bash
+kubectl logs -n banking-app -l app=uc3-agent --tail=30 | grep mmfa_push_fired
+```
+
+**2. If the push still doesn't arrive,** enable notifications for IBM Verify on your phone and confirm you completed device enrollment.
