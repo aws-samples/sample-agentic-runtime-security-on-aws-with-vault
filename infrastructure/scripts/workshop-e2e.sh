@@ -695,7 +695,13 @@ phase_observability() {
 
     # Step 4: Verify S3 log bucket has objects
     step_header "Verifying S3 log delivery..."
-    local log_bucket="${CLUSTER_NAME}-workshop-logs"
+    # Discover the bucket by its stable "-workshop-logs" substring — the name
+    # carries a bucket_prefix-generated suffix, so it cannot be rebuilt exactly.
+    local log_bucket
+    log_bucket=$(aws s3api list-buckets \
+        --query "Buckets[?contains(Name, 'workshop-logs')].Name | [0]" \
+        --output text 2>/dev/null || echo "")
+    [ -z "${log_bucket}" ] && log_bucket="None"
     local s3_count
     s3_count=$(aws s3api list-objects-v2 --bucket "${log_bucket}" --max-items 5 \
         --query 'length(Contents)' --output text 2>/dev/null || echo "0")

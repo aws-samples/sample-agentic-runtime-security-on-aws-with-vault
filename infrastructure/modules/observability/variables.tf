@@ -19,11 +19,6 @@ variable "namespace" {
   default     = "logging"
 }
 
-variable "log_bucket_name" {
-  type        = string
-  description = "S3 bucket name for exported logs (Firehose destination). Must be globally unique."
-}
-
 variable "glue_database_name" {
   type        = string
   description = "Existing Glue catalog database from the audit module (workshop_logs)."
