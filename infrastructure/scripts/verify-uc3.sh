@@ -142,6 +142,13 @@ if [ -z "${AWS_REGION:-}" ] && [ -f "${_TFVARS}" ]; then
         | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
 fi
 
+# Resolve cluster name from terraform.tfvars — Firehose stream names are
+# <cluster>-<plane>, independent of the (now prefix-suffixed) log bucket name.
+if [ -z "${CLUSTER_NAME:-}" ] && [ -f "${_TFVARS}" ]; then
+    CLUSTER_NAME=$(grep -E '^\s*cluster_name\s*=' "${_TFVARS}" 2>/dev/null \
+        | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+fi
+
 # Load root token from vault-init.json or local state
 if [ -z "${VAULT_ROOT_TOKEN:-}" ] && [ -f "$HOME/vault-init.json" ]; then
     VAULT_ROOT_TOKEN=$(jq -r '.root_token // empty' "$HOME/vault-init.json" 2>/dev/null || true)
@@ -590,8 +597,7 @@ if [ -n "${AWS_REGION:-}" ]; then
         # Verify Firehose delivery streams are ACTIVE (3 streams)
         active_streams=0
         for stream_suffix in vault-audit ivia-decision agent-trace; do
-            cluster_prefix=$(echo "${log_bucket}" | sed 's/-workshop-logs$//')
-            stream_name="${cluster_prefix}-${stream_suffix}"
+            stream_name="${CLUSTER_NAME}-${stream_suffix}"
             stream_status=$(aws firehose describe-delivery-stream \
                 --delivery-stream-name "${stream_name}" \
                 --region "${AWS_REGION}" \

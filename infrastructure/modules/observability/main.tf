@@ -163,7 +163,12 @@ resource "helm_release" "fluent_bit" {
 #-------------------------------------------------------------------------------
 
 resource "aws_s3_bucket" "logs" {
-  bucket        = var.log_bucket_name
+  # bucket_prefix (not a fixed bucket name) so each attendee's deploy gets a
+  # globally-unique name — S3 bucket names share one global namespace, so a
+  # fixed name collides across accounts at a multi-attendee event. Matches the
+  # audit + KB buckets. The literal "-workshop-logs" substring is preserved so
+  # teardown (starts_with) and the verify scripts (contains) still discover it.
+  bucket_prefix = "${var.cluster_name}-workshop-logs-"
   force_destroy = true
 
   tags = var.tags
