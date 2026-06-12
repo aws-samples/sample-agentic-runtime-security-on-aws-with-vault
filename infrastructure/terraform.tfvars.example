@@ -35,7 +35,8 @@ kb_region = "us-east-1"
 # Let's Encrypt account contact email for the cert-manager ClusterIssuer.
 # REQUIRED — the variable has NO default (project rule: never hardcode an
 # identity value as a default). LE uses this for renewal/revocation notices.
-acme_email = "you@example.com"
+# Leave empty: deploy-workshop.sh prompts for it (and writes it here) on first run.
+acme_email = ""
 
 # Audit retention (workshop ephemeral; 7-day default)
 audit_retention_days = 7

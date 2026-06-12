@@ -8,13 +8,16 @@
 # (modules/verify_access). region / cluster wiring / KMS key / tags all come
 # from tier-1 state via terraform_remote_state — the ONLY inputs here are the
 # two registry/MMFA secrets below (sensitive, never in tier-1 state).
+#
+# Leave both empty: deploy-workshop.sh prompts for them (input hidden) on first
+# run and writes them into the gitignored terraform.tfvars — secrets never get
+# committed to the repo.
 ################################################################################
 
 # IBM Container Registry entitlement key for pulling IVIA images
 # (icr.io/ivia/ivia-oidc-provider). Obtain from your IBM entitlement.
-icr_entitlement_key = "<your-icr-entitlement-key>"
+icr_entitlement_key = ""
 
 # IBM Verify mobile-push (MMFA) — VerifyPushCreds API Key (= push provider Client
-# Secret for ISVA 10.0.3+). Leave empty until Use Case 3 MMFA push is enabled;
-# when empty the 'ivia-mmfa-push' Secret is not created (no-op).
+# Secret for ISVA 10.0.3+). Required by Use Case 3 MMFA push.
 ivia_mmfa_push_client_secret = ""
