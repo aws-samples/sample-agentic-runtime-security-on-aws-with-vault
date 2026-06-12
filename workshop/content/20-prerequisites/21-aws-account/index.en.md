@@ -8,11 +8,11 @@ Clone the workshop repository to your local machine. Forking is optional — you
 ## Step 1: Clone the Repository
 
 ```bash
-git clone https://github.com/sharepointoscar/agentic-runtime-security-aws.git
+git clone https://github.ibm.com/Oscar-Medina/agentic-runtime-security-aws.git
 cd agentic-runtime-security-aws
 ```
 
-If you want your own remote copy (optional), fork first at <https://github.com/sharepointoscar/agentic-runtime-security-aws>, then replace the URL above with `https://github.com/<YOUR_GH_USER>/agentic-runtime-security-aws.git`.
+If you want your own remote copy (optional), fork first at <https://github.ibm.com/Oscar-Medina/agentic-runtime-security-aws>, then replace the URL above with `https://github.ibm.com/<YOUR_GH_USER>/agentic-runtime-security-aws.git`.
 
 ## Step 2: Verify AWS Access
 
