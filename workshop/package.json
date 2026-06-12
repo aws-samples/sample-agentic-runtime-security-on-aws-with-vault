@@ -5,7 +5,7 @@
   "private": true,
   "repository": {
     "type": "git",
-    "url": "https://github.com/sharepointoscar/agentic-runtime-security-aws"
+    "url": "https://github.ibm.com/Oscar-Medina/agentic-runtime-security-aws"
   },
   "scripts": {
     "preview": "bash scripts/preview.sh",
