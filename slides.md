@@ -21,9 +21,6 @@ revealOptions:
 
 # Agentic Runtime Security on AWS
 
-### Short-lived, just-in-time, scoped credentials for AI agents
-
-IBM Verify Identity Access + HashiCorp Vault on Amazon EKS
 
 <div style="display:flex; gap:40px; align-items:center; justify-content:center; margin-top:24px;">
   <img src="assets/hashicorp_logo.png" style="width: 130px;" alt="HashiCorp" />
@@ -372,20 +369,29 @@ Check 14 closes the obvious door — you can't forge with a symmetric key becaus
 
 ## One request_id, three planes
 
-<img src="assets/audit-correlation.svg" style="max-height: 380px;" />
+<img src="assets/audit-correlation.svg" style="max-height: 460px;" />
 
 A single Athena view **`audit_correlation`** (12 cols) stitches **IVIA decision · Vault audit · RDS pgaudit**. `request_id` anchors IVIA↔pgaudit; Vault is bridged by **principal + path + ±30s**.
 
+Note:
+The pedagogical money shot — and here's the honest mechanism an expert will want. IVIA emits a decision record carrying the agent's `request_id` (it was the CIBA `binding_message`). The agent embeds that same UUID as a `/* uc3_request_id=… */` SQL comment, which pgaudit logs verbatim and the view regex-extracts — so IVIA and Postgres correlate directly on request_id. Vault's native audit `request.id` is a different value, so the view bridges Vault by composite key: principal `jwt-<sub>`, path `database/creds/uc3-refund-writer`, response event, within a ±30s window. Three CloudWatch log groups → Firehose (decompress + extract) → S3 → Glue → one Athena view. The correlated row is on the next slide.
+
+---
+
+### `audit_correlation` — one row, three planes
+
 ```text
-request_id                 2f50b532-…-71250b5470c3     vault_principal   jwt-jaime
-user_approved_sub          jaime                       vault_path        database/creds/uc3-refund-writer
-approval_time              2026-…T15:20:47             vault_bound_claim_may_act   uc3-actor
-db_write_time              2026-… 15:20:47 UTC          vault_bound_claim_rar_type  refund_approval
-db_command                 WRITE,INSERT                 db_credential_ttl 300
+request_id         2f50b532-…-71250b5470c3  vault_principal            jwt-jaime
+user_approved_sub  jaime                    vault_path                 database/creds/uc3-refund-writer
+approval_time      2026-…T15:20:47          vault_bound_claim_may_act  uc3-actor
+db_write_time      2026-… 15:20:47 UTC      vault_bound_claim_rar_type refund_approval
+db_command         WRITE,INSERT             db_credential_ttl          300
 ```
 
+One row answers: **who approved, when, what claims Vault bound them to, what write landed, and the credential's TTL.**
+
 Note:
-The pedagogical money shot — and here's the honest mechanism an expert will want. IVIA emits a decision record carrying the agent's `request_id` (it was the CIBA `binding_message`). The agent embeds that same UUID as a `/* uc3_request_id=… */` SQL comment, which pgaudit logs verbatim and the view regex-extracts — so IVIA and Postgres correlate directly on request_id. Vault's native audit `request.id` is a different value, so the view bridges Vault by composite key: principal `jwt-<sub>`, path `database/creds/uc3-refund-writer`, response event, within a ±30s window. Three CloudWatch log groups → Firehose (decompress + extract) → S3 → Glue → one Athena view. One row answers: who approved, when, what claims Vault bound them to, what write landed, and the credential's TTL. The TTL column comes from the value the agent observed in the Vault creds response and threaded into its IVIA anchor — because the database/creds read response doesn't log a numeric duration.
+This single row is the auditor's answer. The TTL column comes from the value the agent observed in the Vault creds response and threaded into its IVIA anchor — because the `database/creds` read response doesn't log a numeric duration. Read it left-to-right across the three planes: IVIA says jaime approved at 15:20:47; Vault says principal `jwt-jaime` was vended `database/creds/uc3-refund-writer` with `may_act=uc3-actor` and RAR type `refund_approval` at a 300-second TTL; RDS pgaudit says an INSERT write landed on `banking.refunds` at the same instant — all keyed by the one `request_id`.
 
 ---
 
