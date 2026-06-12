@@ -21,19 +21,23 @@ bash infrastructure/scripts/bootstrap.sh
 
 It is idempotent — safe to re-run, and it never overwrites values you have already set.
 
-## Step 2 — Deploy
+## Step 2 — Set your one manual secret
+
+Bootstrap derived every value it could, but the IBM Container Registry entitlement key is a secret it cannot derive — set it by hand in the tier-2 file it just seeded:
+
+**Tier 2 — `infrastructure/services/terraform.tfvars`** — your IBM Container Registry entitlement key from [Obtain IVIA Licenses](../../20-prerequisites/22-ivia-licensing/):
+
+```hcl
+icr_entitlement_key = "<your-entitlement-key>"
+```
+
+## Step 3 — Deploy
 
 ```bash
 bash infrastructure/scripts/deploy-workshop.sh
 ```
 
-On the **first run**, the script prompts for the three values it cannot derive or store in the repo — paste each when asked:
-
-- **Let's Encrypt contact email** — a real, deliverable address for the TLS certificate (the `example.com` placeholder is rejected).
-- **IBM Container Registry entitlement key** — from [Obtain IVIA Licenses](../../20-prerequisites/22-ivia-licensing/) (input hidden).
-- **IBM Verify MMFA push client secret** — required by Use Case 3 (input hidden).
-
-The script writes them into the gitignored `terraform.tfvars` files, so re-runs reuse them and never prompt again. It then prints a pass/fail summary per step — every step must pass before you continue to verification.
+The script prints a pass/fail summary per step. Every step must pass before you continue to verification.
 
 :::alert{header="Timing & re-runs" type="info"}
 First deploy takes ~35–50 min (EKS ~12, RDS ~10 incl. pgaudit reboot, Bedrock KB ~3, add-ons ~5, then Vault + IVIA + ACME + workloads) — timing tracks AWS API response, not your machine. The script is idempotent: if a step fails, fix the cause and re-run; converged work is skipped.

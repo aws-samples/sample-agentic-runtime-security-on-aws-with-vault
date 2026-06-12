@@ -9,8 +9,6 @@ The workshop expects these versions: kubectl 1.34.x, helm 3.12+, terraform 1.10+
 
 The pre-flight script installs them all and verifies your AWS account in one step. Manual install steps are intentionally omitted — running the script is the documented path. Windows users: use WSL2 (Linux subsystem).
 
-**Docker is the one exception you install yourself** — install **Docker Desktop** (macOS/Windows) or **Docker Engine** (Linux) and make sure it is **running** before you deploy. The pre-flight script checks for it but does not install it; the deploy builds and pushes the Use Case agent container images with it.
-
 ## Run the pre-flight script
 
 The pre-flight script auto-installs all CLI tools, then verifies Bedrock model access, AWS service quotas, and IAM permissions in one shot. It continues past individual failures and emits a consolidated summary with copy-paste remediation for each failure.
@@ -34,7 +32,6 @@ kubectl version --client
 helm version --short
 vault version
 aws --version
-docker info --format '{{.ServerVersion}}'   # confirms the Docker daemon is running
 ```
 
 ## Service quotas
