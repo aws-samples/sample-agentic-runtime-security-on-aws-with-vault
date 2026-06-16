@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# 15-uc3-mmfa-ciba/solve-shell — the CIBA round-trip is a human action
+# (tapping Approve on the phone). solve is a no-op.
+set -euo pipefail
+exit 0
