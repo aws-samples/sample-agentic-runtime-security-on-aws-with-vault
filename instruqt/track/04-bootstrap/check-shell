@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+#===============================================================================
+# 04-bootstrap/check-shell
+# Asserts:
+#   - All three tier tfvars files exist and are non-empty
+#   - admin_principal_arn stamped from STS identity in tier-1 tfvars
+#   - All three roots are terraform-init-ed (.terraform/ dirs present)
+#===============================================================================
+
+set -euo pipefail
+
+REPO="/root/workshop"
+
+for f in "${REPO}/infrastructure/terraform.tfvars" \
+         "${REPO}/infrastructure/services/terraform.tfvars" \
+         "${REPO}/infrastructure/workloads/terraform.tfvars"; do
+    [ -s "$f" ] || { echo "FAIL: missing or empty: $f"; exit 1; }
+done
+echo "PASS: all three tier tfvars present and non-empty"
+
+ARN=$(grep -E '^[[:space:]]*admin_principal_arn[[:space:]]*=' \
+    "${REPO}/infrastructure/terraform.tfvars" \
+    | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+[[ "${ARN}" =~ ^arn:aws:iam::[0-9]{12}: ]] \
+    || { echo "FAIL: admin_principal_arn not in expected IAM ARN format: '${ARN}'"; exit 1; }
+echo "PASS: admin_principal_arn stamped (${ARN})"
+
+for d in "${REPO}/infrastructure" \
+         "${REPO}/infrastructure/services" \
+         "${REPO}/infrastructure/workloads"; do
+    [ -d "$d/.terraform" ] \
+        || { echo "FAIL: $d not terraform-init-ed"; exit 1; }
+done
+echo "PASS: all three roots terraform-init-ed"
+
+echo "04-bootstrap: all checks green"

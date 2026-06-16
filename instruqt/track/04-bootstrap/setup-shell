@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+#===============================================================================
+# 04-bootstrap/setup-shell
+# Belt-and-suspenders: bootstrap.sh already ran in track_scripts/setup-shell.
+# Re-running here is safe (idempotent per project CLAUDE.md) and reconverges
+# state if the attendee modified anything between challenges.
+#===============================================================================
+set -euo pipefail
+
+cd /root/workshop
+bash infrastructure/scripts/bootstrap.sh --skip-prereq-gate

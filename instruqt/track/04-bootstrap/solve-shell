@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# 04-bootstrap/solve-shell
+# setup-shell re-runs the bootstrap; solve is a no-op since the check assertions
+# are pure side-effects of bootstrap.sh's idempotent execution.
+set -euo pipefail
+exit 0
