@@ -12,6 +12,20 @@ Step-by-step **hands-on** AWS Workshop Studio workshop that deploys the IBM Veri
 
 ---
 
+## Distributions
+
+The workshop ships in **two** parallel distributions. Both deploy the same underlying AWS reference architecture and share every script under `infrastructure/scripts/`, every Terraform module under `infrastructure/modules/`, and every page of narrative under `workshop/content/`. Choose the distribution that matches your delivery channel.
+
+### AWS Workshop Studio (`workshop/`)
+
+Hosted on AWS Workshop Studio v2. Attendees consume the workshop as 39 guided `index.en.md` pages (`workshop/content/**`). Admin deploys the whole stack with one `bash infrastructure/scripts/deploy-workshop.sh` invocation against an AWS account they own. See "Quick start (admin)" below and "Workshop content (preview + publish)" further down.
+
+### Instruqt (`instruqt/`)
+
+Hosted on Instruqt as a single ~4-hour mega-track. Each attendee receives a fresh **Instruqt-provisioned AWS sandbox account** and works through 18 challenges that drive the same `deploy-workshop.sh` orchestration in three tiers (one challenge per tier), then walk the three use cases end-to-end. The 14-step deploy is split via the `--tier <1|2|3>` flag on `deploy-workshop.sh`; AWS credentials, SSH deploy key, and IBM licensing artifacts are injected from Instruqt org secrets so the attendee never touches plaintext. See `instruqt/README.md` for the full authoring + publish loop.
+
+---
+
 ## Quick start (admin)
 
 ```bash
