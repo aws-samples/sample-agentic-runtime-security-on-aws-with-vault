@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# 08-platform-health/solve-shell — re-running test-foundation.sh is the
+# canonical remediation for any check failure. Forward its exit code.
+set -euo pipefail
+cd /root/workshop
+bash infrastructure/scripts/test-foundation.sh
