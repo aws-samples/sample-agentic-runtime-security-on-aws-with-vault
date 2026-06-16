@@ -14,6 +14,7 @@
 # infrastructure/deployments.tfdeploy.hcl) holds for instruqt/ too.
 slug: agentic-runtime-security-aws
 type: track
+owner: hashicorp-field-ops
 title: Agentic Runtime Security on AWS
 teaser: >-
   Five control objectives, three use cases, one EKS cluster — runtime-secure an
