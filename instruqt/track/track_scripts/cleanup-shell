@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+#===============================================================================
+# track_scripts/cleanup-shell — Instruqt track-play teardown.
+#
+# Runs ONCE per track-play after the last challenge completes (or when the
+# track-play is abandoned). Instruqt destroys the AWS sandbox account
+# immediately after this script returns, so calling teardown.sh here is
+# belt-and-suspenders for any resources that escape the sandbox boundary
+# (e.g., an ACM cert imported via the bootstrap path, S3 buckets with
+# objects, KMS keys in pending-deletion).
+#
+# `--yes` is the non-interactive contract added in Task 2 step 3 — required
+# because the Instruqt cleanup phase has no tty.
+#===============================================================================
+
+set -euo pipefail
+
+REPO_DIR="/root/workshop"
+
+if [ ! -d "${REPO_DIR}" ]; then
+    echo "==> [cleanup-shell] repo never cloned; nothing to teardown."
+    exit 0
+fi
+
+echo "==> [cleanup-shell] bash infrastructure/scripts/teardown.sh --yes"
+# Best-effort — Instruqt nukes the sandbox after we return regardless.
+# Capture exit code but never fail the cleanup phase.
+bash "${REPO_DIR}/infrastructure/scripts/teardown.sh" --yes || {
+    echo "WARN: teardown.sh returned non-zero; Instruqt will still destroy the sandbox AWS account."
+}
+
+echo "==> [cleanup-shell] complete."

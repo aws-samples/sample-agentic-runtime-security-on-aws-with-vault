@@ -1,0 +1,54 @@
+---
+# Instruqt sandbox declaration — TEMPLATE.
+#
+# The two region placeholders below are substituted at push-time by
+# instruqt/scripts/render-config.sh. The literals live ONLY in
+# infrastructure/terraform.tfvars.example (the documented single-source-of-
+# truth per its file-header comment on lines 21-22) and never appear in any
+# tracked instruqt/ file, honoring the canonical region contract in CLAUDE.md.
+#
+# Authoring loop:
+#   1. Edit this template.
+#   2. Run: instruqt/scripts/render-config.sh
+#   3. Run: instruqt/scripts/push.sh   (wraps render + `instruqt track push`)
+#
+# Direct `instruqt track push` is NOT supported — see instruqt/README.md.
+version: "3"
+
+containers:
+  - name: shell
+    # Instruqt default Ubuntu LTS shell image with aws CLI v2 + terraform 1.10+
+    # + kubectl + helm + jq + git pre-installed. Exact image name + version
+    # comes from the Instruqt hosts catalog at push-time; placeholder kept
+    # generic until that lookup happens against the live Instruqt org.
+    image: instruqt/ubuntu-cloud-sdk
+    shell: /bin/bash
+
+aws_accounts:
+  - name: workshop
+    regions:
+      - ${REGION_PRIMARY}
+      - ${REGION_KB}
+    managed_policies:
+      - arn:aws:iam::aws:policy/AdministratorAccess
+
+# Org secrets — injected as env vars in the sandbox at track-play start.
+# Per CLAUDE.md (Bear, 2026-06-16): NEVER printed; NEVER echoed; visible only
+# to the workload that needs them. ICR + IVIA push secrets land in
+# infrastructure/services/terraform.tfvars in track_scripts/setup-shell;
+# the SSH deploy key lands in ~/.ssh/id_ed25519 (mode 0600).
+secrets:
+  - name: ICR_ENTITLEMENT_KEY
+  - name: IVIA_MMFA_PUSH_SECRET
+  - name: INSTRUQT_GITHUB_IBM_DEPLOY_KEY
+
+# Runtime parameters — prompted to attendee at track start.
+# Per Decision 2: LE_EMAIL is a runtime_parameter (attendee enters their own
+# deliverable email so Let's Encrypt cert registration is real). The two
+# secrets above stay org-level so the attendee never sees them.
+runtime_parameters:
+  - name: LE_EMAIL
+    description: >-
+      Real, deliverable email for Let's Encrypt certificate registration. Used
+      verbatim in infrastructure/terraform.tfvars as acme_email; LE sends
+      expiry warnings to this address.

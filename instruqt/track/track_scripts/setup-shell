@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+#===============================================================================
+# track_scripts/setup-shell — Instruqt track-play bootstrap.
+#
+# Runs ONCE per track-play (before challenge 01-welcome displays) inside the
+# Instruqt sandbox shell container. Responsibilities, in order:
+#
+#   a. Translate Instruqt's AWS-account env vars (INSTRUQT_AWS_ACCOUNT_workshop_*)
+#      into ~/.aws/credentials so the aws CLI and the Terraform AWS provider
+#      pick them up with zero AWS_PROFILE export.
+#   b. Write the SSH deploy key from the org secret INSTRUQT_GITHUB_IBM_DEPLOY_KEY
+#      to ~/.ssh/id_ed25519 (mode 0600) and clone the workshop repo over SSH.
+#   c. Inject runtime_parameter LE_EMAIL → infrastructure/terraform.tfvars and
+#      org secrets ICR_ENTITLEMENT_KEY / IVIA_MMFA_PUSH_SECRET →
+#      infrastructure/services/terraform.tfvars so deploy-workshop.sh sees the
+#      values as already-set and does NOT prompt.
+#   d. Run check-prerequisites.sh --skip-tools (validates credentials, region,
+#      Bedrock model access, quotas, IAM — skips the install gate since the
+#      sandbox image has the CLIs pre-baked).
+#   e. Run bootstrap.sh --skip-prereq-gate (seeds the 3 tfvars from .example,
+#      stamps admin_principal_arn from STS, terraform init in all 3 roots).
+#
+# Any non-zero exit halts the track-play before challenge 1 displays — that is
+# the correct fail-loud behavior: an attendee should never see a half-broken
+# environment.
+#===============================================================================
+
+set -euo pipefail
+
+REPO_DIR="/root/workshop"
+SSH_KEY_PATH="${HOME}/.ssh/id_ed25519"
+KNOWN_HOSTS="${HOME}/.ssh/known_hosts"
+GIT_REMOTE="git@github.ibm.com:Oscar-Medina/agentic-runtime-security-aws.git"
+
+echo "==> [setup-shell] step (a): translate Instruqt AWS env vars → ~/.aws/credentials"
+
+# Instruqt injects credentials for an AWS sandbox named in config.yml's
+# aws_accounts[].name as `INSTRUQT_AWS_ACCOUNT_<name>_AWS_ACCESS_KEY_ID` etc.
+# Our sandbox is named `workshop` (see instruqt/track/config.yml.tmpl).
+: "${INSTRUQT_AWS_ACCOUNT_workshop_AWS_ACCESS_KEY_ID:?Instruqt did not inject AWS_ACCESS_KEY_ID for workshop sandbox — config.yml aws_accounts name mismatch?}"
+: "${INSTRUQT_AWS_ACCOUNT_workshop_AWS_SECRET_ACCESS_KEY:?Instruqt did not inject AWS_SECRET_ACCESS_KEY for workshop sandbox}"
+
+mkdir -p "${HOME}/.aws"
+cat > "${HOME}/.aws/credentials" <<EOF
+[default]
+aws_access_key_id     = ${INSTRUQT_AWS_ACCOUNT_workshop_AWS_ACCESS_KEY_ID}
+aws_secret_access_key = ${INSTRUQT_AWS_ACCOUNT_workshop_AWS_SECRET_ACCESS_KEY}
+EOF
+chmod 600 "${HOME}/.aws/credentials"
+
+# Region defaults for the aws CLI + terraform AWS provider. Primary workload
+# region comes from the Instruqt-injected region list (first entry); we set
+# both AWS_REGION and AWS_DEFAULT_REGION so no env-var ceremony is needed.
+PRIMARY_REGION="${INSTRUQT_AWS_ACCOUNT_workshop_REGION:-}"
+if [ -z "${PRIMARY_REGION}" ]; then
+    # Fallback: read from the rendered config.yml shipped with the track.
+    PRIMARY_REGION=$(awk '/aws_accounts:/,/^[a-zA-Z]/' /tmp/__instruqt-config.yml 2>/dev/null \
+        | awk '/regions:/{f=1;next} f && /^[[:space:]]*-/{gsub(/^[[:space:]]*-[[:space:]]*/,""); print; exit}' \
+        || true)
+fi
+: "${PRIMARY_REGION:?Could not resolve a primary region for the workshop sandbox}"
+
+mkdir -p /etc/profile.d
+cat > /etc/profile.d/aws.sh <<EOF
+export AWS_REGION="${PRIMARY_REGION}"
+export AWS_DEFAULT_REGION="${PRIMARY_REGION}"
+EOF
+chmod 644 /etc/profile.d/aws.sh
+# Export into the current shell so the rest of this script + bootstrap.sh see it.
+export AWS_REGION="${PRIMARY_REGION}"
+export AWS_DEFAULT_REGION="${PRIMARY_REGION}"
+
+echo "    AWS region set to: ${AWS_REGION}"
+aws sts get-caller-identity --query Account --output text \
+    || { echo "FATAL: aws sts get-caller-identity failed — credentials not usable"; exit 1; }
+
+echo "==> [setup-shell] step (b): SSH deploy key + repo clone"
+
+: "${INSTRUQT_GITHUB_IBM_DEPLOY_KEY:?Org secret INSTRUQT_GITHUB_IBM_DEPLOY_KEY not injected — set it on the Instruqt org}"
+
+mkdir -p "${HOME}/.ssh"
+chmod 700 "${HOME}/.ssh"
+# Write key. The org-secret value is expected to be the FULL private key PEM
+# (BEGIN ... END) including a trailing newline; if Instruqt strips the trailing
+# newline ssh-keygen will still accept it, so we add one defensively.
+printf '%s\n' "${INSTRUQT_GITHUB_IBM_DEPLOY_KEY}" > "${SSH_KEY_PATH}"
+chmod 600 "${SSH_KEY_PATH}"
+
+ssh-keyscan -t ed25519 github.ibm.com >> "${KNOWN_HOSTS}" 2>/dev/null || true
+chmod 600 "${KNOWN_HOSTS}"
+
+if [ -d "${REPO_DIR}/.git" ]; then
+    echo "    Repo already cloned at ${REPO_DIR} — running git fetch + reset to origin/main (idempotent)"
+    git -C "${REPO_DIR}" fetch origin
+    git -C "${REPO_DIR}" reset --hard origin/main
+else
+    echo "    Cloning ${GIT_REMOTE} → ${REPO_DIR}"
+    git clone "${GIT_REMOTE}" "${REPO_DIR}"
+fi
+
+echo "==> [setup-shell] step (c): inject secrets + LE_EMAIL into terraform.tfvars"
+
+: "${LE_EMAIL:?runtime_parameter LE_EMAIL not provided by attendee — Instruqt prompt missed?}"
+: "${ICR_ENTITLEMENT_KEY:?Org secret ICR_ENTITLEMENT_KEY not injected}"
+: "${IVIA_MMFA_PUSH_SECRET:?Org secret IVIA_MMFA_PUSH_SECRET not injected}"
+
+# Seed tier-1 tfvars from .example IF missing; bootstrap.sh handles the same
+# normally, but doing it here lets us inject acme_email cleanly before
+# bootstrap runs (which is gated on tfvars existing).
+TIER1_TFVARS="${REPO_DIR}/infrastructure/terraform.tfvars"
+TIER1_TFVARS_EXAMPLE="${REPO_DIR}/infrastructure/terraform.tfvars.example"
+TIER2_TFVARS="${REPO_DIR}/infrastructure/services/terraform.tfvars"
+TIER2_TFVARS_EXAMPLE="${REPO_DIR}/infrastructure/services/terraform.tfvars.example"
+
+[ -f "${TIER1_TFVARS}" ] || cp "${TIER1_TFVARS_EXAMPLE}" "${TIER1_TFVARS}"
+[ -f "${TIER2_TFVARS}" ] || cp "${TIER2_TFVARS_EXAMPLE}" "${TIER2_TFVARS}"
+
+# Idempotent inject — replace if present, append if absent.
+_set_tfvar() {
+    local file="$1" key="$2" value="$3"
+    if grep -qE "^[[:space:]]*${key}[[:space:]]*=" "${file}"; then
+        # Use a delimiter unlikely in tfvars values (|) for sed safety.
+        sed -i.bak -E "s|^[[:space:]]*${key}[[:space:]]*=.*|${key} = \"${value}\"|" "${file}"
+        rm -f "${file}.bak"
+    else
+        printf '\n%s = "%s"\n' "${key}" "${value}" >> "${file}"
+    fi
+}
+
+_set_tfvar "${TIER1_TFVARS}" "acme_email" "${LE_EMAIL}"
+_set_tfvar "${TIER2_TFVARS}" "icr_entitlement_key" "${ICR_ENTITLEMENT_KEY}"
+_set_tfvar "${TIER2_TFVARS}" "ivia_mmfa_push_client_secret" "${IVIA_MMFA_PUSH_SECRET}"
+
+echo "    Injected acme_email + icr_entitlement_key + ivia_mmfa_push_client_secret"
+
+echo "==> [setup-shell] step (d): check-prerequisites.sh --skip-tools"
+bash "${REPO_DIR}/infrastructure/scripts/check-prerequisites.sh" --skip-tools
+
+echo "==> [setup-shell] step (e): bootstrap.sh --skip-prereq-gate"
+bash "${REPO_DIR}/infrastructure/scripts/bootstrap.sh" --skip-prereq-gate
+
+echo "==> [setup-shell] complete — challenge 01-welcome ready to display"
