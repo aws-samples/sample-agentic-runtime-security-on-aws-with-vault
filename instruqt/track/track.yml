@@ -1,49 +1,31 @@
----
-# Track manifest — agentic-runtime-security-aws on Instruqt.
-#
-# Slug is the Instruqt-globally-unique track id; matches the repo name 1:1 so
-# the dual distribution (Workshop Studio under workshop/ + Instruqt under
-# instruqt/) keeps its relationship obvious to authors.
-#
-# The companion config.yml is a GENERATED ARTIFACT — never edit by hand and
-# never commit. Authoring loop: edit config.yml.tmpl, run
-# instruqt/scripts/render-config.sh, then instruqt/scripts/push.sh. Regions
-# are extracted at push-time from infrastructure/terraform.tfvars.example
-# (today's documented single-source-of-truth) so the canonical region
-# contract in CLAUDE.md (no AWS region literal outside
-# infrastructure/deployments.tfdeploy.hcl) holds for instruqt/ too.
 slug: agentic-runtime-security-aws
-type: track
-owner: hashicorp-field-ops
+id: 2qnimqnhxlbj
 title: Agentic Runtime Security on AWS
-teaser: >-
-  Five control objectives, three use cases, one EKS cluster — runtime-secure an
-  agentic LLM banking application on AWS in a single afternoon.
-
-# 4 hours: tier-1 + tier-2 + tier-3 deploys each take 25-35 min depending on
-# AWS quota latency; the three use cases together run in 60-75 min; plus
-# 30 min of welcome / theory / cleanup buffer.
-timelimit: 14400
-
-# 30-minute idle timeout — generous enough that the MMFA push challenge (which
-# pauses while the attendee taps Approve on their phone) does not time out.
-idle_timeout: 1800
-
+teaser: Five control objectives, three use cases, one EKS cluster — runtime-secure
+  an agentic LLM banking application on AWS in a single afternoon.
+description: ""
+icon: ""
 tags:
-  - aws
-  - eks
-  - terraform
-  - vault
-  - bedrock
-  - oauth
-  - ciba
-  - rls
-  - postgresql
-  - runtime-security
-  - agentic-ai
-  - ibm-verify-access
-
+- aws
+- eks
+- terraform
+- vault
+- bedrock
+- oauth
+- ciba
+- rls
+- postgresql
+- runtime-security
+- agentic-ai
+- ibm-verify-access
+owner: hashicorp-field-ops
+developers: []
+idle_timeout: 1800
+timelimit: 14400
 lab_config:
-  default_layout: AssignmentRight
+  loadingMessages: false
   theme:
     name: modern-dark
+  default_layout: AssignmentRight
+checksum: "18234699049461595783"
+enhanced_loading: false
