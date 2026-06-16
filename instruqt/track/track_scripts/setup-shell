@@ -81,17 +81,27 @@ TFVARS_EXAMPLE="${REPO_DIR}/infrastructure/terraform.tfvars.example"
 [ -f "${TFVARS_EXAMPLE}" ] || { echo "FATAL: ${TFVARS_EXAMPLE} missing after clone"; exit 1; }
 PRIMARY_REGION=$(grep -E '^[[:space:]]*region[[:space:]]*=' "${TFVARS_EXAMPLE}" \
     | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+KB_REGION=$(grep -E '^[[:space:]]*kb_region[[:space:]]*=' "${TFVARS_EXAMPLE}" \
+    | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
 : "${PRIMARY_REGION:?could not parse region = \"...\" from ${TFVARS_EXAMPLE}}"
+: "${KB_REGION:?could not parse kb_region = \"...\" from ${TFVARS_EXAMPLE}}"
 
 mkdir -p /etc/profile.d
+# AWS_REGION + AWS_DEFAULT_REGION: workload region (every aws CLI call default).
+# AWS_REGION_KB: Bedrock KB region (embedding model lives here only); challenges
+# that talk to AOSS / Bedrock KB / the multimodal embedding model use this var
+# explicitly via `aws --region "$AWS_REGION_KB" ...`. Keeps the assignment.md
+# commands free of hardcoded region literals (Decision 7).
 cat > /etc/profile.d/aws.sh <<EOF
 export AWS_REGION="${PRIMARY_REGION}"
 export AWS_DEFAULT_REGION="${PRIMARY_REGION}"
+export AWS_REGION_KB="${KB_REGION}"
 EOF
 chmod 644 /etc/profile.d/aws.sh
 export AWS_REGION="${PRIMARY_REGION}"
 export AWS_DEFAULT_REGION="${PRIMARY_REGION}"
-echo "    AWS region set to: ${AWS_REGION}"
+export AWS_REGION_KB="${KB_REGION}"
+echo "    AWS region set to: ${AWS_REGION} (workload), ${AWS_REGION_KB} (Bedrock KB)"
 
 aws sts get-caller-identity --query Account --output text \
     || { echo "FATAL: aws sts get-caller-identity failed — credentials not usable"; exit 1; }
