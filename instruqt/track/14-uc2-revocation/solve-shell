@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# 14-uc2-revocation/solve-shell — check-shell drives the whole revocation
+# cycle as a pure side-effect; solve is a no-op.
+set -euo pipefail
+exit 0

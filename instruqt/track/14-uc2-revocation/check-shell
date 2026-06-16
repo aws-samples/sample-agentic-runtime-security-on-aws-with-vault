@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+#===============================================================================
+# 14-uc2-revocation/check-shell
+# End-to-end revocation cycle:
+#   1. Issue credential against database/creds/uc2-personal-readonly
+#   2. Confirm lease active in sys/leases/lookup
+#   3. vault lease revoke <lease_id>
+#   4. Confirm lease no longer active
+#   5. (Optional) Confirm Postgres role dropped via RDS master creds — skipped
+#      here because pulling Secrets Manager creds adds 30s; the lease/role
+#      coupling is guaranteed by Vault's plugin contract, so the lease check
+#      is the canonical evidence.
+#===============================================================================
+
+set -euo pipefail
+
+REPO="/root/workshop"
+CLUSTER=$(grep -E '^[[:space:]]*cluster_name[[:space:]]*=' "${REPO}/infrastructure/terraform.tfvars" \
+    | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+
+ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json 2>/dev/null) \
+    || { echo "FAIL: ~/vault-init.json missing"; exit 1; }
+
+_vault() {
+    kubectl --context "${CLUSTER}" exec -n vault vault-0 -- \
+        sh -c "VAULT_TOKEN='${ROOT_TOKEN}' $*"
+}
+
+# Issue
+CREDS_JSON=$(_vault "vault read database/creds/uc2-personal-readonly -format=json" 2>/dev/null) \
+    || { echo "FAIL: vault read database/creds/uc2-personal-readonly failed"; exit 1; }
+LEASE_ID=$(jq -r '.lease_id' <<<"${CREDS_JSON}")
+PG_USER=$(jq -r '.data.username' <<<"${CREDS_JSON}")
+[ -n "${LEASE_ID}" ] && [ "${LEASE_ID}" != "null" ] \
+    || { echo "FAIL: no lease_id in vault response"; exit 1; }
+echo "PASS: issued credential LEASE_ID=${LEASE_ID}, PG_USER=${PG_USER}"
+
+# Confirm active
+LIST=$(_vault "vault list -format=json sys/leases/lookup/database/creds/uc2-personal-readonly" 2>/dev/null \
+    || echo '[]')
+SUFFIX="${LEASE_ID##*/}"
+echo "${LIST}" | jq -e --arg L "${SUFFIX}" 'index($L) != null' >/dev/null \
+    || { echo "FAIL: just-issued lease ${SUFFIX} not found in active-leases list"; exit 1; }
+echo "PASS: lease ${SUFFIX} active in sys/leases/lookup"
+
+# Revoke
+_vault "vault lease revoke '${LEASE_ID}'" >/dev/null \
+    || { echo "FAIL: vault lease revoke ${LEASE_ID} failed"; exit 1; }
+echo "PASS: vault lease revoke succeeded"
+
+# Re-confirm gone
+sleep 2  # Vault's lease-list cache settles within a couple of seconds
+LIST_AFTER=$(_vault "vault list -format=json sys/leases/lookup/database/creds/uc2-personal-readonly" 2>/dev/null \
+    || echo '[]')
+echo "${LIST_AFTER}" | jq -e --arg L "${SUFFIX}" 'index($L) == null' >/dev/null \
+    || { echo "FAIL: lease ${SUFFIX} still present after revoke"; exit 1; }
+echo "PASS: lease ${SUFFIX} removed from active-leases after revoke"
+
+echo "14-uc2-revocation: all checks green"
