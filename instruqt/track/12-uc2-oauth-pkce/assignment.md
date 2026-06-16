@@ -7,11 +7,6 @@ tabs:
   - title: Terminal
     type: terminal
     hostname: shell
-  - title: Banking UI
-    type: website
-    hostname: shell
-    port: 443
-    path: /
 ---
 
 Use Case 2 adds **user identity** to the credential flow. The banking UI
@@ -34,8 +29,7 @@ cd /root/workshop
 echo "https://$(terraform -chdir=infrastructure/workloads output -raw effective_banking_host)"
 ```
 
-Open the URL in your browser (the **Banking UI** tab in this challenge points
-at the same host).
+Open the URL in your own browser (copy from the terminal output).
 
 ## Sign in as Jaime
 
