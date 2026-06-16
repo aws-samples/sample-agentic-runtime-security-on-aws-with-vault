@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# 16-uc3-bound-claims/check-shell — wraps verify-uc3.sh.
+set -euo pipefail
+cd /root/workshop
+bash infrastructure/scripts/verify-uc3.sh \
+    || { echo "FAIL: verify-uc3.sh did not pass — see Terminal tab for the failing assertion"; exit 1; }
+echo "16-uc3-bound-claims: verify-uc3.sh ALL CHECKS PASSED"
