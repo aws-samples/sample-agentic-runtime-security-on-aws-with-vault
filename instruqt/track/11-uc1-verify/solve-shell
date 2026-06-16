@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# 11-uc1-verify/solve-shell — re-running verify-uc1.sh is the only solve path.
+set -euo pipefail
+cd /root/workshop
+bash infrastructure/scripts/verify-uc1.sh
