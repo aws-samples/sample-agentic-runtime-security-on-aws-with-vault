@@ -34,6 +34,12 @@
 # Options:
 #   --region REGION          AWS region (default: parsed from terraform.tfvars)
 #   --cluster-name NAME      EKS cluster name (default: parsed from terraform.tfvars)
+#   --tier <1|2|3>           Run only one deploy tier (default: all 14 steps).
+#                            tier 1 = steps 1-4 (core infra + kubectl + images + LBC gate)
+#                            tier 2 = steps 5-9 (vault + ivia + ACME + vault/ivia configure)
+#                            tier 3 = steps 10-14 (workloads + ALB assert + seed + KB ingest)
+#                            Required for the Instruqt distribution (one tier per challenge);
+#                            bare invocation is the Workshop Studio path (all 14 steps).
 #   --skip-infra             Skip the tier-1 apply (cluster + core infra already up)
 #   --skip-vault-init        Skip Vault initialization (Vault already initialized)
 #   --skip-build             Skip image build+push (images already in ECR)
@@ -48,7 +54,10 @@
 #     and infrastructure/workloads/terraform.tfvars populated
 #
 # Examples:
-#   ./deploy-workshop.sh                    # full end-to-end deploy
+#   ./deploy-workshop.sh                    # full end-to-end deploy (all 14 steps)
+#   ./deploy-workshop.sh --tier 1           # only steps 1-4 (Instruqt tier-1 challenge)
+#   ./deploy-workshop.sh --tier 2           # only steps 5-9 (Instruqt tier-2 challenge)
+#   ./deploy-workshop.sh --tier 3           # only steps 10-14 (Instruqt tier-3 challenge)
 #   ./deploy-workshop.sh --skip-infra       # re-run config against a live cluster
 #   ./deploy-workshop.sh --skip-build       # re-run when images are already pushed
 #   ./deploy-workshop.sh --dry-run          # preview every step
@@ -81,6 +90,9 @@ SKIP_BUILD=false
 # shellcheck disable=SC2034  # consumed by _run_acme_step
 SKIP_ACME=false
 DRY_RUN=false
+# Per-tier execution gate (empty = run all 14 steps, the Workshop Studio path;
+# 1|2|3 = run only that tier's steps, the Instruqt per-challenge path).
+TIER=""
 
 # Vault port-forward PID (cleaned up on exit)
 VAULT_PF_PID=""
@@ -112,6 +124,13 @@ while [[ $# -gt 0 ]]; do
         --help|-h)          usage ;;
         --region)           REGION="$2"; shift ;;
         --cluster-name)     CLUSTER_NAME="$2"; shift ;;
+        --tier)
+            TIER="$2"; shift
+            case "$TIER" in
+                1|2|3) : ;;
+                *) echo "ERROR: --tier must be 1, 2, or 3 (got: '${TIER}')"; usage ;;
+            esac
+            ;;
         --skip-infra)       SKIP_INFRA=true ;;
         --skip-vault-init)  SKIP_VAULT_INIT=true ;;
         --skip-build)       SKIP_BUILD=true ;;
@@ -260,6 +279,22 @@ _wait_for_port() {
         elapsed=$((elapsed + 2))
     done
     return 1
+}
+
+# Per-tier gate. When --tier is unset (Workshop Studio path), every step runs.
+# When --tier=N, only steps whose step_tier matches N run. Steps gated out are
+# silent — no echo, no PASS/SKIP marker — so an Instruqt tier-2 challenge does
+# not visually replay tier-1 work the previous challenge already completed.
+#
+# Step → tier mapping (also encoded by the main flow's _run_if_tier calls):
+#   steps 1-4  → tier 1   core infra + kubectl + images + LBC gate
+#   steps 5-9  → tier 2   vault + ivia + ACME + vault/ivia configure
+#   steps 10-14 → tier 3  workloads + ALB assert + LDAP + DB seed + KB ingest
+_run_if_tier() {
+    local step_tier="$1"; shift
+    if [[ -z "$TIER" ]] || [[ "$TIER" = "$step_tier" ]]; then
+        "$@"
+    fi
 }
 
 #-------------------------------------------------------------------------------
@@ -1143,24 +1178,28 @@ step_14_sync_bedrock_kb() {
 }
 
 #===============================================================================
-# Main flow — call each step function in sequence. The refactor (Task 2a)
-# extracts the 14 inline step blocks into functions so a per-tier gate can
-# select a subset; the bare invocation runs all 14 unchanged.
+# Main flow — call each step function via _run_if_tier so the same script
+# drives both distributions:
+#   - Workshop Studio (bare):  TIER="" runs every step (all 14)
+#   - Instruqt tier-N:         TIER="N" runs only that tier's steps
+# Idempotency contract (project CLAUDE.md): every step is safe to re-run, so
+# running --tier 1 then --tier 2 then --tier 3 produces the same end state as
+# a bare invocation, and re-running any tier converges.
 #===============================================================================
-step_01_apply_tier1
-step_02_configure_kubectl
-step_03_build_push_images
-step_04_lbc_readiness_gate
-step_05_apply_tier2
-step_06_initialize_vault
-step_07_acme_cert_issuance
-step_08_configure_vault
-step_09_configure_ivia
-step_10_apply_tier3
-step_11_post_tier3_reconcile
-step_12_verify_ldap_user
-step_13_seed_banking_db
-step_14_sync_bedrock_kb
+_run_if_tier 1 step_01_apply_tier1
+_run_if_tier 1 step_02_configure_kubectl
+_run_if_tier 1 step_03_build_push_images
+_run_if_tier 1 step_04_lbc_readiness_gate
+_run_if_tier 2 step_05_apply_tier2
+_run_if_tier 2 step_06_initialize_vault
+_run_if_tier 2 step_07_acme_cert_issuance
+_run_if_tier 2 step_08_configure_vault
+_run_if_tier 2 step_09_configure_ivia
+_run_if_tier 3 step_10_apply_tier3
+_run_if_tier 3 step_11_post_tier3_reconcile
+_run_if_tier 3 step_12_verify_ldap_user
+_run_if_tier 3 step_13_seed_banking_db
+_run_if_tier 3 step_14_sync_bedrock_kb
 
 #===============================================================================
 # Summary is emitted by the EXIT trap (_cleanup)
