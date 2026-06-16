@@ -25,11 +25,13 @@ workload identity and JIT credential foundations from Use Case 1.
 ## Find the banking UI URL
 
 The deploy emitted a CNAME-friendly `nip.io` hostname for the banking UI ALB.
-Resolve it from the tier-3 Terraform output:
+Resolve it from the tier-3 Terraform output (the value resolves to the
+LE-trusted nip.io FQDN once `.acme-state` is written, else the raw ALB
+hostname):
 
 ```bash
 cd /root/workshop
-terraform -chdir=infrastructure/workloads output -raw banking_ui_url
+echo "https://$(terraform -chdir=infrastructure/workloads output -raw effective_banking_host)"
 ```
 
 Open the URL in your browser (the **Banking UI** tab in this challenge points

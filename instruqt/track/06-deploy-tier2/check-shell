@@ -11,11 +11,11 @@
 set -euo pipefail
 
 REPO="/root/workshop"
-CLUSTER=$(grep -E '^[[:space:]]*cluster_name[[:space:]]*=' "${REPO}/infrastructure/terraform.tfvars" \
-    | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+# kubectl alias deploy-workshop.sh Step 2 writes (see deploy-workshop.sh:461)
+KUBE_CONTEXT="workshop"
 
 # Vault
-STATUS=$(kubectl --context "${CLUSTER}" exec -n vault vault-0 -- vault status -format=json 2>/dev/null || true)
+STATUS=$(kubectl --context "${KUBE_CONTEXT}" exec -n vault vault-0 -- vault status -format=json 2>/dev/null || true)
 [ -n "${STATUS}" ] || { echo "FAIL: could not get vault-0 status"; exit 1; }
 SEALED=$(jq -r '.sealed' <<<"${STATUS}")
 INIT=$(jq -r '.initialized' <<<"${STATUS}")
@@ -23,29 +23,32 @@ INIT=$(jq -r '.initialized' <<<"${STATUS}")
 [ "${INIT}" = "true" ] || { echo "FAIL: vault-0 initialized=${INIT}, expected true"; exit 1; }
 echo "PASS: vault-0 Sealed=false, Initialized=true"
 
-# IVIA pods
+# IVIA pods. The verify_access module labels pods with `app=<name>` (see
+# infrastructure/modules/verify_access/main.tf:801, 805, 989, etc.), not the
+# common `app.kubernetes.io/name=<name>` key — so we select by `app`.
 for pod in iviaconfig iviawrprp1 iviaruntime iviaop iviadsc openldap postgresql; do
-    READY=$(kubectl --context "${CLUSTER}" -n verify-access get pods \
-        -l app.kubernetes.io/name="${pod}" \
+    READY=$(kubectl --context "${KUBE_CONTEXT}" -n verify-access get pods \
+        -l "app=${pod}" \
         -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)
     if [ "${READY}" != "True" ]; then
-        # Fallback: some IVIA charts label differently; match by name prefix.
-        READY=$(kubectl --context "${CLUSTER}" -n verify-access get pods --no-headers 2>/dev/null \
+        # Fallback: name-prefix match for pods whose chart applied no app label.
+        READY=$(kubectl --context "${KUBE_CONTEXT}" -n verify-access get pods --no-headers 2>/dev/null \
             | awk -v p="${pod}" '$1 ~ "^"p {if ($2 ~ /\/[1-9]/ && $3 == "Running") print "True"; exit}')
     fi
     [ "${READY}" = "True" ] || { echo "FAIL: IVIA pod ${pod} not Ready"; exit 1; }
 done
 echo "PASS: all 7 IVIA pods Ready"
 
-# autoconf Job complete
-COMP=$(kubectl --context "${CLUSTER}" -n verify-access get job \
-    -l app.kubernetes.io/name=ivia-autoconf \
-    -o jsonpath='{.items[0].status.conditions[?(@.type=="Complete")].status}' 2>/dev/null || true)
+# autoconf Job complete — resource is `kubernetes_job_v1.ivia_autoconf` in
+# infrastructure/modules/verify_access/main.tf:1627, metadata.name=ivia-autoconf.
+COMP=$(kubectl --context "${KUBE_CONTEXT}" -n verify-access get job ivia-autoconf \
+    -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}' 2>/dev/null || true)
 [ "${COMP}" = "True" ] || { echo "FAIL: ivia-autoconf Job not Complete"; exit 1; }
 echo "PASS: ivia-autoconf Job Complete"
 
-# workshop-le-tls Certificate Ready
-READY=$(kubectl --context "${CLUSTER}" -n verify-access get certificate workshop-le-tls \
+# workshop-le-tls Certificate Ready — Certificate CR lives in the cert-manager
+# namespace (see deploy-workshop.sh:852-867), not verify-access.
+READY=$(kubectl --context "${KUBE_CONTEXT}" -n cert-manager get certificate workshop-le-tls \
     -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)
 [ "${READY}" = "True" ] || { echo "FAIL: workshop-le-tls Certificate not Ready"; exit 1; }
 echo "PASS: workshop-le-tls Certificate Ready"

@@ -2,44 +2,56 @@
 #===============================================================================
 # 07-deploy-tier3/check-shell
 # Asserts tier-3 artifacts:
-#   - 5 workshop deploys Ready (uc1-agent, uc2-agent, uc3-agent, banking-app,
-#     banking-ui)
+#   - uc1-agent Ready in ns `uc1`
+#   - banking-ui, banking-agent, banking-mcp-server, uc3-agent Ready in ns
+#     `banking-app` (per infrastructure/workloads/main.tf:127)
 #   - OpenLDAP user `jaime` resolvable via ldapsearch (from autoconf seed)
-#   - banking RDS transactions table > 0 rows (seed-banking-db.sh ran)
-#   - At least one Bedrock KB ingestion job COMPLETE for the HR data source
+#   - At least one Bedrock KB ingestion job COMPLETE
 #===============================================================================
 
 set -euo pipefail
 
 REPO="/root/workshop"
-CLUSTER=$(grep -E '^[[:space:]]*cluster_name[[:space:]]*=' "${REPO}/infrastructure/terraform.tfvars" \
-    | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+# kubectl alias deploy-workshop.sh Step 2 writes (see deploy-workshop.sh:461)
+KUBE_CONTEXT="workshop"
 
-# Workshop deployments
-for d in uc1-agent uc2-agent uc3-agent banking-app banking-ui; do
-    kubectl --context "${CLUSTER}" -n workshop rollout status "deploy/${d}" --timeout=60s \
-        || { echo "FAIL: deploy/${d} not Ready"; exit 1; }
+# UC1 agent in its own namespace
+kubectl --context "${KUBE_CONTEXT}" -n uc1 rollout status deploy/uc1-agent --timeout=60s \
+    || { echo "FAIL: deploy/uc1-agent in ns uc1 not Ready"; exit 1; }
+echo "PASS: uc1-agent Ready in ns uc1"
+
+# Banking-app namespace co-locates banking UI/API/MCP and the UC3 agent
+for d in banking-ui banking-agent banking-mcp-server uc3-agent; do
+    kubectl --context "${KUBE_CONTEXT}" -n banking-app rollout status "deploy/${d}" --timeout=60s \
+        || { echo "FAIL: deploy/${d} in ns banking-app not Ready"; exit 1; }
 done
-echo "PASS: 5 workshop deploys Ready"
+echo "PASS: 4 banking-app deploys Ready (banking-ui, banking-agent, banking-mcp-server, uc3-agent)"
 
 # OpenLDAP user jaime resolvable (autoconf seed plus deploy step 12 idempotent verify)
-kubectl --context "${CLUSTER}" -n verify-access exec deploy/openldap -- \
+kubectl --context "${KUBE_CONTEXT}" -n verify-access exec deploy/openldap -- \
     ldapsearch -x -H ldap://localhost -b "dc=ibm,dc=com" -LLL "(uid=jaime)" dn 2>/dev/null \
     | grep -q "uid=jaime" \
     || { echo "FAIL: ldapsearch could not resolve uid=jaime"; exit 1; }
 echo "PASS: OpenLDAP user jaime resolvable"
 
-# Bedrock KB ingestion job COMPLETE
+# Bedrock KB ingestion job COMPLETE.
+# Note: tier-1 outputs.tf only re-exports `kb_id`; the per-data-source IDs live
+# on the module but are not promoted to the root. Resolve the first data-source
+# id by listing the KB's data sources via the AWS API — works whether the KB
+# has one or several (HR / customers / finance) data sources.
 cd "${REPO}"
 KB_ID=$(terraform -chdir=infrastructure output -raw kb_id 2>/dev/null) \
     || { echo "FAIL: tier-1 output kb_id not readable"; exit 1; }
-HR_DS=$(terraform -chdir=infrastructure output -raw kb_hr_data_source_id 2>/dev/null) \
-    || { echo "FAIL: tier-1 output kb_hr_data_source_id not readable"; exit 1; }
+DS_ID=$(aws --region "${AWS_REGION_KB}" bedrock-agent list-data-sources \
+    --knowledge-base-id "${KB_ID}" \
+    --query 'dataSourceSummaries[0].dataSourceId' --output text 2>/dev/null || true)
+[ -n "${DS_ID}" ] && [ "${DS_ID}" != "None" ] \
+    || { echo "FAIL: no data sources found on KB ${KB_ID}"; exit 1; }
 STATUS=$(aws --region "${AWS_REGION_KB}" bedrock-agent list-ingestion-jobs \
-    --knowledge-base-id "${KB_ID}" --data-source-id "${HR_DS}" \
+    --knowledge-base-id "${KB_ID}" --data-source-id "${DS_ID}" \
     --query 'ingestionJobSummaries[0].status' --output text 2>/dev/null || true)
 [ "${STATUS}" = "COMPLETE" ] \
-    || { echo "FAIL: HR ingestion job status=${STATUS}, expected COMPLETE"; exit 1; }
-echo "PASS: HR data source ingestion COMPLETE"
+    || { echo "FAIL: KB ingestion job status=${STATUS}, expected COMPLETE"; exit 1; }
+echo "PASS: KB data source ingestion COMPLETE"
 
 echo "07-deploy-tier3: all checks green"

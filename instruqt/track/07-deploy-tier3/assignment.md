@@ -26,19 +26,24 @@ Tier 3 deploys the application workloads on top of tier-1 (cluster) and tier-2
 
 ## Inspect what landed
 
-```bash
-kubectl get pods -n workshop
-```
+The tier-3 workloads split across two namespaces:
 
-Expected: `uc1-agent`, `uc2-agent`, `uc3-agent`, `banking-app`, `banking-ui`
-all `Running`.
+- `uc1` — `uc1-agent` (UC1 Strands agent)
+- `banking-app` — `banking-ui`, `banking-agent`, `banking-mcp-server`, `uc3-agent`
 
 ```bash
-kubectl get ingress -n workshop
+kubectl get pods -n uc1
+kubectl get pods -n banking-app
 ```
 
-Expected: a single shared ALB Ingress with `banking-app` and `banking-ui`
-hostname rules. The ADDRESS column shows the ALB DNS name.
+Expected: all deployments `Running`.
+
+```bash
+kubectl get ingress -A
+```
+
+Expected: a `banking-ui-ingress` in the `banking-app` namespace with the ALB
+DNS name populated under ADDRESS.
 
 Confirm the banking DB was seeded:
 
@@ -52,9 +57,12 @@ Confirm the Bedrock KB ingestion job completed:
 ```bash
 cd /root/workshop
 KB_ID=$(terraform -chdir=infrastructure output -raw kb_id)
+DS_ID=$(aws --region "$AWS_REGION_KB" bedrock-agent list-data-sources \
+  --knowledge-base-id "$KB_ID" \
+  --query 'dataSourceSummaries[0].dataSourceId' --output text)
 aws --region "$AWS_REGION_KB" bedrock-agent list-ingestion-jobs \
   --knowledge-base-id "$KB_ID" \
-  --data-source-id "$(terraform -chdir=infrastructure output -raw kb_hr_data_source_id)" \
+  --data-source-id "$DS_ID" \
   --query 'ingestionJobSummaries[0].status' --output text
 ```
 

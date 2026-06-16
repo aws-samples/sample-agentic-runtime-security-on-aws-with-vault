@@ -9,8 +9,8 @@
 set -euo pipefail
 
 REPO="/root/workshop"
-CLUSTER=$(grep -E '^[[:space:]]*cluster_name[[:space:]]*=' "${REPO}/infrastructure/terraform.tfvars" \
-    | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+# kubectl alias deploy-workshop.sh Step 2 writes (see deploy-workshop.sh:461)
+KUBE_CONTEXT="workshop"
 ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)
 
 # Capture the snapshot of leases NOW; we want a lease created AFTER this point.
@@ -22,14 +22,14 @@ echo "lease issued in the next 5 minutes (after epoch ${SNAPSHOT_NOW})..."
 echo "If you have not approved the push notification yet, do so now."
 
 while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
-    LIST_JSON=$(kubectl --context "${CLUSTER}" exec -n vault vault-0 -- \
+    LIST_JSON=$(kubectl --context "${KUBE_CONTEXT}" exec -n vault vault-0 -- \
         sh -c "VAULT_TOKEN='${ROOT_TOKEN}' vault list -format=json sys/leases/lookup/database/creds/uc3-refund-writer" \
         2>/dev/null || echo '[]')
 
     # For each lease suffix, lookup its issuance time and compare.
     while IFS= read -r SUFFIX; do
         [ -z "${SUFFIX}" ] && continue
-        ISSUE_TIME=$(kubectl --context "${CLUSTER}" exec -n vault vault-0 -- \
+        ISSUE_TIME=$(kubectl --context "${KUBE_CONTEXT}" exec -n vault vault-0 -- \
             sh -c "VAULT_TOKEN='${ROOT_TOKEN}' vault lease lookup -format=json database/creds/uc3-refund-writer/${SUFFIX}" \
             2>/dev/null | jq -r '.data.issue_time // empty' || true)
         [ -z "${ISSUE_TIME}" ] && continue
