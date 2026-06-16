@@ -18,21 +18,6 @@ title: Agentic Runtime Security on AWS
 teaser: >-
   Five control objectives, three use cases, one EKS cluster — runtime-secure an
   agentic LLM banking application on AWS in a single afternoon.
-description: |-
-  Deploy a production-shaped AWS reference architecture for runtime security of
-  agentic LLM applications:
-
-  - Workload identity for AI agents via short-lived Vault-issued credentials
-    bound to the agent's Kubernetes ServiceAccount
-  - End-user identity propagation into agent calls via OAuth 2.0 + JWT, enforced
-    at the database tier with PostgreSQL Row-Level Security
-  - Sensitive-action authorization via CIBA (Client-Initiated Backchannel
-    Authentication) with mobile-push consent on IBM Verify Access
-  - Auditable, correlated traces across the agent → Vault → RDS → IVIA path
-
-  You will deploy the full stack to a fresh AWS sandbox account provisioned by
-  Instruqt, walk the three use cases end-to-end, and verify every control
-  objective from the attendee Terminal tab.
 
 # 4 hours: tier-1 + tier-2 + tier-3 deploys each take 25-35 min depending on
 # AWS quota latency; the three use cases together run in 60-75 min; plus
@@ -42,10 +27,6 @@ timelimit: 14400
 # 30-minute idle timeout — generous enough that the MMFA push challenge (which
 # pauses while the attendee taps Approve on their phone) does not time out.
 idle_timeout: 1800
-
-owner: Oscar-Medina
-developers:
-  - me@devopsoscar.dev
 
 tags:
   - aws
@@ -65,23 +46,3 @@ lab_config:
   default_layout: AssignmentRight
   theme:
     name: modern-dark
-
-challenges:
-  - 01-welcome
-  - 02-prereqs
-  - 03-ivia-licensing
-  - 04-bootstrap
-  - 05-deploy-tier1
-  - 06-deploy-tier2
-  - 07-deploy-tier3
-  - 08-platform-health
-  - 09-uc1-request-flow
-  - 10-uc1-vault-auth
-  - 11-uc1-verify
-  - 12-uc2-oauth-pkce
-  - 13-uc2-jwt-rls
-  - 14-uc2-revocation
-  - 15-uc3-mmfa-ciba
-  - 16-uc3-bound-claims
-  - 17-uc3-audit
-  - 18-cleanup

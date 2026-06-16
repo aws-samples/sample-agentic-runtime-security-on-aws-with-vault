@@ -7,8 +7,6 @@ tabs:
   - title: Terminal
     type: terminal
     hostname: shell
-difficulty: basic
-timelimit: 600
 ---
 
 Welcome to the **Agentic Runtime Security on AWS** workshop. Over the next ~4 hours

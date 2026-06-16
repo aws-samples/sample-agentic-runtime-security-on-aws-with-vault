@@ -48,32 +48,6 @@ aws_secret_access_key = ${INSTRUQT_AWS_ACCOUNT_workshop_AWS_SECRET_ACCESS_KEY}
 EOF
 chmod 600 "${HOME}/.aws/credentials"
 
-# Region defaults for the aws CLI + terraform AWS provider. Primary workload
-# region comes from the Instruqt-injected region list (first entry); we set
-# both AWS_REGION and AWS_DEFAULT_REGION so no env-var ceremony is needed.
-PRIMARY_REGION="${INSTRUQT_AWS_ACCOUNT_workshop_REGION:-}"
-if [ -z "${PRIMARY_REGION}" ]; then
-    # Fallback: read from the rendered config.yml shipped with the track.
-    PRIMARY_REGION=$(awk '/aws_accounts:/,/^[a-zA-Z]/' /tmp/__instruqt-config.yml 2>/dev/null \
-        | awk '/regions:/{f=1;next} f && /^[[:space:]]*-/{gsub(/^[[:space:]]*-[[:space:]]*/,""); print; exit}' \
-        || true)
-fi
-: "${PRIMARY_REGION:?Could not resolve a primary region for the workshop sandbox}"
-
-mkdir -p /etc/profile.d
-cat > /etc/profile.d/aws.sh <<EOF
-export AWS_REGION="${PRIMARY_REGION}"
-export AWS_DEFAULT_REGION="${PRIMARY_REGION}"
-EOF
-chmod 644 /etc/profile.d/aws.sh
-# Export into the current shell so the rest of this script + bootstrap.sh see it.
-export AWS_REGION="${PRIMARY_REGION}"
-export AWS_DEFAULT_REGION="${PRIMARY_REGION}"
-
-echo "    AWS region set to: ${AWS_REGION}"
-aws sts get-caller-identity --query Account --output text \
-    || { echo "FATAL: aws sts get-caller-identity failed — credentials not usable"; exit 1; }
-
 echo "==> [setup-shell] step (b): SSH deploy key + repo clone"
 
 : "${INSTRUQT_GITHUB_IBM_DEPLOY_KEY:?Org secret INSTRUQT_GITHUB_IBM_DEPLOY_KEY not injected — set it on the Instruqt org}"
@@ -97,6 +71,30 @@ else
     echo "    Cloning ${GIT_REMOTE} → ${REPO_DIR}"
     git clone "${GIT_REMOTE}" "${REPO_DIR}"
 fi
+
+echo "==> [setup-shell] resolve primary region from canonical SoT and export"
+
+# Canonical region SoT (post-clone): infrastructure/terraform.tfvars.example
+# line ~26 (`region = "..."`). Same regex render-config.sh uses. Fail loud if
+# the SoT is missing or unparseable — never silently default.
+TFVARS_EXAMPLE="${REPO_DIR}/infrastructure/terraform.tfvars.example"
+[ -f "${TFVARS_EXAMPLE}" ] || { echo "FATAL: ${TFVARS_EXAMPLE} missing after clone"; exit 1; }
+PRIMARY_REGION=$(grep -E '^[[:space:]]*region[[:space:]]*=' "${TFVARS_EXAMPLE}" \
+    | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+: "${PRIMARY_REGION:?could not parse region = \"...\" from ${TFVARS_EXAMPLE}}"
+
+mkdir -p /etc/profile.d
+cat > /etc/profile.d/aws.sh <<EOF
+export AWS_REGION="${PRIMARY_REGION}"
+export AWS_DEFAULT_REGION="${PRIMARY_REGION}"
+EOF
+chmod 644 /etc/profile.d/aws.sh
+export AWS_REGION="${PRIMARY_REGION}"
+export AWS_DEFAULT_REGION="${PRIMARY_REGION}"
+echo "    AWS region set to: ${AWS_REGION}"
+
+aws sts get-caller-identity --query Account --output text \
+    || { echo "FATAL: aws sts get-caller-identity failed — credentials not usable"; exit 1; }
 
 echo "==> [setup-shell] step (c): inject secrets + LE_EMAIL into terraform.tfvars"
 
