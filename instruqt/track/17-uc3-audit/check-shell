@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+#===============================================================================
+# 17-uc3-audit/check-shell
+# Asserts the audit_correlation Athena VIEW returns at least one row with all
+# three planes populated (user_approved_sub + vault_principal + pgaudit_statement
+# non-null). This is the canonical proof that Use Case 3 ran end-to-end and the
+# three-plane correlation works.
+#===============================================================================
+
+set -euo pipefail
+
+QID=$(aws athena start-query-execution \
+    --region "${AWS_REGION}" --work-group workshop \
+    --query-string "SELECT count(*) AS n FROM workshop_logs.audit_correlation
+                    WHERE user_approved_sub IS NOT NULL
+                      AND vault_principal IS NOT NULL
+                      AND pgaudit_statement IS NOT NULL" \
+    --query 'QueryExecutionId' --output text)
+
+for i in $(seq 1 30); do
+    STATE=$(aws athena get-query-execution --region "${AWS_REGION}" \
+        --query-execution-id "${QID}" \
+        --query 'QueryExecution.Status.State' --output text)
+    [ "${STATE}" = "SUCCEEDED" ] && break
+    [ "${STATE}" = "FAILED" ] && {
+        REASON=$(aws athena get-query-execution --region "${AWS_REGION}" \
+            --query-execution-id "${QID}" \
+            --query 'QueryExecution.Status.StateChangeReason' --output text)
+        echo "FAIL: Athena query failed: ${REASON}"
+        exit 1
+    }
+    sleep 2
+done
+[ "${STATE}" = "SUCCEEDED" ] || { echo "FAIL: Athena query timeout"; exit 1; }
+
+N=$(aws athena get-query-results --region "${AWS_REGION}" \
+    --query-execution-id "${QID}" \
+    --query 'ResultSet.Rows[1].Data[0].VarCharValue' --output text)
+[ "${N}" -ge 1 ] \
+    || { echo "FAIL: audit_correlation has 0 fully-populated rows — UC3 round-trip did not complete"; exit 1; }
+echo "PASS: audit_correlation has ${N} fully-populated row(s) joining all 3 planes"
+
+echo "17-uc3-audit: all checks green"
