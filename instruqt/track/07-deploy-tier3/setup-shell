@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# 07-deploy-tier3/setup-shell — tier-3 deploy. Idempotent.
+set -euo pipefail
+cd /root/workshop
+bash infrastructure/scripts/deploy-workshop.sh --tier 3
