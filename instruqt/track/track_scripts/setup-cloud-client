@@ -186,10 +186,44 @@ fi
 
 mkdir -p "${HOME}/.ssh"
 chmod 700 "${HOME}/.ssh"
-# Defensive trailing newline (ssh-keygen accepts either way).
-printf '%s\n' "${INSTRUQT_GITHUB_IBM_DEPLOY_KEY}" > "${SSH_KEY_PATH}"
+
+# The Instruqt invite-link runtime parameter is a SINGLE-LINE text input.
+# A multi-line PEM pasted into it gets flattened: every newline becomes a
+# single space. The base64 body lands shaped like
+#     -----BEGIN OPENSSH PRIVATE KEY----- b3BlbnNz... -----END OPENSSH PRIVATE KEY-----
+# OpenSSH's libcrypto refuses to parse a key whose base64 body has embedded
+# whitespace ("Load key ...: error in libcrypto" → Permission denied (publickey)).
+# Recover by re-extracting the body, stripping ALL whitespace, fold(1)-wrapping
+# to 70-char lines (the convention ssh-keygen emits), then sandwiching back
+# between the canonical BEGIN/END banners.
+KEY_BODY=$(
+    printf '%s' "${INSTRUQT_GITHUB_IBM_DEPLOY_KEY}" \
+        | sed -E 's/.*-----BEGIN [A-Z ]+ PRIVATE KEY-----//' \
+        | sed -E 's/-----END [A-Z ]+ PRIVATE KEY-----.*//' \
+        | tr -d '[:space:]'
+)
+if [ -z "${KEY_BODY}" ]; then
+    step_fail "(b)" "could not extract base64 body between BEGIN/END banners in INSTRUQT_GITHUB_IBM_DEPLOY_KEY"
+    exit 1
+fi
+{
+    echo "-----BEGIN OPENSSH PRIVATE KEY-----"
+    echo "${KEY_BODY}" | fold -w 70
+    echo "-----END OPENSSH PRIVATE KEY-----"
+} > "${SSH_KEY_PATH}"
 chmod 600 "${SSH_KEY_PATH}"
-echo "    wrote ${SSH_KEY_PATH} ($(wc -c < "${SSH_KEY_PATH}") bytes)"
+echo "    wrote ${SSH_KEY_PATH} ($(wc -c < "${SSH_KEY_PATH}") bytes, $(wc -l < "${SSH_KEY_PATH}") lines)"
+
+# Sanity-check the rewrapped key BEFORE attempting clone — `ssh-keygen -y`
+# only succeeds if libcrypto can parse the private half (it derives + prints
+# the public half). Fails fast with a clear message instead of leaving us to
+# diagnose "Permission denied (publickey)" inside git.
+if ssh-keygen -y -f "${SSH_KEY_PATH}" >/dev/null 2>&1; then
+    echo "    ssh-keygen -y validates rewrapped key — proceeding to clone"
+else
+    step_fail "(b)" "rewrapped private key failed ssh-keygen -y validation — base64 body recovered from env var is invalid"
+    exit 1
+fi
 
 # ssh-keyscan WITHOUT a `-t` filter so we accept all supported host key types
 # (rsa/ecdsa/ed25519). The prior `-t ed25519` filter returned nothing because
