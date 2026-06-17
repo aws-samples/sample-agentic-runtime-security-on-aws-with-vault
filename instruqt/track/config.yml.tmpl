@@ -38,23 +38,44 @@ aws_accounts:
     managed_policies:
       - arn:aws:iam::aws:policy/AdministratorAccess
 
-# Org secrets — injected as env vars in the sandbox at track-play start.
-# Per CLAUDE.md (Bear, 2026-06-16): NEVER printed; NEVER echoed; visible only
-# to the workload that needs them. ICR + IVIA push secrets land in
-# infrastructure/services/terraform.tfvars in track_scripts/setup-cloud-client;
-# the SSH deploy key lands in ~/.ssh/id_ed25519 (mode 0600).
-secrets:
-  - name: ICR_ENTITLEMENT_KEY
-  - name: IVIA_MMFA_PUSH_SECRET
-  - name: INSTRUQT_GITHUB_IBM_DEPLOY_KEY
-
-# Runtime parameters — prompted to attendee at track start.
-# Per Decision 2: LE_EMAIL is a runtime_parameter (attendee enters their own
-# deliverable email so Let's Encrypt cert registration is real). The two
-# secrets above stay org-level so the attendee never sees them.
+# Runtime parameters — injected as environment variables into lifecycle
+# scripts (only; per docs they are NOT stored on the container after lifecycle
+# scripts finish). Pre-fill the workshop-wide values via the invite link's
+# Advanced options → +Runtime parameters in the Instruqt UI; attendees never
+# type those and never see them. LE_EMAIL stays a prompted parameter so each
+# attendee uses their own deliverable email for Let's Encrypt registration.
+#
+# Why not config.yml `secrets:`? Per
+# https://docs.instruqt.com/sandboxes/runtime/secrets.md, secrets can only be
+# created by team Owners. The track author for this workshop does not hold
+# that role on hashicorp-field-ops, so we use the runtime_parameter path which
+# the track author can pre-fill via the invite-link UI without team-Owner
+# perms.
 runtime_parameters:
   - name: LE_EMAIL
     description: >-
       Real, deliverable email for Let's Encrypt certificate registration. Used
       verbatim in infrastructure/terraform.tfvars as acme_email; LE sends
-      expiry warnings to this address.
+      expiry warnings to this address. Attendees enter their own value at
+      track start.
+  - name: ICR_ENTITLEMENT_KEY
+    description: >-
+      IBM Container Registry entitlement key. Pre-filled by the track author
+      via the invite link's Advanced options → +Runtime parameters. Written
+      to infrastructure/services/terraform.tfvars as icr_entitlement_key by
+      track_scripts/setup-cloud-client so deploy-workshop.sh sees it set and
+      skips the interactive prompt.
+  - name: IVIA_MMFA_PUSH_SECRET
+    description: >-
+      IVIA MMFA push-provider client secret (Use Case 3 mobile-push
+      notifications). Pre-filled by the track author via the invite link's
+      Advanced options. Written to infrastructure/services/terraform.tfvars
+      as ivia_mmfa_push_client_secret.
+  - name: INSTRUQT_GITHUB_IBM_DEPLOY_KEY
+    description: >-
+      SSH private key (read-only) used by track_scripts/setup-cloud-client
+      to clone git@github.ibm.com:Oscar-Medina/agentic-runtime-security-aws.
+      Pre-filled by the track author via the invite link's Advanced options
+      → +Runtime parameters with the full multi-line PEM. The matching .pub
+      is registered as a Deploy Key on the repo by
+      instruqt/scripts/seed-secrets.sh before the invite is created.
