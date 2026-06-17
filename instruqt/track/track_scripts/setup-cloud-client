@@ -191,9 +191,24 @@ printf '%s\n' "${INSTRUQT_GITHUB_IBM_DEPLOY_KEY}" > "${SSH_KEY_PATH}"
 chmod 600 "${SSH_KEY_PATH}"
 echo "    wrote ${SSH_KEY_PATH} ($(wc -c < "${SSH_KEY_PATH}") bytes)"
 
-ssh-keyscan -t ed25519 github.ibm.com >> "${KNOWN_HOSTS}" 2>/dev/null || true
-chmod 600 "${KNOWN_HOSTS}"
-echo "    known_hosts: $(wc -l < "${KNOWN_HOSTS}") entries"
+# ssh-keyscan WITHOUT a `-t` filter so we accept all supported host key types
+# (rsa/ecdsa/ed25519). The prior `-t ed25519` filter returned nothing because
+# github.ibm.com does not offer an ed25519 host key — git then negotiated the
+# server's actual key type, found no matching trusted entry, and reported
+# "Host key verification failed". Drop the filter, capture both streams so
+# diagnostics surface, and append only well-formed host-key lines.
+KEYSCAN_OUT=$(ssh-keyscan -T 10 github.ibm.com 2>&1) || true
+echo "    [ssh-keyscan output]"
+echo "${KEYSCAN_OUT}" | sed 's/^/      /'
+echo "${KEYSCAN_OUT}" | grep '^github\.ibm\.com ' >> "${KNOWN_HOSTS}" || true
+chmod 644 "${KNOWN_HOSTS}"
+
+if ! grep -q '^github\.ibm\.com ' "${KNOWN_HOSTS}"; then
+    step_fail "(b)" "ssh-keyscan produced no usable host-key line for github.ibm.com — git clone will fail with Host key verification failed"
+    exit 1
+fi
+echo "    known_hosts entries for github.ibm.com:"
+grep '^github\.ibm\.com ' "${KNOWN_HOSTS}" | awk '{print "      " $1, $2}'
 
 if [ -d "${REPO_DIR}/.git" ]; then
     echo "    repo already cloned at ${REPO_DIR} — running git fetch + reset to origin/main (idempotent)"
