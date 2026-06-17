@@ -298,6 +298,21 @@ export AWS_PAGER=""
 export CHECKPOINT_DISABLE=1
 EOF
 chmod 644 /etc/profile.d/aws.sh
+
+# /etc/profile.d/aws.sh is sourced ONLY by login shells (via /etc/profile).
+# Instruqt's terminal tab opens an interactive NON-login shell — bash sources
+# /etc/bash.bashrc for those, not /etc/profile.d/*.sh. Without this hook the
+# attendee's shell never sees AWS_PAGER="" and `aws sts get-caller-identity`
+# fails with `[Errno 2] No such file or directory: 'less'` (cloud-client:2
+# doesn't ship less). Idempotent — grep guard prevents duplicate appends on
+# re-runs.
+if ! grep -qF 'source /etc/profile.d/aws.sh' /etc/bash.bashrc 2>/dev/null; then
+    printf '\n# Added by Instruqt setup-cloud-client — see /etc/profile.d/aws.sh\nsource /etc/profile.d/aws.sh\n' >> /etc/bash.bashrc
+    echo "    appended source-line to /etc/bash.bashrc (interactive non-login shells)"
+else
+    echo "    /etc/bash.bashrc already sources /etc/profile.d/aws.sh"
+fi
+
 export AWS_REGION="${PRIMARY_REGION}"
 export AWS_DEFAULT_REGION="${PRIMARY_REGION}"
 export AWS_REGION_KB="${KB_REGION}"
