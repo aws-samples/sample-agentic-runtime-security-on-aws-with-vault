@@ -18,6 +18,7 @@ Bootstrapping, end-to-end orchestration, per-component verification, and teardow
 | `e2e-validate.sh` | Admin/presenter | Lints all `*.sh`: shebang consistency, `bash -n` syntax, optional shellcheck, Bash 4+ guard, no `base64 -d` usage. No deployment | — |
 | `workshop-e2e.sh` | Admin/presenter | Full lifecycle orchestrator (Phase 0–8). Single-command deploy + verify + teardown with local Terraform state. | — |
 | `excalidraw-to-svg.py` | Workshop user, content authors | Converts the six Excalidraw sources in `assets/` to SVG (single-source-of-truth pipeline) | SCAF-03 |
+| `install-git-hooks.sh` | Maintainer (one-time, post-clone) | Symlinks `infrastructure/git-hooks/*` into `.git/hooks/`. Enables the `post-merge` hook that auto-runs `instruqt/scripts/push.sh` when a merge to `main` touches `instruqt/**` (GHE org has Actions disabled, so the local hook replaces CI for Instruqt sync) | — |
 
 ## Workshop User Flow
 
