@@ -17,11 +17,17 @@ version: "3"
 
 containers:
   - name: shell
-    # Instruqt default Ubuntu LTS shell image with aws CLI v2 + terraform 1.10+
-    # + kubectl + helm + jq + git pre-installed. Exact image name + version
-    # comes from the Instruqt hosts catalog at push-time; placeholder kept
-    # generic until that lookup happens against the live Instruqt org.
-    image: instruqt/ubuntu-cloud-sdk
+    # Instruqt cloud-client v2 — documented image at gcr.io/instruqt/cloud-client:2
+    # (https://docs.instruqt.com/sandboxes/cloud-accounts/cloud-client.md).
+    # Ships aws-cli v2.22.27, az, gcloud, bash, git, curl, openssl, jq,
+    # ca-certificates. terraform / kubectl / helm / openldap-utils /
+    # postgresql-client are NOT in the image — installed by
+    # track_scripts/setup-shell step (0) on first start.
+    image: gcr.io/instruqt/cloud-client:2
+    # 4 GiB: tier-1/2/3 deploys run terraform + kubectl apply + image builds
+    # concurrently. The docs' default 256 MiB OOM-kills mid-deploy without a
+    # legible error.
+    memory: 4096
     shell: /bin/bash
 
 aws_accounts:
