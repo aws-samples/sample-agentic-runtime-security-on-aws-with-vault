@@ -1,12 +1,17 @@
 ---
 slug: platform-health
+id: zrulpcrbmfli
 type: challenge
 title: Platform Health Check
-teaser: One script verifies EKS, RDS, Bedrock KB, audit log groups, and the region contract.
+teaser: One script verifies EKS, RDS, Bedrock KB, audit log groups, and the region
+  contract.
 tabs:
-  - title: Terminal
-    type: terminal
-    hostname: cloud-client
+- id: ptt3vxesgvm0
+  title: Terminal
+  type: terminal
+  hostname: cloud-client
+difficulty: ""
+enhanced_loading: null
 ---
 
 Before walking the use cases, run the foundation verification script. It

@@ -1,12 +1,16 @@
 ---
 slug: uc3-mmfa-ciba
+id: mqaenulkyvzq
 type: challenge
 title: Use Case 3 — MMFA Enrollment + CIBA Refund
 teaser: Enroll your phone in IBM Verify, then approve a refund out-of-band.
 tabs:
-  - title: Terminal
-    type: terminal
-    hostname: cloud-client
+- id: 8d3udmzroykw
+  title: Terminal
+  type: terminal
+  hostname: cloud-client
+difficulty: ""
+enhanced_loading: null
 ---
 
 Use Case 3 demonstrates **Objective 3 — actions tied to user intent** for a

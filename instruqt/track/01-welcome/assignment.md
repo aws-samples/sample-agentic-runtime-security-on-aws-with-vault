@@ -1,12 +1,16 @@
 ---
 slug: welcome
+id: lwwbbtmsyanv
 type: challenge
 title: Welcome to Agentic Runtime Security on AWS
 teaser: Five control objectives, three use cases, one EKS cluster.
 tabs:
-  - title: Terminal
-    type: terminal
-    hostname: cloud-client
+- id: yq8v19f3guhy
+  title: Terminal
+  type: terminal
+  hostname: cloud-client
+difficulty: ""
+enhanced_loading: null
 ---
 
 Welcome to the **Agentic Runtime Security on AWS** workshop. Over the next ~4 hours

@@ -1,12 +1,16 @@
 ---
 slug: uc2-oauth-pkce
+id: ubm2sg1ho3pe
 type: challenge
 title: Use Case 2 — OAuth + PKCE Login
 teaser: Sign in to the banking UI; observe the JWT IVIA issued.
 tabs:
-  - title: Terminal
-    type: terminal
-    hostname: cloud-client
+- id: ef8wunzgoqui
+  title: Terminal
+  type: terminal
+  hostname: cloud-client
+difficulty: ""
+enhanced_loading: null
 ---
 
 Use Case 2 adds **user identity** to the credential flow. The banking UI

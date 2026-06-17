@@ -1,12 +1,16 @@
 ---
 slug: uc3-audit
+id: zxzyfpzitbrl
 type: challenge
 title: Use Case 3 — Three-Plane Audit Correlation
 teaser: One Athena query joins IVIA + Vault + pgaudit on a single request_id.
 tabs:
-  - title: Terminal
-    type: terminal
-    hostname: cloud-client
+- id: kxcrhdvvor9j
+  title: Terminal
+  type: terminal
+  hostname: cloud-client
+difficulty: ""
+enhanced_loading: null
 ---
 
 The **money shot** of the workshop. Each plane logs the same refund

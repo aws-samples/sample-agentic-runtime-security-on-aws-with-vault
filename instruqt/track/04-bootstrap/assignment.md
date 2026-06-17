@@ -1,12 +1,17 @@
 ---
 slug: bootstrap
+id: 4kuyx44j1yin
 type: challenge
 title: Bootstrap Terraform Roots
-teaser: Seed the three terraform.tfvars files and run terraform init in all three roots.
+teaser: Seed the three terraform.tfvars files and run terraform init in all three
+  roots.
 tabs:
-  - title: Terminal
-    type: terminal
-    hostname: cloud-client
+- id: 5ruledfulvrs
+  title: Terminal
+  type: terminal
+  hostname: cloud-client
+difficulty: ""
+enhanced_loading: null
 ---
 
 The workshop is split into three local-state Terraform roots, applied in

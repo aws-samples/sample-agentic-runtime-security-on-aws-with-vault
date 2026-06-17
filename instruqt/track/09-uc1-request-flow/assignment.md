@@ -1,12 +1,16 @@
 ---
 slug: uc1-request-flow
+id: p8jkrh7wluv6
 type: challenge
 title: Use Case 1 — Request Flow
 teaser: Workload identity. JIT credentials. No standing privileges.
 tabs:
-  - title: Terminal
-    type: terminal
-    hostname: cloud-client
+- id: jdqpvgpctqjj
+  title: Terminal
+  type: terminal
+  hostname: cloud-client
+difficulty: ""
+enhanced_loading: null
 ---
 
 Use Case 1 is a Strands agent that authenticates to Vault using its own

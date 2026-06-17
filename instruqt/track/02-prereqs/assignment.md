@@ -1,12 +1,17 @@
 ---
 slug: prereqs
+id: yfmvdznl5fkb
 type: challenge
 title: Prerequisites
-teaser: Verify your sandbox account, the workshop repo, and your IBM Verify mobile app are ready.
+teaser: Verify your sandbox account, the workshop repo, and your IBM Verify mobile
+  app are ready.
 tabs:
-  - title: Terminal
-    type: terminal
-    hostname: cloud-client
+- id: 5ij52ehlz9b7
+  title: Terminal
+  type: terminal
+  hostname: cloud-client
+difficulty: ""
+enhanced_loading: null
 ---
 
 ## Mobile prerequisite — IBM Verify app

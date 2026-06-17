@@ -1,12 +1,16 @@
 ---
 slug: deploy-tier2
+id: wflxu3adr2ch
 type: challenge
 title: Deploy Tier 2 — Vault + IBM Verify Access
 teaser: HashiCorp Vault HA cluster + the 7-pod IVIA stack. About 20-30 minutes.
 tabs:
-  - title: Terminal
-    type: terminal
-    hostname: cloud-client
+- id: xjc1kuaogq2l
+  title: Terminal
+  type: terminal
+  hostname: cloud-client
+difficulty: ""
+enhanced_loading: null
 ---
 
 Tier 2 deploys two stateful workloads on top of the tier-1 EKS cluster:

@@ -1,12 +1,16 @@
 ---
 slug: deploy-tier1
+id: syeibftqg4rd
 type: challenge
 title: Deploy Tier 1 — Core Infrastructure
 teaser: VPC, EKS, RDS, Bedrock KB, ECR, IAM, add-ons. About 25-35 minutes.
 tabs:
-  - title: Terminal
-    type: terminal
-    hostname: cloud-client
+- id: bjgwj9chpeeq
+  title: Terminal
+  type: terminal
+  hostname: cloud-client
+difficulty: ""
+enhanced_loading: null
 ---
 
 Tier 1 deploys the core AWS infrastructure: VPC, EKS, RDS PostgreSQL with

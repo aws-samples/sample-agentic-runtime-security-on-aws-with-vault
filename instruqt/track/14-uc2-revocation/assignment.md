@@ -1,12 +1,16 @@
 ---
 slug: uc2-revocation
+id: ak8gc79kv9vk
 type: challenge
 title: Use Case 2 — Credential Revocation
 teaser: Issue, observe, revoke; prove the Postgres role and Vault lease are both gone.
 tabs:
-  - title: Terminal
-    type: terminal
-    hostname: cloud-client
+- id: b0yrqjyi89sg
+  title: Terminal
+  type: terminal
+  hostname: cloud-client
+difficulty: ""
+enhanced_loading: null
 ---
 
 The production code path for credential revocation is

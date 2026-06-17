@@ -1,12 +1,17 @@
 ---
 slug: ivia-licensing
+id: cakzx4esvxyp
 type: challenge
 title: IVIA Licensing
-teaser: Confirm the IBM Container Registry entitlement key and the IVIA trial certificate are in place.
+teaser: Confirm the IBM Container Registry entitlement key and the IVIA trial certificate
+  are in place.
 tabs:
-  - title: Terminal
-    type: terminal
-    hostname: cloud-client
+- id: csw2y85tczac
+  title: Terminal
+  type: terminal
+  hostname: cloud-client
+difficulty: ""
+enhanced_loading: null
 ---
 
 IBM Verify Access (IVIA) 11.0.2 runs self-hosted on EKS as the OIDC provider

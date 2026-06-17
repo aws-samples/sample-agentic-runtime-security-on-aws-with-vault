@@ -1,12 +1,16 @@
 ---
 slug: uc1-verify
+id: xa0uxg0i5fra
 type: challenge
 title: Use Case 1 — Verify Credentials
 teaser: Run verify-uc1.sh — issue, observe, prove enforcement.
 tabs:
-  - title: Terminal
-    type: terminal
-    hostname: cloud-client
+- id: prywrlrelvgu
+  title: Terminal
+  type: terminal
+  hostname: cloud-client
+difficulty: ""
+enhanced_loading: null
 ---
 
 Use Case 1 ships with an end-to-end verifier that exercises the JIT credential

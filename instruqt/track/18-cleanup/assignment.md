@@ -1,12 +1,16 @@
 ---
 slug: cleanup
+id: tnvfcpbyqyd9
 type: challenge
 title: Cleanup
 teaser: Tear down the workshop infrastructure (Instruqt also destroys the sandbox).
 tabs:
-  - title: Terminal
-    type: terminal
-    hostname: cloud-client
+- id: gncciojbyrud
+  title: Terminal
+  type: terminal
+  hostname: cloud-client
+difficulty: ""
+enhanced_loading: null
 ---
 
 You've completed all three use cases. Time to tear down.

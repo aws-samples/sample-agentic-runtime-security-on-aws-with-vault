@@ -1,12 +1,16 @@
 ---
 slug: deploy-tier3
+id: njr2t4hovkvq
 type: challenge
 title: Deploy Tier 3 — Workloads
 teaser: Use Case agent pods, banking app + UI, banking DB seed, Bedrock KB ingest.
 tabs:
-  - title: Terminal
-    type: terminal
-    hostname: cloud-client
+- id: ffysxwsvfpqq
+  title: Terminal
+  type: terminal
+  hostname: cloud-client
+difficulty: ""
+enhanced_loading: null
 ---
 
 Tier 3 deploys the application workloads on top of tier-1 (cluster) and tier-2

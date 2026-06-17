@@ -1,12 +1,16 @@
 ---
 slug: uc1-vault-auth
+id: yguipxwctyry
 type: challenge
 title: Use Case 1 — Vault Auth Inspection
 teaser: Inspect the Vault role, policy, and database secrets engine that scope uc1-retriever-sa.
 tabs:
-  - title: Terminal
-    type: terminal
-    hostname: cloud-client
+- id: hz4gb8stxjjj
+  title: Terminal
+  type: terminal
+  hostname: cloud-client
+difficulty: ""
+enhanced_loading: null
 ---
 
 The Vault Kubernetes auth method, database secrets engine role, AWS secrets

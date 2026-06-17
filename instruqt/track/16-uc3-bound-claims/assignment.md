@@ -1,12 +1,17 @@
 ---
 slug: uc3-bound-claims
+id: ts9eexvmdevj
 type: challenge
 title: Use Case 3 — Vault bound_claims Enforcement
-teaser: Inspect the may_act delegation claim and the RFC 9396 authorization_details.type that gate the write credential.
+teaser: Inspect the may_act delegation claim and the RFC 9396 authorization_details.type
+  that gate the write credential.
 tabs:
-  - title: Terminal
-    type: terminal
-    hostname: cloud-client
+- id: chqsnydsh7dh
+  title: Terminal
+  type: terminal
+  hostname: cloud-client
+difficulty: ""
+enhanced_loading: null
 ---
 
 The refund credential is gated by **three cryptographic enforcement points**

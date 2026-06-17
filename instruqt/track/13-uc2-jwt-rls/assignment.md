@@ -1,12 +1,16 @@
 ---
 slug: uc2-jwt-rls
+id: smrxwjchdy7i
 type: challenge
 title: Use Case 2 — JWT + Row-Level Security
 teaser: Per-user Vault credentials; PostgreSQL RLS enforces data isolation.
 tabs:
-  - title: Terminal
-    type: terminal
-    hostname: cloud-client
+- id: tntwwvqexfmy
+  title: Terminal
+  type: terminal
+  hostname: cloud-client
+difficulty: ""
+enhanced_loading: null
 ---
 
 Use Case 2 issues per-user Postgres credentials via Vault's `database/creds/uc2-personal-readonly`
