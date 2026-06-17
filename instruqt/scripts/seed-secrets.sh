@@ -24,9 +24,9 @@ set -euo pipefail
 
 # Resolve the active Instruqt team from the CLI config so this script can't
 # silently target the wrong team (Bear, CLAUDE.md: never hardcode identity).
-TEAM=$(instruqt config get team 2>/dev/null \
-    | awk '/^[[:space:]]*team[[:space:]]*=/ {print $3}' \
-    | tr -d '[:space:]')
+# `instruqt config get team` returns the bare value with a trailing newline
+# (verified empirically); just strip whitespace.
+TEAM=$(instruqt config get team 2>/dev/null | tr -d '[:space:]')
 if [[ -z "${TEAM}" ]]; then
     echo "FATAL: no Instruqt team configured. Run: instruqt auth login" >&2
     exit 1
