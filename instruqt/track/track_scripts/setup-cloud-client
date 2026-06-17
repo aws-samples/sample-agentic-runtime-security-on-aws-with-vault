@@ -7,27 +7,19 @@
 #
 #   0. Install the workshop CLI toolchain that cloud-client:2 doesn't ship
 #      (terraform, kubectl, helm, ldapsearch, psql, unzip).
-#   a. Translate Instruqt's AWS-account env vars (INSTRUQT_AWS_ACCOUNT_workshop_*)
-#      into ~/.aws/credentials so the aws CLI and the Terraform AWS provider
-#      pick them up with zero AWS_PROFILE export.
+#   a. Translate Instruqt's AWS-account env vars into ~/.aws/credentials so
+#      the aws CLI and the Terraform AWS provider pick them up with zero
+#      AWS_PROFILE export.
 #   b. Write the SSH deploy key from runtime parameter INSTRUQT_GITHUB_IBM_DEPLOY_KEY
-#      (set ONCE by the track author in the invite link's Advanced options) to
-#      ~/.ssh/id_ed25519 (mode 0600) and clone the workshop repo over SSH.
+#      to ~/.ssh/id_ed25519 (mode 0600) and clone the workshop repo over SSH.
 #   c. Run check-prerequisites.sh --skip-tools (validates credentials, region,
-#      Bedrock model access, quotas, IAM — skips the install gate since step 0
-#      installed everything).
+#      Bedrock model access, quotas, IAM).
 #   d. Run bootstrap.sh --skip-prereq-gate (seeds the 3 tfvars from .example,
 #      stamps admin_principal_arn from STS, terraform init in all 3 roots).
 #
-# The Workshop Studio confidential values (acme_email, icr_entitlement_key,
-# ivia_mmfa_push_client_secret) are NOT pre-injected here. deploy-workshop.sh
-# preflight prompts the attendee interactively when they run the tier-N deploy
-# from the Terminal tab, identical to the Workshop Studio flow. Avoids needing
-# team-Owner perms on Instruqt to register org secrets.
-#
-# Any non-zero exit halts the track-play before challenge 1 displays — that is
-# the correct fail-loud behavior: an attendee should never see a half-broken
-# environment.
+# DEBUG MODE: this version emits structured START/OK markers at every step
+# and dumps every INSTRUQT_* env var visible at script start (secrets
+# redacted). Use the log output to diagnose where setup stalls or fails.
 #===============================================================================
 
 set -euo pipefail
@@ -42,26 +34,65 @@ TERRAFORM_VERSION="1.10.5"
 KUBECTL_VERSION="v1.31.4"
 HELM_VERSION="v3.16.4"
 
-echo "==> [setup-cloud-client] step (0): install workshop CLI toolchain on cloud-client:2"
+# Structured step markers — every step prints START at entry and OK at exit.
+# A missing OK after a START tells you exactly where the script died.
+step_start() { echo "==> step $1 START: $2"; }
+step_ok()    { echo "==> step $1 OK"; }
+step_fail()  { echo "==> step $1 FAIL: $2" >&2; }
 
-# cloud-client:2 ships aws-cli v2 + bash + curl + git + jq + openssl + gcloud + az.
-# Missing: terraform, kubectl, helm, openldap-utils (ldapsearch — UC2/UC3 verifies),
-# postgresql-client (psql — UC1/UC2 verifies). Install idempotently.
+# Redact known-sensitive value patterns from any line. The redaction is
+# substring-based (greedy from the `=`), so it catches both raw env-style
+# lines and embedded shell expansions. Add patterns here as new sensitive
+# vars surface.
+redact() {
+    sed -E \
+        -e 's/(AWS_SECRET_ACCESS_KEY[^=]*=)[^[:space:]]*/\1<REDACTED>/g' \
+        -e 's/(PASSWORD[^=]*=)[^[:space:]]*/\1<REDACTED>/g' \
+        -e 's/(DEPLOY_KEY[^=]*=)[^[:space:]]*/\1<REDACTED>/g' \
+        -e 's/(_SECRET[^=]*=)[^[:space:]]*/\1<REDACTED>/g'
+}
+
+#--- preflight env dump --------------------------------------------------------
+echo "==============================================================================="
+echo "==> [debug] PREFLIGHT context"
+echo "    hostname=$(hostname)  uid=$(id -u)  pwd=$(pwd)  date=$(date -u +%FT%TZ)"
+echo "    participant=${INSTRUQT_PARTICIPANT_ID:-<unset>}"
+echo "    track=${INSTRUQT_TRACK_ID:-<unset>}"
+echo "    INSTRUQT_AWS_ACCOUNTS=${INSTRUQT_AWS_ACCOUNTS:-<unset>}"
+echo "==> [debug] ALL INSTRUQT_* env vars visible to this lifecycle script (redacted):"
+if env | grep -E '^INSTRUQT' >/dev/null 2>&1; then
+    env | grep -E '^INSTRUQT' | sort | redact | sed 's/^/    /'
+else
+    echo "    (none found — Instruqt did not inject any INSTRUQT_* vars)"
+fi
+echo "==> [debug] \$INSTRUQT_ENV_VARS contents (redacted, AWS-related lines highlighted):"
+if [ -n "${INSTRUQT_ENV_VARS:-}" ]; then
+    echo "${INSTRUQT_ENV_VARS}" | redact | sed 's/^/    /'
+else
+    echo "    (INSTRUQT_ENV_VARS is unset or empty)"
+fi
+echo "==============================================================================="
+
+#--- step (0) ------------------------------------------------------------------
+step_start "(0)" "install workshop CLI toolchain on cloud-client:2"
 export DEBIAN_FRONTEND=noninteractive
 
-# Detect already-installed by symlink presence to keep re-runs fast (~3s vs ~90s).
 if ! command -v terraform >/dev/null 2>&1; then
     echo "    Installing terraform ${TERRAFORM_VERSION}"
     curl -fsSL "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip" -o /tmp/terraform.zip
     (cd /usr/local/bin && unzip -o /tmp/terraform.zip terraform >/dev/null)
     chmod +x /usr/local/bin/terraform
     rm -f /tmp/terraform.zip
+else
+    echo "    terraform already present: $(command -v terraform)"
 fi
 
 if ! command -v kubectl >/dev/null 2>&1; then
     echo "    Installing kubectl ${KUBECTL_VERSION}"
     curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" -o /usr/local/bin/kubectl
     chmod +x /usr/local/bin/kubectl
+else
+    echo "    kubectl already present: $(command -v kubectl)"
 fi
 
 if ! command -v helm >/dev/null 2>&1; then
@@ -70,84 +101,126 @@ if ! command -v helm >/dev/null 2>&1; then
     tar -xzf /tmp/helm.tgz -C /tmp linux-amd64/helm
     install -m 0755 /tmp/linux-amd64/helm /usr/local/bin/helm
     rm -rf /tmp/helm.tgz /tmp/linux-amd64
+else
+    echo "    helm already present: $(command -v helm)"
 fi
 
 if ! command -v ldapsearch >/dev/null 2>&1 || ! command -v psql >/dev/null 2>&1; then
     echo "    Installing apt packages: ldap-utils postgresql-client unzip"
     apt-get update -qq
     apt-get install -y -qq ldap-utils postgresql-client unzip ca-certificates >/dev/null
+else
+    echo "    ldapsearch + psql already present"
 fi
 
-terraform version | head -1
-kubectl version --client=true 2>&1 | head -1
-helm version --short
+echo "    versions:"
+echo "      $(terraform version | head -1)"
+echo "      $(kubectl version --client=true 2>&1 | head -1)"
+echo "      $(helm version --short)"
+step_ok "(0)"
 
-echo "==> [setup-cloud-client] step (a): translate Instruqt AWS env vars → ~/.aws/credentials"
+#--- step (a) ------------------------------------------------------------------
+step_start "(a)" "translate Instruqt AWS env vars → ~/.aws/credentials"
 
-# Instruqt injects credentials for an AWS sandbox named in config.yml's
-# aws_accounts[].name. Per docs (sandboxes/cloud-accounts/aws-accounts/
-# aws-environment-variables), there are TWO sets:
-#   - USER vars (INSTRUQT_AWS_ACCOUNT_<name>_AWS_ACCESS_KEY_ID) — available
-#     ONLY in the attendee's shell/container, NOT in lifecycle scripts.
-#   - ADMIN vars (INSTRUQT_AWS_ACCOUNT_<name>_ADMIN_AWS_ACCESS_KEY_ID) —
-#     injected ONLY into lifecycle scripts (this script).
-# This script runs as a lifecycle script, so we MUST use the ADMIN_ form.
-# Our sandbox is named `workshop` (see instruqt/track/config.yml.tmpl).
-: "${INSTRUQT_AWS_ACCOUNT_workshop_ADMIN_AWS_ACCESS_KEY_ID:?Instruqt did not inject ADMIN_AWS_ACCESS_KEY_ID for workshop sandbox — config.yml aws_accounts name mismatch?}"
-: "${INSTRUQT_AWS_ACCOUNT_workshop_ADMIN_AWS_SECRET_ACCESS_KEY:?Instruqt did not inject ADMIN_AWS_SECRET_ACCESS_KEY for workshop sandbox}"
+# Empirically discover which AWS-related env vars Instruqt actually injects
+# into THIS lifecycle script's environment. The earlier ADMIN_-vs-USER docs
+# reading failed empirically, so this dump is the ground truth.
+echo "    [debug] env vars matching INSTRUQT_.*AWS (redacted):"
+if env | grep -E '^INSTRUQT_.*AWS' >/dev/null 2>&1; then
+    env | grep -E '^INSTRUQT_.*AWS' | sort | redact | sed 's/^/      /'
+else
+    echo "      (none found — Instruqt injected zero INSTRUQT_*AWS* vars into this script)"
+fi
+
+# Try BOTH historical naming patterns so we land creds regardless of which
+# is actually injected. First match wins. Add more candidates here if the
+# preflight dump shows yet another pattern.
+ACCESS_KEY=""
+SECRET_KEY=""
+for src in \
+    "INSTRUQT_AWS_ACCOUNT_workshop_ADMIN_AWS_ACCESS_KEY_ID:INSTRUQT_AWS_ACCOUNT_workshop_ADMIN_AWS_SECRET_ACCESS_KEY" \
+    "INSTRUQT_AWS_ACCOUNT_workshop_AWS_ACCESS_KEY_ID:INSTRUQT_AWS_ACCOUNT_workshop_AWS_SECRET_ACCESS_KEY" \
+    ; do
+    ak="${src%%:*}"
+    sk="${src##*:}"
+    if [ -n "${!ak:-}" ] && [ -n "${!sk:-}" ]; then
+        ACCESS_KEY="${!ak}"
+        SECRET_KEY="${!sk}"
+        echo "    [debug] using credential pair from: $ak / $sk"
+        break
+    else
+        echo "    [debug] candidate empty: $ak (=${!ak:+<set>}${!ak:-<unset>}) / $sk (=${!sk:+<set>}${!sk:-<unset>})"
+    fi
+done
+
+if [ -z "${ACCESS_KEY}" ] || [ -z "${SECRET_KEY}" ]; then
+    step_fail "(a)" "no usable credential pair found in the lifecycle script environment"
+    echo "    Expected one of these pairs to be set:"
+    echo "      INSTRUQT_AWS_ACCOUNT_workshop_ADMIN_AWS_ACCESS_KEY_ID + ..._ADMIN_AWS_SECRET_ACCESS_KEY"
+    echo "      INSTRUQT_AWS_ACCOUNT_workshop_AWS_ACCESS_KEY_ID + ..._AWS_SECRET_ACCESS_KEY"
+    echo "    See the PREFLIGHT dump above for the actual var names Instruqt injected."
+    exit 1
+fi
 
 mkdir -p "${HOME}/.aws"
 cat > "${HOME}/.aws/credentials" <<EOF
 [default]
-aws_access_key_id     = ${INSTRUQT_AWS_ACCOUNT_workshop_ADMIN_AWS_ACCESS_KEY_ID}
-aws_secret_access_key = ${INSTRUQT_AWS_ACCOUNT_workshop_ADMIN_AWS_SECRET_ACCESS_KEY}
+aws_access_key_id     = ${ACCESS_KEY}
+aws_secret_access_key = ${SECRET_KEY}
 EOF
 chmod 600 "${HOME}/.aws/credentials"
+echo "    wrote ${HOME}/.aws/credentials ($(wc -c < "${HOME}/.aws/credentials") bytes, mode $(stat -c '%a' "${HOME}/.aws/credentials" 2>/dev/null || stat -f '%Lp' "${HOME}/.aws/credentials"))"
+step_ok "(a)"
 
-echo "==> [setup-cloud-client] step (b): SSH deploy key + repo clone"
+#--- step (b) ------------------------------------------------------------------
+step_start "(b)" "SSH deploy key + repo clone"
 
-: "${INSTRUQT_GITHUB_IBM_DEPLOY_KEY:?Org secret INSTRUQT_GITHUB_IBM_DEPLOY_KEY not injected — set it on the Instruqt org}"
+echo "    [debug] INSTRUQT_GITHUB_IBM_DEPLOY_KEY set? $([ -n "${INSTRUQT_GITHUB_IBM_DEPLOY_KEY:-}" ] && echo yes || echo NO)"
+if [ -z "${INSTRUQT_GITHUB_IBM_DEPLOY_KEY:-}" ]; then
+    step_fail "(b)" "runtime parameter INSTRUQT_GITHUB_IBM_DEPLOY_KEY is unset/empty — paste the private key in the invite link Advanced options"
+    exit 1
+fi
 
 mkdir -p "${HOME}/.ssh"
 chmod 700 "${HOME}/.ssh"
-# Write key. The org-secret value is expected to be the FULL private key PEM
-# (BEGIN ... END) including a trailing newline; if Instruqt strips the trailing
-# newline ssh-keygen will still accept it, so we add one defensively.
+# Defensive trailing newline (ssh-keygen accepts either way).
 printf '%s\n' "${INSTRUQT_GITHUB_IBM_DEPLOY_KEY}" > "${SSH_KEY_PATH}"
 chmod 600 "${SSH_KEY_PATH}"
+echo "    wrote ${SSH_KEY_PATH} ($(wc -c < "${SSH_KEY_PATH}") bytes)"
 
 ssh-keyscan -t ed25519 github.ibm.com >> "${KNOWN_HOSTS}" 2>/dev/null || true
 chmod 600 "${KNOWN_HOSTS}"
+echo "    known_hosts: $(wc -l < "${KNOWN_HOSTS}") entries"
 
 if [ -d "${REPO_DIR}/.git" ]; then
-    echo "    Repo already cloned at ${REPO_DIR} — running git fetch + reset to origin/main (idempotent)"
+    echo "    repo already cloned at ${REPO_DIR} — running git fetch + reset to origin/main (idempotent)"
     git -C "${REPO_DIR}" fetch origin
     git -C "${REPO_DIR}" reset --hard origin/main
 else
-    echo "    Cloning ${GIT_REMOTE} → ${REPO_DIR}"
+    echo "    cloning ${GIT_REMOTE} → ${REPO_DIR}"
     git clone "${GIT_REMOTE}" "${REPO_DIR}"
 fi
+echo "    HEAD: $(git -C "${REPO_DIR}" log --oneline -1)"
+step_ok "(b)"
 
-echo "==> [setup-cloud-client] resolve primary region from canonical SoT and export"
+#--- region resolution ---------------------------------------------------------
+step_start "(region)" "resolve primary + KB region from canonical SoT"
 
-# Canonical region SoT (post-clone): infrastructure/terraform.tfvars.example
-# line ~26 (`region = "..."`). Same regex render-config.sh uses. Fail loud if
-# the SoT is missing or unparseable — never silently default.
 TFVARS_EXAMPLE="${REPO_DIR}/infrastructure/terraform.tfvars.example"
-[ -f "${TFVARS_EXAMPLE}" ] || { echo "FATAL: ${TFVARS_EXAMPLE} missing after clone"; exit 1; }
+if [ ! -f "${TFVARS_EXAMPLE}" ]; then
+    step_fail "(region)" "${TFVARS_EXAMPLE} missing after clone — repo structure changed?"
+    exit 1
+fi
 PRIMARY_REGION=$(grep -E '^[[:space:]]*region[[:space:]]*=' "${TFVARS_EXAMPLE}" \
     | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
 KB_REGION=$(grep -E '^[[:space:]]*kb_region[[:space:]]*=' "${TFVARS_EXAMPLE}" \
     | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
-: "${PRIMARY_REGION:?could not parse region = \"...\" from ${TFVARS_EXAMPLE}}"
-: "${KB_REGION:?could not parse kb_region = \"...\" from ${TFVARS_EXAMPLE}}"
+if [ -z "${PRIMARY_REGION}" ] || [ -z "${KB_REGION}" ]; then
+    step_fail "(region)" "could not parse region/kb_region from ${TFVARS_EXAMPLE} (PRIMARY=${PRIMARY_REGION:-<empty>}, KB=${KB_REGION:-<empty>})"
+    exit 1
+fi
 
 mkdir -p /etc/profile.d
-# AWS_REGION + AWS_DEFAULT_REGION: workload region (every aws CLI call default).
-# AWS_REGION_KB: Bedrock KB region (embedding model lives here only); challenges
-# that talk to AOSS / Bedrock KB / the multimodal embedding model use this var
-# explicitly via `aws --region "$AWS_REGION_KB" ...`. Keeps the assignment.md
-# commands free of hardcoded region literals (Decision 7).
 cat > /etc/profile.d/aws.sh <<EOF
 export AWS_REGION="${PRIMARY_REGION}"
 export AWS_DEFAULT_REGION="${PRIMARY_REGION}"
@@ -157,15 +230,25 @@ chmod 644 /etc/profile.d/aws.sh
 export AWS_REGION="${PRIMARY_REGION}"
 export AWS_DEFAULT_REGION="${PRIMARY_REGION}"
 export AWS_REGION_KB="${KB_REGION}"
-echo "    AWS region set to: ${AWS_REGION} (workload), ${AWS_REGION_KB} (Bedrock KB)"
+echo "    primary=${AWS_REGION}  kb=${AWS_REGION_KB}"
+step_ok "(region)"
 
-aws sts get-caller-identity --query Account --output text \
-    || { echo "FATAL: aws sts get-caller-identity failed — credentials not usable"; exit 1; }
+#--- sts probe -----------------------------------------------------------------
+step_start "(sts)" "aws sts get-caller-identity (proves creds are usable)"
+if ! aws sts get-caller-identity --query Account --output text; then
+    step_fail "(sts)" "aws sts get-caller-identity failed — creds in ~/.aws/credentials are not usable"
+    exit 1
+fi
+step_ok "(sts)"
 
-echo "==> [setup-cloud-client] step (c): check-prerequisites.sh --skip-tools"
+#--- step (c) ------------------------------------------------------------------
+step_start "(c)" "check-prerequisites.sh --skip-tools"
 bash "${REPO_DIR}/infrastructure/scripts/check-prerequisites.sh" --skip-tools
+step_ok "(c)"
 
-echo "==> [setup-cloud-client] step (d): bootstrap.sh --skip-prereq-gate"
+#--- step (d) ------------------------------------------------------------------
+step_start "(d)" "bootstrap.sh --skip-prereq-gate"
 bash "${REPO_DIR}/infrastructure/scripts/bootstrap.sh" --skip-prereq-gate
+step_ok "(d)"
 
-echo "==> [setup-cloud-client] complete — challenge 01-welcome ready to display"
+echo "==> setup-cloud-client COMPLETE — challenge 01-welcome ready to display"
