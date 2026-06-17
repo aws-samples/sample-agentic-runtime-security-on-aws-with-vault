@@ -1,29 +1,23 @@
 #!/usr/bin/env bash
 #===============================================================================
 # 03-ivia-licensing/check-cloud-client
-# Asserts the two IVIA licensing artifacts are usable:
-#   - icr_entitlement_key + ivia_mmfa_push_client_secret set in services tfvars
-#   - ISAM-Trial-HashiCorp.cer present and not expired
+# Asserts the attendee uploaded their IVIA trial activation certificate:
+#   - ISAM-Trial-HashiCorp.cer present at the canonical repo path
+#   - notAfter date in the future
+#
+# ICR entitlement key + MMFA push secret are NOT checked here — they are
+# prompted interactively by deploy-workshop.sh during the tier-2 deploy
+# challenge.
 #===============================================================================
 
 set -euo pipefail
 
 REPO_DIR="/root/workshop"
-SERVICES_TFVARS="${REPO_DIR}/infrastructure/services/terraform.tfvars"
 TRIAL_CERT="${REPO_DIR}/infrastructure/modules/verify_access/base_layer/ISAM-Trial-HashiCorp.cer"
-
-# tfvars values present and non-empty
-for key in icr_entitlement_key ivia_mmfa_push_client_secret; do
-    val=$(grep -E "^[[:space:]]*${key}[[:space:]]*=" "${SERVICES_TFVARS}" 2>/dev/null \
-        | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
-    [ -n "${val}" ] \
-        || { echo "FAIL: ${key} missing or empty in ${SERVICES_TFVARS} — org secret not injected?"; exit 1; }
-done
-echo "PASS: services tfvars carries both ICR + MMFA secrets"
 
 # Trial cert present
 [ -f "${TRIAL_CERT}" ] \
-    || { echo "FAIL: ${TRIAL_CERT} missing — repo clone incomplete?"; exit 1; }
+    || { echo "FAIL: ${TRIAL_CERT} missing — upload your trial PEM via the IDE tab"; exit 1; }
 
 # Trial cert not expired (notAfter date is in the future)
 NOT_AFTER_EPOCH=$(openssl x509 -in "${TRIAL_CERT}" -noout -enddate 2>/dev/null \
@@ -33,12 +27,12 @@ NOT_AFTER_EPOCH=$(openssl x509 -in "${TRIAL_CERT}" -noout -enddate 2>/dev/null \
 # macOS `date` doesn't grok the openssl format with -d; the sandbox is Linux so
 # this should always succeed there. Fail loud if it doesn't.
 [ -n "${NOT_AFTER_EPOCH}" ] \
-    || { echo "FAIL: could not parse trial cert notAfter date"; exit 1; }
+    || { echo "FAIL: could not parse trial cert notAfter date — is the upload a valid PEM?"; exit 1; }
 
 NOW_EPOCH=$(date +%s)
 if [ "${NOT_AFTER_EPOCH}" -le "${NOW_EPOCH}" ]; then
     echo "FAIL: trial cert is expired (notAfter epoch ${NOT_AFTER_EPOCH} <= now ${NOW_EPOCH})"
-    echo "      Request a fresh cert from https://isva-trial.verify.ibm.com/"
+    echo "      Request a fresh cert from https://isva-trial.verify.ibm.com/ and re-upload via the IDE tab"
     exit 1
 fi
 echo "PASS: trial cert present and not expired"

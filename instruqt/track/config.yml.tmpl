@@ -26,7 +26,11 @@ containers:
     image: gcr.io/instruqt/cloud-client:2
     # Port 80: cloud-client's built-in credentials web service (per the
     # canonical docs example at sandboxes/cloud-accounts/cloud-client).
-    ports: [80]
+    # Port 8080: code-server (open-source VS Code Server) launched by
+    # setup-cloud-client step (0). Exposed via a service tab on the
+    # 03-ivia-licensing challenge so attendees can drag-and-drop / upload
+    # their own IVIA trial PEM into the repo.
+    ports: [80, 8080]
     # 4 GiB: tier-1/2/3 deploys run terraform + kubectl apply + image builds
     # concurrently. The docs' default 256 MiB OOM-kills mid-deploy without a
     # legible error.
