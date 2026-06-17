@@ -116,6 +116,40 @@ else
     echo "    vault already present: $(command -v vault)"
 fi
 
+# code-server (open-source VS Code Server) — installed once per sandbox.
+# Used by the 03-ivia-licensing challenge: attendees obtain their own 90-day
+# IVIA trial PEM from https://isva-trial.verify.ibm.com/ and drag-and-drop /
+# upload it into the repo via the IDE file explorer. Exposed as a service
+# tab on port 8080 (declared in config.yml.tmpl). Sandbox URL is participant-
+# scoped (single-attendee pod), so --auth none is safe.
+if ! command -v code-server >/dev/null 2>&1; then
+    echo "    Installing code-server (via the upstream install.sh)"
+    curl -fsSL https://code-server.dev/install.sh | sh >/dev/null
+else
+    echo "    code-server already present: $(command -v code-server)"
+fi
+
+if ! pgrep -f 'code-server.*--port 8080' >/dev/null 2>&1 \
+   && ! ss -ltn 2>/dev/null | grep -q ':8080[[:space:]]'; then
+    echo "    Launching code-server on :8080 (workspace /root/workshop, auth disabled)"
+    # nohup + disown so the server persists past the lifecycle script exit.
+    # Logs to /var/log/code-server.log for debugging if a play stalls.
+    nohup code-server \
+        --bind-addr 0.0.0.0:8080 \
+        --auth none \
+        /root \
+        > /var/log/code-server.log 2>&1 &
+    disown $!
+    # Wait briefly for the listener to come up so the service tab doesn't
+    # 502 on first click. 5s is generous on cloud-client:2.
+    for i in 1 2 3 4 5; do
+        ss -ltn 2>/dev/null | grep -q ':8080[[:space:]]' && break
+        sleep 1
+    done
+else
+    echo "    code-server already listening on :8080"
+fi
+
 if ! command -v ldapsearch >/dev/null 2>&1 || ! command -v psql >/dev/null 2>&1 || ! command -v bc >/dev/null 2>&1; then
     echo "    Installing apt packages: ldap-utils postgresql-client unzip bc"
     apt-get update -qq
