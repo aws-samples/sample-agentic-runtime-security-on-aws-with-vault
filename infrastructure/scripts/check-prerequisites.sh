@@ -55,6 +55,16 @@ INTERACTIVE=false
 # (brew, apt, yum) is not available. Set true by --skip-tools; required by the
 # Instruqt distribution's track_scripts/setup-cloud-client (see instruqt/README.md).
 SKIP_TOOLS=false
+# Skip Section 3 (servicequotas:GetServiceQuota) when running in an environment
+# whose SCP blocks the servicequotas API entirely — Instruqt sandboxes:
+# `servicequotas` is not on Instruqt's 43-key allowed-services list, so every
+# quota probe gets an explicit-deny. Set true by --skip-quotas.
+SKIP_QUOTAS=false
+# Skip Section 4 (iam:SimulatePrincipalPolicy probes) when running in an
+# environment whose SCP architecture makes the simulator return implicitDeny
+# for actions the principal can actually perform — Instruqt sandboxes. The
+# real test is the subsequent terraform apply. Set true by --skip-iam-sim.
+SKIP_IAM_SIM=false
 
 # Argument parsing — keep simple, no shift loops with positional args
 for arg in "$@"; do
@@ -62,9 +72,11 @@ for arg in "$@"; do
         --interactive)    INTERACTIVE=true; unset WORKSHOP_AUTO_YES ;;
         --dry-run|--noop) DRY_RUN=true ;;
         --skip-tools)     SKIP_TOOLS=true ;;
+        --skip-quotas)    SKIP_QUOTAS=true ;;
+        --skip-iam-sim)   SKIP_IAM_SIM=true ;;
         --help|-h)
             cat <<USAGE
-Usage: $0 [--interactive] [--dry-run] [--skip-tools] [--help]
+Usage: $0 [--interactive] [--dry-run] [--skip-tools] [--skip-quotas] [--skip-iam-sim] [--help]
 
 Workshop pre-flight: installs CLI prereqs, then verifies Bedrock model access,
 AWS service quotas, and IAM permissions for the workshop bootstrap.
@@ -85,6 +97,15 @@ Modes:
                     Instruqt distribution where aws/terraform/kubectl/jq/helm
                     are pre-baked into the sandbox image and brew/apt are not
                     available.
+  --skip-quotas     Skip Section 3 (servicequotas:GetServiceQuota probe loop).
+                    Required where the sandbox SCP blocks the servicequotas
+                    API entirely (Instruqt — servicequotas is not on the
+                    43-key allowed-services list).
+  --skip-iam-sim    Skip Section 4 (iam:SimulatePrincipalPolicy probes).
+                    Required where the sandbox SCP architecture makes the
+                    simulator return implicitDeny for actions the principal
+                    can actually perform; terraform apply becomes the real
+                    test (Instruqt).
   --help, -h        Show this help and exit.
 USAGE
             exit 0
@@ -502,9 +523,18 @@ echo
 #   - AWS CLI stderr captured (no longer hidden behind 2>/dev/null) and
 #     surfaced in FAIL message.
 # =============================================================================
-echo -e "${BLUE}=== Check AWS service quotas ===${NC}"
+if [ "$SKIP_QUOTAS" = true ]; then
+    echo -e "${BLUE}=== Check AWS service quotas — SKIPPED (--skip-quotas) ===${NC}"
+    print_info "servicequotas:GetServiceQuota is SCP-denied in the Instruqt sandbox; relying on terraform apply / actual workshop usage to surface real quota issues."
+    QUOTAS_HEADER_PRINTED=1
+fi
+if [ -z "${QUOTAS_HEADER_PRINTED:-}" ]; then
+    echo -e "${BLUE}=== Check AWS service quotas ===${NC}"
+fi
 
-if confirm "Run AWS service quotas check?"; then
+if [ "$SKIP_QUOTAS" = true ]; then
+    : # skipped above; do not run the probe loop
+elif confirm "Run AWS service quotas check?"; then
     # ---- Pre-flight: bc + AWS creds ----
     if ! command -v bc >/dev/null 2>&1; then
         print_fail "bc not installed (needed for float comparison)" \
@@ -613,9 +643,18 @@ echo
 #   - simulator self-test fallback (Pitfall §7)
 #   - 17-action batch simulation
 # =============================================================================
-echo -e "${BLUE}=== Check IAM permissions ===${NC}"
+if [ "$SKIP_IAM_SIM" = true ]; then
+    echo -e "${BLUE}=== Check IAM permissions — SKIPPED (--skip-iam-sim) ===${NC}"
+    print_info "iam:SimulatePrincipalPolicy returns implicitDeny under Instruqt's SCP architecture even for actions the principal can perform; relying on terraform apply to surface real permission failures."
+    IAM_HEADER_PRINTED=1
+fi
+if [ -z "${IAM_HEADER_PRINTED:-}" ]; then
+    echo -e "${BLUE}=== Check IAM permissions ===${NC}"
+fi
 
-if confirm "Run IAM permissions check (iam:SimulatePrincipalPolicy)?"; then
+if [ "$SKIP_IAM_SIM" = true ]; then
+    : # skipped above; do not run the simulator probes
+elif confirm "Run IAM permissions check (iam:SimulatePrincipalPolicy)?"; then
     # Step 1 — derive PRINCIPAL_ARN
     RAW_ARN=$(aws sts get-caller-identity --query 'Arn' --output text 2>/dev/null)
     ACCOUNT_ID=$(aws sts get-caller-identity --query 'Account' --output text 2>/dev/null)
