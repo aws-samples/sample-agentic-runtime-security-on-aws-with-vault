@@ -28,6 +28,17 @@ Tier 2 deploys two stateful workloads on top of the tier-1 EKS cluster:
 8. **Configure Vault** (`vault-configure.sh`) — auth methods, policies, secrets engines
 9. **Configure IVIA** (`ivia-configure.sh`) — verify OIDC discovery
 
+## Run the deploy
+
+```bash
+cd /root/workshop
+bash infrastructure/scripts/deploy-workshop.sh --tier 2
+```
+
+The preflight values you entered in tier 1 (LE email, ICR entitlement
+key, IVIA MMFA push secret) are cached in `terraform.tfvars` and reused
+silently — no re-prompt.
+
 ## Inspect what landed
 
 After the deploy finishes, verify Vault is unsealed and serving:
@@ -58,10 +69,9 @@ Expected: seven `Running` pods plus the `ivia-autoconf-<hash>` Job showing
 and re-check.
 
 {% hint style="info" %}
-Setup-shell ran the entire tier-2 deploy for you. The `~/vault-init.json`
-file contains the **Vault root token** — keep it private. The `nip.io`
-trusted certificate is real Let's Encrypt and uses the email you supplied as
-the `LE_EMAIL` runtime_parameter.
+The `~/vault-init.json` file contains the **Vault root token** — keep it
+private. The `nip.io` trusted certificate is real Let's Encrypt and uses the
+email you supplied during the tier-1 preflight prompt.
 {% endhint %}
 
 When all checks pass, advance to tier 3.

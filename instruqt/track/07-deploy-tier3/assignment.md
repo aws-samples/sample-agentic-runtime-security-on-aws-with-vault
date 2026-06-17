@@ -28,6 +28,15 @@ Tier 3 deploys the application workloads on top of tier-1 (cluster) and tier-2
 13. **Seed the banking database** (`seed-banking-db.sh`) — transactions table
 14. **Ingest the Bedrock KB corpus** (`sync-bedrock-kb.sh`) — HR + customers + finance
 
+## Run the deploy
+
+```bash
+cd /root/workshop
+bash infrastructure/scripts/deploy-workshop.sh --tier 3
+```
+
+The preflight values from tier 1 are cached and reused — no re-prompt.
+
 ## Inspect what landed
 
 The tier-3 workloads split across two namespaces:

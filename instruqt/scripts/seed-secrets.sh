@@ -97,12 +97,10 @@ cat <<EOF
 
 ==> Deploy key ready.
 
-Next: create / edit the Instruqt invite link and paste these three values
-into Advanced options → +Runtime parameters (Add variable):
+Next: create / edit the Instruqt invite link and paste ONE value into
+Advanced options → +Runtime parameters (Add variable):
 
-   ICR_ENTITLEMENT_KEY            <your IBM Container Registry entitlement key>
-   IVIA_MMFA_PUSH_SECRET          <IVIA MMFA push-provider client secret>
-   INSTRUQT_GITHUB_IBM_DEPLOY_KEY <full contents of ${DEPLOY_KEY_PATH}>
+   INSTRUQT_GITHUB_IBM_DEPLOY_KEY  =  <full contents of ${DEPLOY_KEY_PATH}>
 
 To pipe the private key to your clipboard for pasting:
 
@@ -111,7 +109,12 @@ To pipe the private key to your clipboard for pasting:
 Invite link UI:
    https://play.instruqt.com/manage/$(instruqt config get team | tr -d '[:space:]')/tracks/${DEPLOY_REPO_NAME}/invites
 
-After saving the invite, attendees use that specific invite URL (not the
-generic published URL) so the three values get injected as env vars into
+After saving the invite, attendees use THAT specific invite URL (not the
+generic published URL) so the SSH key gets injected as an env var into
 track_scripts/setup-cloud-client.
+
+LE_EMAIL / ICR_ENTITLEMENT_KEY / IVIA_MMFA_PUSH_SECRET are NOT pre-set
+here — deploy-workshop.sh preflight prompts the attendee for them when
+they run the tier-1 deploy from the Terminal tab, same flow as the
+Workshop Studio distribution.
 EOF

@@ -1,7 +1,0 @@
-#!/usr/bin/env bash
-# 06-deploy-tier2/setup-cloud-client
-# Runs the tier-2 deploy. Idempotent. ~20-30 minutes first time.
-set -euo pipefail
-
-cd /root/workshop
-bash infrastructure/scripts/deploy-workshop.sh --tier 2

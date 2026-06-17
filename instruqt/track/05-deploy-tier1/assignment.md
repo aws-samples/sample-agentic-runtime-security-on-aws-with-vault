@@ -25,9 +25,24 @@ yet — that comes in tier 2.
 3. `build-images.sh` — builds and pushes the Use Case agent images to ECR
 4. Load Balancer Controller readiness gate
 
-The challenge `setup-cloud-client` invokes this for you. The deploy is idempotent —
-if anything fails, re-running the same command converges (Project CLAUDE.md
-mandate).
+## Run the deploy
+
+```bash
+cd /root/workshop
+bash infrastructure/scripts/deploy-workshop.sh --tier 1
+```
+
+The script's preflight will prompt you for three values the workshop needs
+later (they're cached in `terraform.tfvars` so subsequent tiers don't re-prompt):
+
+- **Let's Encrypt contact email** — a real, deliverable address (used in tier 2)
+- **IBM Container Registry entitlement key** — required for IVIA image pulls
+  (used in tier 2; input is hidden)
+- **IBM Verify MMFA push client secret** — required for Use Case 3 mobile push
+  (used in tier 3; input is hidden)
+
+The deploy is idempotent — if anything fails, re-running the same command
+converges (Project CLAUDE.md mandate).
 
 {% hint style="info" %}
 First-time tier-1 deploy takes ~25-35 minutes — EKS (~12 min), RDS (~10 min

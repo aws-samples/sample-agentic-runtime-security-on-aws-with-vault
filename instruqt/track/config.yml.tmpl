@@ -39,38 +39,25 @@ aws_accounts:
       - arn:aws:iam::aws:policy/AdministratorAccess
 
 # Runtime parameters — injected as environment variables into lifecycle
-# scripts (only; per docs they are NOT stored on the container after lifecycle
-# scripts finish). Pre-fill the workshop-wide values via the invite link's
-# Advanced options → +Runtime parameters in the Instruqt UI; attendees never
-# type those and never see them. LE_EMAIL stays a prompted parameter so each
-# attendee uses their own deliverable email for Let's Encrypt registration.
+# scripts only (per docs they are NOT stored on the container after lifecycle
+# scripts finish, so attendees can't read them from /proc/self/environ once
+# the shell is alive).
 #
-# Why not config.yml `secrets:`? Per
-# https://docs.instruqt.com/sandboxes/runtime/secrets.md, secrets can only be
-# created by team Owners. The track author for this workshop does not hold
-# that role on hashicorp-field-ops, so we use the runtime_parameter path which
-# the track author can pre-fill via the invite-link UI without team-Owner
-# perms.
+# Why is the SSH deploy key the ONLY one here?
+#   - acme_email / icr_entitlement_key / ivia_mmfa_push_client_secret are
+#     prompted interactively by infrastructure/scripts/deploy-workshop.sh
+#     preflight when the attendee runs the deploy from the Terminal tab.
+#     That flow is identical to the Workshop Studio distribution — no need
+#     to pre-inject from Instruqt.
+#   - INSTRUQT_GITHUB_IBM_DEPLOY_KEY MUST be available BEFORE the attendee
+#     reaches the terminal, because track_scripts/setup-cloud-client uses
+#     it to git-clone the workshop repo from github.ibm.com into the
+#     sandbox. The attendee has no github.ibm.com SSO inside Instruqt, so
+#     they cannot supply their own credentials. The track author sets this
+#     ONCE via the invite link's Advanced options → +Runtime parameters
+#     (Add variable, paste the full multi-line PEM). Every play from that
+#     invite URL reuses the same key.
 runtime_parameters:
-  - name: LE_EMAIL
-    description: >-
-      Real, deliverable email for Let's Encrypt certificate registration. Used
-      verbatim in infrastructure/terraform.tfvars as acme_email; LE sends
-      expiry warnings to this address. Attendees enter their own value at
-      track start.
-  - name: ICR_ENTITLEMENT_KEY
-    description: >-
-      IBM Container Registry entitlement key. Pre-filled by the track author
-      via the invite link's Advanced options → +Runtime parameters. Written
-      to infrastructure/services/terraform.tfvars as icr_entitlement_key by
-      track_scripts/setup-cloud-client so deploy-workshop.sh sees it set and
-      skips the interactive prompt.
-  - name: IVIA_MMFA_PUSH_SECRET
-    description: >-
-      IVIA MMFA push-provider client secret (Use Case 3 mobile-push
-      notifications). Pre-filled by the track author via the invite link's
-      Advanced options. Written to infrastructure/services/terraform.tfvars
-      as ivia_mmfa_push_client_secret.
   - name: INSTRUQT_GITHUB_IBM_DEPLOY_KEY
     description: >-
       SSH private key (read-only) used by track_scripts/setup-cloud-client
