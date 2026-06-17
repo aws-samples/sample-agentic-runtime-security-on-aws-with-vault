@@ -294,8 +294,15 @@ fi
 step_ok "(sts)"
 
 #--- step (c) ------------------------------------------------------------------
-step_start "(c)" "check-prerequisites.sh --skip-tools"
-bash "${REPO_DIR}/infrastructure/scripts/check-prerequisites.sh" --skip-tools
+# Instruqt-sandbox-specific skips:
+#   --skip-quotas:  servicequotas API is SCP-blocked (servicequotas not on
+#                   Instruqt's 43-key allowed-services list).
+#   --skip-iam-sim: iam:SimulatePrincipalPolicy returns implicitDeny under
+#                   Instruqt's SCP architecture for actions the principal
+#                   can actually perform; terraform apply is ground truth.
+step_start "(c)" "check-prerequisites.sh --skip-tools --skip-quotas --skip-iam-sim"
+bash "${REPO_DIR}/infrastructure/scripts/check-prerequisites.sh" \
+    --skip-tools --skip-quotas --skip-iam-sim
 step_ok "(c)"
 
 #--- step (d) ------------------------------------------------------------------
