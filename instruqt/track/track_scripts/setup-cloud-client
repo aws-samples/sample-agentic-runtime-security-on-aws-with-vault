@@ -85,16 +85,22 @@ helm version --short
 echo "==> [setup-cloud-client] step (a): translate Instruqt AWS env vars → ~/.aws/credentials"
 
 # Instruqt injects credentials for an AWS sandbox named in config.yml's
-# aws_accounts[].name as `INSTRUQT_AWS_ACCOUNT_<name>_AWS_ACCESS_KEY_ID` etc.
+# aws_accounts[].name. Per docs (sandboxes/cloud-accounts/aws-accounts/
+# aws-environment-variables), there are TWO sets:
+#   - USER vars (INSTRUQT_AWS_ACCOUNT_<name>_AWS_ACCESS_KEY_ID) — available
+#     ONLY in the attendee's shell/container, NOT in lifecycle scripts.
+#   - ADMIN vars (INSTRUQT_AWS_ACCOUNT_<name>_ADMIN_AWS_ACCESS_KEY_ID) —
+#     injected ONLY into lifecycle scripts (this script).
+# This script runs as a lifecycle script, so we MUST use the ADMIN_ form.
 # Our sandbox is named `workshop` (see instruqt/track/config.yml.tmpl).
-: "${INSTRUQT_AWS_ACCOUNT_workshop_AWS_ACCESS_KEY_ID:?Instruqt did not inject AWS_ACCESS_KEY_ID for workshop sandbox — config.yml aws_accounts name mismatch?}"
-: "${INSTRUQT_AWS_ACCOUNT_workshop_AWS_SECRET_ACCESS_KEY:?Instruqt did not inject AWS_SECRET_ACCESS_KEY for workshop sandbox}"
+: "${INSTRUQT_AWS_ACCOUNT_workshop_ADMIN_AWS_ACCESS_KEY_ID:?Instruqt did not inject ADMIN_AWS_ACCESS_KEY_ID for workshop sandbox — config.yml aws_accounts name mismatch?}"
+: "${INSTRUQT_AWS_ACCOUNT_workshop_ADMIN_AWS_SECRET_ACCESS_KEY:?Instruqt did not inject ADMIN_AWS_SECRET_ACCESS_KEY for workshop sandbox}"
 
 mkdir -p "${HOME}/.aws"
 cat > "${HOME}/.aws/credentials" <<EOF
 [default]
-aws_access_key_id     = ${INSTRUQT_AWS_ACCOUNT_workshop_AWS_ACCESS_KEY_ID}
-aws_secret_access_key = ${INSTRUQT_AWS_ACCOUNT_workshop_AWS_SECRET_ACCESS_KEY}
+aws_access_key_id     = ${INSTRUQT_AWS_ACCOUNT_workshop_ADMIN_AWS_ACCESS_KEY_ID}
+aws_secret_access_key = ${INSTRUQT_AWS_ACCOUNT_workshop_ADMIN_AWS_SECRET_ACCESS_KEY}
 EOF
 chmod 600 "${HOME}/.aws/credentials"
 

@@ -24,6 +24,9 @@ containers:
     # postgresql-client are NOT in the image — installed by
     # track_scripts/setup-cloud-client step (0) on first start.
     image: gcr.io/instruqt/cloud-client:2
+    # Port 80: cloud-client's built-in credentials web service (per the
+    # canonical docs example at sandboxes/cloud-accounts/cloud-client).
+    ports: [80]
     # 4 GiB: tier-1/2/3 deploys run terraform + kubectl apply + image builds
     # concurrently. The docs' default 256 MiB OOM-kills mid-deploy without a
     # legible error.
@@ -32,6 +35,7 @@ containers:
 
 aws_accounts:
   - name: workshop
+    services: []
     regions:
       - ${REGION_PRIMARY}
       - ${REGION_KB}
