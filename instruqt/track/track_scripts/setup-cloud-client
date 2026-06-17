@@ -33,7 +33,7 @@ GIT_REMOTE="git@github.ibm.com:Oscar-Medina/agentic-runtime-security-aws.git"
 TERRAFORM_VERSION="1.10.5"
 KUBECTL_VERSION="v1.31.4"
 HELM_VERSION="v3.16.4"
-VAULT_VERSION="1.21.8"
+VAULT_VERSION="1.21.4"
 
 # Structured step markers — every step prints START at entry and OK at exit.
 # A missing OK after a START tells you exactly where the script died.
