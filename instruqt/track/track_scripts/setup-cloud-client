@@ -33,6 +33,7 @@ GIT_REMOTE="git@github.ibm.com:Oscar-Medina/agentic-runtime-security-aws.git"
 TERRAFORM_VERSION="1.10.5"
 KUBECTL_VERSION="v1.31.4"
 HELM_VERSION="v3.16.4"
+VAULT_VERSION="1.21.8"
 
 # Structured step markers — every step prints START at entry and OK at exit.
 # A missing OK after a START tells you exactly where the script died.
@@ -103,6 +104,16 @@ if ! command -v helm >/dev/null 2>&1; then
     rm -rf /tmp/helm.tgz /tmp/linux-amd64
 else
     echo "    helm already present: $(command -v helm)"
+fi
+
+if ! command -v vault >/dev/null 2>&1; then
+    echo "    Installing vault ${VAULT_VERSION}"
+    curl -fsSL "https://releases.hashicorp.com/vault/${VAULT_VERSION}/vault_${VAULT_VERSION}_linux_amd64.zip" -o /tmp/vault.zip
+    (cd /usr/local/bin && unzip -o /tmp/vault.zip vault >/dev/null)
+    chmod +x /usr/local/bin/vault
+    rm -f /tmp/vault.zip
+else
+    echo "    vault already present: $(command -v vault)"
 fi
 
 if ! command -v ldapsearch >/dev/null 2>&1 || ! command -v psql >/dev/null 2>&1 || ! command -v bc >/dev/null 2>&1; then
@@ -273,15 +284,25 @@ if [ -z "${PRIMARY_REGION}" ] || [ -z "${KB_REGION}" ]; then
 fi
 
 mkdir -p /etc/profile.d
+# AWS_PAGER="": cloud-client:2 doesn't ship `less`; AWS CLI v2's default pager
+#   pipe fails with `[Errno 2] No such file or directory: 'less'`. Disabling
+#   the pager unconditionally avoids the failure for every aws CLI call.
+# CHECKPOINT_DISABLE=1: silences Terraform's "you're out of date" banner —
+#   we pin 1.10.5 deliberately for Stacks compatibility, the upgrade prompt
+#   is noise.
 cat > /etc/profile.d/aws.sh <<EOF
 export AWS_REGION="${PRIMARY_REGION}"
 export AWS_DEFAULT_REGION="${PRIMARY_REGION}"
 export AWS_REGION_KB="${KB_REGION}"
+export AWS_PAGER=""
+export CHECKPOINT_DISABLE=1
 EOF
 chmod 644 /etc/profile.d/aws.sh
 export AWS_REGION="${PRIMARY_REGION}"
 export AWS_DEFAULT_REGION="${PRIMARY_REGION}"
 export AWS_REGION_KB="${KB_REGION}"
+export AWS_PAGER=""
+export CHECKPOINT_DISABLE=1
 echo "    primary=${AWS_REGION}  kb=${AWS_REGION_KB}"
 step_ok "(region)"
 
