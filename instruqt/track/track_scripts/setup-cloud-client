@@ -132,13 +132,16 @@ else
     echo "      (none found — Instruqt injected zero INSTRUQT_*AWS* vars into this script)"
 fi
 
-# Try BOTH historical naming patterns so we land creds regardless of which
-# is actually injected. First match wins. Add more candidates here if the
-# preflight dump shows yet another pattern.
+# Empirical naming (confirmed by participant sd90gsdib4zw debug dump 2026-06-17):
+# Instruqt UPPERCASES the account-name token inside the variable name, even
+# when config.yml declares `aws_accounts[0].name: workshop` (lowercase). The
+# `_ACCOUNT_NAME` value stays lowercase, but the var-name token is uppercased.
+# There is NO `ADMIN_` variant for this account — the plain `_AWS_*` form IS
+# injected into the lifecycle script (earlier docs-based guess was wrong).
 ACCESS_KEY=""
 SECRET_KEY=""
 for src in \
-    "INSTRUQT_AWS_ACCOUNT_workshop_ADMIN_AWS_ACCESS_KEY_ID:INSTRUQT_AWS_ACCOUNT_workshop_ADMIN_AWS_SECRET_ACCESS_KEY" \
+    "INSTRUQT_AWS_ACCOUNT_WORKSHOP_AWS_ACCESS_KEY_ID:INSTRUQT_AWS_ACCOUNT_WORKSHOP_AWS_SECRET_ACCESS_KEY" \
     "INSTRUQT_AWS_ACCOUNT_workshop_AWS_ACCESS_KEY_ID:INSTRUQT_AWS_ACCOUNT_workshop_AWS_SECRET_ACCESS_KEY" \
     ; do
     ak="${src%%:*}"
@@ -156,8 +159,8 @@ done
 if [ -z "${ACCESS_KEY}" ] || [ -z "${SECRET_KEY}" ]; then
     step_fail "(a)" "no usable credential pair found in the lifecycle script environment"
     echo "    Expected one of these pairs to be set:"
-    echo "      INSTRUQT_AWS_ACCOUNT_workshop_ADMIN_AWS_ACCESS_KEY_ID + ..._ADMIN_AWS_SECRET_ACCESS_KEY"
-    echo "      INSTRUQT_AWS_ACCOUNT_workshop_AWS_ACCESS_KEY_ID + ..._AWS_SECRET_ACCESS_KEY"
+    echo "      INSTRUQT_AWS_ACCOUNT_WORKSHOP_AWS_ACCESS_KEY_ID + ..._WORKSHOP_AWS_SECRET_ACCESS_KEY  (uppercase token, current)"
+    echo "      INSTRUQT_AWS_ACCOUNT_workshop_AWS_ACCESS_KEY_ID + ..._workshop_AWS_SECRET_ACCESS_KEY  (lowercase fallback)"
     echo "    See the PREFLIGHT dump above for the actual var names Instruqt injected."
     exit 1
 fi
