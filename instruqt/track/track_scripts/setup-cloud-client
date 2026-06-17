@@ -105,12 +105,12 @@ else
     echo "    helm already present: $(command -v helm)"
 fi
 
-if ! command -v ldapsearch >/dev/null 2>&1 || ! command -v psql >/dev/null 2>&1; then
-    echo "    Installing apt packages: ldap-utils postgresql-client unzip"
+if ! command -v ldapsearch >/dev/null 2>&1 || ! command -v psql >/dev/null 2>&1 || ! command -v bc >/dev/null 2>&1; then
+    echo "    Installing apt packages: ldap-utils postgresql-client unzip bc"
     apt-get update -qq
-    apt-get install -y -qq ldap-utils postgresql-client unzip ca-certificates >/dev/null
+    apt-get install -y -qq ldap-utils postgresql-client unzip ca-certificates bc >/dev/null
 else
-    echo "    ldapsearch + psql already present"
+    echo "    ldapsearch + psql + bc already present"
 fi
 
 echo "    versions:"

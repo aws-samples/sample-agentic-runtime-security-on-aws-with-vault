@@ -35,7 +35,45 @@ containers:
 
 aws_accounts:
   - name: workshop
-    services: []
+    # `services:` is an Instruqt-side whitelist of AWS service short-names that
+    # the sandbox SCP allows. An empty list = Instruqt's default service set,
+    # which does NOT include bedrock — the deploy hit an SCP explicit-deny on
+    # bedrock:InvokeModel against us.amazon.nova-pro-v1:0 (participant
+    # 5iomw9tgb4nz, 2026-06-17T21:07:03). We enumerate every short-name the
+    # workshop needs from Instruqt's 43-key allowed list:
+    #   https://docs.instruqt.com/sandboxes/manage/cloud-services-and-regions/allowed-services-and-regions
+    # Caveats (unresolved, will surface downstream if real):
+    #   - `bedrock-runtime` is NOT on the allowed list; if Bedrock InvokeModel
+    #     dispatches against bedrock-runtime.us-west-2.amazonaws.com,
+    #     enabling `bedrock` alone may be insufficient.
+    #   - `aoss` / `opensearchserverless` is NOT on the allowed list — the
+    #     Bedrock KB stack (AOSS collection) may fail to provision.
+    #   - `secretsmanager` is NOT on the allowed list — the workshop reads
+    #     RDS master creds from Secrets Manager.
+    services:
+      - bedrock
+      - cloudformation
+      - cloudwatch
+      - dynamodb
+      - ec2
+      - ecr
+      - eks
+      - elasticloadbalancing
+      - es
+      - events
+      - firehose
+      - iam
+      - kinesis
+      - kms
+      - lambda
+      - logs
+      - rds
+      - route53
+      - s3
+      - sns
+      - sqs
+      - ssm
+      - sts
     regions:
       - ${REGION_PRIMARY}
       - ${REGION_KB}
