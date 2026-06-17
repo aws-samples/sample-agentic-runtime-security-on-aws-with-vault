@@ -83,11 +83,11 @@ _upsert_secret() {
 
     if _secret_exists "${name}"; then
         echo "    Updating existing secret ${name}..."
-        instruqt secrets update "${name}" "${value}" >/dev/null
+        instruqt secrets update "${name}" "${value}"
     else
         echo "    Creating secret ${name}..."
         instruqt secrets create "${name}" "${value}" \
-            --description "${description}" >/dev/null
+            --description "${description}"
     fi
     echo "    OK"
 }
@@ -110,12 +110,12 @@ _upsert_secret_from_file() {
 
     if _secret_exists "${name}"; then
         echo "    Updating existing secret ${name} from ${path}..."
-        instruqt secrets update "${name}" --data-file "${path}" >/dev/null
+        instruqt secrets update "${name}" --data-file "${path}"
     else
         echo "    Creating secret ${name} from ${path}..."
         instruqt secrets create "${name}" \
             --data-file "${path}" \
-            --description "${description}" >/dev/null
+            --description "${description}"
     fi
     echo "    OK"
 }
@@ -216,12 +216,12 @@ _upsert_secret_from_file_default() {
 
     if _secret_exists "${name}"; then
         echo "    Updating existing secret ${name} from ${path}..."
-        instruqt secrets update "${name}" --data-file "${path}" >/dev/null
+        instruqt secrets update "${name}" --data-file "${path}"
     else
         echo "    Creating secret ${name} from ${path}..."
         instruqt secrets create "${name}" \
             --data-file "${path}" \
-            --description "${description}" >/dev/null
+            --description "${description}"
     fi
     echo "    OK"
 }
