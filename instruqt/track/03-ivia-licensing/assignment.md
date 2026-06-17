@@ -9,11 +9,12 @@ tabs:
   title: Terminal
   type: terminal
   hostname: cloud-client
-- title: IDE
+- id: n4abzhigtzbv
+  title: IDE
   type: service
   hostname: cloud-client
-  port: 8080
   path: /
+  port: 8080
 difficulty: ""
 enhanced_loading: null
 ---
