@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# 17-uc3-audit/solve-cloud-client — audit rows are a pure side-effect of the UC3
+# refund flow + Firehose pipeline. solve is a no-op.
+set -euo pipefail
+exit 0

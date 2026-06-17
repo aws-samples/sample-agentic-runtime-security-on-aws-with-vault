@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+#===============================================================================
+# 05-deploy-tier1/check-cloud-client
+# Asserts the tier-1 artifacts came up:
+#   - EKS cluster ACTIVE
+#   - kubectl context resolves and >= 2 Ready nodes
+#   - ECR repositories present with at least one image tag each
+#   - aws-load-balancer-controller deployment Available
+#===============================================================================
+
+set -euo pipefail
+
+REPO="/root/workshop"
+INFRA="${REPO}/infrastructure"
+
+# EKS cluster name (real AWS resource) — used for `aws eks ...`.
+EKS_CLUSTER=$(grep -E '^[[:space:]]*cluster_name[[:space:]]*=' "${INFRA}/terraform.tfvars" \
+    | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+[ -n "${EKS_CLUSTER}" ] || { echo "FAIL: cluster_name missing from infrastructure/terraform.tfvars"; exit 1; }
+
+# kubectl context alias deploy-workshop.sh Step 2 writes via
+# `aws eks update-kubeconfig --alias workshop` (see deploy-workshop.sh:461).
+KUBE_CONTEXT="workshop"
+
+STATE=$(aws eks describe-cluster --name "${EKS_CLUSTER}" --query cluster.status --output text 2>/dev/null) \
+    || { echo "FAIL: aws eks describe-cluster ${EKS_CLUSTER} failed"; exit 1; }
+[ "${STATE}" = "ACTIVE" ] || { echo "FAIL: EKS cluster ${EKS_CLUSTER} not ACTIVE (got: ${STATE})"; exit 1; }
+echo "PASS: EKS cluster ${EKS_CLUSTER} ACTIVE"
+
+# kubectl context resolves from setup-cloud-client (deploy-workshop.sh Step 2).
+kubectl --context "${KUBE_CONTEXT}" get nodes --no-headers > /tmp/.nodes 2>/dev/null \
+    || { echo "FAIL: kubectl --context ${KUBE_CONTEXT} get nodes failed"; exit 1; }
+READY=$(awk '$2 == "Ready" {n++} END{print n+0}' /tmp/.nodes)
+[ "${READY}" -ge 2 ] || { echo "FAIL: only ${READY} Ready nodes (need >= 2)"; exit 1; }
+echo "PASS: ${READY} Ready nodes on ${EKS_CLUSTER}"
+
+# ECR repos present. Tier-1 pre-creates three repos (see infrastructure/main.tf
+# `repository_names = ["workshop/uc1-agent", "workshop/uc3-agent",
+# "workshop-banking-app"]`); the banking image carries the UI + agent + MCP.
+REPOS=$(aws ecr describe-repositories --query 'repositories[].repositoryName' --output text 2>/dev/null \
+    || true)
+echo "    ECR repos: ${REPOS}"
+for r in workshop/uc1-agent workshop/uc3-agent workshop-banking-app; do
+    grep -qw "${r}" <<<"${REPOS}" \
+        || { echo "FAIL: ECR repository ${r} missing"; exit 1; }
+done
+echo "PASS: all 3 ECR repositories present"
+
+# LBC available
+kubectl --context "${KUBE_CONTEXT}" -n kube-system rollout status deploy/aws-load-balancer-controller --timeout=60s \
+    || { echo "FAIL: aws-load-balancer-controller not Available"; exit 1; }
+echo "PASS: aws-load-balancer-controller Available"
+
+echo "05-deploy-tier1: all checks green"

@@ -22,6 +22,13 @@
 #   ./check-prerequisites.sh                 # default: auto-install + run all checks
 #   ./check-prerequisites.sh --interactive   # prompt before each install + each check
 #   ./check-prerequisites.sh --dry-run       # print actions without executing installs
+#   ./check-prerequisites.sh --skip-tools    # skip the tool-install + tool-version
+#                                            # sections; run credential + region +
+#                                            # quota + IAM checks only. Required for
+#                                            # the Instruqt distribution where the
+#                                            # sandbox image has aws/terraform/kubectl
+#                                            # pre-baked and `brew` / `apt` are not
+#                                            # available.
 #   ./check-prerequisites.sh --help          # usage
 #
 # Replaces (and consolidates) the previous 4 scripts:
@@ -43,15 +50,21 @@ export WORKSHOP_AUTO_YES=1
 
 DRY_RUN=false
 INTERACTIVE=false
+# Skip the tool-install + tool-version sections when running in an environment
+# where aws/terraform/kubectl are pre-installed and the host package manager
+# (brew, apt, yum) is not available. Set true by --skip-tools; required by the
+# Instruqt distribution's track_scripts/setup-cloud-client (see instruqt/README.md).
+SKIP_TOOLS=false
 
 # Argument parsing — keep simple, no shift loops with positional args
 for arg in "$@"; do
     case "$arg" in
         --interactive)    INTERACTIVE=true; unset WORKSHOP_AUTO_YES ;;
         --dry-run|--noop) DRY_RUN=true ;;
+        --skip-tools)     SKIP_TOOLS=true ;;
         --help|-h)
             cat <<USAGE
-Usage: $0 [--interactive] [--dry-run] [--help]
+Usage: $0 [--interactive] [--dry-run] [--skip-tools] [--help]
 
 Workshop pre-flight: installs CLI prereqs, then verifies Bedrock model access,
 AWS service quotas, and IAM permissions for the workshop bootstrap.
@@ -66,6 +79,12 @@ Modes:
                     executing. AWS read-only API calls (get-service-quota,
                     get-caller-identity, etc.) DO run live since they have no
                     side effects.
+  --skip-tools      Skip the tool-install (Section 1) + tool-version
+                    (Section 1.5) gates. Keep all credential + region + Bedrock
+                    + quota + IAM checks (Sections 2-4). Required for the
+                    Instruqt distribution where aws/terraform/kubectl/jq/helm
+                    are pre-baked into the sandbox image and brew/apt are not
+                    available.
   --help, -h        Show this help and exit.
 USAGE
             exit 0
@@ -137,7 +156,13 @@ run() {
 
 # =============================================================================
 # SECTION 1: Install CLI tools
+# (gated by --skip-tools — see argument parsing block above)
 # =============================================================================
+if [ "$SKIP_TOOLS" = true ]; then
+    echo -e "${BLUE}=== Install CLI tools — SKIPPED (--skip-tools) ===${NC}"
+    echo -e "  ${YELLOW}Skipping tool install + tool-version gates; assuming aws/terraform/kubectl/jq/helm/vault pre-installed.${NC}"
+    echo
+else
 echo -e "${BLUE}=== Install CLI tools ===${NC}"
 
 # Tool versions (matches PREF-05 documentation)
@@ -410,6 +435,7 @@ else
 fi
 
 echo
+fi  # end if [ "$SKIP_TOOLS" = true ] ... else  (covers Sections 1 + 1.5)
 
 # =============================================================================
 # SECTION 2: Check Bedrock access (PREF-01)

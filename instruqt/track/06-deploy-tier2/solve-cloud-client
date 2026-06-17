@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# 06-deploy-tier2/solve-cloud-client — re-run the tier-2 deploy (idempotent).
+set -euo pipefail
+cd /root/workshop
+bash infrastructure/scripts/deploy-workshop.sh --tier 2

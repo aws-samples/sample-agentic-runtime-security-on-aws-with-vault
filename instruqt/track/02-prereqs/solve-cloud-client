@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# 02-prereqs/solve-cloud-client
+# This challenge has no attendee action — every assertion in check-cloud-client is a
+# pure side-effect of track_scripts/setup-cloud-client. Marking solve is a no-op.
+set -euo pipefail
+exit 0

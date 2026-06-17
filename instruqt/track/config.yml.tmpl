@@ -1,0 +1,68 @@
+---
+# Instruqt sandbox declaration — TEMPLATE.
+#
+# The two region placeholders below are substituted at push-time by
+# instruqt/scripts/render-config.sh. The literals live ONLY in
+# infrastructure/terraform.tfvars.example (the documented single-source-of-
+# truth per its file-header comment on lines 21-22) and never appear in any
+# tracked instruqt/ file, honoring the canonical region contract in CLAUDE.md.
+#
+# Authoring loop:
+#   1. Edit this template.
+#   2. Run: instruqt/scripts/render-config.sh
+#   3. Run: instruqt/scripts/push.sh   (wraps render + `instruqt track push`)
+#
+# Direct `instruqt track push` is NOT supported — see instruqt/README.md.
+version: "3"
+
+containers:
+  - name: cloud-client
+    # Instruqt cloud-client v2 — documented image at gcr.io/instruqt/cloud-client:2
+    # (https://docs.instruqt.com/sandboxes/cloud-accounts/cloud-client.md).
+    # Ships aws-cli v2.22.27, az, gcloud, bash, git, curl, openssl, jq,
+    # ca-certificates. terraform / kubectl / helm / openldap-utils /
+    # postgresql-client are NOT in the image — installed by
+    # track_scripts/setup-cloud-client step (0) on first start.
+    image: gcr.io/instruqt/cloud-client:2
+    # 4 GiB: tier-1/2/3 deploys run terraform + kubectl apply + image builds
+    # concurrently. The docs' default 256 MiB OOM-kills mid-deploy without a
+    # legible error.
+    memory: 4096
+    shell: /bin/bash
+
+aws_accounts:
+  - name: workshop
+    regions:
+      - ${REGION_PRIMARY}
+      - ${REGION_KB}
+    managed_policies:
+      - arn:aws:iam::aws:policy/AdministratorAccess
+
+# Runtime parameters — injected as environment variables into lifecycle
+# scripts only (per docs they are NOT stored on the container after lifecycle
+# scripts finish, so attendees can't read them from /proc/self/environ once
+# the shell is alive).
+#
+# Why is the SSH deploy key the ONLY one here?
+#   - acme_email / icr_entitlement_key / ivia_mmfa_push_client_secret are
+#     prompted interactively by infrastructure/scripts/deploy-workshop.sh
+#     preflight when the attendee runs the deploy from the Terminal tab.
+#     That flow is identical to the Workshop Studio distribution — no need
+#     to pre-inject from Instruqt.
+#   - INSTRUQT_GITHUB_IBM_DEPLOY_KEY MUST be available BEFORE the attendee
+#     reaches the terminal, because track_scripts/setup-cloud-client uses
+#     it to git-clone the workshop repo from github.ibm.com into the
+#     sandbox. The attendee has no github.ibm.com SSO inside Instruqt, so
+#     they cannot supply their own credentials. The track author sets this
+#     ONCE via the invite link's Advanced options → +Runtime parameters
+#     (Add variable, paste the full multi-line PEM). Every play from that
+#     invite URL reuses the same key.
+runtime_parameters:
+  - name: INSTRUQT_GITHUB_IBM_DEPLOY_KEY
+    description: >-
+      SSH private key (read-only) used by track_scripts/setup-cloud-client
+      to clone git@github.ibm.com:Oscar-Medina/agentic-runtime-security-aws.
+      Pre-filled by the track author via the invite link's Advanced options
+      → +Runtime parameters with the full multi-line PEM. The matching .pub
+      is registered as a Deploy Key on the repo by
+      instruqt/scripts/seed-secrets.sh before the invite is created.

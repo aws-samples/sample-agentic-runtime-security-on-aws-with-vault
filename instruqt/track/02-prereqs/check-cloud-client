@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+#===============================================================================
+# 02-prereqs/check-cloud-client
+# Asserts:
+#   - AWS credentials work (aws sts get-caller-identity returns account id)
+#   - Workshop repo cloned at /root/workshop with a working tree
+#   - Required CLIs present on PATH
+#===============================================================================
+
+set -euo pipefail
+
+REPO_DIR="/root/workshop"
+
+# AWS creds
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text 2>/dev/null) \
+    || { echo "FAIL: aws sts get-caller-identity did not return a result"; exit 1; }
+[[ "${ACCOUNT_ID}" =~ ^[0-9]{12}$ ]] \
+    || { echo "FAIL: STS returned non-numeric account id: ${ACCOUNT_ID}"; exit 1; }
+echo "PASS: AWS sandbox account ${ACCOUNT_ID} reachable"
+
+# Repo present
+[ -d "${REPO_DIR}/.git" ] \
+    || { echo "FAIL: ${REPO_DIR} is not a git repo — setup-cloud-client did not clone"; exit 1; }
+[ -f "${REPO_DIR}/infrastructure/terraform.tfvars.example" ] \
+    || { echo "FAIL: ${REPO_DIR}/infrastructure/terraform.tfvars.example missing"; exit 1; }
+echo "PASS: workshop repo cloned at ${REPO_DIR}"
+
+# CLI presence (versions are not enforced here — setup-cloud-client relied on the
+# sandbox image guaranteeing them; this is a defensive check).
+for tool in aws terraform kubectl helm vault jq; do
+    command -v "${tool}" >/dev/null \
+        || { echo "FAIL: ${tool} not found on PATH"; exit 1; }
+done
+echo "PASS: aws + terraform + kubectl + helm + vault + jq all present"
+
+echo "02-prereqs: all checks green"

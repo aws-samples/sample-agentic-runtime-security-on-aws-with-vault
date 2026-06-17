@@ -34,6 +34,12 @@
 # Options:
 #   --region REGION          AWS region (default: parsed from terraform.tfvars)
 #   --cluster-name NAME      EKS cluster name (default: parsed from terraform.tfvars)
+#   --tier <1|2|3>           Run only one deploy tier (default: all 14 steps).
+#                            tier 1 = steps 1-4 (core infra + kubectl + images + LBC gate)
+#                            tier 2 = steps 5-9 (vault + ivia + ACME + vault/ivia configure)
+#                            tier 3 = steps 10-14 (workloads + ALB assert + seed + KB ingest)
+#                            Required for the Instruqt distribution (one tier per challenge);
+#                            bare invocation is the Workshop Studio path (all 14 steps).
 #   --skip-infra             Skip the tier-1 apply (cluster + core infra already up)
 #   --skip-vault-init        Skip Vault initialization (Vault already initialized)
 #   --skip-build             Skip image build+push (images already in ECR)
@@ -48,7 +54,10 @@
 #     and infrastructure/workloads/terraform.tfvars populated
 #
 # Examples:
-#   ./deploy-workshop.sh                    # full end-to-end deploy
+#   ./deploy-workshop.sh                    # full end-to-end deploy (all 14 steps)
+#   ./deploy-workshop.sh --tier 1           # only steps 1-4 (Instruqt tier-1 challenge)
+#   ./deploy-workshop.sh --tier 2           # only steps 5-9 (Instruqt tier-2 challenge)
+#   ./deploy-workshop.sh --tier 3           # only steps 10-14 (Instruqt tier-3 challenge)
 #   ./deploy-workshop.sh --skip-infra       # re-run config against a live cluster
 #   ./deploy-workshop.sh --skip-build       # re-run when images are already pushed
 #   ./deploy-workshop.sh --dry-run          # preview every step
@@ -81,6 +90,9 @@ SKIP_BUILD=false
 # shellcheck disable=SC2034  # consumed by _run_acme_step
 SKIP_ACME=false
 DRY_RUN=false
+# Per-tier execution gate (empty = run all 14 steps, the Workshop Studio path;
+# 1|2|3 = run only that tier's steps, the Instruqt per-challenge path).
+TIER=""
 
 # Vault port-forward PID (cleaned up on exit)
 VAULT_PF_PID=""
@@ -112,6 +124,13 @@ while [[ $# -gt 0 ]]; do
         --help|-h)          usage ;;
         --region)           REGION="$2"; shift ;;
         --cluster-name)     CLUSTER_NAME="$2"; shift ;;
+        --tier)
+            TIER="$2"; shift
+            case "$TIER" in
+                1|2|3) : ;;
+                *) echo "ERROR: --tier must be 1, 2, or 3 (got: '${TIER}')"; usage ;;
+            esac
+            ;;
         --skip-infra)       SKIP_INFRA=true ;;
         --skip-vault-init)  SKIP_VAULT_INIT=true ;;
         --skip-build)       SKIP_BUILD=true ;;
@@ -262,6 +281,22 @@ _wait_for_port() {
     return 1
 }
 
+# Per-tier gate. When --tier is unset (Workshop Studio path), every step runs.
+# When --tier=N, only steps whose step_tier matches N run. Steps gated out are
+# silent — no echo, no PASS/SKIP marker — so an Instruqt tier-2 challenge does
+# not visually replay tier-1 work the previous challenge already completed.
+#
+# Step → tier mapping (also encoded by the main flow's _run_if_tier calls):
+#   steps 1-4  → tier 1   core infra + kubectl + images + LBC gate
+#   steps 5-9  → tier 2   vault + ivia + ACME + vault/ivia configure
+#   steps 10-14 → tier 3  workloads + ALB assert + LDAP + DB seed + KB ingest
+_run_if_tier() {
+    local step_tier="$1"; shift
+    if [[ -z "$TIER" ]] || [[ "$TIER" = "$step_tier" ]]; then
+        "$@"
+    fi
+}
+
 #-------------------------------------------------------------------------------
 # Header
 #-------------------------------------------------------------------------------
@@ -398,42 +433,46 @@ echo ""
 #===============================================================================
 # STEP 1: terraform apply — tier 1 (core infrastructure, no pods)
 #===============================================================================
-echo -e "${YELLOW}> Step 1: Apply tier 1 (core infrastructure)${NC}"
+step_01_apply_tier1() {
+    echo -e "${YELLOW}> Step 1: Apply tier 1 (core infrastructure)${NC}"
 
-if [[ "$SKIP_INFRA" = true ]]; then
-    print_info "Step 1: tier-1 apply skipped (--skip-infra)"
-    PASSES+=("Step 1: Apply tier 1 (skipped)")
-else
-    _tf_apply_tier "Step 1: Apply tier 1 (core infrastructure)" "${INFRA_DIR}"
-fi
+    if [[ "$SKIP_INFRA" = true ]]; then
+        print_info "Step 1: tier-1 apply skipped (--skip-infra)"
+        PASSES+=("Step 1: Apply tier 1 (skipped)")
+    else
+        _tf_apply_tier "Step 1: Apply tier 1 (core infrastructure)" "${INFRA_DIR}"
+    fi
+}
 
 #===============================================================================
 # STEP 2: Configure kubectl
 #===============================================================================
-echo ""
-echo -e "${YELLOW}> Step 2: Configure kubectl${NC}"
+step_02_configure_kubectl() {
+    echo ""
+    echo -e "${YELLOW}> Step 2: Configure kubectl${NC}"
 
-if [[ "$DRY_RUN" = true ]]; then
-    print_info "[DRY-RUN] Would run: aws eks update-kubeconfig --region ${REGION} --name ${CLUSTER_NAME} --alias workshop"
-    print_pass "Step 2: Configure kubectl (dry-run)"
-else
-    if aws eks update-kubeconfig \
-            --region "${REGION}" \
-            --name "${CLUSTER_NAME}" \
-            --alias workshop \
-            >/dev/null 2>&1; then
-        if kubectl --context workshop get nodes --no-headers >/dev/null 2>&1; then
-            local_node_count=$(kubectl --context workshop get nodes --no-headers 2>/dev/null | wc -l | tr -d ' ')
-            print_pass "Step 2: Configure kubectl (${local_node_count} node(s) reachable)"
-        else
-            _die "Step 2: Configure kubectl — nodes not reachable" \
-                "Check EKS cluster status: aws eks describe-cluster --name ${CLUSTER_NAME} --region ${REGION}"
-        fi
+    if [[ "$DRY_RUN" = true ]]; then
+        print_info "[DRY-RUN] Would run: aws eks update-kubeconfig --region ${REGION} --name ${CLUSTER_NAME} --alias workshop"
+        print_pass "Step 2: Configure kubectl (dry-run)"
     else
-        _die "Step 2: Configure kubectl — update-kubeconfig failed" \
-            "Ensure EKS cluster is Active: aws eks describe-cluster --name ${CLUSTER_NAME} --region ${REGION}"
+        if aws eks update-kubeconfig \
+                --region "${REGION}" \
+                --name "${CLUSTER_NAME}" \
+                --alias workshop \
+                >/dev/null 2>&1; then
+            if kubectl --context workshop get nodes --no-headers >/dev/null 2>&1; then
+                local_node_count=$(kubectl --context workshop get nodes --no-headers 2>/dev/null | wc -l | tr -d ' ')
+                print_pass "Step 2: Configure kubectl (${local_node_count} node(s) reachable)"
+            else
+                _die "Step 2: Configure kubectl — nodes not reachable" \
+                    "Check EKS cluster status: aws eks describe-cluster --name ${CLUSTER_NAME} --region ${REGION}"
+            fi
+        else
+            _die "Step 2: Configure kubectl — update-kubeconfig failed" \
+                "Ensure EKS cluster is Active: aws eks describe-cluster --name ${CLUSTER_NAME} --region ${REGION}"
+        fi
     fi
-fi
+}
 
 #===============================================================================
 # STEP 3: Build & push application images
@@ -442,29 +481,33 @@ fi
 # apply creates the Deployments — so the pods pull a real image on first create
 # instead of sitting in ImagePullBackOff. Deployments are rolled in Step 10.
 #===============================================================================
-echo ""
-echo -e "${YELLOW}> Step 3: Build & push application images${NC}"
+step_03_build_push_images() {
+    echo ""
+    echo -e "${YELLOW}> Step 3: Build & push application images${NC}"
 
-if [[ "$SKIP_BUILD" = true ]]; then
-    print_info "Step 3: Image build skipped (--skip-build)"
-    PASSES+=("Step 3: Build & push application images (skipped)")
-elif [[ "$DRY_RUN" = true ]]; then
-    print_info "[DRY-RUN] Would run: build-images.sh --region ${REGION}"
-    print_pass "Step 3: Build & push application images (dry-run)"
-else
-    if _run_subscript "Step 3: build-images" "${SCRIPT_DIR}/build-images.sh" --region "${REGION}"; then
-        print_pass "Step 3: Build & push application images"
+    if [[ "$SKIP_BUILD" = true ]]; then
+        print_info "Step 3: Image build skipped (--skip-build)"
+        PASSES+=("Step 3: Build & push application images (skipped)")
+    elif [[ "$DRY_RUN" = true ]]; then
+        print_info "[DRY-RUN] Would run: build-images.sh --region ${REGION}"
+        print_pass "Step 3: Build & push application images (dry-run)"
     else
-        _die "Step 3: build-images" "Images are required before the tier-3 apply. Re-run: ${SCRIPT_DIR}/build-images.sh --region ${REGION}"
+        if _run_subscript "Step 3: build-images" "${SCRIPT_DIR}/build-images.sh" --region "${REGION}"; then
+            print_pass "Step 3: Build & push application images"
+        else
+            _die "Step 3: build-images" "Images are required before the tier-3 apply. Re-run: ${SCRIPT_DIR}/build-images.sh --region ${REGION}"
+        fi
     fi
-fi
+}
 
 #===============================================================================
 # STEP 4: LBC readiness gate (before any Ingress is created in tier 2 / tier 3)
 #===============================================================================
-echo ""
-echo -e "${YELLOW}> Step 4: LBC readiness gate${NC}"
-_wait_lbc_ready "Step 4: LBC readiness gate"
+step_04_lbc_readiness_gate() {
+    echo ""
+    echo -e "${YELLOW}> Step 4: LBC readiness gate${NC}"
+    _wait_lbc_ready "Step 4: LBC readiness gate"
+}
 
 #===============================================================================
 # STEP 5: terraform apply — tier 2 (shared services: vault_server + ivia)
@@ -474,37 +517,41 @@ _wait_lbc_ready "Step 4: LBC readiness gate"
 # FIRST apply .acme-state is absent, so IVIA falls back to its raw ALB ingress
 # hostname (degraded but working); Step 7 re-applies module.ivia on nip.io.
 #===============================================================================
-echo ""
-echo -e "${YELLOW}> Step 5: Apply tier 2 (vault_server + ivia)${NC}"
-_tf_apply_tier "Step 5: Apply tier 2 (shared services)" "${SERVICES_DIR}"
+step_05_apply_tier2() {
+    echo ""
+    echo -e "${YELLOW}> Step 5: Apply tier 2 (vault_server + ivia)${NC}"
+    _tf_apply_tier "Step 5: Apply tier 2 (shared services)" "${SERVICES_DIR}"
+}
 
 #===============================================================================
 # STEP 6: Initialize Vault (skip if --skip-vault-init)
 #===============================================================================
-echo ""
-echo -e "${YELLOW}> Step 6: Initialize Vault${NC}"
+step_06_initialize_vault() {
+    echo ""
+    echo -e "${YELLOW}> Step 6: Initialize Vault${NC}"
 
-if [[ "$SKIP_VAULT_INIT" = true ]]; then
-    print_info "Step 6: Vault init skipped (--skip-vault-init)"
-    PASSES+=("Step 6: Initialize Vault (skipped)")
-elif [[ "$DRY_RUN" = true ]]; then
-    print_info "[DRY-RUN] Would run: vault-init.sh"
-    print_pass "Step 6: Initialize Vault (dry-run)"
-else
-    if _run_subscript "Step 6: vault-init" "${SCRIPT_DIR}/vault-init.sh"; then
-        vault_sealed=$(kubectl --context workshop exec -n vault vault-0 -- \
-            vault status -format=json 2>/dev/null \
-            | jq -r '.sealed' 2>/dev/null || echo "true")
-        if [[ "$vault_sealed" = "false" ]]; then
-            print_pass "Step 6: Initialize Vault (initialized, unsealed)"
-        else
-            _die "Step 6: Initialize Vault" \
-                "Vault sealed or unreachable. Check: kubectl --context workshop exec -n vault vault-0 -- vault status"
-        fi
+    if [[ "$SKIP_VAULT_INIT" = true ]]; then
+        print_info "Step 6: Vault init skipped (--skip-vault-init)"
+        PASSES+=("Step 6: Initialize Vault (skipped)")
+    elif [[ "$DRY_RUN" = true ]]; then
+        print_info "[DRY-RUN] Would run: vault-init.sh"
+        print_pass "Step 6: Initialize Vault (dry-run)"
     else
-        _die "Step 6: vault-init" "Vault must be unsealed before vault-configure. Re-run: ${SCRIPT_DIR}/vault-init.sh"
+        if _run_subscript "Step 6: vault-init" "${SCRIPT_DIR}/vault-init.sh"; then
+            vault_sealed=$(kubectl --context workshop exec -n vault vault-0 -- \
+                vault status -format=json 2>/dev/null \
+                | jq -r '.sealed' 2>/dev/null || echo "true")
+            if [[ "$vault_sealed" = "false" ]]; then
+                print_pass "Step 6: Initialize Vault (initialized, unsealed)"
+            else
+                _die "Step 6: Initialize Vault" \
+                    "Vault sealed or unreachable. Check: kubectl --context workshop exec -n vault vault-0 -- vault status"
+            fi
+        else
+            _die "Step 6: vault-init" "Vault must be unsealed before vault-configure. Re-run: ${SCRIPT_DIR}/vault-init.sh"
+        fi
     fi
-fi
+}
 
 #===============================================================================
 # STEP 7: ACME cert issuance + ACM bootstrap sync (nip.io + Let's Encrypt)
@@ -879,9 +926,11 @@ EOF
     return 0
 }
 
-echo ""
-echo -e "${YELLOW}> Step 7: ACME cert issuance + ACM bootstrap sync${NC}"
-_run_acme_step
+step_07_acme_cert_issuance() {
+    echo ""
+    echo -e "${YELLOW}> Step 7: ACME cert issuance + ACM bootstrap sync${NC}"
+    _run_acme_step
+}
 
 #===============================================================================
 # STEP 8: Configure Vault (vault-configure.sh) — reads tier-1 + tier-2 state
@@ -891,78 +940,82 @@ _run_acme_step
 # with. MUST run before the tier-3 apply (Step 10) or the pods 403 on startup.
 # Binds the JWT bound_issuer to tier-2's ivia_issuer (now nip.io after Step 7).
 #===============================================================================
-echo ""
-echo -e "${YELLOW}> Step 8: Configure Vault${NC}"
+step_08_configure_vault() {
+    echo ""
+    echo -e "${YELLOW}> Step 8: Configure Vault${NC}"
 
-if [[ "$DRY_RUN" = true ]]; then
-    print_info "[DRY-RUN] Would run: vault-configure.sh"
-    print_pass "Step 8: Configure Vault (dry-run)"
-else
-    if _run_subscript "Step 8: vault-configure" "${SCRIPT_DIR}/vault-configure.sh"; then
-        # Best-effort confirm kubernetes/ + jwt/ are enabled (warn-only).
-        kubectl --context workshop port-forward svc/vault -n vault 8200:8200 \
-            >/dev/null 2>&1 &
-        VAULT_PF_PID=$!
-        if _wait_for_port 8200 30; then
-            ROOT_TOKEN=""
-            if [[ -f "${HOME}/vault-init.json" ]]; then
-                ROOT_TOKEN=$(jq -r '.root_token // empty' "${HOME}/vault-init.json" 2>/dev/null || echo "")
-            fi
-            if [[ -n "$ROOT_TOKEN" ]]; then
-                AUTH_LIST=$(VAULT_ADDR="http://localhost:8200" VAULT_TOKEN="$ROOT_TOKEN" \
-                    vault auth list -format=json 2>/dev/null || echo '{}')
-                K8S_ENABLED=$(echo "$AUTH_LIST" | jq -r 'keys[] | select(. == "kubernetes/")' 2>/dev/null || echo "")
-                JWT_ENABLED=$(echo "$AUTH_LIST" | jq -r 'keys[] | select(. == "jwt/")' 2>/dev/null || echo "")
-                if [[ -n "$K8S_ENABLED" ]] && [[ -n "$JWT_ENABLED" ]]; then
-                    print_pass "Step 8: Configure Vault (kubernetes/ and jwt/ auth methods enabled)"
+    if [[ "$DRY_RUN" = true ]]; then
+        print_info "[DRY-RUN] Would run: vault-configure.sh"
+        print_pass "Step 8: Configure Vault (dry-run)"
+    else
+        if _run_subscript "Step 8: vault-configure" "${SCRIPT_DIR}/vault-configure.sh"; then
+            # Best-effort confirm kubernetes/ + jwt/ are enabled (warn-only).
+            kubectl --context workshop port-forward svc/vault -n vault 8200:8200 \
+                >/dev/null 2>&1 &
+            VAULT_PF_PID=$!
+            if _wait_for_port 8200 30; then
+                ROOT_TOKEN=""
+                if [[ -f "${HOME}/vault-init.json" ]]; then
+                    ROOT_TOKEN=$(jq -r '.root_token // empty' "${HOME}/vault-init.json" 2>/dev/null || echo "")
+                fi
+                if [[ -n "$ROOT_TOKEN" ]]; then
+                    AUTH_LIST=$(VAULT_ADDR="http://localhost:8200" VAULT_TOKEN="$ROOT_TOKEN" \
+                        vault auth list -format=json 2>/dev/null || echo '{}')
+                    K8S_ENABLED=$(echo "$AUTH_LIST" | jq -r 'keys[] | select(. == "kubernetes/")' 2>/dev/null || echo "")
+                    JWT_ENABLED=$(echo "$AUTH_LIST" | jq -r 'keys[] | select(. == "jwt/")' 2>/dev/null || echo "")
+                    if [[ -n "$K8S_ENABLED" ]] && [[ -n "$JWT_ENABLED" ]]; then
+                        print_pass "Step 8: Configure Vault (kubernetes/ and jwt/ auth methods enabled)"
+                    else
+                        print_warn "Step 8: Vault auth methods not both visible (kubernetes=${K8S_ENABLED:-MISSING} jwt=${JWT_ENABLED:-MISSING}) — vault-configure reported success; inspect manually if tier-3 pods 403"
+                    fi
                 else
-                    print_warn "Step 8: Vault auth methods not both visible (kubernetes=${K8S_ENABLED:-MISSING} jwt=${JWT_ENABLED:-MISSING}) — vault-configure reported success; inspect manually if tier-3 pods 403"
+                    print_warn "Step 8: Could not verify Vault auth — root token not found in ~/vault-init.json"
                 fi
             else
-                print_warn "Step 8: Could not verify Vault auth — root token not found in ~/vault-init.json"
+                print_warn "Step 8: Could not verify Vault auth via port-forward"
+            fi
+            if [[ -n "$VAULT_PF_PID" ]] && kill -0 "$VAULT_PF_PID" 2>/dev/null; then
+                kill "$VAULT_PF_PID" 2>/dev/null || true
+                VAULT_PF_PID=""
             fi
         else
-            print_warn "Step 8: Could not verify Vault auth via port-forward"
+            _die "Step 8: vault-configure" "tier-3 pods authenticate to Vault with the roles this step creates. Re-run: ${SCRIPT_DIR}/vault-configure.sh"
         fi
-        if [[ -n "$VAULT_PF_PID" ]] && kill -0 "$VAULT_PF_PID" 2>/dev/null; then
-            kill "$VAULT_PF_PID" 2>/dev/null || true
-            VAULT_PF_PID=""
-        fi
-    else
-        _die "Step 8: vault-configure" "tier-3 pods authenticate to Vault with the roles this step creates. Re-run: ${SCRIPT_DIR}/vault-configure.sh"
     fi
-fi
+}
 
 #===============================================================================
 # STEP 9: Configure IVIA (ivia-configure.sh)
 #===============================================================================
-echo ""
-echo -e "${YELLOW}> Step 9: Configure IVIA${NC}"
+step_09_configure_ivia() {
+    echo ""
+    echo -e "${YELLOW}> Step 9: Configure IVIA${NC}"
 
-if [[ "$DRY_RUN" = true ]]; then
-    print_info "[DRY-RUN] Would run: ivia-configure.sh"
-    print_pass "Step 9: Configure IVIA (dry-run)"
-else
-    if _run_subscript "Step 9: ivia-configure" "${SCRIPT_DIR}/ivia-configure.sh"; then
-        IVIA_HEALTH=""
-        if kubectl --context workshop get pods -n verify-access --no-headers 2>/dev/null | grep -q Running; then
-            kubectl --context workshop port-forward \
-                svc/iviaop -n verify-access 8436:8436 \
-                >/dev/null 2>&1 &
-            _IVIA_PF_PID=$!
-            sleep 3
-            IVIA_HEALTH=$(curl -sk \
-                "https://localhost:8436/oauth2/.well-known/openid-configuration" \
-                2>/dev/null | jq -r '.issuer // empty' 2>/dev/null || echo "")
-            kill "$_IVIA_PF_PID" 2>/dev/null || true
-        fi
-        if [[ -n "$IVIA_HEALTH" ]]; then
-            print_pass "Step 9: Configure IVIA (OIDC issuer: ${IVIA_HEALTH})"
-        else
-            print_warn "Step 9: Could not verify IVIA OIDC health endpoint (IVIA may still be starting)"
+    if [[ "$DRY_RUN" = true ]]; then
+        print_info "[DRY-RUN] Would run: ivia-configure.sh"
+        print_pass "Step 9: Configure IVIA (dry-run)"
+    else
+        if _run_subscript "Step 9: ivia-configure" "${SCRIPT_DIR}/ivia-configure.sh"; then
+            IVIA_HEALTH=""
+            if kubectl --context workshop get pods -n verify-access --no-headers 2>/dev/null | grep -q Running; then
+                kubectl --context workshop port-forward \
+                    svc/iviaop -n verify-access 8436:8436 \
+                    >/dev/null 2>&1 &
+                _IVIA_PF_PID=$!
+                sleep 3
+                IVIA_HEALTH=$(curl -sk \
+                    "https://localhost:8436/oauth2/.well-known/openid-configuration" \
+                    2>/dev/null | jq -r '.issuer // empty' 2>/dev/null || echo "")
+                kill "$_IVIA_PF_PID" 2>/dev/null || true
+            fi
+            if [[ -n "$IVIA_HEALTH" ]]; then
+                print_pass "Step 9: Configure IVIA (OIDC issuer: ${IVIA_HEALTH})"
+            else
+                print_warn "Step 9: Could not verify IVIA OIDC health endpoint (IVIA may still be starting)"
+            fi
         fi
     fi
-fi
+}
 
 #===============================================================================
 # STEP 10: terraform apply — tier 3 (workloads: uc1/uc2/uc3 + iviaop patch)
@@ -971,24 +1024,26 @@ fi
 # the agent-uc2 redirect_uri patch (banking nip FQDN from .acme-state). Then
 # rolls each app Deployment so a re-run pulls the freshly pushed :latest image.
 #===============================================================================
-echo ""
-echo -e "${YELLOW}> Step 10: Apply tier 3 (workloads)${NC}"
-_tf_apply_tier "Step 10: Apply tier 3 (workloads)" "${WORKLOADS_DIR}"
+step_10_apply_tier3() {
+    echo ""
+    echo -e "${YELLOW}> Step 10: Apply tier 3 (workloads)${NC}"
+    _tf_apply_tier "Step 10: Apply tier 3 (workloads)" "${WORKLOADS_DIR}"
 
-if [[ "$DRY_RUN" = true ]]; then
-    print_info "[DRY-RUN] Would roll Deployments: ${APP_DEPLOYMENTS[*]}"
-else
-    rolled=0
-    for entry in "${APP_DEPLOYMENTS[@]}"; do
-        ns="${entry%%:*}"
-        dep="${entry#*:}"
-        if kubectl --context workshop get deploy "$dep" -n "$ns" >/dev/null 2>&1; then
-            kubectl --context workshop rollout restart "deploy/${dep}" -n "$ns" >/dev/null 2>&1 \
-                && rolled=$((rolled + 1))
-        fi
-    done
-    print_pass "Step 10: tier-3 Deployments rolled (${rolled}/${#APP_DEPLOYMENTS[@]})"
-fi
+    if [[ "$DRY_RUN" = true ]]; then
+        print_info "[DRY-RUN] Would roll Deployments: ${APP_DEPLOYMENTS[*]}"
+    else
+        rolled=0
+        for entry in "${APP_DEPLOYMENTS[@]}"; do
+            ns="${entry%%:*}"
+            dep="${entry#*:}"
+            if kubectl --context workshop get deploy "$dep" -n "$ns" >/dev/null 2>&1; then
+                kubectl --context workshop rollout restart "deploy/${dep}" -n "$ns" >/dev/null 2>&1 \
+                    && rolled=$((rolled + 1))
+            fi
+        done
+        print_pass "Step 10: tier-3 Deployments rolled (${rolled}/${#APP_DEPLOYMENTS[@]})"
+    fi
+}
 
 #===============================================================================
 # STEP 11: Post-tier-3 shared-ALB assertion + iviaop agent-uc2 redirect reconcile
@@ -1051,46 +1106,52 @@ _run_post_tier3_step() {
     return 0
 }
 
-echo ""
-echo -e "${YELLOW}> Step 11: Post-tier-3 shared-ALB assertion + iviaop reconcile${NC}"
-_run_post_tier3_step
+step_11_post_tier3_reconcile() {
+    echo ""
+    echo -e "${YELLOW}> Step 11: Post-tier-3 shared-ALB assertion + iviaop reconcile${NC}"
+    _run_post_tier3_step
+}
 
 #===============================================================================
 # STEP 12: Verify OpenLDAP user 'oscar' seeded by IVIA autoconf
 #===============================================================================
-echo ""
-echo -e "${YELLOW}> Step 12: Verify OpenLDAP user 'oscar' seeded${NC}"
+step_12_verify_ldap_user() {
+    echo ""
+    echo -e "${YELLOW}> Step 12: Verify OpenLDAP user 'oscar' seeded${NC}"
 
-if [[ "$DRY_RUN" = true ]]; then
-    print_info "[DRY-RUN] Would query in-cluster OpenLDAP for cn=oscar"
-    print_pass "Step 12: OpenLDAP user check (dry-run)"
-else
-    LDAP_PW=$(kubectl --context workshop get secret openldap-creds -n verify-access -o jsonpath='{.data.admin_password}' 2>/dev/null | base64 --decode 2>/dev/null || echo "")
-    if [ -n "${LDAP_PW}" ] && kubectl --context workshop exec -n verify-access deploy/openldap -- \
-            ldapsearch -x -H ldapi:/// -D "cn=admin,dc=ibm,dc=com" -w "${LDAP_PW}" \
-            -b "dc=ibm,dc=com" "(cn=oscar)" dn 2>/dev/null | grep -q '^dn:'; then
-        print_pass "Step 12: OpenLDAP user 'oscar' present (seeded by IVIA autoconf)"
+    if [[ "$DRY_RUN" = true ]]; then
+        print_info "[DRY-RUN] Would query in-cluster OpenLDAP for cn=oscar"
+        print_pass "Step 12: OpenLDAP user check (dry-run)"
     else
-        print_warn "Step 12: OpenLDAP user 'oscar' NOT found — re-run the tier-2 apply or inspect ivia-autoconf job logs"
+        LDAP_PW=$(kubectl --context workshop get secret openldap-creds -n verify-access -o jsonpath='{.data.admin_password}' 2>/dev/null | base64 --decode 2>/dev/null || echo "")
+        if [ -n "${LDAP_PW}" ] && kubectl --context workshop exec -n verify-access deploy/openldap -- \
+                ldapsearch -x -H ldapi:/// -D "cn=admin,dc=ibm,dc=com" -w "${LDAP_PW}" \
+                -b "dc=ibm,dc=com" "(cn=oscar)" dn 2>/dev/null | grep -q '^dn:'; then
+            print_pass "Step 12: OpenLDAP user 'oscar' present (seeded by IVIA autoconf)"
+        else
+            print_warn "Step 12: OpenLDAP user 'oscar' NOT found — re-run the tier-2 apply or inspect ivia-autoconf job logs"
+        fi
     fi
-fi
+}
 
 #===============================================================================
 # STEP 13: Seed Banking DB (seed-banking-db.sh)
 #===============================================================================
-echo ""
-echo -e "${YELLOW}> Step 13: Seed Banking DB${NC}"
+step_13_seed_banking_db() {
+    echo ""
+    echo -e "${YELLOW}> Step 13: Seed Banking DB${NC}"
 
-if [[ "$DRY_RUN" = true ]]; then
-    print_info "[DRY-RUN] Would run: seed-banking-db.sh --region ${REGION}"
-    print_pass "Step 13: Seed Banking DB (dry-run)"
-else
-    if _run_subscript "Step 13: seed-banking-db" "${SCRIPT_DIR}/seed-banking-db.sh" --region "${REGION}"; then
-        print_pass "Step 13: Seed Banking DB (script verified successfully)"
+    if [[ "$DRY_RUN" = true ]]; then
+        print_info "[DRY-RUN] Would run: seed-banking-db.sh --region ${REGION}"
+        print_pass "Step 13: Seed Banking DB (dry-run)"
     else
-        _die "Step 13: seed-banking-db" "Banking app has no data without this seed. Re-run: ${SCRIPT_DIR}/seed-banking-db.sh --region ${REGION}"
+        if _run_subscript "Step 13: seed-banking-db" "${SCRIPT_DIR}/seed-banking-db.sh" --region "${REGION}"; then
+            print_pass "Step 13: Seed Banking DB (script verified successfully)"
+        else
+            _die "Step 13: seed-banking-db" "Banking app has no data without this seed. Re-run: ${SCRIPT_DIR}/seed-banking-db.sh --region ${REGION}"
+        fi
     fi
-fi
+}
 
 #===============================================================================
 # STEP 14: Ingest Bedrock Knowledge Base corpus (sync-bedrock-kb.sh)
@@ -1100,19 +1161,45 @@ fi
 # Case 1 agent's retrieve_from_knowledge_base tool returns zero passages.
 # Idempotent: re-running starts a fresh ingestion job that converges.
 #===============================================================================
-echo ""
-echo -e "${YELLOW}> Step 14: Ingest Bedrock Knowledge Base corpus${NC}"
+step_14_sync_bedrock_kb() {
+    echo ""
+    echo -e "${YELLOW}> Step 14: Ingest Bedrock Knowledge Base corpus${NC}"
 
-if [[ "$DRY_RUN" = true ]]; then
-    print_info "[DRY-RUN] Would run: sync-bedrock-kb.sh"
-    print_pass "Step 14: Ingest Bedrock Knowledge Base corpus (dry-run)"
-else
-    if _run_subscript "Step 14: sync-bedrock-kb" "${SCRIPT_DIR}/sync-bedrock-kb.sh"; then
-        print_pass "Step 14: Ingest Bedrock Knowledge Base corpus"
+    if [[ "$DRY_RUN" = true ]]; then
+        print_info "[DRY-RUN] Would run: sync-bedrock-kb.sh"
+        print_pass "Step 14: Ingest Bedrock Knowledge Base corpus (dry-run)"
     else
-        _die "Step 14: sync-bedrock-kb" "Use Case 1 agent returns zero passages without an ingested KB. Re-run: ${SCRIPT_DIR}/sync-bedrock-kb.sh"
+        if _run_subscript "Step 14: sync-bedrock-kb" "${SCRIPT_DIR}/sync-bedrock-kb.sh"; then
+            print_pass "Step 14: Ingest Bedrock Knowledge Base corpus"
+        else
+            _die "Step 14: sync-bedrock-kb" "Use Case 1 agent returns zero passages without an ingested KB. Re-run: ${SCRIPT_DIR}/sync-bedrock-kb.sh"
+        fi
     fi
-fi
+}
+
+#===============================================================================
+# Main flow — call each step function via _run_if_tier so the same script
+# drives both distributions:
+#   - Workshop Studio (bare):  TIER="" runs every step (all 14)
+#   - Instruqt tier-N:         TIER="N" runs only that tier's steps
+# Idempotency contract (project CLAUDE.md): every step is safe to re-run, so
+# running --tier 1 then --tier 2 then --tier 3 produces the same end state as
+# a bare invocation, and re-running any tier converges.
+#===============================================================================
+_run_if_tier 1 step_01_apply_tier1
+_run_if_tier 1 step_02_configure_kubectl
+_run_if_tier 1 step_03_build_push_images
+_run_if_tier 1 step_04_lbc_readiness_gate
+_run_if_tier 2 step_05_apply_tier2
+_run_if_tier 2 step_06_initialize_vault
+_run_if_tier 2 step_07_acme_cert_issuance
+_run_if_tier 2 step_08_configure_vault
+_run_if_tier 2 step_09_configure_ivia
+_run_if_tier 3 step_10_apply_tier3
+_run_if_tier 3 step_11_post_tier3_reconcile
+_run_if_tier 3 step_12_verify_ldap_user
+_run_if_tier 3 step_13_seed_banking_db
+_run_if_tier 3 step_14_sync_bedrock_kb
 
 #===============================================================================
 # Summary is emitted by the EXIT trap (_cleanup)

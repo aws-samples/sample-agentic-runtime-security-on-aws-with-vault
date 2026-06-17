@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# 11-uc1-verify/check-cloud-client — wraps verify-uc1.sh; forwards its exit code.
+set -euo pipefail
+cd /root/workshop
+bash infrastructure/scripts/verify-uc1.sh \
+    || { echo "FAIL: verify-uc1.sh did not pass — see Terminal tab for the failing assertion"; exit 1; }
+echo "11-uc1-verify: verify-uc1.sh ALL CHECKS PASSED"

@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+#===============================================================================
+# track_scripts/setup-cloud-client — Instruqt track-play bootstrap.
+#
+# Runs ONCE per track-play (before challenge 01-welcome displays) inside the
+# Instruqt sandbox cloud-client container. Responsibilities, in order:
+#
+#   0. Install the workshop CLI toolchain that cloud-client:2 doesn't ship
+#      (terraform, kubectl, helm, ldapsearch, psql, unzip).
+#   a. Translate Instruqt's AWS-account env vars (INSTRUQT_AWS_ACCOUNT_workshop_*)
+#      into ~/.aws/credentials so the aws CLI and the Terraform AWS provider
+#      pick them up with zero AWS_PROFILE export.
+#   b. Write the SSH deploy key from runtime parameter INSTRUQT_GITHUB_IBM_DEPLOY_KEY
+#      (set ONCE by the track author in the invite link's Advanced options) to
+#      ~/.ssh/id_ed25519 (mode 0600) and clone the workshop repo over SSH.
+#   c. Run check-prerequisites.sh --skip-tools (validates credentials, region,
+#      Bedrock model access, quotas, IAM — skips the install gate since step 0
+#      installed everything).
+#   d. Run bootstrap.sh --skip-prereq-gate (seeds the 3 tfvars from .example,
+#      stamps admin_principal_arn from STS, terraform init in all 3 roots).
+#
+# The Workshop Studio confidential values (acme_email, icr_entitlement_key,
+# ivia_mmfa_push_client_secret) are NOT pre-injected here. deploy-workshop.sh
+# preflight prompts the attendee interactively when they run the tier-N deploy
+# from the Terminal tab, identical to the Workshop Studio flow. Avoids needing
+# team-Owner perms on Instruqt to register org secrets.
+#
+# Any non-zero exit halts the track-play before challenge 1 displays — that is
+# the correct fail-loud behavior: an attendee should never see a half-broken
+# environment.
+#===============================================================================
+
+set -euo pipefail
+
+REPO_DIR="/root/workshop"
+SSH_KEY_PATH="${HOME}/.ssh/id_ed25519"
+KNOWN_HOSTS="${HOME}/.ssh/known_hosts"
+GIT_REMOTE="git@github.ibm.com:Oscar-Medina/agentic-runtime-security-aws.git"
+
+# Tool versions pinned for reproducibility. Bump in one place.
+TERRAFORM_VERSION="1.10.5"
+KUBECTL_VERSION="v1.31.4"
+HELM_VERSION="v3.16.4"
+
+echo "==> [setup-cloud-client] step (0): install workshop CLI toolchain on cloud-client:2"
+
+# cloud-client:2 ships aws-cli v2 + bash + curl + git + jq + openssl + gcloud + az.
+# Missing: terraform, kubectl, helm, openldap-utils (ldapsearch — UC2/UC3 verifies),
+# postgresql-client (psql — UC1/UC2 verifies). Install idempotently.
+export DEBIAN_FRONTEND=noninteractive
+
+# Detect already-installed by symlink presence to keep re-runs fast (~3s vs ~90s).
+if ! command -v terraform >/dev/null 2>&1; then
+    echo "    Installing terraform ${TERRAFORM_VERSION}"
+    curl -fsSL "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip" -o /tmp/terraform.zip
+    (cd /usr/local/bin && unzip -o /tmp/terraform.zip terraform >/dev/null)
+    chmod +x /usr/local/bin/terraform
+    rm -f /tmp/terraform.zip
+fi
+
+if ! command -v kubectl >/dev/null 2>&1; then
+    echo "    Installing kubectl ${KUBECTL_VERSION}"
+    curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" -o /usr/local/bin/kubectl
+    chmod +x /usr/local/bin/kubectl
+fi
+
+if ! command -v helm >/dev/null 2>&1; then
+    echo "    Installing helm ${HELM_VERSION}"
+    curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" -o /tmp/helm.tgz
+    tar -xzf /tmp/helm.tgz -C /tmp linux-amd64/helm
+    install -m 0755 /tmp/linux-amd64/helm /usr/local/bin/helm
+    rm -rf /tmp/helm.tgz /tmp/linux-amd64
+fi
+
+if ! command -v ldapsearch >/dev/null 2>&1 || ! command -v psql >/dev/null 2>&1; then
+    echo "    Installing apt packages: ldap-utils postgresql-client unzip"
+    apt-get update -qq
+    apt-get install -y -qq ldap-utils postgresql-client unzip ca-certificates >/dev/null
+fi
+
+terraform version | head -1
+kubectl version --client=true 2>&1 | head -1
+helm version --short
+
+echo "==> [setup-cloud-client] step (a): translate Instruqt AWS env vars → ~/.aws/credentials"
+
+# Instruqt injects credentials for an AWS sandbox named in config.yml's
+# aws_accounts[].name as `INSTRUQT_AWS_ACCOUNT_<name>_AWS_ACCESS_KEY_ID` etc.
+# Our sandbox is named `workshop` (see instruqt/track/config.yml.tmpl).
+: "${INSTRUQT_AWS_ACCOUNT_workshop_AWS_ACCESS_KEY_ID:?Instruqt did not inject AWS_ACCESS_KEY_ID for workshop sandbox — config.yml aws_accounts name mismatch?}"
+: "${INSTRUQT_AWS_ACCOUNT_workshop_AWS_SECRET_ACCESS_KEY:?Instruqt did not inject AWS_SECRET_ACCESS_KEY for workshop sandbox}"
+
+mkdir -p "${HOME}/.aws"
+cat > "${HOME}/.aws/credentials" <<EOF
+[default]
+aws_access_key_id     = ${INSTRUQT_AWS_ACCOUNT_workshop_AWS_ACCESS_KEY_ID}
+aws_secret_access_key = ${INSTRUQT_AWS_ACCOUNT_workshop_AWS_SECRET_ACCESS_KEY}
+EOF
+chmod 600 "${HOME}/.aws/credentials"
+
+echo "==> [setup-cloud-client] step (b): SSH deploy key + repo clone"
+
+: "${INSTRUQT_GITHUB_IBM_DEPLOY_KEY:?Org secret INSTRUQT_GITHUB_IBM_DEPLOY_KEY not injected — set it on the Instruqt org}"
+
+mkdir -p "${HOME}/.ssh"
+chmod 700 "${HOME}/.ssh"
+# Write key. The org-secret value is expected to be the FULL private key PEM
+# (BEGIN ... END) including a trailing newline; if Instruqt strips the trailing
+# newline ssh-keygen will still accept it, so we add one defensively.
+printf '%s\n' "${INSTRUQT_GITHUB_IBM_DEPLOY_KEY}" > "${SSH_KEY_PATH}"
+chmod 600 "${SSH_KEY_PATH}"
+
+ssh-keyscan -t ed25519 github.ibm.com >> "${KNOWN_HOSTS}" 2>/dev/null || true
+chmod 600 "${KNOWN_HOSTS}"
+
+if [ -d "${REPO_DIR}/.git" ]; then
+    echo "    Repo already cloned at ${REPO_DIR} — running git fetch + reset to origin/main (idempotent)"
+    git -C "${REPO_DIR}" fetch origin
+    git -C "${REPO_DIR}" reset --hard origin/main
+else
+    echo "    Cloning ${GIT_REMOTE} → ${REPO_DIR}"
+    git clone "${GIT_REMOTE}" "${REPO_DIR}"
+fi
+
+echo "==> [setup-cloud-client] resolve primary region from canonical SoT and export"
+
+# Canonical region SoT (post-clone): infrastructure/terraform.tfvars.example
+# line ~26 (`region = "..."`). Same regex render-config.sh uses. Fail loud if
+# the SoT is missing or unparseable — never silently default.
+TFVARS_EXAMPLE="${REPO_DIR}/infrastructure/terraform.tfvars.example"
+[ -f "${TFVARS_EXAMPLE}" ] || { echo "FATAL: ${TFVARS_EXAMPLE} missing after clone"; exit 1; }
+PRIMARY_REGION=$(grep -E '^[[:space:]]*region[[:space:]]*=' "${TFVARS_EXAMPLE}" \
+    | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+KB_REGION=$(grep -E '^[[:space:]]*kb_region[[:space:]]*=' "${TFVARS_EXAMPLE}" \
+    | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+: "${PRIMARY_REGION:?could not parse region = \"...\" from ${TFVARS_EXAMPLE}}"
+: "${KB_REGION:?could not parse kb_region = \"...\" from ${TFVARS_EXAMPLE}}"
+
+mkdir -p /etc/profile.d
+# AWS_REGION + AWS_DEFAULT_REGION: workload region (every aws CLI call default).
+# AWS_REGION_KB: Bedrock KB region (embedding model lives here only); challenges
+# that talk to AOSS / Bedrock KB / the multimodal embedding model use this var
+# explicitly via `aws --region "$AWS_REGION_KB" ...`. Keeps the assignment.md
+# commands free of hardcoded region literals (Decision 7).
+cat > /etc/profile.d/aws.sh <<EOF
+export AWS_REGION="${PRIMARY_REGION}"
+export AWS_DEFAULT_REGION="${PRIMARY_REGION}"
+export AWS_REGION_KB="${KB_REGION}"
+EOF
+chmod 644 /etc/profile.d/aws.sh
+export AWS_REGION="${PRIMARY_REGION}"
+export AWS_DEFAULT_REGION="${PRIMARY_REGION}"
+export AWS_REGION_KB="${KB_REGION}"
+echo "    AWS region set to: ${AWS_REGION} (workload), ${AWS_REGION_KB} (Bedrock KB)"
+
+aws sts get-caller-identity --query Account --output text \
+    || { echo "FATAL: aws sts get-caller-identity failed — credentials not usable"; exit 1; }
+
+echo "==> [setup-cloud-client] step (c): check-prerequisites.sh --skip-tools"
+bash "${REPO_DIR}/infrastructure/scripts/check-prerequisites.sh" --skip-tools
+
+echo "==> [setup-cloud-client] step (d): bootstrap.sh --skip-prereq-gate"
+bash "${REPO_DIR}/infrastructure/scripts/bootstrap.sh" --skip-prereq-gate
+
+echo "==> [setup-cloud-client] complete — challenge 01-welcome ready to display"
