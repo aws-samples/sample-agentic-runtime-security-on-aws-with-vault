@@ -53,7 +53,7 @@ INTERACTIVE=false
 # Skip the tool-install + tool-version sections when running in an environment
 # where aws/terraform/kubectl are pre-installed and the host package manager
 # (brew, apt, yum) is not available. Set true by --skip-tools; required by the
-# Instruqt distribution's track_scripts/setup-shell (see instruqt/README.md).
+# Instruqt distribution's track_scripts/setup-cloud-client (see instruqt/README.md).
 SKIP_TOOLS=false
 
 # Argument parsing — keep simple, no shift loops with positional args

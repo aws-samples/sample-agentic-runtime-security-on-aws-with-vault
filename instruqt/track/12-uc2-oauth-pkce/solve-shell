@@ -1,5 +1,0 @@
-#!/usr/bin/env bash
-# 12-uc2-oauth-pkce/solve-shell — tier-2 deploy puts the trust chain in place;
-# no attendee action solves this beyond a successful login round-trip.
-set -euo pipefail
-exit 0

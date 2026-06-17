@@ -6,7 +6,7 @@ teaser: Per-user Vault credentials; PostgreSQL RLS enforces data isolation.
 tabs:
   - title: Terminal
     type: terminal
-    hostname: shell
+    hostname: cloud-client
 ---
 
 Use Case 2 issues per-user Postgres credentials via Vault's `database/creds/uc2-personal-readonly`

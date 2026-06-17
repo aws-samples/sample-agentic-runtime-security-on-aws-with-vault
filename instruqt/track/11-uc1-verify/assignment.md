@@ -6,7 +6,7 @@ teaser: Run verify-uc1.sh — issue, observe, prove enforcement.
 tabs:
   - title: Terminal
     type: terminal
-    hostname: shell
+    hostname: cloud-client
 ---
 
 Use Case 1 ships with an end-to-end verifier that exercises the JIT credential

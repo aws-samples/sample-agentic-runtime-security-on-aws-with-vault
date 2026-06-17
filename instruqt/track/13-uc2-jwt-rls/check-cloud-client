@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# 13-uc2-jwt-rls/check-cloud-client — wraps verify-uc2.sh.
+set -euo pipefail
+cd /root/workshop
+bash infrastructure/scripts/verify-uc2.sh \
+    || { echo "FAIL: verify-uc2.sh did not pass — see Terminal tab for the failing assertion"; exit 1; }
+echo "13-uc2-jwt-rls: verify-uc2.sh ALL CHECKS PASSED"

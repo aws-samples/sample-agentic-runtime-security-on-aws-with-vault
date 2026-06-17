@@ -6,7 +6,7 @@ teaser: Workload identity. JIT credentials. No standing privileges.
 tabs:
   - title: Terminal
     type: terminal
-    hostname: shell
+    hostname: cloud-client
 ---
 
 Use Case 1 is a Strands agent that authenticates to Vault using its own

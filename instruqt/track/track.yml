@@ -1,5 +1,4 @@
 slug: agentic-runtime-security-aws
-id: 2qnimqnhxlbj
 title: Agentic Runtime Security on AWS
 teaser: Five control objectives, three use cases, one EKS cluster — runtime-secure
   an agentic LLM banking application on AWS in a single afternoon.
@@ -27,5 +26,4 @@ lab_config:
   theme:
     name: modern-dark
   default_layout: AssignmentRight
-checksum: "18234699049461595783"
 enhanced_loading: false

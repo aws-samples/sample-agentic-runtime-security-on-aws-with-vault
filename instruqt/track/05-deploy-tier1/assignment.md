@@ -6,7 +6,7 @@ teaser: VPC, EKS, RDS, Bedrock KB, ECR, IAM, add-ons. About 25-35 minutes.
 tabs:
   - title: Terminal
     type: terminal
-    hostname: shell
+    hostname: cloud-client
 ---
 
 Tier 1 deploys the core AWS infrastructure: VPC, EKS, RDS PostgreSQL with
@@ -21,7 +21,7 @@ yet — that comes in tier 2.
 3. `build-images.sh` — builds and pushes the Use Case agent images to ECR
 4. Load Balancer Controller readiness gate
 
-The challenge `setup-shell` invokes this for you. The deploy is idempotent —
+The challenge `setup-cloud-client` invokes this for you. The deploy is idempotent —
 if anything fails, re-running the same command converges (Project CLAUDE.md
 mandate).
 

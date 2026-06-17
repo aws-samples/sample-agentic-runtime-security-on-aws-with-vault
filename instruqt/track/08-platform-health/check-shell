@@ -1,9 +1,0 @@
-#!/usr/bin/env bash
-# 08-platform-health/check-shell — wraps the existing test-foundation.sh.
-# That script exits 0 only when EKS + RDS + Bedrock KB + audit log groups +
-# region contract all pass; we forward its exit code unchanged.
-set -euo pipefail
-cd /root/workshop
-bash infrastructure/scripts/test-foundation.sh \
-    || { echo "FAIL: test-foundation.sh did not pass — see Terminal tab"; exit 1; }
-echo "08-platform-health: test-foundation.sh ALL PASSED"

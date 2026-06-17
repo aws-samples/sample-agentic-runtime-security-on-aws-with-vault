@@ -6,12 +6,12 @@ teaser: Tear down the workshop infrastructure (Instruqt also destroys the sandbo
 tabs:
   - title: Terminal
     type: terminal
-    hostname: shell
+    hostname: cloud-client
 ---
 
 You've completed all three use cases. Time to tear down.
 
-The track-play `cleanup-shell` (which Instruqt runs automatically after this
+The track-play `cleanup-cloud-client` (which Instruqt runs automatically after this
 challenge) invokes `bash infrastructure/scripts/teardown.sh --yes`, and
 Instruqt then destroys the AWS sandbox account itself. This challenge is
 belt-and-suspenders: it kicks off the same teardown now so you can observe

@@ -6,7 +6,7 @@ teaser: Inspect the Vault role, policy, and database secrets engine that scope u
 tabs:
   - title: Terminal
     type: terminal
-    hostname: shell
+    hostname: cloud-client
 ---
 
 The Vault Kubernetes auth method, database secrets engine role, AWS secrets

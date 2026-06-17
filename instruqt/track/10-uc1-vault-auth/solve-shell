@@ -1,5 +1,0 @@
-#!/usr/bin/env bash
-# 10-uc1-vault-auth/solve-shell
-# Vault config is pure side-effect of tier-2 deploy. Solve is a no-op.
-set -euo pipefail
-exit 0

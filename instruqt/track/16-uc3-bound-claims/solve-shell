@@ -1,5 +1,0 @@
-#!/usr/bin/env bash
-# 16-uc3-bound-claims/solve-shell — re-run verify-uc3.sh.
-set -euo pipefail
-cd /root/workshop
-bash infrastructure/scripts/verify-uc3.sh

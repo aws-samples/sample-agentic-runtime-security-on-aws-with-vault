@@ -6,7 +6,7 @@ teaser: Seed the three terraform.tfvars files and run terraform init in all thre
 tabs:
   - title: Terminal
     type: terminal
-    hostname: shell
+    hostname: cloud-client
 ---
 
 The workshop is split into three local-state Terraform roots, applied in
@@ -24,7 +24,7 @@ stamps the tier-1 `admin_principal_arn` from your STS identity, and runs
 The track-play setup already ran `bootstrap.sh --skip-prereq-gate` for you, and
 the three values that the Workshop Studio path prompts for at deploy time
 (`acme_email`, `icr_entitlement_key`, `ivia_mmfa_push_client_secret`) were
-injected by setup-shell from the Instruqt runtime_parameter and org secrets.
+injected by setup-cloud-client from the Instruqt runtime_parameter and org secrets.
 This challenge just verifies the result.
 
 ## Verify the bootstrap

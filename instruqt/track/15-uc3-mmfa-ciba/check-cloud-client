@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+#===============================================================================
+# 15-uc3-mmfa-ciba/check-cloud-client
+# Polls Vault for a UC3 lease appearing within a 5-min window after the
+# assignment displays. Presence of the lease proves the CIBA round-trip
+# (push fired -> Jaime approved -> Vault issued the 5-min write credential).
+#===============================================================================
+
+set -euo pipefail
+
+REPO="/root/workshop"
+# kubectl alias deploy-workshop.sh Step 2 writes (see deploy-workshop.sh:461)
+KUBE_CONTEXT="workshop"
+ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)
+
+# Capture the snapshot of leases NOW; we want a lease created AFTER this point.
+SNAPSHOT_NOW=$(date +%s)
+DEADLINE=$((SNAPSHOT_NOW + 300))  # 5 minutes
+
+echo "Polling vault sys/leases/lookup/database/creds/uc3-refund-writer for a"
+echo "lease issued in the next 5 minutes (after epoch ${SNAPSHOT_NOW})..."
+echo "If you have not approved the push notification yet, do so now."
+
+while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
+    LIST_JSON=$(kubectl --context "${KUBE_CONTEXT}" exec -n vault vault-0 -- \
+        sh -c "VAULT_TOKEN='${ROOT_TOKEN}' vault list -format=json sys/leases/lookup/database/creds/uc3-refund-writer" \
+        2>/dev/null || echo '[]')
+
+    # For each lease suffix, lookup its issuance time and compare.
+    while IFS= read -r SUFFIX; do
+        [ -z "${SUFFIX}" ] && continue
+        ISSUE_TIME=$(kubectl --context "${KUBE_CONTEXT}" exec -n vault vault-0 -- \
+            sh -c "VAULT_TOKEN='${ROOT_TOKEN}' vault lease lookup -format=json database/creds/uc3-refund-writer/${SUFFIX}" \
+            2>/dev/null | jq -r '.data.issue_time // empty' || true)
+        [ -z "${ISSUE_TIME}" ] && continue
+        # vault issue_time is ISO 8601; convert to epoch
+        ISSUE_EPOCH=$(date -d "${ISSUE_TIME}" +%s 2>/dev/null || true)
+        if [ -n "${ISSUE_EPOCH}" ] && [ "${ISSUE_EPOCH}" -ge "${SNAPSHOT_NOW}" ]; then
+            echo "PASS: uc3-refund-writer lease ${SUFFIX} issued at ${ISSUE_TIME}"
+            exit 0
+        fi
+    done < <(echo "${LIST_JSON}" | jq -r '.[]?')
+
+    sleep 10
+done
+
+echo "FAIL: no uc3-refund-writer lease issued in the 5-minute window."
+echo "      Did you approve the IBM Verify push on your phone?"
+exit 1

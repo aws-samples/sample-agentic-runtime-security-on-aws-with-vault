@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# 18-cleanup/setup-cloud-client — runs teardown.sh --yes so the attendee can observe
+# the cleanup output. The track-play cleanup-cloud-client will run it again on track
+# end as belt-and-suspenders; that re-run is idempotent and a no-op once this
+# pass has converged state.
+set -euo pipefail
+
+cd /root/workshop
+bash infrastructure/scripts/teardown.sh --yes

@@ -16,10 +16,10 @@
 #   teardown.sh --yes              Non-interactive: auto-confirm every prompt the
 #                                  script issues (today's script issues zero
 #                                  prompts, but --yes is the documented contract
-#                                  for the Instruqt distribution's cleanup-shell,
+#                                  for the Instruqt distribution's cleanup-cloud-client,
 #                                  which has no tty — any prompt added later is
 #                                  silently 'y' under this flag). Required by
-#                                  instruqt/track/track_scripts/cleanup-shell.
+#                                  instruqt/track/track_scripts/cleanup-cloud-client.
 #   teardown.sh --help             Show this help
 #
 # Discovery: Workshop tag `Workshop=agentic-runtime-security` + the well-known
@@ -90,7 +90,7 @@ DRY_RUN=false
 AWS_ONLY=false
 POST_DESTROY_ONLY=false
 KEEP_EKS=false
-# --yes: non-interactive contract for the Instruqt cleanup-shell. Today's script
+# --yes: non-interactive contract for the Instruqt cleanup-cloud-client. Today's script
 # has no interactive prompts (verified via `grep -nE 'read -[pr]|confirm' teardown.sh`
 # returning only false positives inside `while IFS= read` loops), so ASSUME_YES is
 # currently a documented no-op. Any future prompt MUST gate on `[ "$ASSUME_YES" = true ]`

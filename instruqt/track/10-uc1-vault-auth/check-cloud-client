@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+#===============================================================================
+# 10-uc1-vault-auth/check-cloud-client
+# Asserts the Vault Kubernetes auth surface for uc1 is configured as expected:
+#   - auth/kubernetes/role/uc1 bound to uc1-retriever-sa in namespace uc1
+#   - policies = [uc1-readonly]
+#   - uc1-readonly policy grants read on database/creds/uc1-readonly
+#===============================================================================
+
+set -euo pipefail
+
+REPO="/root/workshop"
+# kubectl alias deploy-workshop.sh Step 2 writes (see deploy-workshop.sh:461)
+KUBE_CONTEXT="workshop"
+
+ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json 2>/dev/null) \
+    || { echo "FAIL: could not read root_token from ~/vault-init.json"; exit 1; }
+
+ROLE=$(kubectl --context "${KUBE_CONTEXT}" exec -n vault vault-0 -- \
+    sh -c "VAULT_TOKEN='${ROOT_TOKEN}' vault read -format=json auth/kubernetes/role/uc1" 2>/dev/null) \
+    || { echo "FAIL: vault read auth/kubernetes/role/uc1 failed"; exit 1; }
+
+SA=$(jq -r '.data.bound_service_account_names[0]' <<<"${ROLE}")
+NS=$(jq -r '.data.bound_service_account_namespaces[0]' <<<"${ROLE}")
+POL=$(jq -r '.data.token_policies[0] // .data.policies[0]' <<<"${ROLE}")
+
+[ "${SA}" = "uc1-retriever-sa" ] || { echo "FAIL: bound SA = ${SA}, expected uc1-retriever-sa"; exit 1; }
+[ "${NS}" = "uc1" ] || { echo "FAIL: bound ns = ${NS}, expected uc1"; exit 1; }
+[ "${POL}" = "uc1-readonly" ] || { echo "FAIL: policy = ${POL}, expected uc1-readonly"; exit 1; }
+echo "PASS: auth/kubernetes/role/uc1 bound to uc1-retriever-sa/uc1 with uc1-readonly policy"
+
+POLICY=$(kubectl --context "${KUBE_CONTEXT}" exec -n vault vault-0 -- \
+    sh -c "VAULT_TOKEN='${ROOT_TOKEN}' vault policy read uc1-readonly" 2>/dev/null)
+echo "${POLICY}" | grep -q 'database/creds/uc1-readonly' \
+    || { echo "FAIL: uc1-readonly policy does not grant database/creds/uc1-readonly"; exit 1; }
+echo "${POLICY}" | grep -qE 'capabilities\s*=\s*\["read"' \
+    || { echo "FAIL: uc1-readonly policy missing read capability"; exit 1; }
+echo "PASS: uc1-readonly policy permits read on database/creds/uc1-readonly"
+
+echo "10-uc1-vault-auth: all checks green"

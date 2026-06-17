@@ -6,7 +6,7 @@ teaser: Verify your sandbox account, the workshop repo, and your IBM Verify mobi
 tabs:
   - title: Terminal
     type: terminal
-    hostname: shell
+    hostname: cloud-client
 ---
 
 ## Mobile prerequisite — IBM Verify app

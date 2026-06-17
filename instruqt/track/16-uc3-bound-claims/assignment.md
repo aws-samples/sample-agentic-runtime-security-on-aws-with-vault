@@ -6,7 +6,7 @@ teaser: Inspect the may_act delegation claim and the RFC 9396 authorization_deta
 tabs:
   - title: Terminal
     type: terminal
-    hostname: shell
+    hostname: cloud-client
 ---
 
 The refund credential is gated by **three cryptographic enforcement points**

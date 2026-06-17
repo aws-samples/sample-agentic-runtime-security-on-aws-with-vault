@@ -1,8 +1,0 @@
-#!/usr/bin/env bash
-# 05-deploy-tier1/setup-shell
-# Runs the tier-1 deploy. Idempotent — re-runs converge per the deploy script's
-# CLAUDE.md mandate. First-time run is ~25-35 minutes.
-set -euo pipefail
-
-cd /root/workshop
-bash infrastructure/scripts/deploy-workshop.sh --tier 1

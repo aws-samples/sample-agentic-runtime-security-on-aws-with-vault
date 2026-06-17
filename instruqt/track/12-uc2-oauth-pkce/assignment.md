@@ -6,7 +6,7 @@ teaser: Sign in to the banking UI; observe the JWT IVIA issued.
 tabs:
   - title: Terminal
     type: terminal
-    hostname: shell
+    hostname: cloud-client
 ---
 
 Use Case 2 adds **user identity** to the credential flow. The banking UI

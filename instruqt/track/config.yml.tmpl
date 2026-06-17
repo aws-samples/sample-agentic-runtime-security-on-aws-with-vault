@@ -16,13 +16,13 @@
 version: "3"
 
 containers:
-  - name: shell
+  - name: cloud-client
     # Instruqt cloud-client v2 — documented image at gcr.io/instruqt/cloud-client:2
     # (https://docs.instruqt.com/sandboxes/cloud-accounts/cloud-client.md).
     # Ships aws-cli v2.22.27, az, gcloud, bash, git, curl, openssl, jq,
     # ca-certificates. terraform / kubectl / helm / openldap-utils /
     # postgresql-client are NOT in the image — installed by
-    # track_scripts/setup-shell step (0) on first start.
+    # track_scripts/setup-cloud-client step (0) on first start.
     image: gcr.io/instruqt/cloud-client:2
     # 4 GiB: tier-1/2/3 deploys run terraform + kubectl apply + image builds
     # concurrently. The docs' default 256 MiB OOM-kills mid-deploy without a
@@ -41,7 +41,7 @@ aws_accounts:
 # Org secrets — injected as env vars in the sandbox at track-play start.
 # Per CLAUDE.md (Bear, 2026-06-16): NEVER printed; NEVER echoed; visible only
 # to the workload that needs them. ICR + IVIA push secrets land in
-# infrastructure/services/terraform.tfvars in track_scripts/setup-shell;
+# infrastructure/services/terraform.tfvars in track_scripts/setup-cloud-client;
 # the SSH deploy key lands in ~/.ssh/id_ed25519 (mode 0600).
 secrets:
   - name: ICR_ENTITLEMENT_KEY

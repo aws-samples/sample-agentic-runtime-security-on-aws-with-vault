@@ -6,7 +6,7 @@ teaser: One Athena query joins IVIA + Vault + pgaudit on a single request_id.
 tabs:
   - title: Terminal
     type: terminal
-    hostname: shell
+    hostname: cloud-client
 ---
 
 The **money shot** of the workshop. Each plane logs the same refund

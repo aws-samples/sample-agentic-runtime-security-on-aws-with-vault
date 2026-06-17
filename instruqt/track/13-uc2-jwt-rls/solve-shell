@@ -1,5 +1,0 @@
-#!/usr/bin/env bash
-# 13-uc2-jwt-rls/solve-shell — re-run verify-uc2.sh.
-set -euo pipefail
-cd /root/workshop
-bash infrastructure/scripts/verify-uc2.sh

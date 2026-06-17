@@ -1,7 +1,0 @@
-#!/usr/bin/env bash
-# 05-deploy-tier1/solve-shell
-# Re-runs setup-shell — deploy-workshop.sh --tier 1 is idempotent and the only
-# way to "solve" this challenge is to land tier-1 state successfully.
-set -euo pipefail
-cd /root/workshop
-bash infrastructure/scripts/deploy-workshop.sh --tier 1

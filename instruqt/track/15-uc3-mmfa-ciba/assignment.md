@@ -6,7 +6,7 @@ teaser: Enroll your phone in IBM Verify, then approve a refund out-of-band.
 tabs:
   - title: Terminal
     type: terminal
-    hostname: shell
+    hostname: cloud-client
 ---
 
 Use Case 3 demonstrates **Objective 3 — actions tied to user intent** for a

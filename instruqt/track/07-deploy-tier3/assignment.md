@@ -6,7 +6,7 @@ teaser: Use Case agent pods, banking app + UI, banking DB seed, Bedrock KB inges
 tabs:
   - title: Terminal
     type: terminal
-    hostname: shell
+    hostname: cloud-client
 ---
 
 Tier 3 deploys the application workloads on top of tier-1 (cluster) and tier-2

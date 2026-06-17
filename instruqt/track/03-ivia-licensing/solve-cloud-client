@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# 03-ivia-licensing/solve-cloud-client
+# Pure side-effect of track_scripts/setup-cloud-client (org-secret injection) + the
+# repo clone (cert ships in repo). No attendee action; solve is a no-op.
+set -euo pipefail
+exit 0

@@ -6,7 +6,7 @@ teaser: Issue, observe, revoke; prove the Postgres role and Vault lease are both
 tabs:
   - title: Terminal
     type: terminal
-    hostname: shell
+    hostname: cloud-client
 ---
 
 The production code path for credential revocation is
@@ -29,7 +29,7 @@ echo "PG_USER=${PG_USER}"
 
 # Step 2: confirm the Postgres role exists (master-creds query)
 # (see workshop/content/60-use-case-2/65-credential-revocation for the full
-# query — this challenge's check-shell does the same assertion automatically)
+# query — this challenge's check-cloud-client does the same assertion automatically)
 
 # Step 3: revoke the lease
 kubectl exec -n vault vault-0 -- \
@@ -42,9 +42,9 @@ kubectl exec -n vault vault-0 -- \
   && echo "OK: lease removed from active list"
 ```
 
-## Or just let the check-shell do it
+## Or just let the check-cloud-client do it
 
-The `check-shell` performs the issue → confirm → revoke → re-confirm cycle
+The `check-cloud-client` performs the issue → confirm → revoke → re-confirm cycle
 end-to-end and asserts that:
 
 1. The Vault lease was active immediately after issuance.

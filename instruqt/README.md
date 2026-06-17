@@ -15,8 +15,8 @@ tab with `aws`, `terraform`, `kubectl`, `git`, and `jq` pre-installed and
 
 Everything else — `git clone`, `terraform init`, the 14-step `deploy-workshop.sh`
 orchestration, Vault initialization, IVIA configuration, the three use-case
-verifiers, and final teardown — runs from challenge `setup-shell` /
-`check-shell` / `solve-shell` blocks against that sandbox.
+verifiers, and final teardown — runs from challenge `setup-cloud-client` /
+`check-cloud-client` / `solve-cloud-client` blocks against that sandbox.
 
 ## Dual distribution
 
@@ -73,8 +73,8 @@ Prompted in the browser at track-play start; the attendee enters their own value
 
 ## Authoring loop
 
-1. **Edit** the relevant `instruqt/track/NN-<slug>/assignment.md`, `check-shell`,
-   `setup-shell`, or `solve-shell`.
+1. **Edit** the relevant `instruqt/track/NN-<slug>/assignment.md`, `check-cloud-client`,
+   `setup-cloud-client`, or `solve-cloud-client`.
 2. **Validate** the track manifest: `cd instruqt/track && instruqt track validate`
 3. **Test** end-to-end against a real Instruqt-provisioned sandbox:
    `instruqt track test --keep-running`  (use `--keep-running` to inspect the
@@ -106,8 +106,8 @@ flags were added in Task 2 to support the Instruqt sandbox lifecycle:
 | Script                                  | New flag         | Used by                                                  |
 | --------------------------------------- | ---------------- | -------------------------------------------------------- |
 | `infrastructure/scripts/deploy-workshop.sh` | `--tier <1\|2\|3>` | challenges 05/06/07 (one challenge per deploy tier)      |
-| `infrastructure/scripts/check-prerequisites.sh` | `--skip-tools`   | `track_scripts/setup-shell` (sandbox image has CLIs)     |
-| `infrastructure/scripts/teardown.sh`    | `--yes`          | `track_scripts/cleanup-shell` + challenge 18 setup-shell |
+| `infrastructure/scripts/check-prerequisites.sh` | `--skip-tools`   | `track_scripts/setup-cloud-client` (sandbox image has CLIs)     |
+| `infrastructure/scripts/teardown.sh`    | `--yes`          | `track_scripts/cleanup-cloud-client` + challenge 18 setup-cloud-client |
 
 All three flags are no-op for bare invocation, preserving Workshop Studio
 behavior byte-for-byte.

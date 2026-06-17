@@ -6,7 +6,7 @@ teaser: One script verifies EKS, RDS, Bedrock KB, audit log groups, and the regi
 tabs:
   - title: Terminal
     type: terminal
-    hostname: shell
+    hostname: cloud-client
 ---
 
 Before walking the use cases, run the foundation verification script. It

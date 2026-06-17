@@ -1,6 +1,0 @@
-#!/usr/bin/env bash
-# 02-prereqs/solve-shell
-# This challenge has no attendee action — every assertion in check-shell is a
-# pure side-effect of track_scripts/setup-shell. Marking solve is a no-op.
-set -euo pipefail
-exit 0

@@ -6,7 +6,7 @@ teaser: HashiCorp Vault HA cluster + the 7-pod IVIA stack. About 20-30 minutes.
 tabs:
   - title: Terminal
     type: terminal
-    hostname: shell
+    hostname: cloud-client
 ---
 
 Tier 2 deploys two stateful workloads on top of the tier-1 EKS cluster:

@@ -6,7 +6,7 @@ teaser: Confirm the IBM Container Registry entitlement key and the IVIA trial ce
 tabs:
   - title: Terminal
     type: terminal
-    hostname: shell
+    hostname: cloud-client
 ---
 
 IBM Verify Access (IVIA) 11.0.2 runs self-hosted on EKS as the OIDC provider
@@ -35,7 +35,7 @@ Instruqt org level:
 
 {% hint style="info" %}
 You never see the org secrets in plaintext — Instruqt injects them as env
-vars at sandbox start, setup-shell writes them to the gitignored
+vars at sandbox start, setup-cloud-client writes them to the gitignored
 `infrastructure/services/terraform.tfvars`, and they are never echoed.
 {% endhint %}
 
