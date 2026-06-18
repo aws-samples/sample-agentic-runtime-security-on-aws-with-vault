@@ -93,23 +93,6 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 #-------------------------------------------------------------------------------
-# Workshop kubectl/helm context isolation (BLOCKING)
-#
-# lib-workshop-context.sh writes a PROCESS-ISOLATED kubeconfig pointing at
-# ONLY the workshop EKS cluster (alias `workshop`) and exports KUBECONFIG to
-# it. Every bare `kubectl` / `helm` call in this script + every child script
-# bash invokes inherits the isolated kubeconfig and CANNOT reach a non-workshop
-# cluster (GKE / other AWS / etc).
-# Reason: 2026-06-07 — bare `kubectl exec vault-0 -- vault status` inside
-# vault-init.sh routed to a GKE Vault on Bear's machine, silently reporting
-# `initialized=true` and skipping the actual workshop Vault init.
-# Skipped during --teardown-only / --nuke / --cleanup-only (cluster may be
-# gone) and --start-from prerequisites/bootstrap (cluster not built yet).
-#-------------------------------------------------------------------------------
-# Defer sourcing until after argparse runs so we can honor opt-out modes —
-# see "Workshop context bootstrap" block below.
-
-#-------------------------------------------------------------------------------
 # Color Constants (match existing scripts)
 #-------------------------------------------------------------------------------
 RED='\033[0;31m'
@@ -235,19 +218,6 @@ if [ -z "$WORKSHOP_REGION" ] && [ "$TEARDOWN_ONLY" = false ] && [ "$NUKE" = fals
     echo "Set AWS_REGION or ensure infrastructure/terraform.tfvars is present."
     exit 1
 fi
-
-#-------------------------------------------------------------------------------
-# Workshop context bootstrap — isolate KUBECONFIG to the workshop EKS cluster.
-# Skipped for modes where the cluster may not exist yet (cleanup-only) or has
-# been fully destroyed (teardown-only / nuke). For all other modes the source
-# call fails fast if the cluster can't be reached — refusing to silently fall
-# back to ~/.kube/config (which often defaults to GKE / other AWS / etc).
-#-------------------------------------------------------------------------------
-if [ "$TEARDOWN_ONLY" = true ] || [ "$NUKE" = true ] || [ "$CLEANUP_ONLY" = true ]; then
-    export WORKSHOP_CONTEXT_SKIP=true
-fi
-# shellcheck source=./lib-workshop-context.sh
-source "$SCRIPT_DIR/lib-workshop-context.sh"
 
 #-------------------------------------------------------------------------------
 # Phase 07.8 — Orphan TargetGroupBinding sweep

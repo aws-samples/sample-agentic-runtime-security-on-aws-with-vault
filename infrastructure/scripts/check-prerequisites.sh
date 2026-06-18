@@ -123,10 +123,6 @@ done
 # a single explicit summary at the end of check-prerequisites.sh ourselves
 # (combining install + check failures).
 export COMMON_CHECKS_SUMMARY=0
-# Skip workshop-cluster context isolation — this script runs BEFORE the
-# cluster is built (its job is to verify prerequisites are in place to build
-# the cluster), so requiring an isolated kubeconfig would block the check.
-export WORKSHOP_CONTEXT_SKIP=true
 # shellcheck source=common-checks.sh
 source "$SCRIPT_DIR/common-checks.sh"
 
