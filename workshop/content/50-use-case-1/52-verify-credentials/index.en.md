@@ -29,12 +29,12 @@ To see the Vault authentication behind the answer, port-forward and call `/query
 kubectl port-forward -n uc1 svc/uc1-agent-svc 8080:80
 ```
 
-In a second terminal:
+In a second terminal, send a SQL-shaped question — the agent's `query_database` tool routes this to Vault for a Just-In-Time Postgres credential, which we'll observe in Step 3:
 
 ```bash
 curl -s http://localhost:8080/query \
   -H "Content-Type: application/json" \
-  -d '{"query": "Summarize the employee PTO policy."}' \
+  -d '{"query": "Run a SQL query to list any tables in the database."}' \
   | jq '{answer: .answer, credential_metadata: .credential_metadata}'
 ```
 
@@ -42,7 +42,7 @@ The response surfaces the Vault authentication state:
 
 ```json
 {
-  "answer": "Paid time off accrues monthly based on tenure ...",
+  "answer": "I was unable to find any tables in the database ...",
   "credential_metadata": {
     "vault_authenticated": true,
     "vault_role": "uc1"
@@ -50,19 +50,18 @@ The response surfaces the Vault authentication state:
 }
 ```
 
-`vault_authenticated: true` with `vault_role: uc1` confirms the pod authenticated to Vault with its ServiceAccount identity — not a static key.
+`vault_authenticated: true` with `vault_role: uc1` confirms the pod authenticated to Vault with its ServiceAccount identity — not a static key. The "no tables" answer is itself a teaching moment: the `uc1-readonly` Vault role only GRANTs SELECT on schema `public` (empty here), so even though the agent successfully obtained a credential, that credential's reach is bounded by the role.
 
 ## Step 3 — Observe credential issuance in the Vault audit log
 
-Each `/query` triggers a fresh Vault credential issuance. Read the audit log for the database credential event:
+The SQL-shaped question in Step 2 made the agent call Vault for a Just-In-Time database credential. Read the audit log for that issuance event:
 
 ```bash
-kubectl logs -n vault vault-0 --tail=100 \
-  | grep '"type":"response"' \
-  | jq 'select(.request.path == "database/creds/uc1-readonly")
-        | {time: .time, path: .request.path,
-           display_name: .auth.display_name,
-           ttl: .response.data.lease_duration}' \
+kubectl logs -n vault vault-0 --since=15m \
+  | jq -c 'select(.type=="response" and .request.path=="database/creds/uc1-readonly")
+           | {time, path: .request.path,
+              display_name: .auth.display_name,
+              lease_id: .response.secret.lease_id}' \
   | tail -1
 ```
 
@@ -70,14 +69,14 @@ Expected:
 
 ```json
 {
-  "time": "2026-05-26T22:14:58Z",
+  "time": "2026-06-18T21:20:56Z",
   "path": "database/creds/uc1-readonly",
   "display_name": "kubernetes-uc1-uc1-retriever-sa",
-  "ttl": 900
+  "lease_id": "database/creds/uc1-readonly/FTDIUF5OVChJxHpUfKOHoaZz"
 }
 ```
 
-`display_name` is `kubernetes-uc1-uc1-retriever-sa` — the Vault Kubernetes mount, the role, and the ServiceAccount that authenticated. This entry is the first link in the audit-correlation chain that Use Case 3 completes end-to-end. The `ttl` of `900` seconds is the 15-minute database credential lifetime.
+`display_name` is `kubernetes-uc1-uc1-retriever-sa` — the Vault Kubernetes mount, the role, and the ServiceAccount that authenticated. `lease_id` is unique per issuance — every `query_database` call produces a fresh one, which is the audit-trail proof that credentials are JIT (not reused). This entry is the first link in the audit-correlation chain that Use Case 3 completes end-to-end. The 15-minute TTL comes from the `default_ttl = 900` on `vault_database_secret_backend_role.uc1_readonly` (visible via `vault read database/roles/uc1-readonly` from the previous page).
 
 ## Step 4 — ENFC-01 enforcement test (the thing that must NOT happen)
 
