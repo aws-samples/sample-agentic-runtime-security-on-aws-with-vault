@@ -29,11 +29,10 @@ You will enroll the app against the workshop's IBM Verify Access (IVIA) server
 during the Use Case 3 challenges — you don't need to enroll yet, just have the
 app installed.
 
-{% hint style="info" %}
-On your phone, allow IBM Verify to send push notifications. Without
-notifications, you won't see an Approve prompt when the CIBA refund flow runs,
-and Use Case 3 cannot complete end-to-end.
-{% endhint %}
+> [!NOTE]
+> On your phone, allow IBM Verify to send push notifications. Without
+> notifications, you won't see an Approve prompt when the CIBA refund flow runs,
+> and Use Case 3 cannot complete end-to-end.
 
 ## Sandbox AWS account
 

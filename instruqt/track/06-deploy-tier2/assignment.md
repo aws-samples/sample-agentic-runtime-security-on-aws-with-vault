@@ -68,10 +68,9 @@ Expected: seven `Running` pods plus the `ivia-autoconf-<hash>` Job showing
 `Completed`. If the autoconf Job is still running, give it 4-6 more minutes
 and re-check.
 
-{% hint style="info" %}
-The `~/vault-init.json` file contains the **Vault root token** — keep it
-private. The `nip.io` trusted certificate is real Let's Encrypt and uses the
-email you supplied during the tier-1 preflight prompt.
-{% endhint %}
+> [!IMPORTANT]
+> The `~/vault-init.json` file contains the **Vault root token** — keep it
+> private. The `nip.io` trusted certificate is real Let's Encrypt and uses the
+> email you supplied during the tier-1 preflight prompt.
 
 When all checks pass, advance to tier 3.
