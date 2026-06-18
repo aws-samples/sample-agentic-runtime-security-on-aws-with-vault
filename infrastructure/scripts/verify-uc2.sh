@@ -347,8 +347,22 @@ fi
 #     only be completed in a real browser. The full flow is validated by
 #     the workshop attendee in sub-module 61.
 #-------------------------------------------------------------------------------
-ivia_endpoint=$(kubectl get ingress -n verify-access ivia-wrp \
-    -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
+# Phase 07.8 D-02 scoped the WRP Ingress to the nip.io FQDN, so the raw
+# ALB hostname no longer matches the host rule and returns 404 on /isvaop
+# paths. Resolve the FQDN from .acme-state, which deploy-workshop.sh Step 7
+# writes after the LE cert is issued. Fall back to the raw ALB host if
+# .acme-state is missing (older deploys) so this check still has a chance.
+_acme_state_file="${SCRIPT_DIR}/../.acme-state"
+ivia_endpoint=""
+if [ -f "${_acme_state_file}" ]; then
+    # shellcheck source=/dev/null
+    . "${_acme_state_file}"
+    ivia_endpoint="${NIP_FQDN_WRP:-}"
+fi
+if [ -z "${ivia_endpoint}" ]; then
+    ivia_endpoint=$(kubectl get ingress -n verify-access ivia-wrp \
+        -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
+fi
 
 if [ -n "${ivia_endpoint}" ]; then
     discovery=$(curl -sLk "https://${ivia_endpoint}/isvaop/oauth2/.well-known/openid-configuration" \
@@ -358,10 +372,10 @@ if [ -n "${ivia_endpoint}" ]; then
         print_pass "OAuth discovery: IVIA OIDC Provider reachable (issuer=${issuer})"
     else
         print_fail "OAuth discovery failed" \
-            "GET /isvaop/oauth2/.well-known/openid-configuration did not return a valid OIDC document. Response: ${discovery:0:300}. Verify the WRP unauth ACL is attached to /isvaop/oauth2/.well-known and the iviaop pod is Ready."
+            "GET https://${ivia_endpoint}/isvaop/oauth2/.well-known/openid-configuration did not return a valid OIDC document. Response: ${discovery:0:300}. Verify the WRP unauth ACL is attached to /isvaop/oauth2/.well-known and the iviaop pod is Ready."
     fi
 else
-    print_warn "OAuth discovery check skipped — IVIA ALB hostname not resolved (check ivia-wrp Ingress)"
+    print_warn "OAuth discovery check skipped — neither NIP_FQDN_WRP (.acme-state) nor IVIA ALB hostname resolved"
 fi
 
 # Summary is printed automatically by the common-checks.sh EXIT trap
