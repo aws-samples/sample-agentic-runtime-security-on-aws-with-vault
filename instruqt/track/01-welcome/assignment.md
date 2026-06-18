@@ -5,6 +5,8 @@ type: challenge
 title: Welcome to Agentic Runtime Security on AWS
 teaser: Five control objectives, three use cases, one EKS cluster.
 difficulty: ""
+lab_config:
+  custom_layout: '{"root":{"children":[{"leaf":{"tabs":["assignment"],"activeTabId":"assignment","size":100}}],"orientation":"Horizontal"}}'
 enhanced_loading: null
 ---
 
