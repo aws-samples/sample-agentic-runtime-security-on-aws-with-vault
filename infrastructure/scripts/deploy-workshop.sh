@@ -862,12 +862,48 @@ spec:
   renewBefore: 720h
 EOF
 
-    # (6) Wait for cert-manager to drive HTTP-01 to Ready. 5 min budget.
-    if ! kubectl --context workshop wait \
-            --for=condition=Ready certificate/workshop-le-tls \
-            -n cert-manager --timeout=300s 2>&1; then
+    # (6) Wait for cert-manager to drive HTTP-01 to Ready, with auto-recovery.
+    #
+    # LE issues one authz per dnsNames entry (here: wrp + banking). Each authz
+    # is validated by LE hitting the cert-manager solver pod through the shared
+    # ALB. The ALB Load Balancer Controller takes 30-60s per solver Ingress to
+    # register the target group + propagate the listener rule. If LE polls a
+    # solver BEFORE its rule is live it gets EOF/connection-refused and marks
+    # that single authz `errored` — even though the parallel banking authz
+    # succeeds moments later when its rule IS live. The order stays `pending`
+    # but the errored authz never auto-recovers, so the cert never goes Ready.
+    #
+    # Fix: poll for Ready up to 15 min; every cycle, delete any challenge in
+    # state=errored — cert-manager auto-creates a fresh authz + solver Ingress,
+    # the ALB has time to register, and LE re-validates against a live rule.
+    # Attendees see one continuous spinner, no manual intervention.
+    local _cert_deadline=$(( $(date +%s) + 900 ))   # 15 min hard ceiling
+    local _cert_ready=false _cert_recovery_rounds=0
+    while [[ $(date +%s) -lt ${_cert_deadline} ]]; do
+        if kubectl --context workshop get certificate workshop-le-tls -n cert-manager \
+                -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null \
+                | grep -q "^True$"; then
+            _cert_ready=true
+            break
+        fi
+        # Re-trigger any errored challenges by deleting them — cert-manager
+        # owns the lifecycle and will issue a fresh authz + solver Ingress.
+        local _errored
+        _errored=$(kubectl --context workshop get challenges.acme.cert-manager.io \
+            -n cert-manager -o jsonpath='{range .items[?(@.status.state=="errored")]}{.metadata.name}{"\n"}{end}' 2>/dev/null)
+        if [[ -n "${_errored}" ]]; then
+            _cert_recovery_rounds=$(( _cert_recovery_rounds + 1 ))
+            while IFS= read -r _ch; do
+                kubectl --context workshop delete challenge "${_ch}" \
+                    -n cert-manager --ignore-not-found >/dev/null 2>&1
+            done <<< "${_errored}"
+            print_info "Step 7: re-triggered $(echo "${_errored}" | wc -l | tr -d ' ') errored ACME challenge(s) (recovery round ${_cert_recovery_rounds}); continuing to wait"
+        fi
+        sleep 15
+    done
+    if [[ "${_cert_ready}" != true ]]; then
         print_fail "Step 7: Certificate Ready=true" \
-            "cert-manager did not mark workshop-le-tls Ready within 300s. Investigate: kubectl describe certificate/workshop-le-tls -n cert-manager; kubectl get challenges,orders -n cert-manager"
+            "cert-manager did not mark workshop-le-tls Ready within 900s (after ${_cert_recovery_rounds} auto-recovery rounds). Investigate: kubectl describe certificate/workshop-le-tls -n cert-manager; kubectl get challenges,orders -n cert-manager"
         return 1
     fi
 
