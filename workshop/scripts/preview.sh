@@ -4,6 +4,12 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
 
 set -e
 
+# Always re-sync assets/ -> workshop/static/images/ before serving the preview.
+# The destination directory is gitignored, so without this step a freshly added
+# diagram in assets/ (e.g. ivia-stack.svg landed 2026-05-25) would silently 404
+# in the local preview while every Workshop Studio CDN copy worked fine.
+bash "$SCRIPT_DIR/package-assets.sh"
+
 if [ ! -f "$SCRIPT_DIR/../tmp/preview_build" ]; then
   echo "Download Workshop Studio preview utility..."
 
