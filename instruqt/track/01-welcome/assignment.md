@@ -77,11 +77,10 @@ Athena query joins IVIA decision logs + Vault audit logs + RDS pgaudit logs by
 `request_id` and answers "Which user authorized this action, when, against
 what system, and was access revoked?" **Demonstrates all 5 Objectives.**
 
-{% hint style="info" %}
-The sandbox AWS account, your SSH deploy key, and your `~/.aws/credentials`
-were configured automatically when this track started — you do **not** need
-to `aws configure` or `export AWS_PROFILE`. Try `aws sts get-caller-identity`
-in the Terminal tab to confirm.
-{% endhint %}
+> [!NOTE]
+> The sandbox AWS account, your SSH deploy key, and your `~/.aws/credentials`
+> were configured automatically when this track started — you do **not** need
+> to `aws configure` or `export AWS_PROFILE`. Try `aws sts get-caller-identity`
+> in the Terminal tab to confirm.
 
 When you're ready, advance to the next challenge.

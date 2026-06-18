@@ -55,12 +55,11 @@ Sign in as `jaime` / `WorkshopUser1!`. In the chat panel:
 5. The chat reports the refund succeeded with a `Status: approved` line and
    the new refund row appears in your transaction list.
 
-{% hint style="info" %}
-The push is a real MMFA notification, not a simulation. If you don't see it,
-make sure (a) the IBM Verify app has notifications enabled, (b) your phone
-has data/wifi, (c) the device shows in the Authenticators list at the URL
-from Step 1.
-{% endhint %}
+> [!NOTE]
+> The push is a real MMFA notification, not a simulation. If you don't see it,
+> make sure (a) the IBM Verify app has notifications enabled, (b) your phone
+> has data/wifi, (c) the device shows in the Authenticators list at the URL
+> from Step 1.
 
 ## What just happened (in plain English)
 

@@ -44,11 +44,10 @@ later (they're cached in `terraform.tfvars` so subsequent tiers don't re-prompt)
 The deploy is idempotent — if anything fails, re-running the same command
 converges (Project CLAUDE.md mandate).
 
-{% hint style="info" %}
-First-time tier-1 deploy takes ~25-35 minutes — EKS (~12 min), RDS (~10 min
-including pgaudit reboot), Bedrock KB (~3 min), add-ons (~5 min). Timing
-tracks AWS API response, not your sandbox.
-{% endhint %}
+> [!NOTE]
+> First-time tier-1 deploy takes ~25-35 minutes — EKS (~12 min), RDS (~10 min
+> including pgaudit reboot), Bedrock KB (~3 min), add-ons (~5 min). Timing
+> tracks AWS API response, not your sandbox.
 
 ## Inspect what landed
 
