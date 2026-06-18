@@ -128,20 +128,6 @@ if [ "$local_exclusive" -gt 1 ]; then
 fi
 
 #-------------------------------------------------------------------------------
-# Workshop context bootstrap — isolate KUBECONFIG to the workshop EKS cluster.
-# In modes where the cluster may already be gone (--aws-only,
-# --post-destroy-only), skip isolation; the script's own k8s_cleanup checks
-# tolerate a missing cluster. For default full-nuke and --keep-eks, the
-# cluster exists at script start and isolation is required so phase_k8s_cleanup
-# cannot accidentally hit a non-workshop cluster.
-#-------------------------------------------------------------------------------
-if [ "$AWS_ONLY" = true ] || [ "$POST_DESTROY_ONLY" = true ]; then
-    export WORKSHOP_CONTEXT_SKIP=true
-fi
-# shellcheck source=./lib-workshop-context.sh
-source "$SCRIPT_DIR/lib-workshop-context.sh"
-
-#-------------------------------------------------------------------------------
 # Region resolution (canonical contract: terraform.tfvars carries the literal
 # "us-west-2" — everything else reads it from there or $AWS_REGION).
 # Falls back to terraform.tfvars.example if terraform.tfvars doesn't exist.
