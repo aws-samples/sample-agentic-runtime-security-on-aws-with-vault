@@ -3,67 +3,72 @@ title: 'Deploy the Workshop'
 weight: 31
 ---
 
-One command deploys the whole workshop. `deploy-workshop.sh` provisions all three Terraform tiers and runs every post-deploy configuration step — you never run `terraform apply` by hand.
+Three Terraform roots, applied in dependency order. Each downstream root reads the upstream root's state, so Terraform enforces the ordering for you. Run `bootstrap.sh` once, then one tier at a time — natural checkpoints between EKS, Vault + IVIA, and the Use Case workloads.
 
-The deploy is split into three local-state roots, applied in dependency order. Each downstream root reads the upstream root's state, so Terraform enforces the order for you:
-
-- **Tier 1** — `infrastructure/` — VPC, EKS, add-ons, RDS, Bedrock Knowledge Base, ECR, IAM
+- **Tier 1** — `infrastructure/` — VPC, EKS, add-ons, RDS, Bedrock KB, ECR, IAM
 - **Tier 2** — `infrastructure/services/` — Vault server + IBM Verify Identity Access
-- **Tier 3** — `infrastructure/workloads/` — the Use Case 1, 2, and 3 agent pods
+- **Tier 3** — `infrastructure/workloads/` — Use Case 1, 2, 3 agent pods
 
-## Step 1 — Bootstrap your tfvars and roots
+## Step 1 — Bootstrap (one-time)
 
-Run `bootstrap.sh` once. It seeds all three `terraform.tfvars` files from their templates, stamps the tier-3 ECR image URIs and the tier-1 admin ARN from your AWS account and region, and runs `terraform init` in all three roots:
+Seeds the three `terraform.tfvars` files from their templates, stamps the tier-3 ECR image URIs + tier-1 admin ARN from your account/region, and runs `terraform init` in all three roots. Idempotent.
 
 ```bash
 bash infrastructure/scripts/bootstrap.sh
 ```
 
-It is idempotent — safe to re-run, and it never overwrites values you have already set.
+## Step 2 — Deploy Tier 1 (core infrastructure)
 
-## Step 2 — Deploy
+VPC, EKS cluster, managed add-ons (cert-manager, external-dns, AWS Load Balancer Controller), RDS PostgreSQL with pgaudit, Bedrock KB, ECR repos, IAM, and the audit substrate. The Use Case 1/2/3 images are built and pushed to ECR at the end of this tier. **No application pods yet.**
 
 ```bash
-bash infrastructure/scripts/deploy-workshop.sh
+bash infrastructure/scripts/deploy-workshop.sh --tier 1
 ```
 
-On the **first run**, the script prompts for the three values it cannot derive or store in the repo — paste each when asked:
+On your **first run** the script prompts for three values it cannot store in the repo — paste each when asked:
 
-- **Let's Encrypt contact email** — a real, deliverable address for the TLS certificate (the `example.com` placeholder is rejected).
+- **Let's Encrypt contact email** — a real, deliverable address for TLS certificate issuance/renewal notices (the `example.com` placeholder is rejected).
 - **IBM Container Registry entitlement key** — from [Obtain IVIA Licenses](../../20-prerequisites/22-ivia-licensing/) (input hidden).
 - **IBM Verify MMFA push client secret** — required by Use Case 3 (input hidden).
 
-The script writes them into the gitignored `terraform.tfvars` files, so re-runs reuse them and never prompt again. It then prints a pass/fail summary per step — every step must pass before you continue to verification.
+The script writes them into the gitignored `terraform.tfvars` files, so subsequent tiers and re-runs reuse them silently.
 
-:::alert{header="Timing & re-runs" type="info"}
-First deploy takes ~35–50 min (EKS ~12, RDS ~10 incl. pgaudit reboot, Bedrock KB ~3, add-ons ~5, then Vault + IVIA + ACME + workloads) — timing tracks AWS API response, not your machine. The script is idempotent: if a step fails, fix the cause and re-run; converged work is skipped.
+:::alert{header="Tier 1 timing" type="info"}
+~22–30 min on first run — EKS ~12 min, RDS ~10 min (incl. pgaudit reboot), Bedrock KB ~3 min, add-ons + image build ~5 min. Timing tracks AWS API response.
 :::
 
-:::alert{header="If a step fails — resume without redoing the slow stages" type="warning"}
-The script hard-stops on the first failed step and prints a `Fix:` hint. Fix the cause (for example, **start Docker Desktop** if the image build failed), then resume. Once the cluster, images, and Vault init are already done, skip those slow stages and re-run the configuration steps:
+## Step 3 — Deploy Tier 2 (Vault + IVIA)
+
+Applies Vault HA + IVIA, initializes Vault (`~/vault-init.json`), issues the Let's Encrypt `nip.io` cert, imports it into ACM, re-applies IVIA on the trusted host, configures Vault auth/policies/secrets engines, and verifies the IVIA OIDC discovery endpoint.
 
 ```bash
-bash infrastructure/scripts/deploy-workshop.sh --skip-infra --skip-vault-init --skip-build
+bash infrastructure/scripts/deploy-workshop.sh --tier 2
 ```
 
-This re-applies Tier 2 (no-op if unchanged), re-runs the ACME/issuer patch, then **Configure Vault** and everything after it. Re-running is always safe — converged work is skipped. **Configure Vault** retries the Vault connection for up to 30s and tolerates a standby Raft node; a persistent "Cannot reach Vault" means the Vault pods aren't all `Running` yet — check `kubectl -n vault get pods`, then re-run the command above.
+:::alert{header="Tier 2 timing" type="info"}
+~10–15 min — Vault Raft converge ~3 min, IVIA pods ~5 min, ACME issuance + ACM import + IVIA re-apply ~3 min, Vault + IVIA configure ~2 min.
 :::
 
-## What it runs, in order
+## Step 4 — Deploy Tier 3 (Use Case workloads)
 
-1. **Apply tier-1** — VPC, EKS, add-ons (cert-manager, external-dns, AWS Load Balancer Controller), RDS, Bedrock KB, ECR, IAM, audit substrate. *No pods yet.*
-2. **Configure kubectl** (`aws eks update-kubeconfig`)
-3. **Build & push** the Use Case 1/2/3 images (`build-images.sh`)
-4. **Load Balancer Controller readiness gate**
-5. **Apply tier-2** — Vault server + IVIA
-6. **Initialize Vault** (`vault-init.sh`) — writes `~/vault-init.json`
-7. **Issue ACME cert**, sync to ACM, re-apply IVIA on the trusted `nip.io` host
-8. **Configure Vault** (`vault-configure.sh`) — auth, policies, secrets engines
-9. **Configure IVIA** (`ivia-configure.sh`) — verify OIDC discovery
-10. **Apply tier-3** — Use Case agent pods, then roll deployments
-11. **Shared-ALB assertion** + IVIA redirect reconcile
-12. **Verify** OpenLDAP user `oscar` was seeded
-13. **Seed the banking database** (`seed-banking-db.sh`)
-14. **Ingest the Bedrock KB corpus** (`sync-bedrock-kb.sh`)
+Applies the Use Case 1, 2, 3 agent pods, rolls the deployments to pick up the freshly pushed images, runs the shared-ALB assertion + IVIA redirect reconcile, verifies the OpenLDAP `oscar` user, seeds the banking database, and ingests the Bedrock KB corpus.
 
-Tier-1 outputs referenced later: `kubectl_config_command`, `kb_id`, `rds_endpoint`.
+```bash
+bash infrastructure/scripts/deploy-workshop.sh --tier 3
+```
+
+:::alert{header="Tier 3 timing" type="info"}
+~5–10 min — workloads apply ~3 min, deployment rollouts ~2 min, DB seed + KB ingest ~3 min.
+:::
+
+## Re-runs and recovery
+
+Every step is idempotent — re-running a tier converges what's missing and skips what's already done. If a step fails the script hard-stops on it and prints a `Fix:` hint; fix the cause and re-run the same `--tier N` command.
+
+When the cluster, images, and Vault init are already done, the slow stages can be skipped on a tier-1 re-run:
+
+```bash
+bash infrastructure/scripts/deploy-workshop.sh --tier 1 --skip-infra --skip-build --skip-vault-init
+```
+
+Tier-1 outputs referenced by later pages: `kubectl_config_command`, `kb_id`, `rds_endpoint`.

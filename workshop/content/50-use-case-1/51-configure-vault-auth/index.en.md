@@ -11,17 +11,18 @@ This page explains what was configured and why — understanding the Vault trust
 
 ## Step 1 — Inspect the Vault role binding
 
-Point the `vault` CLI at Vault and authenticate with the root token so the reads below are permitted (without `VAULT_TOKEN` the CLI sends no credential and Vault returns `403 permission denied`):
+Point the `vault` CLI at Vault and authenticate with the root token so the reads below are permitted (without `VAULT_TOKEN` the CLI sends no credential and Vault returns `403 permission denied`). One paste — kills any prior port-forward, opens a fresh one, exports `VAULT_ADDR` + `VAULT_TOKEN`, and prints the Web UI URL + token for the browser-side step further down:
 
 ```bash
-export VAULT_ADDR=http://localhost:8200
-
-# If you need to port-forward:
-kubectl port-forward -n vault svc/vault 8200:8200 &
-
-# Authenticate the local CLI with the root token written during Vault init
-export VAULT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)
+pkill -f "kubectl port-forward -n vault svc/vault 8200:8200" 2>/dev/null; \
+  kubectl port-forward -n vault svc/vault 8200:8200 >/dev/null 2>&1 & \
+  sleep 2 && \
+  export VAULT_ADDR=http://localhost:8200 && \
+  export VAULT_TOKEN=$(jq -r '.root_token' ~/vault-init.json) && \
+  echo && echo "Vault Web UI: $VAULT_ADDR/ui" && echo "Root token:   $VAULT_TOKEN"
 ```
+
+To follow along in the browser too, open the **Vault Web UI** URL printed above, leave **Token** selected as the auth method, and paste the printed root token.
 
 Read the Kubernetes auth role that binds `uc1-retriever-sa` to the `uc1-readonly` policy:
 

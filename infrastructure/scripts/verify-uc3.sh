@@ -378,23 +378,37 @@ fi
 #-------------------------------------------------------------------------------
 # Check E — CIBA consent endpoint reachable via WRP ALB (the money check)
 #-------------------------------------------------------------------------------
+# Phase 07.8 D-02 scoped the WRP Ingress to the nip.io FQDN, so the raw
+# ALB hostname no longer matches the host rule and returns 404 on /isvaop
+# paths. Resolve the FQDN from .acme-state (deploy-workshop.sh Step 7
+# writes it after the LE cert is issued); fall back to the raw ALB host
+# only if .acme-state is absent (older deploys). Switched http://→https://
+# because the WRP only serves /isvaop over HTTPS post-Phase-07.8.
+_acme_state_file="${SCRIPT_DIR}/../.acme-state"
 wrp_alb_host=""
-wrp_alb_host=$(kubectl get ingress -n verify-access ivia-wrp \
-    -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
+if [ -f "${_acme_state_file}" ]; then
+    # shellcheck source=/dev/null
+    . "${_acme_state_file}"
+    wrp_alb_host="${NIP_FQDN_WRP:-}"
+fi
+if [ -z "${wrp_alb_host}" ]; then
+    wrp_alb_host=$(kubectl get ingress -n verify-access ivia-wrp \
+        -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
+fi
 
 if [ -n "${wrp_alb_host}" ]; then
-    ciba_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
-        "http://${wrp_alb_host}/isvaop/oauth2/ciba_user_authorize/test-check" 2>/dev/null || echo "")
+    ciba_code=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 10 \
+        "https://${wrp_alb_host}/isvaop/oauth2/ciba_user_authorize/test-check" 2>/dev/null || echo "")
     if [ -n "${ciba_code}" ] && [ "${ciba_code}" != "404" ]; then
         print_pass "CIBA consent endpoint: HTTP ${ciba_code} via WRP (not 404) — WRP is handling the request"
     elif [ "${ciba_code}" = "404" ]; then
         print_fail "CIBA consent endpoint: HTTP 404 — still broken" \
-            "WRP junction or ACL misconfigured. CIBA consent URL must not return 404. Check WRP junction definition for /isvaop path. WRP ALB: ${wrp_alb_host}"
+            "WRP junction or ACL misconfigured. CIBA consent URL must not return 404. Check WRP junction definition for /isvaop path. WRP host: ${wrp_alb_host}"
     else
-        print_warn "CIBA consent endpoint: no HTTP response from WRP ALB — ALB may still be provisioning. Check: kubectl get ingress -n verify-access ivia-wrp"
+        print_warn "CIBA consent endpoint: no HTTP response from WRP — host may still be provisioning. Check: kubectl get ingress -n verify-access ivia-wrp"
     fi
 else
-    print_warn "CIBA consent endpoint: skipped — WRP Ingress has no ALB hostname yet. Check: kubectl get ingress -n verify-access ivia-wrp"
+    print_warn "CIBA consent endpoint: skipped — neither NIP_FQDN_WRP (.acme-state) nor WRP Ingress ALB hostname resolved"
 fi
 
 #-------------------------------------------------------------------------------

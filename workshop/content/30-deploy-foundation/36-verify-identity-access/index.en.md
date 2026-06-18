@@ -47,9 +47,10 @@ kubectl wait --for=condition=complete job \
   -n verify-access --timeout=10m
 ```
 
-### Autoconf failure
+:::alert{header="STOP — only run this block if the ivia-autoconf Job shows STATUS=Error" type="warning"}
+**Skip this block entirely if the autoconf Job shows `Completed` above** — the commands below DELETE working state. They are recovery-only.
 
-If the autoconf job shows `Error`, inspect the log:
+If — and only if — `kubectl get pods -n verify-access` shows the autoconf Job with `STATUS=Error`, inspect the log to find the failure:
 
 ```bash
 kubectl logs -n verify-access -l app.kubernetes.io/name=ivia-autoconf
@@ -62,6 +63,7 @@ terraform -chdir=infrastructure state rm 'module.ivia.kubernetes_job_v1.ivia_aut
 kubectl delete job -n verify-access -l app.kubernetes.io/name=ivia-autoconf
 terraform -chdir=infrastructure apply
 ```
+:::
 
 ## Step 2 — Confirm the WRP ALB Ingress
 
