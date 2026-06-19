@@ -9,7 +9,12 @@ The workshop expects these versions: kubectl 1.34.x, helm 3.12+, terraform 1.10+
 
 The pre-flight script installs them all and verifies your AWS account in one step. Manual install steps are intentionally omitted — running the script is the documented path. Windows users: use WSL2 (Linux subsystem).
 
-**Docker is the one exception you install yourself** — install **Docker Desktop** (macOS/Windows) or **Docker Engine** (Linux) and make sure it is **running** before you deploy. The pre-flight script checks for it but does not install it; the deploy builds and pushes the Use Case agent container images with it.
+**A container runtime is the one exception you install *and start* yourself — Docker *or* Podman.** The deploy builds and pushes the Use Case agent container images with whichever one you have; the pre-flight script auto-detects it but does not install it. Installing it is not enough — the engine must be **running** before you deploy (the pre-flight check fails with a clear "installed but not running" message otherwise). Set up **one** of:
+
+- **Docker** — install Docker Desktop (macOS/Windows) or Docker Engine (Linux), then **start it** and confirm `docker info` succeeds.
+- **Podman** — `brew install podman` (macOS) then `podman machine init && podman machine start`; on Linux install Podman 4.0+ from [podman.io](https://podman.io/docs/installation). Confirm `podman info` succeeds.
+
+When both are installed, the scripts prefer Podman; force one with `WORKSHOP_CONTAINER_CLI=docker` (or `=podman`).
 
 ## Run the pre-flight script
 
@@ -34,7 +39,7 @@ kubectl version --client
 helm version --short
 vault version
 aws --version
-docker info --format '{{.ServerVersion}}'   # confirms the Docker daemon is running
+docker info --format '{{.ServerVersion}}' 2>/dev/null || podman info --format '{{.Version.Version}}'   # confirms your container runtime is ready
 ```
 
 ## Service quotas
