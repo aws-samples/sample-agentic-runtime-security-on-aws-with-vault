@@ -203,3 +203,132 @@ print_summary() {
 if [ "$COMMON_CHECKS_SUMMARY" = "1" ]; then
     trap 'print_summary; exit $?' EXIT
 fi
+
+#-------------------------------------------------------------------------------
+# Container runtime detection (Podman OR Docker)
+#
+# The workshop builds + pushes the Use Case agent images with whichever OCI
+# runtime the attendee has. detect_container_runtime exports
+# WORKSHOP_CONTAINER_CLI=podman|docker; container_build abstracts the one
+# behavioral difference between the two (Docker needs `buildx build --load`,
+# Podman uses plain `build`). check-prerequisites.sh + the three build scripts
+# all consume these two helpers.
+#
+# Preference order: podman -> docker. Podman is rootless-by-default, daemonless,
+# and OCI-native; Docker remains a first-class fallback. Override the detection
+# with WORKSHOP_CONTAINER_CLI=docker (or =podman) in the environment.
+#
+# Minimum Podman major version: plain `podman build --platform` needs Podman
+# 4.0+. Older 3.x is rejected with an actionable error (it requires buildah).
+#-------------------------------------------------------------------------------
+PODMAN_MIN_MAJOR=4
+
+# Best-effort version string for a runtime CLI; empty on failure. Uses the
+# stable `--version` output (NOT `--format`, whose template field name varies
+# across releases and can return empty — which would let the version floor
+# fail-open).
+_container_runtime_version() {
+    case "$1" in
+        docker) docker --version 2>/dev/null | awk '{print $3}' | tr -d ',' ;;
+        podman) podman --version 2>/dev/null | awk '{print $3}' ;;
+    esac
+}
+
+# Validate Podman is usable: machine running (macOS) + version >= floor.
+# Records a failure + returns 1 on any problem.
+_validate_podman() {
+    if ! podman info >/dev/null 2>&1; then
+        if [ "$(uname)" = "Darwin" ]; then
+            print_info "Podman detected but its machine is not running — attempting 'podman machine start'"
+            podman machine start >/dev/null 2>&1 || true
+        fi
+        if ! podman info >/dev/null 2>&1; then
+            print_fail "podman is installed but not responsive" \
+                "macOS: run \`podman machine init && podman machine start\`. Linux: ensure rootless podman is configured (\`podman info\` must succeed). Or set WORKSHOP_CONTAINER_CLI=docker to use Docker instead."
+            return 1
+        fi
+    fi
+    local major
+    major="$(_container_runtime_version podman | cut -d. -f1)"
+    if [ -n "$major" ] && [ "$major" -lt "$PODMAN_MIN_MAJOR" ] 2>/dev/null; then
+        print_fail "podman ${major}.x is too old (need >= ${PODMAN_MIN_MAJOR}.0)" \
+            "Upgrade Podman to 4.0+ (https://podman.io/docs/installation), or set WORKSHOP_CONTAINER_CLI=docker to build with Docker instead."
+        return 1
+    fi
+    return 0
+}
+
+# Validate Docker is usable: daemon up + buildx plugin present (the --load
+# build path needs buildx).
+_validate_docker() {
+    if ! docker info >/dev/null 2>&1; then
+        print_fail "docker is installed but the daemon is not running" \
+            "Start Docker Desktop (macOS/Windows) or the docker service (Linux: \`sudo systemctl start docker\`), then re-run. The image build needs a running daemon."
+        return 1
+    fi
+    if ! docker buildx version >/dev/null 2>&1; then
+        print_fail "docker found but 'docker buildx' is not installed" \
+            "Install the Buildx plugin (bundled with Docker Desktop 4+; minimal Linux: \`apt-get install docker-buildx-plugin\`, or https://github.com/docker/buildx#installing). Or set WORKSHOP_CONTAINER_CLI=podman."
+        return 1
+    fi
+    return 0
+}
+
+# Detect + validate the container runtime; export WORKSHOP_CONTAINER_CLI.
+# Preference podman -> docker; honors a pinned WORKSHOP_CONTAINER_CLI override.
+# Idempotent (short-circuits once validated). Prints its own pass/fail line, so
+# callers must NOT also print_pass. Returns 0 on success, 1 on failure — the
+# caller decides whether to continue (check-prerequisites accumulates and keeps
+# going) or `|| exit 1` (build scripts can't proceed without a runtime).
+detect_container_runtime() {
+    if [ "${_WORKSHOP_RUNTIME_OK:-0}" = "1" ] && [ -n "${WORKSHOP_CONTAINER_CLI:-}" ]; then
+        return 0
+    fi
+
+    local cli="${WORKSHOP_CONTAINER_CLI:-}" pinned=false
+    [ -n "$cli" ] && pinned=true
+
+    if [ -z "$cli" ]; then
+        if   command -v podman >/dev/null 2>&1; then cli=podman
+        elif command -v docker >/dev/null 2>&1; then cli=docker
+        else
+            print_fail "no container runtime found (neither podman nor docker)" \
+                "Install ONE of: Podman — macOS \`brew install podman && podman machine init && podman machine start\`, Linux https://podman.io/docs/installation; OR Docker — Desktop https://www.docker.com/products/docker-desktop/, Linux Engine https://docs.docker.com/engine/install/. The deploy builds + pushes the Use Case agent images with whichever is present."
+            return 1
+        fi
+    fi
+
+    if ! command -v "$cli" >/dev/null 2>&1; then
+        print_fail "WORKSHOP_CONTAINER_CLI=${cli} but '${cli}' is not on PATH" \
+            "Install ${cli}, or unset WORKSHOP_CONTAINER_CLI to auto-detect."
+        return 1
+    fi
+
+    case "$cli" in
+        podman) _validate_podman || return 1 ;;
+        docker) _validate_docker || return 1 ;;
+        *) print_fail "unsupported WORKSHOP_CONTAINER_CLI=${cli}" \
+               "Supported values: podman, docker. Unset to auto-detect." ; return 1 ;;
+    esac
+
+    export WORKSHOP_CONTAINER_CLI="$cli"
+    _WORKSHOP_RUNTIME_OK=1
+    local v; v="$(_container_runtime_version "$cli")"
+    local suffix=""; [ "$pinned" = true ] && suffix=" [pinned via WORKSHOP_CONTAINER_CLI]"
+    print_pass "Container runtime: ${cli}${v:+ (v${v})}${suffix}"
+    return 0
+}
+
+# Run a build with the detected runtime, abstracting ONLY the
+# `buildx build --load` (docker) vs `build` (podman) difference. ALL build
+# flags pass through verbatim, so --platform/--no-cache/--tag/--file/--build-arg/
+# context all work, and the call survives banking-app's `run` dry-run wrapper.
+#   container_build --platform linux/amd64 --no-cache \
+#       --tag "$URI" --file "$DIR/Dockerfile" "$DIR"
+container_build() {
+    if [ "${WORKSHOP_CONTAINER_CLI}" = "docker" ]; then
+        docker buildx build --load "$@"
+    else
+        podman build "$@"
+    fi
+}
