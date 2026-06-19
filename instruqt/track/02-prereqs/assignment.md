@@ -71,6 +71,19 @@ terraform version && kubectl version --client && helm version --short \
 The minimum versions the workshop expects are: kubectl 1.34.x, helm 3.12+,
 terraform 1.10+, vault 1.21.x, aws CLI v2.
 
+## Container runtime
+
+The sandbox also ships a container runtime — **Docker or Podman**. The deploy
+builds and pushes the Use Case agent images with whichever is present; the
+workshop scripts auto-detect it via `detect_container_runtime` in
+`infrastructure/scripts/common-checks.sh` (preference Podman → Docker; override
+with `WORKSHOP_CONTAINER_CLI=docker`). Confirm which one this sandbox has:
+
+```bash
+command -v podman && podman info --format '{{.Version.Version}}' \
+  || command -v docker && docker info --format '{{.ServerVersion}}'
+```
+
 ## Service quotas + Bedrock model access
 
 These are validated automatically in the next challenge by
