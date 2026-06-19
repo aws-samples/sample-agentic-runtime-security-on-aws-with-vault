@@ -146,12 +146,8 @@ run() {
 #-------------------------------------------------------------------------------
 print_info "Running pre-flight checks..."
 
-# Docker
-if ! command -v docker &>/dev/null; then
-    print_fail "docker not found — install Docker Desktop or Docker CLI"
-    exit 1
-fi
-print_pass "docker available"
+# Container runtime (Podman OR Docker)
+detect_container_runtime || exit 1
 
 # AWS CLI
 if ! command -v aws &>/dev/null; then
@@ -190,9 +186,9 @@ fi
 #-------------------------------------------------------------------------------
 # ECR login
 #-------------------------------------------------------------------------------
-print_info "Authenticating Docker to ECR..."
+print_info "Authenticating ${WORKSHOP_CONTAINER_CLI} to ECR..."
 if ! run aws ecr get-login-password --region "${REGION}" | \
-    run docker login \
+    run "${WORKSHOP_CONTAINER_CLI}" login \
         --username AWS \
         --password-stdin \
         "${AWS_ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"; then
@@ -218,24 +214,23 @@ build_and_push() {
         return 1
     fi
 
-    if run docker buildx build \
+    if run container_build \
         --platform linux/amd64 \
         --no-cache \
-        --load \
         --tag "${image_uri}" \
         --file "${dockerfile}" \
         "${context_dir}"; then
         print_pass "Built ${image_uri}"
     else
-        print_fail "docker build failed for ${tag}"
+        print_fail "container build failed for ${tag}"
         return 1
     fi
 
     print_info "Pushing ${tag}..."
-    if run docker push "${image_uri}"; then
+    if run "${WORKSHOP_CONTAINER_CLI}" push "${image_uri}"; then
         print_pass "Pushed ${image_uri}"
     else
-        print_fail "docker push failed for ${tag}"
+        print_fail "image push failed for ${tag}"
         return 1
     fi
 
