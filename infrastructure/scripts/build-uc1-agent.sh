@@ -81,8 +81,7 @@ ECR_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/${ECR_REPO_NAME}:${IM
 print_info "ECR URI: ${ECR_URI}"
 
 print_info "Running pre-flight checks..."
-command -v docker &>/dev/null || { print_fail "docker not found"; exit 1; }
-print_pass "docker available"
+detect_container_runtime || exit 1
 command -v aws &>/dev/null || { print_fail "aws CLI not found"; exit 1; }
 print_pass "aws CLI available"
 [[ -d "${AGENT_DIR}" ]] || { print_fail "Agent source missing: ${AGENT_DIR}"; exit 1; }
@@ -98,8 +97,8 @@ else
 fi
 
 if [[ "$DRY_RUN" == true ]]; then
-    print_info "[DRY-RUN] Would build: docker build --platform linux/amd64 -t ${ECR_URI} ${AGENT_DIR}"
-    print_info "[DRY-RUN] Would push: docker push ${ECR_URI}"
+    print_info "[DRY-RUN] Would build with ${WORKSHOP_CONTAINER_CLI}: container_build --platform linux/amd64 --tag ${ECR_URI} ${AGENT_DIR}"
+    print_info "[DRY-RUN] Would push: ${WORKSHOP_CONTAINER_CLI} push ${ECR_URI}"
     print_pass "UC1 agent image built and pushed (dry-run)"
     echo ""
     echo "  ${ECR_URI}"
@@ -109,9 +108,9 @@ if [[ "$DRY_RUN" == true ]]; then
     exit 0
 fi
 
-print_info "Authenticating Docker to ECR..."
+print_info "Authenticating ${WORKSHOP_CONTAINER_CLI} to ECR..."
 aws ecr get-login-password --region "${REGION}" | \
-    docker login --username AWS --password-stdin \
+    "${WORKSHOP_CONTAINER_CLI}" login --username AWS --password-stdin \
         "${AWS_ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com" >/dev/null 2>&1 || {
     print_fail "ECR login failed"; exit 1
 }
@@ -121,17 +120,16 @@ print_info "Building uc1-agent (--platform linux/amd64, --no-cache)..."
 # --no-cache: always rebuild every layer so source/dep changes can never be
 # masked by a stale Docker layer cache. Paired with the deployment's
 # imagePullPolicy: Always so the cluster always pulls the freshly pushed :latest.
-docker buildx build \
+container_build \
     --platform linux/amd64 \
     --no-cache \
-    --load \
     --tag "${ECR_URI}" \
     --file "${AGENT_DIR}/Dockerfile" \
-    "${AGENT_DIR}" || { print_fail "docker build failed"; exit 1; }
+    "${AGENT_DIR}" || { print_fail "container build failed"; exit 1; }
 print_pass "Built ${ECR_URI}"
 
 print_info "Pushing uc1-agent..."
-docker push "${ECR_URI}" || { print_fail "docker push failed"; exit 1; }
+"${WORKSHOP_CONTAINER_CLI}" push "${ECR_URI}" || { print_fail "image push failed"; exit 1; }
 print_pass "Pushed ${ECR_URI}"
 
 echo ""
