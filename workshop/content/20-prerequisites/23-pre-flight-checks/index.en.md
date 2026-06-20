@@ -16,6 +16,24 @@ The pre-flight script installs them all and verifies your AWS account in one ste
 
 When both are installed, the scripts prefer Podman; force one with `WORKSHOP_CONTAINER_CLI=docker` (or `=podman`).
 
+:::alert{header="Apple Silicon + Podman: Rosetta is required" type="warning"}
+On Apple Silicon Macs (M1–M4), **Podman MUST have Rosetta enabled.** The Use Case images are built for `linux/amd64`; without Rosetta, Podman falls back to QEMU emulation, which crashes the banking-UI image build (the JavaScript bundler dies with a `fatal error: lfstack.push`). A known Podman bug ([containers/podman#28181](https://github.com/containers/podman/issues/28181)) reports `Rosetta: true` while Rosetta is actually inactive — so verify it.
+
+```bash
+# Rosetta active when this prints a 'rosetta' entry AND qemu-x86_64 is absent:
+podman machine ssh ls /proc/sys/fs/binfmt_misc/ | grep -E 'rosetta|qemu-x86_64'
+```
+
+If `qemu-x86_64` is present (or `rosetta` is missing), enable Rosetta and restart the machine:
+
+```bash
+podman machine ssh 'sudo touch /etc/containers/enable-rosetta'
+podman machine stop && podman machine start
+```
+
+Docker Desktop uses Rosetta automatically — this note is Podman-only. Native `amd64` Linux hosts are unaffected (no emulation).
+:::
+
 ## Run the pre-flight script
 
 The pre-flight script auto-installs all CLI tools, then verifies Bedrock model access, AWS service quotas, and IAM permissions in one shot. It continues past individual failures and emits a consolidated summary with copy-paste remediation for each failure.
