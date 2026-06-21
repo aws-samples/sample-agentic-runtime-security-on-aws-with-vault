@@ -436,20 +436,12 @@ else
         "Install via the install loop above, or manually from https://developer.hashicorp.com/terraform/install. Minimum: ${TERRAFORM_MIN_VERSION}"
 fi
 
-# docker — required by build-images.sh (deploy Step 3) to build + push the agent
-# images. Check both the CLI and a running daemon; the build fails if either is
-# missing.
-if command -v docker >/dev/null 2>&1; then
-    if docker info >/dev/null 2>&1; then
-        print_pass "docker present and daemon running"
-    else
-        print_fail "docker installed but the daemon is not running" \
-            "Start Docker Desktop (macOS/Windows) or the docker service (Linux: \`sudo systemctl start docker\`), then re-run. The image build in deploy-workshop.sh needs a running daemon."
-    fi
-else
-    print_fail "docker not found" \
-        "Install Docker Desktop (https://www.docker.com/products/docker-desktop/) or Docker Engine on Linux. deploy-workshop.sh builds and pushes the Use Case agent images with it."
-fi
+# Container runtime (Podman OR Docker) — required by build-images.sh (deploy
+# Step 3) to build + push the agent images. detect_container_runtime validates
+# the runtime and prints its own pass/fail line. NO `|| exit 1` here — this
+# script is continue-on-failure (the EXIT trap prints the consolidated summary),
+# so a missing/broken runtime is recorded and the remaining checks still run.
+detect_container_runtime
 
 echo
 fi  # end if [ "$SKIP_TOOLS" = true ] ... else  (covers Sections 1 + 1.5)

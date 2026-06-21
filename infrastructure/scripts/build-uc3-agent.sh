@@ -122,8 +122,7 @@ print_info "ECR URI: ${ECR_URI}"
 #-------------------------------------------------------------------------------
 print_info "Running pre-flight checks..."
 
-command -v docker &>/dev/null || { print_fail "docker not found — install Docker Desktop or Docker CLI"; exit 1; }
-print_pass "docker available"
+detect_container_runtime || exit 1
 
 command -v aws &>/dev/null || { print_fail "aws CLI not found — install AWS CLI v2"; exit 1; }
 print_pass "aws CLI available"
@@ -152,10 +151,10 @@ fi
 # Dry-run: show commands and exit
 #-------------------------------------------------------------------------------
 if [[ "${DRY_RUN}" == true ]]; then
-    print_info "[DRY-RUN] Would authenticate to ECR: aws ecr get-login-password | docker login"
+    print_info "[DRY-RUN] Would authenticate to ECR: aws ecr get-login-password | ${WORKSHOP_CONTAINER_CLI} login"
     print_info "[DRY-RUN] Would build:"
-    print_info "  docker buildx build --platform linux/amd64 --no-cache --load --tag ${ECR_URI} ${AGENT_DIR}"
-    print_info "[DRY-RUN] Would push: docker push ${ECR_URI}"
+    print_info "  container_build --platform linux/amd64 --no-cache --tag ${ECR_URI} ${AGENT_DIR}"
+    print_info "[DRY-RUN] Would push: ${WORKSHOP_CONTAINER_CLI} push ${ECR_URI}"
     echo ""
     print_pass "UC3 agent image build+push (dry-run)"
     echo ""
@@ -169,9 +168,9 @@ fi
 #-------------------------------------------------------------------------------
 # ECR login
 #-------------------------------------------------------------------------------
-print_info "Authenticating Docker to ECR..."
+print_info "Authenticating ${WORKSHOP_CONTAINER_CLI} to ECR..."
 aws ecr get-login-password --region "${REGION}" | \
-    docker login \
+    "${WORKSHOP_CONTAINER_CLI}" login \
         --username AWS \
         --password-stdin \
         "${AWS_ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com" >/dev/null 2>&1 || {
@@ -187,14 +186,13 @@ print_info "Building uc3-agent (--platform linux/amd64, --no-cache)..."
 # --no-cache: always rebuild every layer so source/dep changes can never be
 # masked by a stale Docker layer cache. Paired with the deployment's
 # imagePullPolicy: Always so the cluster always pulls the freshly pushed :latest.
-docker buildx build \
+container_build \
     --platform linux/amd64 \
     --no-cache \
-    --load \
     --tag "${ECR_URI}" \
     --file "${AGENT_DIR}/Dockerfile" \
     "${AGENT_DIR}" || {
-    print_fail "docker build failed for uc3-agent"
+    print_fail "container build failed for uc3-agent"
     exit 1
 }
 print_pass "Built ${ECR_URI}"
@@ -203,8 +201,8 @@ print_pass "Built ${ECR_URI}"
 # Push
 #-------------------------------------------------------------------------------
 print_info "Pushing uc3-agent..."
-docker push "${ECR_URI}" || {
-    print_fail "docker push failed for uc3-agent"
+"${WORKSHOP_CONTAINER_CLI}" push "${ECR_URI}" || {
+    print_fail "image push failed for uc3-agent"
     exit 1
 }
 print_pass "Pushed ${ECR_URI}"
