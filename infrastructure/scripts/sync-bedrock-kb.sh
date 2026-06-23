@@ -42,6 +42,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 # Disable the common-checks EXIT-trap summary — this is an action script, not a
 # pure check script (matches seed-banking-db.sh).
+# shellcheck disable=SC2034  # read by sourced common-checks.sh (suppresses its EXIT-trap summary)
 COMMON_CHECKS_SUMMARY=0
 # shellcheck source=common-checks.sh
 source "${SCRIPT_DIR}/common-checks.sh"

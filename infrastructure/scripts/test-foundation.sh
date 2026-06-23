@@ -212,7 +212,7 @@ if kubectl get deploy openldap -n verify-access &>/dev/null; then
         failures=$((failures + 1))
     fi
 
-    ldap_pw=$(kubectl get secret openldap-creds -n verify-access -o jsonpath='{.data.admin_password}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+    ldap_pw=$(kubectl get secret openldap-creds -n verify-access -o jsonpath='{.data.admin_password}' 2>/dev/null | base64 --decode 2>/dev/null || echo "")
     if [ -n "${ldap_pw}" ]; then
         oscar_dn=$(kubectl exec -n verify-access deploy/openldap -- \
             ldapsearch -x -H ldapi:/// -D "cn=admin,dc=ibm,dc=com" -w "${ldap_pw}" \

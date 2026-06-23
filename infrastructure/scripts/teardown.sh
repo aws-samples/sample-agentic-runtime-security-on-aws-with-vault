@@ -103,6 +103,7 @@ usage() {
 }
 
 while [ $# -gt 0 ]; do
+    # shellcheck disable=SC2034  # ASSUME_YES (--yes/-y) is a documented no-op flag — parsed, not yet read (see decl comment above)
     case "$1" in
         --aws-only)           AWS_ONLY=true ;;
         --post-destroy-only)  POST_DESTROY_ONLY=true ;;

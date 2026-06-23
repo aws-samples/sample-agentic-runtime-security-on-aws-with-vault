@@ -219,7 +219,7 @@ if confirm "Install / verify CLI tools (kubectl, helm, terraform, vault, aws, jq
                     if kubectl version --client --output=yaml 2>/dev/null | grep -q "${KUBECTL_MAJOR_MINOR}"; then
                         print_info "kubectl ${KUBECTL_MAJOR_MINOR}.x already installed"
                     else
-                        local kv; kv=$(kubectl version --client --short 2>/dev/null || kubectl version --client -o yaml 2>/dev/null | grep gitVersion | head -1 | awk '{print $2}')
+                        kv=$(kubectl version --client --short 2>/dev/null || kubectl version --client -o yaml 2>/dev/null | grep gitVersion | head -1 | awk '{print $2}')
                         print_warn "kubectl installed (${kv}) but not ${KUBECTL_MAJOR_MINOR}.x — should work fine"
                     fi
                 else
