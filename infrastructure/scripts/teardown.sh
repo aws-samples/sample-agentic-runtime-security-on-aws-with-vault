@@ -1956,7 +1956,11 @@ elif [ "$KEEP_EKS" = true ]; then
     if [ -f "$infra_dir/.terraform/terraform.tfstate" ] || [ -d "$infra_dir/.terraform" ]; then
         # Build a stable target list and pass it as one batch so terraform's
         # dependency graph resolves the destroy order in a single plan.
-        mapfile -t TARGETS < <(_keep_eks_targets)
+        # bash 3.2 portable (no `mapfile`): read one `-target=` line per element.
+        TARGETS=()
+        while IFS= read -r _tgt; do
+            [ -n "$_tgt" ] && TARGETS+=("$_tgt")
+        done < <(_keep_eks_targets)
         if [ "${#TARGETS[@]}" -eq 0 ]; then
             print_info "No destroy targets — terraform state already aligned with --keep-eks (preserves match)"
         else
