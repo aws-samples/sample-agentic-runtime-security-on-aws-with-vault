@@ -247,10 +247,11 @@ step_summary() {
     echo -e "  - admin_principal_arn stamped into tier-1 + ECR image URIs stamped into tier-3"
     echo -e "  - terraform init in all 3 roots (local state)"
     echo
-    echo -e "${GREEN}Next steps:${NC}"
-    echo -e "  1. Fill in the one manual secret: ${BLUE}${PROJECT_ROOT}/infrastructure/services/terraform.tfvars${NC} (ICR entitlement key)"
-    echo -e "  2. Deploy everything: ${BLUE}./infrastructure/scripts/deploy-workshop.sh${NC}"
-    echo -e "  3. Or run the full e2e: ${BLUE}./infrastructure/scripts/workshop-e2e.sh --skip-teardown${NC}"
+    echo -e "${GREEN}Next steps (deploy one tier at a time):${NC}"
+    echo -e "  Tier 1 prompts you for the ICR entitlement key + Let's Encrypt email — no manual tfvars edit needed."
+    echo -e "  1. Core infra (VPC/EKS/RDS/KB):   ${BLUE}./infrastructure/scripts/deploy-workshop.sh --tier 1${NC}"
+    echo -e "  2. Vault + IVIA:                  ${BLUE}./infrastructure/scripts/deploy-workshop.sh --tier 2${NC}"
+    echo -e "  3. Workloads (Use Cases 1-3):     ${BLUE}./infrastructure/scripts/deploy-workshop.sh --tier 3${NC}"
     echo
     echo -e "${GREEN}===============================================================================${NC}"
 }
