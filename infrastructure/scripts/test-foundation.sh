@@ -269,4 +269,20 @@ else
 fi
 echo -e "${BLUE}===============================================================================${NC}"
 
+# Repeat the values the NEXT workshop step (Ingest Knowledge Base, page 34) needs.
+# The KB id is printed in the banner at the TOP of this run, which is easy to
+# miss, so surface it again here at the end — only when the foundation passed,
+# since a failed foundation is not ready to ingest.
+if [ "$failures" -eq 0 ]; then
+    echo
+    echo -e "${GREEN}===============================================================================${NC}"
+    echo -e "${GREEN}  Next step — Ingest Knowledge Base${NC}"
+    echo -e "${GREEN}===============================================================================${NC}"
+    echo -e "  Knowledge Base id:  ${KB_ID}"
+    echo -e "  KB region:          ${KB_REGION}"
+    echo -e "  Use this KB id on the Ingest Knowledge Base page, or set it directly:"
+    echo -e "    ${BLUE}export KB_ID=${KB_ID}${NC}"
+    echo -e "${GREEN}===============================================================================${NC}"
+fi
+
 exit "$failures"
