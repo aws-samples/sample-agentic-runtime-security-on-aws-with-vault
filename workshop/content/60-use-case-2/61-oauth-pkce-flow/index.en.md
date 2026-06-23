@@ -130,16 +130,10 @@ The `sub` claim in the `id_token` (e.g. `oscar`) flows to:
 
 ## Step 1 — Get the Banking UI URL
 
-At the end of `bash infrastructure/scripts/deploy-workshop.sh`, the script prints `NIP_FQDN_BANKING` — the banking-UI nip.io URL backed by a Let's Encrypt certificate served on the shared workshop ALB. You can also read it back from `infrastructure/.acme-state`:
+At the end of `bash infrastructure/scripts/deploy-workshop.sh`, the script prints `NIP_FQDN_BANKING` — the banking-UI nip.io URL backed by a Let's Encrypt certificate served on the shared workshop ALB. Print the full HTTPS URL (read back from `infrastructure/.acme-state`) and open it in your browser:
 
 ```bash
-grep '^NIP_FQDN_BANKING=' infrastructure/.acme-state
-```
-
-Open the URL in a browser:
-
-```
-https://<NIP_FQDN_BANKING>/
+echo "https://$(grep '^NIP_FQDN_BANKING=' infrastructure/.acme-state | cut -d= -f2)/"
 ```
 
 :::alert{header="HTTPS with HTTP redirect — trusted Let's Encrypt cert" type="info"}
