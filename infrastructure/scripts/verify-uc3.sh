@@ -420,7 +420,7 @@ fi
 # mapping rule named `notifyuser` and grep its content for InternalAuthenticator.
 #-------------------------------------------------------------------------------
 ivia_admin_pw=$(kubectl get secret iviaadmin -n verify-access \
-    -o jsonpath='{.data.adminpw}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+    -o jsonpath='{.data.adminpw}' 2>/dev/null | base64 --decode 2>/dev/null || echo "")
 notifyuser_check_pod="notifyuser-check-$$"
 kubectl delete pod "${notifyuser_check_pod}" -n verify-access --ignore-not-found --wait=true &>/dev/null
 notifyuser_rule_json=""

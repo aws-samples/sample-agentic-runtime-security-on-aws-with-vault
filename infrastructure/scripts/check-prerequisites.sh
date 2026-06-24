@@ -199,17 +199,9 @@ if confirm "Install / verify CLI tools (kubectl, helm, terraform, vault, aws, jq
                     "Install from https://brew.sh — paste this in a terminal: /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
             else
                 print_info "Using Homebrew at: $(command -v brew)"
-                # bash 5.x — newer than macOS system bash 3.2 (Pitfall §3); needed for
-                # check-*.sh associative arrays and \x1f field separator.
-                if ! brew list bash >/dev/null 2>&1; then
-                    if confirm "Install bash 5.x via Homebrew (newer than macOS system bash 3.2)?"; then
-                        print_info "Installing bash"; run brew install bash
-                    else
-                        print_warn "Skipped bash install"
-                    fi
-                else
-                    print_info "bash already installed"
-                fi
+                # No bash upgrade required — the whole suite runs on stock macOS
+                # bash 3.2 (no associative arrays / mapfile; e2e-validate.sh
+                # enforces this via the "No bash-4-only constructs" lint).
                 # Standard tools
                 for tool in awscli terraform helm jq yq vault; do
                     if brew list "$tool" >/dev/null 2>&1; then
@@ -227,7 +219,7 @@ if confirm "Install / verify CLI tools (kubectl, helm, terraform, vault, aws, jq
                     if kubectl version --client --output=yaml 2>/dev/null | grep -q "${KUBECTL_MAJOR_MINOR}"; then
                         print_info "kubectl ${KUBECTL_MAJOR_MINOR}.x already installed"
                     else
-                        local kv; kv=$(kubectl version --client --short 2>/dev/null || kubectl version --client -o yaml 2>/dev/null | grep gitVersion | head -1 | awk '{print $2}')
+                        kv=$(kubectl version --client --short 2>/dev/null || kubectl version --client -o yaml 2>/dev/null | grep gitVersion | head -1 | awk '{print $2}')
                         print_warn "kubectl installed (${kv}) but not ${KUBECTL_MAJOR_MINOR}.x — should work fine"
                     fi
                 else

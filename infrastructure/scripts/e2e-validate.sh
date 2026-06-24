@@ -80,18 +80,13 @@ echo -e "${YELLOW}Phase 4: Cross-Platform Compatibility${NC}"
 # shellcheck disable=SC2016
 check "No base64 -d usage" bash -c '! grep -n "| [b]ase64 -d" "$1"/*.sh' _ "$SCRIPT_DIR"
 
-# No unguarded associative arrays
+# No bash-4-only constructs — the whole suite must run on stock macOS bash 3.2
+# (associative arrays + mapfile/readarray are bash 4+). The ^[[:space:]]* anchor
+# matches a construct only in command position (first token of a line), so it
+# flags real usage but not prose mentions in comments — and never self-matches,
+# since this validator's grep line starts with `check`, not the constructs.
 # shellcheck disable=SC2016
-check "No unguarded associative arrays" bash -c '
-    for script in "$1"/*.sh; do
-        if grep -q "declare -A" "$script"; then
-            if ! grep -q "BASH_VERSINFO" "$script"; then
-                exit 1
-            fi
-        fi
-    done
-    exit 0
-' _ "$SCRIPT_DIR"
+check "No bash-4-only constructs (3.2 compat)" bash -c '! grep -En "^[[:space:]]*(declare -A|local -A|mapfile|readarray)([[:space:]]|$)" "$1"/*.sh' _ "$SCRIPT_DIR"
 echo ""
 
 ################################################################################

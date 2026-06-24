@@ -212,7 +212,7 @@ if kubectl get deploy openldap -n verify-access &>/dev/null; then
         failures=$((failures + 1))
     fi
 
-    ldap_pw=$(kubectl get secret openldap-creds -n verify-access -o jsonpath='{.data.admin_password}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+    ldap_pw=$(kubectl get secret openldap-creds -n verify-access -o jsonpath='{.data.admin_password}' 2>/dev/null | base64 --decode 2>/dev/null || echo "")
     if [ -n "${ldap_pw}" ]; then
         oscar_dn=$(kubectl exec -n verify-access deploy/openldap -- \
             ldapsearch -x -H ldapi:/// -D "cn=admin,dc=ibm,dc=com" -w "${ldap_pw}" \
@@ -268,5 +268,21 @@ else
     echo -e "${RED}  Foundation verification: ${failures} component(s) FAILED${NC}"
 fi
 echo -e "${BLUE}===============================================================================${NC}"
+
+# Repeat the values the NEXT workshop step (Ingest Knowledge Base, page 34) needs.
+# The KB id is printed in the banner at the TOP of this run, which is easy to
+# miss, so surface it again here at the end — only when the foundation passed,
+# since a failed foundation is not ready to ingest.
+if [ "$failures" -eq 0 ]; then
+    echo
+    echo -e "${GREEN}===============================================================================${NC}"
+    echo -e "${GREEN}  Next step — Ingest Knowledge Base${NC}"
+    echo -e "${GREEN}===============================================================================${NC}"
+    echo -e "  Knowledge Base id:  ${KB_ID}"
+    echo -e "  KB region:          ${KB_REGION}"
+    echo -e "  Use this KB id on the Ingest Knowledge Base page, or set it directly:"
+    echo -e "    ${BLUE}export KB_ID=${KB_ID}${NC}"
+    echo -e "${GREEN}===============================================================================${NC}"
+fi
 
 exit "$failures"

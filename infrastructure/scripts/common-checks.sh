@@ -28,14 +28,6 @@
 # "All checks passed" summary banner from this trap.
 #===============================================================================
 
-# Bash 4+ guard (Pitfall §3 — macOS ships bash 3.2; brew install bash for 5.x)
-# `declare -a` and `${var,,}` lowercasing both require bash 4+.
-if (( BASH_VERSINFO[0] < 4 )); then
-    echo "ERROR: bash 4+ required (macOS ships bash 3.2)" >&2
-    echo "       Fix: brew install bash, then re-run with /opt/homebrew/bin/bash or /usr/local/bin/bash" >&2
-    exit 1
-fi
-
 # Disable AWS CLI pager so commands don't block on `less`
 export AWS_PAGER=""
 

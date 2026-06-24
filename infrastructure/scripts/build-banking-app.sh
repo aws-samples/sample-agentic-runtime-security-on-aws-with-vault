@@ -33,6 +33,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 SCRIPT_DESCRIPTION="Banking App ECR build+push (UI + Agent + MCP server)"
 
 # Source common helpers (print_pass, print_fail, FAILURES[], print_summary)
+# shellcheck disable=SC2034  # read by sourced common-checks.sh (suppresses its EXIT-trap summary)
 COMMON_CHECKS_SUMMARY=0
 # shellcheck source=common-checks.sh
 source "${SCRIPT_DIR}/common-checks.sh"

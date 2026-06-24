@@ -51,7 +51,10 @@ DRY_RUN=false
 SKIP_IVIA=false
 
 #--- Result tracking -----------------------------------------------------------
-declare -A RESULTS
+# Parallel indexed arrays (bash 3.2 — no associative arrays). record() upserts a
+# key→status pair; _result_get() echoes a key's status (non-zero if unset).
+RESULT_KEYS=()
+RESULT_VALS=()
 PHASE_ORDER=("gather" "vault_config" "ivia_verify")
 
 #--- Parse arguments -----------------------------------------------------------
@@ -78,8 +81,27 @@ fail()    { printf '\033[0;31m[FAIL]\033[0m  %s\n' "$*"; }
 phase()   { printf '\n\033[1;36m━━━ Phase %s: %s ━━━\033[0m\n\n' "$1" "$2"; }
 
 record() {
-  local name="$1" status="$2"
-  RESULTS["$name"]="$status"
+  local name="$1" status="$2" i
+  for i in "${!RESULT_KEYS[@]}"; do
+    if [[ "${RESULT_KEYS[$i]}" == "$name" ]]; then
+      RESULT_VALS[$i]="$status"
+      return
+    fi
+  done
+  RESULT_KEYS+=("$name")
+  RESULT_VALS+=("$status")
+}
+
+# Echo the recorded status for KEY; return non-zero if KEY was never recorded.
+_result_get() {
+  local name="$1" i
+  for i in "${!RESULT_KEYS[@]}"; do
+    if [[ "${RESULT_KEYS[$i]}" == "$name" ]]; then
+      printf '%s' "${RESULT_VALS[$i]}"
+      return 0
+    fi
+  done
+  return 1
 }
 
 cleanup() {
@@ -97,7 +119,8 @@ print_summary() {
   printf '  %-20s %s\n' "Phase" "Status"
   printf '  %-20s %s\n' "-----" "------"
   for name in "${PHASE_ORDER[@]}"; do
-    local status="${RESULTS[$name]:-SKIPPED}"
+    local status
+    status="$(_result_get "$name")" || status="SKIPPED"
     local color="\033[0;33m"
     case "$status" in
       PASS) color="\033[0;32m" ;;
@@ -109,7 +132,7 @@ print_summary() {
 
   local any_fail=false
   for name in "${PHASE_ORDER[@]}"; do
-    [[ "${RESULTS[$name]:-}" == "FAIL" ]] && any_fail=true
+    [[ "$(_result_get "$name")" == "FAIL" ]] && any_fail=true
   done
 
   if [[ "$any_fail" == true ]]; then
