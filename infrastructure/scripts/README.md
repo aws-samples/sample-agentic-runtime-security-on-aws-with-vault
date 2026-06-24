@@ -19,6 +19,51 @@ Bootstrapping, end-to-end orchestration, per-component verification, and teardow
 | `workshop-e2e.sh` | Admin/presenter | Full lifecycle orchestrator (Phase 0–8). Single-command deploy + verify + teardown with local Terraform state. | — |
 | `excalidraw-to-svg.py` | Workshop user, content authors | Converts the six Excalidraw sources in `assets/` to SVG (single-source-of-truth pipeline) | SCAF-03 |
 | `install-git-hooks.sh` | Maintainer (one-time, post-clone) | Symlinks `infrastructure/git-hooks/*` into `.git/hooks/`. Enables the `post-merge` hook that auto-runs `instruqt/scripts/push.sh` when a merge to `main` touches `instruqt/**` (GHE org has Actions disabled, so the local hook replaces CI for Instruqt sync) | — |
+| `deploy-workshop.sh` | Workshop user | Tier-by-tier deploy orchestrator (`--tier 1\|2\|3`). Flags: `--image-source <ghcr\|ecr>` (default `ghcr`), `--ghcr-registry-base <base>` (default `ghcr.io/sharepointoscar`), `--skip-infra`, `--skip-build`, `--skip-vault-init`, `--skip-acme`. In `ghcr` mode: no build, no ECR, no deployment roll. In `ecr` mode: builds via `build-*.sh`, pushes to ECR, rolls deployments to pull `:latest`. | — |
+| `build-images.sh` | `deploy-workshop.sh` (`--image-source ecr`), self-paced attendee | Top-level build coordinator — calls `build-uc1-agent.sh`, `build-banking-app.sh`, `build-uc3-agent.sh` in sequence. Used only in `ecr` mode. | — |
+| `build-uc1-agent.sh` | `build-images.sh`, self-paced attendee | Builds the Use Case 1 agent image from `infrastructure/modules/uc1_agent/agent/Dockerfile` (`--platform linux/amd64`) and pushes to the attendee's ECR. Used only in `ecr` mode. | — |
+| `build-banking-app.sh` | `build-images.sh`, self-paced attendee | Builds three banking-app images (ui / agent / mcp) including the host-side MCP `tsc` compile (`--platform linux/amd64`) and pushes to the attendee's ECR. Used only in `ecr` mode. | — |
+| `build-uc3-agent.sh` | `build-images.sh`, self-paced attendee | Builds the Use Case 3 agent image (`--platform linux/amd64`) and pushes to the attendee's ECR. Used only in `ecr` mode. | — |
+| `publish-images.sh` | Maintainer only (NOT in the attendee path) | Builds all five workshop images (`--platform linux/amd64`) and pushes them to the configured public GHCR base (default `ghcr.io/sharepointoscar`, override via `GHCR_REGISTRY_BASE` env or `--registry-base` flag). Inlines its own build (does NOT call `build-*.sh`). Requires a `write:packages` PAT via `GHCR_PAT` env or `gh auth token`. Idempotent, `--dry-run`. | — |
+
+## Image source: GHCR default vs ECR opt-in
+
+The workshop supports two image-source modes controlled by `deploy-workshop.sh --image-source <ghcr|ecr>` (default `ghcr`). The mode is persisted by `bootstrap.sh` into `infrastructure/terraform.tfvars` so partial re-runs (`--tier N`) hold the mode automatically.
+
+### Default mode: `ghcr` (anonymous pull, no build, no container runtime)
+
+`deploy-workshop.sh` (no flags) pulls the five pre-built public images from GHCR anonymously at pod start:
+
+| Image | GHCR package |
+|-------|-------------|
+| Use Case 1 agent | `<ghcr_registry_base>/workshop-uc1-agent:v1` |
+| Banking app UI | `<ghcr_registry_base>/workshop-banking-app-ui:v1` |
+| Banking app agent | `<ghcr_registry_base>/workshop-banking-app-agent:v1` |
+| Banking app MCP | `<ghcr_registry_base>/workshop-banking-app-mcp:v1` |
+| Use Case 3 agent | `<ghcr_registry_base>/workshop-uc3-agent:v1` |
+
+`ghcr_registry_base` defaults to `ghcr.io/sharepointoscar`. No ECR repos provisioned, no `aws ecr` call, no container runtime required, no deployment roll.
+
+To repoint the GHCR base (e.g., fork to your own namespace), pass `--ghcr-registry-base ghcr.io/<you>` — this cascades `ghcr_registry_base` into the tier-3 Terraform apply. The publish base (`publish-images.sh --registry-base`) and the consume base (`deploy-workshop.sh --ghcr-registry-base`) must match; pointing consume at an empty or private base yields `ImagePullBackOff`.
+
+### Self-paced opt-in: `ecr` (local build + push to your ECR)
+
+`deploy-workshop.sh --image-source ecr` runs the full local-build → ECR flow: `bootstrap.sh` stamps your `<account>/<region>` ECR image URIs into the tier-3 tfvars, Terraform provisions the ECR repos, `build-images.sh` builds the five images via `build-uc1-agent.sh` / `build-banking-app.sh` / `build-uc3-agent.sh` and pushes them to your ECR, and the deployments roll to pull the newly pushed `:latest` images. Requires a running container runtime (Docker or Podman — see [Self-paced: build images locally](https://github.com/Oscar-Medina/agentic-runtime-security-aws/blob/main/workshop/content/20-prerequisites/23-pre-flight-checks/index.en.md#self-paced-build-images-locally---image-source-ecr) in the workshop pre-flight page).
+
+### Maintainer-only: publish to GHCR
+
+`publish-images.sh` is the maintainer-only release path. It builds all five images with `--platform linux/amd64` and pushes them to the configured public GHCR namespace. It inlines its own build — it does NOT call `build-*.sh`. The GHCR owner for `docker login` is derived from the registry base. Run once per release and set each of the five packages Public via the GitHub web UI after pushing (there is no REST API for container-package visibility).
+
+```bash
+# Add the write:packages scope to your GitHub CLI token (one-time)
+gh auth refresh -h github.com -s write:packages
+
+# Publish to the default namespace (ghcr.io/sharepointoscar)
+bash infrastructure/scripts/publish-images.sh
+
+# Publish to a fork namespace
+bash infrastructure/scripts/publish-images.sh --registry-base ghcr.io/<you>
+```
 
 ## Workshop User Flow
 
