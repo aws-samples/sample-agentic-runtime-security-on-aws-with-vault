@@ -51,8 +51,14 @@ variable "kb_region" {
 }
 
 variable "agent_image" {
-  description = "Container image URI for the UC1 agent (ECR repository + tag)."
+  description = "Container image URI for the UC1 agent. In ghcr mode this is the GHCR :v1 URI derived from locals in the workloads root; in ecr mode it is the ECR URI stamped by bootstrap."
   type        = string
+}
+
+variable "image_pull_policy" {
+  description = "Kubernetes imagePullPolicy for the UC1 agent container. IfNotPresent for ghcr mode (pinned :v1 tag); Always for ecr mode (mutable :latest). Set by the workloads root; default keeps a standalone module plan valid."
+  type        = string
+  default     = "IfNotPresent"
 }
 
 variable "bedrock_model_id" {
