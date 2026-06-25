@@ -94,7 +94,7 @@ curl -sk "https://$WRP_HOST/isvaop/oauth2/.well-known/openid-configuration" | jq
 Expected:
 
 ```
-"https://<wrp-alb-hostname>"
+"https://<NIP_FQDN_WRP>"
 ```
 
 ## Step 4 — Confirm internal OIDC discovery
@@ -108,5 +108,5 @@ kubectl run oidc-check --image=curlimages/curl --rm -i --restart=Never --quiet -
 Expected — the **same** issuer as Step 3, even reached over ClusterIP. The provider always advertises the one public WRP issuer, which lets Vault validate IVIA tokens against a single `bound_issuer`:
 
 ```
-"https://<wrp-alb-hostname>"
+"https://<NIP_FQDN_WRP>"
 ```
