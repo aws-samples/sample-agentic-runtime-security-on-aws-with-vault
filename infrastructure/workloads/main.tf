@@ -47,17 +47,20 @@ locals {
   #
   # GHCR URIs: derived from var.ghcr_registry_base so a fork repoints everything
   # with one setting. Var defaults can't interpolate other vars, so derivation
-  # lives here. The five suffixes (D-03 flattened names, pinned :v1) are the
-  # canonical GHCR package names published by infrastructure/scripts/publish-images.sh.
+  # lives here. The five suffixes (D-03 flattened names) are the canonical GHCR
+  # package names published by infrastructure/scripts/publish-images.sh. Each
+  # image is versioned independently: only an image whose source actually
+  # changed gets a new :tag (publish-images.sh --image <name> --version vN).
+  # banking-ui is :v2 (real logout terminates the WebSEAL session); the rest :v1.
   # ---------------------------------------------------------------------------
   ghcr_uc1_agent     = "${var.ghcr_registry_base}/workshop-uc1-agent:v1"
-  ghcr_banking_ui    = "${var.ghcr_registry_base}/workshop-banking-app-ui:v1"
+  ghcr_banking_ui    = "${var.ghcr_registry_base}/workshop-banking-app-ui:v2"
   ghcr_banking_agent = "${var.ghcr_registry_base}/workshop-banking-app-agent:v1"
   ghcr_banking_mcp   = "${var.ghcr_registry_base}/workshop-banking-app-mcp:v1"
   ghcr_uc3_agent     = "${var.ghcr_registry_base}/workshop-uc3-agent:v1"
 
   # Mode-driven imagePullPolicy (D-14):
-  #   ghcr mode → IfNotPresent (pinned :v1; per-node cache avoids redundant pulls)
+  #   ghcr mode → IfNotPresent (pinned immutable :tags; per-node cache avoids redundant pulls)
   #   ecr mode  → Always       (mutable :latest; matches today's ECR opt-in behaviour)
   image_pull_policy = var.image_source == "ecr" ? "Always" : "IfNotPresent"
 
