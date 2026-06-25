@@ -6,16 +6,20 @@ Exposes:
 
 Security flow per request:
   1. Extract JWT from Authorization: Bearer header.
-  2. Set the JWT in the request context (agent.set_request_jwt).
-  3. Invoke the Strands agent — it calls get_accounts/get_transactions tools.
-  4. Each tool forwards the JWT to the MCP server.
-  5. MCP server authenticates to Vault with the JWT and fetches per-user DB creds.
-  6. Stream agent response back as Server-Sent Events.
+  2. Build a FRESH Strands agent (empty history) from the shared model.
+  3. Bind the JWT to the request via the _REQUEST_JWT ContextVar.
+  4. Invoke the agent in a worker thread — it calls get_accounts/get_transactions.
+  5. Each tool forwards the JWT to the MCP server.
+  6. MCP server authenticates to Vault with the JWT and fetches per-user DB creds.
+  7. Stream agent response back as Server-Sent Events; reset the ContextVar.
 
-The agent pod's workload identity (Vault K8s auth) is established at startup.
-The user's identity (JWT) is established per-request and never stored.
+The agent pod's workload identity (Vault K8s auth) and the shared Bedrock model
+are established once at startup. The user's identity (JWT) and the agent itself
+are per-request — never shared across users — so one caller's banking data can
+never reach another caller.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -27,7 +31,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from .agent import build_uc2_agent, set_request_jwt
+from .agent import build_uc2_agent, build_uc2_model, _REQUEST_JWT
 from .vault_client import build_agent_vault_client
 
 logging.basicConfig(
@@ -36,14 +40,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-_agent = None
+_model = None
 _vault_client = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """FastAPI lifespan — authenticate agent workload identity at startup."""
-    global _agent, _vault_client
+    global _model, _vault_client
 
     # Establish agent workload identity via Vault Kubernetes auth (OBJ-1)
     _vault_client = build_agent_vault_client()
@@ -54,8 +58,10 @@ async def lifespan(app: FastAPI):
         # Non-fatal in development (no K8s SA token mount outside cluster)
         logger.warning("agent_vault_auth_skipped", extra={"reason": str(exc)})
 
-    # Build the Strands agent with Vault-issued Bedrock STS credentials (OBJ-2)
-    _agent = build_uc2_agent(vault_client=_vault_client if _vault_client and _vault_client.is_authenticated() else None)
+    # Build the SHARED Bedrock model with Vault-issued STS credentials (OBJ-2).
+    # The model carries no per-user state; each /chat builds a fresh Agent on top
+    # of it (the per-user isolation boundary).
+    _model = build_uc2_model(vault_client=_vault_client if _vault_client and _vault_client.is_authenticated() else None)
 
     yield
 
@@ -87,12 +93,15 @@ class ChatRequest(BaseModel):
 async def chat(request: Request, body: ChatRequest):
     """Accept a user message and return an SSE stream of agent responses.
 
-    Extracts the user JWT from Authorization: Bearer header and sets it
-    in the request context before invoking the agent. The JWT is forwarded
-    to MCP tool calls — the agent never stores or discloses it.
+    Extracts the user JWT from Authorization: Bearer header, builds a FRESH
+    agent for this request, and binds the JWT to the request-scoped _REQUEST_JWT
+    ContextVar before invoking the agent in a worker thread. A per-request agent
+    (empty conversation history) plus a request-scoped JWT mean one caller's
+    banking data can never reach another caller. The JWT is forwarded to MCP
+    tool calls — the agent never persists or discloses it.
     """
-    global _agent
-    if _agent is None:
+    global _model
+    if _model is None:
         raise HTTPException(status_code=503, detail="Agent not initialized")
 
     # Extract user JWT from Authorization header
@@ -107,24 +116,28 @@ async def chat(request: Request, body: ChatRequest):
     if not jwt:
         raise HTTPException(status_code=401, detail="Empty JWT in Authorization header")
 
-    # Set JWT in request context for tool calls
-    set_request_jwt(jwt)
-
-    # No per-request rebuild needed: the agent's Bedrock session uses
+    # Build a FRESH agent for THIS request on top of the shared model. The
+    # agent's (empty) conversation history is the cross-user isolation boundary:
+    # a per-request agent can never serve a prior user's banking data to this
+    # caller. The shared _model carries no user state — its Bedrock session uses
     # RefreshableCredentials, so botocore transparently re-mints the Vault STS
-    # lease (re-logging into Vault if the pod token expired) as it nears expiry.
-    # This replaces the old rebuild that was silently skipped once the Vault
-    # token aged out, leaving the agent with expired STS creds (OBJ-2).
-
+    # lease as it nears expiry (OBJ-2).
+    agent = build_uc2_agent(_model)
     message = body.message
 
     async def generate():
+        # Bind the user JWT for THIS request only. A ContextVar (not a module
+        # global) keeps concurrent callers isolated; asyncio.to_thread copies the
+        # context into the worker thread so the Strands tool callbacks read THIS
+        # caller's JWT. Reset in finally so it never bleeds into the next request.
+        ctx_token = _REQUEST_JWT.set(jwt)
         try:
             # Yield a planning message
             yield f"data: {json.dumps({'role': 'ai', 'content': 'Processing your request...', 'type': 'tool_planning'})}\n\n"
 
-            # Invoke the Strands agent
-            response = _agent(message)
+            # Invoke the Strands agent off the event loop; to_thread copies the
+            # current context, so _REQUEST_JWT is visible to the tools it calls.
+            response = await asyncio.to_thread(agent, message)
 
             # Stream the response. Strip any <thinking>...</thinking> chain-of-thought
             # the model emits so it never leaks into the chat UI (mirrors uc3-agent).
@@ -137,8 +150,8 @@ async def chat(request: Request, body: ChatRequest):
             yield f"data: {json.dumps({'type': 'error', 'content': str(exc)})}\n\n"
             yield f"data: {json.dumps({'type': 'end'})}\n\n"
         finally:
-            # Clear JWT from request context
-            set_request_jwt("")
+            # Unbind the JWT so the next request on this worker starts clean.
+            _REQUEST_JWT.reset(ctx_token)
 
     return StreamingResponse(
         generate(),
@@ -157,6 +170,6 @@ async def health():
     return {
         "status": "ok",
         "service": "banking-agent",
-        "agent_ready": _agent is not None,
+        "agent_ready": _model is not None,
         "vault_authenticated": _vault_client.is_authenticated() if _vault_client else False,
     }
