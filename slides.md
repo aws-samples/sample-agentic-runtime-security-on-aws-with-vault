@@ -100,13 +100,13 @@ Keep this open in a second window. IVIA owns the user-identity plane; Vault owns
 | **Amazon RDS PostgreSQL 17** | **pgaudit** + **Row-Level Security**; only Vault-vended dynamic roles connect |
 | **Amazon Bedrock** | Nova Pro inference (`us.amazon.nova-pro-v1:0`, CRIS) + Nova 2 embeddings; reached via **Vault AWS STS** |
 | **OpenSearch Serverless + S3** | Bedrock Knowledge Base vector store + corpus |
-| **AWS KMS** | Single workshop CMK encrypts RDS, S3, AOSS, CloudWatch |
+| **AWS KMS** | Two regional CMKs: `workshop` (RDS, audit S3, CloudWatch · us-west-2) + `kb` (AOSS, corpus S3 · us-east-1) |
 | **Amazon Athena** | Cross-plane audit correlation (`audit_correlation` view) |
 
 Embedding model is **us-east-1 only**; all else **us-west-2**. Enforcement lives in the AWS primitives — Vault brokers, AWS enforces and records.
 
 Note:
-The division of labor matters for an expert audience: Verify and Vault decide identity and vend credentials, but the actual enforcement is AWS-native. RDS enforces RLS and writes pgaudit; the EKS OIDC provider is what Vault's Kubernetes auth validates SA tokens against; KMS encrypts every store under one CMK; Athena answers the auditor's question. Nova Pro is the cross-region inference profile id (`us.` prefix — the bare id is rejected for on-demand throughput); Nova 2 Multimodal Embeddings is us-east-1 only, which is why the KB plane is split into a second region.
+The division of labor matters for an expert audience: Verify and Vault decide identity and vend credentials, but the actual enforcement is AWS-native. RDS enforces RLS and writes pgaudit; the EKS OIDC provider is what Vault's Kubernetes auth validates SA tokens against; two regional CMKs encrypt every store — a us-west-2 `workshop` key (RDS, audit S3, CloudWatch) and a us-east-1 `kb` key (AOSS, corpus S3), since KMS keys are regional; Athena answers the auditor's question. Nova Pro is the cross-region inference profile id (`us.` prefix — the bare id is rejected for on-demand throughput); Nova 2 Multimodal Embeddings is us-east-1 only, which is why the KB plane is split into a second region.
 
 ---
 
