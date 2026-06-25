@@ -60,8 +60,8 @@ pod "pg-client-oscar" deleted
 
 Open a **new Incognito / Private browser window**, go to the Banking UI URL, and sign in as `jaime` (password `WorkshopUser1!`). Navigate to the **Accounts** page. You should see Jaime's accounts only — no rows from Oscar's data.
 
-:::alert{type="info" header="Use Incognito to switch users"}
-Don't use **Logout** to change personas. IVIA keeps its own SSO session cookie, so logging out of the Banking UI still leaves you recognised by IVIA — re-opening the app sends you to the OAuth consent page instead of a fresh login. A separate Incognito / Private window has an empty cookie jar, giving you a clean login as Jaime while your Oscar window stays signed in.
+:::alert{type="info" header="Why a second window here?"}
+**Logout** fully signs you out: the Banking UI clears its session cookies and redirects to IVIA's `/pkmslogout`, which ends the WebSEAL single sign-on session too — so logging out and back in as Jaime in the *same* window gives you a clean credential prompt. We open a **separate Incognito / Private window** here only so your Oscar session stays live in the first window for a side-by-side comparison.
 :::
 
 Run the same manual query with `app.current_user_sub = 'jaime'` (you can reuse the same Vault-vended credential — RLS isolation is driven entirely by the session variable, not by the Postgres user):
