@@ -179,8 +179,8 @@ To act as a different user, open a **new Incognito / Private browser window** an
 - **Username:** `jaime`
 - **Password:** `WorkshopUser1!`
 
-:::alert{type="info" header="Why Incognito instead of Logout?"}
-IVIA's OIDC Provider keeps its own single sign-on (SSO) session cookie that is separate from the Banking UI's session cookie. Clicking **Logout** in the Banking UI clears only the Banking UI cookie — IVIA still recognises you, so re-opening the app sends you straight to the OAuth **consent** page rather than a fresh credential prompt. An Incognito / Private window starts with an empty cookie jar, so there is no IVIA SSO session to inherit and you get a clean login page as the new user. Keep your Oscar window open in the meantime — it stays signed in as Oscar.
+:::alert{type="info" header="Why a second window here?"}
+**Logout** fully signs you out: the Banking UI `/logout` handler clears its session cookies and then redirects to IVIA's `/pkmslogout`, which terminates the WebSEAL single sign-on session as well — so clicking Logout and signing back in as Jaime in the *same* window works and lands you on a fresh credential prompt. We open a **separate Incognito / Private window** here only so your Oscar session stays live in the first window and you can compare the two personas side-by-side.
 :::
 
 The dashboard now shows Jaime's accounts and transactions — not Oscar's. The `sub` claim changed, activating a different RLS filter in PostgreSQL.
@@ -255,7 +255,7 @@ src/routes/
   dashboard/
     +page.svelte        — Personalized banking dashboard
   logout/
-    +server.ts          — Clears session cookies
+    +server.ts          — Clears session cookies, redirects to IVIA /pkmslogout
 src/lib/
   auth.ts               — Server-side PKCE helpers: generatePkce,
                           buildAuthorizeUrl, exchangeCodeForTokens
