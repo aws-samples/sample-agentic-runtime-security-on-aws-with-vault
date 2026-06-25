@@ -42,6 +42,30 @@ locals {
   effective_banking_host = coalesce(local.nip_io_banking_host, module.uc2_app.banking_ui_alb_hostname)
   uc2_redirect_uri       = "https://${local.effective_banking_host}/callback"
 
+  # ---------------------------------------------------------------------------
+  # Image source toggle (D-13 / D-14 / D-15)
+  #
+  # GHCR URIs: derived from var.ghcr_registry_base so a fork repoints everything
+  # with one setting. Var defaults can't interpolate other vars, so derivation
+  # lives here. The five suffixes (D-03 flattened names) are the canonical GHCR
+  # package names published by infrastructure/scripts/publish-images.sh. Each
+  # image is versioned independently: only an image whose source actually
+  # changed gets a new :tag (publish-images.sh --image <name> --version vN).
+  # banking-ui is :v2 (real logout terminates the WebSEAL session); banking-agent
+  # is :v2 (per-request agent + request-scoped JWT — fixes the cross-user data
+  # leak from the shared singleton agent); the rest :v1.
+  # ---------------------------------------------------------------------------
+  ghcr_uc1_agent     = "${var.ghcr_registry_base}/workshop-uc1-agent:v1"
+  ghcr_banking_ui    = "${var.ghcr_registry_base}/workshop-banking-app-ui:v2"
+  ghcr_banking_agent = "${var.ghcr_registry_base}/workshop-banking-app-agent:v2"
+  ghcr_banking_mcp   = "${var.ghcr_registry_base}/workshop-banking-app-mcp:v1"
+  ghcr_uc3_agent     = "${var.ghcr_registry_base}/workshop-uc3-agent:v1"
+
+  # Mode-driven imagePullPolicy (D-14):
+  #   ghcr mode → IfNotPresent (pinned immutable :tags; per-node cache avoids redundant pulls)
+  #   ecr mode  → Always       (mutable :latest; matches today's ECR opt-in behaviour)
+  image_pull_policy = var.image_source == "ecr" ? "Always" : "IfNotPresent"
+
   iviaop_provider_yml_resolved = templatefile(
     "${path.module}/../modules/verify_access/iviaop-config/provider.yml.tftpl",
     {
@@ -74,7 +98,8 @@ module "uc1_agent" {
   knowledge_base_id = local.infra.kb_id
   region            = local.infra.region
   kb_region         = local.infra.kb_region
-  agent_image       = var.uc1_agent_image
+  agent_image       = var.image_source == "ecr" ? var.uc1_agent_image : local.ghcr_uc1_agent
+  image_pull_policy = local.image_pull_policy
   bedrock_model_id  = var.bedrock_model_id
   tags              = local.infra.tags
 }
@@ -97,9 +122,10 @@ module "uc2_app" {
   knowledge_base_id     = local.infra.kb_id
   region                = local.infra.region
   kb_region             = local.infra.kb_region
-  ui_image              = var.banking_app_ui_image
-  agent_image           = var.banking_app_agent_image
-  mcp_image             = var.banking_app_mcp_image
+  ui_image              = var.image_source == "ecr" ? var.banking_app_ui_image : local.ghcr_banking_ui
+  agent_image           = var.image_source == "ecr" ? var.banking_app_agent_image : local.ghcr_banking_agent
+  mcp_image             = var.image_source == "ecr" ? var.banking_app_mcp_image : local.ghcr_banking_mcp
+  image_pull_policy     = local.image_pull_policy
   bedrock_model_id      = var.bedrock_model_id
   ivia_ingress_hostname = local.services.ivia_ingress_hostname
   ivia_service_endpoint = local.services.ivia_service_endpoint
@@ -135,7 +161,8 @@ module "uc3_agent" {
   ivia_external_url   = "https://${local.effective_ivia_host}"
   db_host             = local.infra.rds_address
   db_name             = "workshop"
-  uc3_agent_image     = var.uc3_agent_image
+  uc3_agent_image     = var.image_source == "ecr" ? var.uc3_agent_image : local.ghcr_uc3_agent
+  image_pull_policy   = local.image_pull_policy
   bedrock_model_id    = var.bedrock_model_id
   region              = local.infra.region
   rds_cidr            = local.infra.vpc_cidr

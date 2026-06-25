@@ -64,8 +64,14 @@ variable "db_name" {
 }
 
 variable "uc3_agent_image" {
-  description = "Container image URI for the UC3 privileged-action agent (ECR repository + tag)."
+  description = "Container image URI for the UC3 privileged-action agent. In ghcr mode this is the GHCR :v1 URI derived from locals in the workloads root; in ecr mode it is the ECR URI stamped by bootstrap."
   type        = string
+}
+
+variable "image_pull_policy" {
+  description = "Kubernetes imagePullPolicy for the UC3 agent container. IfNotPresent for ghcr mode (pinned :v1 tag); Always for ecr mode (mutable :latest). Set by the workloads root; default keeps a standalone module plan valid."
+  type        = string
+  default     = "IfNotPresent"
 }
 
 variable "bedrock_model_id" {

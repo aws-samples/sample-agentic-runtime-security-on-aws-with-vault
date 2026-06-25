@@ -19,6 +19,7 @@ Banking operations:
   - get_transactions: list recent transactions for the user's accounts
 """
 
+import contextvars
 import json
 import logging
 import os
@@ -58,16 +59,15 @@ def _call_mcp_tool(tool_name: str, jwt: str, **kwargs: object) -> dict:
         return response.json()
 
 
-# Module-level JWT store for the current request context.
-# Set by main.py before invoking the agent on each /chat call.
-# This is a simple approach for a workshop — in production use async context vars.
-_current_jwt: str = ""
-
-
-def set_request_jwt(jwt: str) -> None:
-    """Set the JWT for the current request context."""
-    global _current_jwt
-    _current_jwt = jwt
+# Request-scoped JWT store. A ContextVar — NOT a module global — so each
+# concurrent /chat request (and the worker thread asyncio.to_thread copies the
+# context into) sees ONLY its own caller's JWT. main.py sets it per request and
+# resets it in a finally. Mirrors uc3-agent's _AUTHENTICATED_SUB ContextVar.
+# A module global here let one caller's identity bleed into another's request
+# under concurrency — half of the cross-user data leak this replaces.
+_REQUEST_JWT: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "uc2_request_jwt", default=""
+)
 
 
 @tool
@@ -81,10 +81,11 @@ def get_accounts() -> list[dict]:
     Returns:
         List of account dicts with balance, account_type, currency.
     """
-    if not _current_jwt:
-        raise ValueError("No user JWT in request context — call set_request_jwt() first")
+    jwt = _REQUEST_JWT.get()
+    if not jwt:
+        raise ValueError("No user JWT in request context — _REQUEST_JWT not set")
 
-    result = _call_mcp_tool("get_accounts", _current_jwt)
+    result = _call_mcp_tool("get_accounts", jwt)
 
     mcp_result = result.get("result", {})
     content_blocks = mcp_result.get("content", [])
@@ -124,14 +125,15 @@ def get_transactions(account_id: str = "") -> list[dict]:
     Returns:
         List of transaction dicts (amount, description, transaction_type, created_at).
     """
-    if not _current_jwt:
-        raise ValueError("No user JWT in request context — call set_request_jwt() first")
+    jwt = _REQUEST_JWT.get()
+    if not jwt:
+        raise ValueError("No user JWT in request context — _REQUEST_JWT not set")
 
     kwargs = {}
     if account_id:
         kwargs["account_id"] = account_id
 
-    result = _call_mcp_tool("get_transactions", _current_jwt, **kwargs)
+    result = _call_mcp_tool("get_transactions", jwt, **kwargs)
 
     mcp_result = result.get("result", {})
     content_blocks = mcp_result.get("content", [])
@@ -158,15 +160,18 @@ def get_transactions(account_id: str = "") -> list[dict]:
     return []
 
 
-def build_uc2_agent(vault_client=None) -> Agent:
-    """Construct the UC2 banking Strands Agent.
+def build_uc2_model(vault_client=None) -> BedrockModel:
+    """Build the shared Bedrock model — called ONCE at startup, never per user.
 
-    Uses Amazon Nova Pro via CRIS profile (us.amazon.nova-pro-v1:0).
-    Bedrock credentials come from Vault AWS STS (OBJ-2) — not the node IAM role.
-    Tools: get_accounts + get_transactions — both forward user JWT to MCP server.
+    Uses Amazon Nova Pro via CRIS profile (us.amazon.nova-pro-v1:0). Bedrock
+    credentials come from Vault AWS STS (OBJ-2) — not the node IAM role — and
+    botocore re-mints them via RefreshableCredentials as they near expiry. The
+    model carries NO per-user state, so it is safe to share across every
+    request: the per-request isolation boundary is the Agent (build_uc2_agent),
+    not the model.
 
     Returns:
-        Configured strands.Agent ready to handle banking queries.
+        Configured strands.models.BedrockModel for build_uc2_agent to wrap.
     """
     region = os.getenv("REGION", "us-west-2")
     model_id = os.getenv("BEDROCK_MODEL_ID", "us.amazon.nova-pro-v1:0")
@@ -183,6 +188,29 @@ def build_uc2_agent(vault_client=None) -> Agent:
 
     bedrock_model = BedrockModel(**model_kwargs)
 
+    logger.info(
+        "uc2_model_built",
+        extra={"model_id": model_id, "region": region},
+    )
+    return bedrock_model
+
+
+def build_uc2_agent(model: BedrockModel) -> Agent:
+    """Construct a FRESH UC2 banking Strands Agent — called PER /chat request.
+
+    A new Agent (empty conversation history) is the cross-user isolation
+    boundary: because it holds no prior turns, it can never serve one user's
+    banking data to the next user — the leak a single long-lived shared Agent
+    caused. Identity for each tool call flows from the request-scoped
+    _REQUEST_JWT ContextVar, never a shared global. Mirrors uc3-agent's
+    per-request build_uc3_agent.
+
+    Tools: get_accounts + get_transactions — both forward the user JWT to the
+    MCP server, which performs Vault JWT auth → per-user DB creds → RDS (RLS).
+
+    Returns:
+        Configured strands.Agent ready to handle one user's banking queries.
+    """
     system_prompt = (
         "You are the OscarVault International (OVI) AI Assistant for the Agentic Runtime Security workshop. "
         "You help authenticated users (Oscar and Jaime) with their banking queries. "
@@ -207,17 +235,13 @@ def build_uc2_agent(vault_client=None) -> Agent:
     )
 
     agent = Agent(
-        model=bedrock_model,
+        model=model,
         tools=[get_accounts, get_transactions],
         system_prompt=system_prompt,
     )
 
     logger.info(
         "uc2_agent_built",
-        extra={
-            "model_id": model_id,
-            "region": region,
-            "tools": ["get_accounts", "get_transactions"],
-        },
+        extra={"tools": ["get_accounts", "get_transactions"]},
     )
     return agent

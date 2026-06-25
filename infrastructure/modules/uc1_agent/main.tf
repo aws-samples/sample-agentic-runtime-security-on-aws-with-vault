@@ -125,7 +125,7 @@ resource "kubernetes_deployment" "uc1" {
         container {
           name              = "agent"
           image             = var.agent_image
-          image_pull_policy = "Always"
+          image_pull_policy = var.image_pull_policy
 
           port {
             container_port = 8080

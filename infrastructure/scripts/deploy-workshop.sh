@@ -40,26 +40,37 @@
 #                            tier 3 = steps 10-14 (workloads + ALB assert + seed + KB ingest)
 #                            Required for the Instruqt distribution (one tier per challenge);
 #                            bare invocation is the Workshop Studio path (all 14 steps).
+#   --image-source <ghcr|ecr>     Image source mode (default: ghcr). ghcr pulls pre-built
+#                                 public images from GHCR — no container runtime required,
+#                                 no ECR repos provisioned. ecr uses the local-build + push
+#                                 flow (today's path). Invalid value fails loud.
+#                                 Env fallback: WORKSHOP_IMAGE_SOURCE.
+#   --ghcr-registry-base <base>   GHCR registry base for pre-built images (default:
+#                                 ghcr.io/sharepointoscar). Only meaningful in ghcr mode;
+#                                 repoints the consume base for a fork.
+#                                 Env fallback: WORKSHOP_GHCR_REGISTRY_BASE.
 #   --skip-infra             Skip the tier-1 apply (cluster + core infra already up)
 #   --skip-vault-init        Skip Vault initialization (Vault already initialized)
-#   --skip-build             Skip image build+push (images already in ECR)
+#   --skip-build             Skip image build+push (images already in ECR; ecr mode only)
 #   --skip-acme              Skip ACME cert issuance + ACM first-sync (cert already valid)
 #   --dry-run                Print planned actions without executing
 #   --help                   Show this help message
 #
 # Prerequisites:
 #   - AWS CLI configured with valid credentials
-#   - kubectl, Vault CLI, Docker, terraform >= 1.10 installed
+#   - kubectl, Vault CLI, terraform >= 1.10 installed
+#   - In ecr mode: Docker or Podman required (for image build+push)
 #   - infrastructure/terraform.tfvars, infrastructure/services/terraform.tfvars,
 #     and infrastructure/workloads/terraform.tfvars populated
 #
 # Examples:
-#   ./deploy-workshop.sh                    # full end-to-end deploy (all 14 steps)
-#   ./deploy-workshop.sh --tier 1           # only steps 1-4 (Instruqt tier-1 challenge)
-#   ./deploy-workshop.sh --tier 2           # only steps 5-9 (Instruqt tier-2 challenge)
-#   ./deploy-workshop.sh --tier 3           # only steps 10-14 (Instruqt tier-3 challenge)
-#   ./deploy-workshop.sh --skip-infra       # re-run config against a live cluster
-#   ./deploy-workshop.sh --skip-build       # re-run when images are already pushed
+#   ./deploy-workshop.sh                              # full deploy, ghcr mode (default)
+#   ./deploy-workshop.sh --image-source ecr          # full deploy, build+push to ECR
+#   ./deploy-workshop.sh --tier 1                    # only steps 1-4 (Instruqt tier-1 challenge)
+#   ./deploy-workshop.sh --tier 2                    # only steps 5-9 (Instruqt tier-2 challenge)
+#   ./deploy-workshop.sh --tier 3                    # only steps 10-14 (Instruqt tier-3 challenge)
+#   ./deploy-workshop.sh --skip-infra                # re-run config against a live cluster
+#   ./deploy-workshop.sh --skip-build                # re-run when images are already pushed (ecr mode)
 #   ./deploy-workshop.sh --dry-run          # preview every step
 #===============================================================================
 
@@ -81,9 +92,19 @@ source "${SCRIPT_DIR}/common-checks.sh"
 
 #-------------------------------------------------------------------------------
 # Defaults
+#
+# IMAGE_SOURCE / GHCR_REGISTRY_BASE resolution order (set -u safe — always bound):
+#   1. --image-source / --ghcr-registry-base flag (explicit CLI)
+#   2. WORKSHOP_IMAGE_SOURCE / WORKSHOP_GHCR_REGISTRY_BASE env var
+#   3. image_source from the persisted tier-1 terraform.tfvars (after parsing)
+#   4. Hard default: ghcr / ghcr.io/sharepointoscar
+# Steps 3-4 happen after arg-parse (needs TFVARS path) and before step functions.
+# ghcr.io/sharepointoscar is an image-source URI base, NOT an identity/auth value.
 #-------------------------------------------------------------------------------
 REGION=""
 CLUSTER_NAME=""
+IMAGE_SOURCE="${WORKSHOP_IMAGE_SOURCE:-}"        # flag or env; resolved from tfvar below
+GHCR_REGISTRY_BASE="${WORKSHOP_GHCR_REGISTRY_BASE:-ghcr.io/sharepointoscar}"  # env or default
 SKIP_INFRA=false
 SKIP_VAULT_INIT=false
 SKIP_BUILD=false
@@ -131,6 +152,8 @@ while [[ $# -gt 0 ]]; do
                 *) echo "ERROR: --tier must be 1, 2, or 3 (got: '${TIER}')"; usage ;;
             esac
             ;;
+        --image-source)     IMAGE_SOURCE="$2"; shift ;;
+        --ghcr-registry-base) GHCR_REGISTRY_BASE="$2"; shift ;;
         --skip-infra)       SKIP_INFRA=true ;;
         --skip-vault-init)  SKIP_VAULT_INIT=true ;;
         --skip-build)       SKIP_BUILD=true ;;
@@ -178,6 +201,20 @@ if [[ -z "$CLUSTER_NAME" ]]; then
     print_summary
     exit 1
 fi
+
+#-------------------------------------------------------------------------------
+# Resolve IMAGE_SOURCE: flag (already set) → env (already set above) →
+# persisted tier-1 tfvar (so --tier 3 partial re-runs hold the mode set at
+# full-run time, even without repeating the flag) → hard default ghcr.
+#-------------------------------------------------------------------------------
+if [[ -z "$IMAGE_SOURCE" ]]; then
+    _tfvar_mode=$(_resolve_tfvar "image_source")
+    IMAGE_SOURCE="${_tfvar_mode:-ghcr}"
+fi
+case "$IMAGE_SOURCE" in
+    ghcr|ecr) : ;;
+    *) echo "ERROR: --image-source must be 'ghcr' or 'ecr' (got: '${IMAGE_SOURCE}')" >&2; exit 1 ;;
+esac
 
 #-------------------------------------------------------------------------------
 # EXIT cleanup — kill port-forward on any exit, then emit our summary
@@ -305,11 +342,15 @@ echo -e "${BLUE}================================================================
 echo -e "${BLUE}  Workshop End-to-End Deploy (3-tier)${NC}"
 echo -e "${BLUE}================================================================${NC}"
 echo ""
-print_info "Region:           ${REGION}"
-print_info "Cluster:          ${CLUSTER_NAME}"
+print_info "Region:            ${REGION}"
+print_info "Cluster:           ${CLUSTER_NAME}"
+print_info "Image source:      ${IMAGE_SOURCE}"
+if [[ "$IMAGE_SOURCE" = "ghcr" ]]; then
+    print_info "GHCR base:         ${GHCR_REGISTRY_BASE}"
+fi
 print_info "Skip tier-1 apply: ${SKIP_INFRA}"
 print_info "Skip Vault init:   ${SKIP_VAULT_INIT}"
-print_info "Skip image build:  ${SKIP_BUILD}"
+print_info "Skip image build:  ${SKIP_BUILD} (ecr mode only)"
 if [[ "$DRY_RUN" = true ]]; then
     print_warn "DRY-RUN mode — no changes will be made"
 fi
@@ -440,7 +481,8 @@ step_01_apply_tier1() {
         print_info "Step 1: tier-1 apply skipped (--skip-infra)"
         PASSES+=("Step 1: Apply tier 1 (skipped)")
     else
-        _tf_apply_tier "Step 1: Apply tier 1 (core infrastructure)" "${INFRA_DIR}"
+        _tf_apply_tier "Step 1: Apply tier 1 (core infrastructure)" "${INFRA_DIR}" \
+            -var "image_source=${IMAGE_SOURCE}"
     fi
 }
 
@@ -484,6 +526,12 @@ step_02_configure_kubectl() {
 step_03_build_push_images() {
     echo ""
     echo -e "${YELLOW}> Step 3: Build & push application images${NC}"
+
+    if [[ "$IMAGE_SOURCE" != "ecr" ]]; then
+        print_info "Step 3: Image build skipped (${IMAGE_SOURCE} mode — pulling pre-built public images from GHCR)"
+        PASSES+=("Step 3: Build & push application images (skipped — ghcr mode)")
+        return 0
+    fi
 
     if [[ "$SKIP_BUILD" = true ]]; then
         print_info "Step 3: Image build skipped (--skip-build)"
@@ -1063,21 +1111,29 @@ step_09_configure_ivia() {
 step_10_apply_tier3() {
     echo ""
     echo -e "${YELLOW}> Step 10: Apply tier 3 (workloads)${NC}"
-    _tf_apply_tier "Step 10: Apply tier 3 (workloads)" "${WORKLOADS_DIR}"
+    _tf_apply_tier "Step 10: Apply tier 3 (workloads)" "${WORKLOADS_DIR}" \
+        -var "image_source=${IMAGE_SOURCE}" \
+        -var "ghcr_registry_base=${GHCR_REGISTRY_BASE}"
 
-    if [[ "$DRY_RUN" = true ]]; then
-        print_info "[DRY-RUN] Would roll Deployments: ${APP_DEPLOYMENTS[*]}"
+    # Post-tier-3 repull/roll loop — ECR mode only: in ghcr mode the pinned :v1
+    # tag + IfNotPresent pull policy needs no roll; kubelet uses the cached digest.
+    if [[ "$IMAGE_SOURCE" = "ecr" ]]; then
+        if [[ "$DRY_RUN" = true ]]; then
+            print_info "[DRY-RUN] Would roll Deployments: ${APP_DEPLOYMENTS[*]}"
+        else
+            rolled=0
+            for entry in "${APP_DEPLOYMENTS[@]}"; do
+                ns="${entry%%:*}"
+                dep="${entry#*:}"
+                if kubectl --context workshop get deploy "$dep" -n "$ns" >/dev/null 2>&1; then
+                    kubectl --context workshop rollout restart "deploy/${dep}" -n "$ns" >/dev/null 2>&1 \
+                        && rolled=$((rolled + 1))
+                fi
+            done
+            print_pass "Step 10: tier-3 Deployments rolled (${rolled}/${#APP_DEPLOYMENTS[@]})"
+        fi
     else
-        rolled=0
-        for entry in "${APP_DEPLOYMENTS[@]}"; do
-            ns="${entry%%:*}"
-            dep="${entry#*:}"
-            if kubectl --context workshop get deploy "$dep" -n "$ns" >/dev/null 2>&1; then
-                kubectl --context workshop rollout restart "deploy/${dep}" -n "$ns" >/dev/null 2>&1 \
-                    && rolled=$((rolled + 1))
-            fi
-        done
-        print_pass "Step 10: tier-3 Deployments rolled (${rolled}/${#APP_DEPLOYMENTS[@]})"
+        print_info "Step 10: Deployment roll skipped (${IMAGE_SOURCE} mode — pre-built :v1 images, IfNotPresent pull policy)"
     fi
 }
 

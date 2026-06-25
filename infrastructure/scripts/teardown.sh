@@ -166,6 +166,25 @@ if [ -z "$DEFAULT_CLUSTER" ]; then
     exit 1
 fi
 
+#-------------------------------------------------------------------------------
+# Image source mode resolution — determines whether the ECR sweep is live or
+# a harmless no-op. Resolved deterministically from the PERSISTED tier-1 tfvar
+# so teardown is correct even when invoked bare (no flag) in a fresh shell after
+# an ecr deploy. Resolution order:
+#   1. WORKSHOP_IMAGE_SOURCE env var (operator override)
+#   2. image_source line in infrastructure/terraform.tfvars (persisted by bootstrap)
+#   3. Hard default: ghcr
+# NOTE: a bare ${WORKSHOP_IMAGE_SOURCE:-ghcr} default is INTENTIONALLY avoided —
+# an env default would silently no-op the ECR sweep after an ecr deploy if the
+# env var is unset in a fresh shell, orphaning ECR repos (T-0709-09 mitigation).
+#-------------------------------------------------------------------------------
+IMAGE_SOURCE="${WORKSHOP_IMAGE_SOURCE:-}"
+if [ -z "$IMAGE_SOURCE" ] && [ -f "$TF_VARS" ]; then
+    IMAGE_SOURCE=$(grep -E '^image_source' "$TF_VARS" \
+        | sed -E 's/.*=[[:space:]]*"?([a-z]+)"?.*/\1/' | head -1 || true)
+fi
+IMAGE_SOURCE="${IMAGE_SOURCE:-ghcr}"
+
 CW_LOG_PREFIXES=("/workshop/" "/aws/eks/${DEFAULT_CLUSTER}/" "/aws/rds/instance/${DEFAULT_CLUSTER}-pg")
 S3_BUCKET_PREFIXES+=("${DEFAULT_CLUSTER}-workshop-logs")
 
@@ -501,6 +520,13 @@ sweep_launch_templates() {
 #----- ECR repositories (workshop container images) ----------------------------
 ECR_REPO_NAMES=("workshop/uc1-agent" "workshop/uc3-agent" "workshop-banking-app")
 sweep_ecr_repos() {
+    # In ghcr mode (default) ECR repos were never provisioned — early-return so
+    # the sweep is a clean no-op. ECR_REPO_NAMES stays bound (set -u safe) and
+    # the two _check loops below remain safe; they simply find nothing in ghcr mode.
+    if [ "${IMAGE_SOURCE:-ghcr}" != "ecr" ]; then
+        print_info "No ECR repos to sweep (${IMAGE_SOURCE:-ghcr} mode)"
+        return 0
+    fi
     local count=0
     for repo in "${ECR_REPO_NAMES[@]}"; do
         if aws ecr describe-repositories --repository-names "$repo" --region "$REGION" &>/dev/null; then

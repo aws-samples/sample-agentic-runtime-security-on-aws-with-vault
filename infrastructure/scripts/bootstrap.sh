@@ -17,11 +17,20 @@
 # Options:
 #   --dry-run                Show what would be done without executing
 #   --skip-prereq-gate       Skip the "Have you run check-prerequisites.sh?" prompt
+#   --image-source <ghcr|ecr>
+#                            Image source mode (default: ghcr). ghcr: no ECR image
+#                            URI stamping — GHCR defaults stand. ecr: stamps the five
+#                            ECR image URIs into tier-3 tfvars (today's flow).
+#                            Env fallback: WORKSHOP_IMAGE_SOURCE.
+#   --ghcr-registry-base <base>
+#                            GHCR registry base (default: ghcr.io/sharepointoscar).
+#                            Persisted to tier-3 tfvars ONLY (tier-1 never receives it).
+#                            Env fallback: WORKSHOP_GHCR_REGISTRY_BASE.
 #   --help                   Show this help message
 #
 # Prerequisites (run check-prerequisites.sh first):
 #   - aws CLI configured (AWS_PROFILE / env vars / SSO)
-#   - jq installed
+#   - jq installed (ecr mode: Docker or Podman also required for build-images.sh)
 #===============================================================================
 
 set -e
@@ -39,9 +48,18 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 #-------------------------------------------------------------------------------
 # Defaults
+#
+# IMAGE_SOURCE resolution order (set -e safe — always bound):
+#   1. --image-source flag
+#   2. WORKSHOP_IMAGE_SOURCE env var
+#   3. Hard default: ghcr
+# GHCR_REGISTRY_BASE: --ghcr-registry-base flag → WORKSHOP_GHCR_REGISTRY_BASE env → default
+# ghcr.io/sharepointoscar is an image-source URI base, NOT an identity/auth value.
 #-------------------------------------------------------------------------------
 DRY_RUN=false
 SKIP_PREREQ_GATE=false
+IMAGE_SOURCE="${WORKSHOP_IMAGE_SOURCE:-ghcr}"
+GHCR_REGISTRY_BASE="${WORKSHOP_GHCR_REGISTRY_BASE:-ghcr.io/sharepointoscar}"
 
 usage() {
     cat <<USAGE
@@ -53,11 +71,14 @@ Bootstrap the Agentic Runtime Security workshop environment.
 Options:
   --dry-run                Show what would be done without executing
   --skip-prereq-gate       Skip the "Have you run check-prerequisites.sh?" prompt
+  --image-source <ghcr|ecr>  Image source mode (default: ghcr)
+  --ghcr-registry-base <base> GHCR registry base (default: ghcr.io/sharepointoscar)
   --help                   Show this help message
 
 Examples:
   $0
   $0 --dry-run
+  $0 --image-source ecr
 
 USAGE
 }
@@ -68,13 +89,20 @@ USAGE
 while [ $# -gt 0 ]; do
     case "$1" in
         --help|-h) usage; exit 0 ;;
-        --dry-run)      DRY_RUN=true ;;
-        --skip-prereq-gate) SKIP_PREREQ_GATE=true ;;
+        --dry-run)           DRY_RUN=true ;;
+        --skip-prereq-gate)  SKIP_PREREQ_GATE=true ;;
+        --image-source)      IMAGE_SOURCE="$2"; shift ;;
+        --ghcr-registry-base) GHCR_REGISTRY_BASE="$2"; shift ;;
         -*) echo -e "${RED}Error: Unknown option: $1${NC}"; usage; exit 1 ;;
         *) echo -e "${RED}Error: Unexpected argument: $1${NC}"; usage; exit 1 ;;
     esac
     shift
 done
+
+case "$IMAGE_SOURCE" in
+    ghcr|ecr) : ;;
+    *) echo -e "${RED}Error: --image-source must be 'ghcr' or 'ecr' (got: '${IMAGE_SOURCE}')${NC}" >&2; exit 1 ;;
+esac
 
 step_header() {
     echo
@@ -158,8 +186,13 @@ step_generate_tfvars_and_init() {
 
     if [ "$DRY_RUN" = true ]; then
         echo -e "${YELLOW}[DRY-RUN] Would seed terraform.tfvars in tier-1/2/3 from .example${NC}"
-        echo -e "${YELLOW}[DRY-RUN] Would stamp admin_principal_arn into tier-1 tfvars${NC}"
-        echo -e "${YELLOW}[DRY-RUN] Would stamp derived ECR image URIs into tier-3 tfvars${NC}"
+        echo -e "${YELLOW}[DRY-RUN] Would stamp admin_principal_arn + image_source=${IMAGE_SOURCE} into tier-1 tfvars${NC}"
+        echo -e "${YELLOW}[DRY-RUN] Would stamp image_source=${IMAGE_SOURCE} + ghcr_registry_base=${GHCR_REGISTRY_BASE} into tier-3 tfvars${NC}"
+        if [ "$IMAGE_SOURCE" = "ecr" ]; then
+            echo -e "${YELLOW}[DRY-RUN] Would stamp derived ECR image URIs into tier-3 tfvars (ecr mode)${NC}"
+        else
+            echo -e "${YELLOW}[DRY-RUN] ECR image URI stamping skipped (ghcr mode — GHCR defaults stand)${NC}"
+        fi
         echo -e "${YELLOW}[DRY-RUN] Would run terraform init in all 3 roots${NC}"
         return 0
     fi
@@ -179,6 +212,19 @@ step_generate_tfvars_and_init() {
     sed -i.bak "s|admin_principal_arn[[:space:]]*=.*|admin_principal_arn = \"${ADMIN_PRINCIPAL_ARN}\"|" "$T1_FILE"
     rm -f "${T1_FILE}.bak"
 
+    # --- tier-1: persist image_source (controls module.ecr count) ---------------
+    # image_source is declared in tier-1 (module.ecr count gate) AND tier-3.
+    # We persist it here so partial re-runs (deploy-workshop.sh --tier N) hold the
+    # mode set at full-run time without requiring the flag to be repeated.
+    # ghcr_registry_base is tier-3 ONLY — never written to tier-1 (undeclared var).
+    if grep -qE '^[[:space:]]*image_source[[:space:]]*=' "$T1_FILE" 2>/dev/null; then
+        sed -i.bak "s|image_source[[:space:]]*=.*|image_source = \"${IMAGE_SOURCE}\"|" "$T1_FILE"
+    else
+        echo "image_source = \"${IMAGE_SOURCE}\"" >> "$T1_FILE"
+    fi
+    rm -f "${T1_FILE}.bak"
+    echo -e "${GREEN}OK: tier-1 image_source = ${IMAGE_SOURCE}${NC}"
+
     # --- tier-2 / tier-3: seed from .example only if absent (never overwrite) --
     local dir
     for dir in "$TIER2_DIR" "$TIER3_DIR"; do
@@ -192,15 +238,34 @@ step_generate_tfvars_and_init() {
         fi
     done
 
-    # --- tier-3: stamp the five derived ECR image URIs ------------------------
-    # Account ID comes from Step 2 (live caller identity, :127); region from the
-    # tier-1 tfvars seeded above — the region the deploy actually targets. The
-    # repo:tag halves are fixed in the .example, so we only fill <account>/<region>.
-    # Idempotent: those are literal placeholders, so a re-run (or a user's custom
-    # registry URI) is a no-op — this never overwrites already-real values. No
-    # hardcoded account/region fallback — both must resolve or we fail loud.
+    # --- tier-3: persist image_source + ghcr_registry_base ----------------------
+    # ghcr_registry_base: tier-3 ONLY (tier-1 does NOT declare it — writing it
+    # to tier-1 would set an undeclared var and break the apply; Plan 02 contract).
     local T3_FILE="$TIER3_DIR/terraform.tfvars"
     if [ -f "$T3_FILE" ]; then
+        if grep -qE '^[[:space:]]*image_source[[:space:]]*=' "$T3_FILE" 2>/dev/null; then
+            sed -i.bak "s|image_source[[:space:]]*=.*|image_source = \"${IMAGE_SOURCE}\"|" "$T3_FILE"
+        else
+            echo "image_source = \"${IMAGE_SOURCE}\"" >> "$T3_FILE"
+        fi
+        rm -f "${T3_FILE}.bak"
+        echo -e "${GREEN}OK: tier-3 image_source = ${IMAGE_SOURCE}${NC}"
+
+        if grep -qE '^[[:space:]]*ghcr_registry_base[[:space:]]*=' "$T3_FILE" 2>/dev/null; then
+            sed -i.bak "s|ghcr_registry_base[[:space:]]*=.*|ghcr_registry_base = \"${GHCR_REGISTRY_BASE}\"|" "$T3_FILE"
+        else
+            echo "ghcr_registry_base = \"${GHCR_REGISTRY_BASE}\"" >> "$T3_FILE"
+        fi
+        rm -f "${T3_FILE}.bak"
+        echo -e "${GREEN}OK: tier-3 ghcr_registry_base = ${GHCR_REGISTRY_BASE}${NC}"
+    fi
+
+    # --- tier-3: stamp the five derived ECR image URIs (ecr mode only) ----------
+    # In ghcr mode the GHCR-derived locals in workloads/main.tf stand — no image
+    # URI stamping needed. In ecr mode: account ID from Step 2 (live caller identity),
+    # region from tier-1 tfvars. Idempotent: placeholders are only filled once;
+    # already-real values are left as-is (the grep -q guard is the idempotency gate).
+    if [ "$IMAGE_SOURCE" = "ecr" ] && [ -f "$T3_FILE" ]; then
         # Only the image-URI lines carry placeholders; the instructional comment
         # mentions <account>/<region> in prose, so we scope both the check and
         # the substitution to lines containing "dkr.ecr" — never touch comments.
@@ -217,6 +282,8 @@ step_generate_tfvars_and_init() {
         else
             echo -e "${GREEN}OK: tier-3 image URIs already resolved — leaving as-is${NC}"
         fi
+    elif [ "$IMAGE_SOURCE" != "ecr" ]; then
+        echo -e "${GREEN}OK: ECR image URI stamping skipped (${IMAGE_SOURCE} mode — GHCR defaults stand)${NC}"
     fi
 
     # --- terraform init all 3 roots (bare init, NEVER -upgrade) ---------------
@@ -244,7 +311,13 @@ step_summary() {
     echo -e "${GREEN}What was created (or verified idempotently):${NC}"
     echo -e "  - EC2 Spot Service-Linked Role"
     echo -e "  - terraform.tfvars in all 3 roots (tier-1/2/3, from .example templates)"
-    echo -e "  - admin_principal_arn stamped into tier-1 + ECR image URIs stamped into tier-3"
+    echo -e "  - admin_principal_arn + image_source=${IMAGE_SOURCE} stamped into tier-1"
+    echo -e "  - image_source=${IMAGE_SOURCE} + ghcr_registry_base=${GHCR_REGISTRY_BASE} stamped into tier-3"
+    if [ "$IMAGE_SOURCE" = "ecr" ]; then
+        echo -e "  - ECR image URIs stamped into tier-3 (ecr mode)"
+    else
+        echo -e "  - ECR image URI stamping skipped (ghcr mode — GHCR defaults stand)"
+    fi
     echo -e "  - terraform init in all 3 roots (local state)"
     echo
     echo -e "${GREEN}Next steps (deploy one tier at a time):${NC}"
@@ -264,6 +337,10 @@ echo -e "${BLUE}================================================================
 echo -e "${BLUE} Agentic Runtime Security — Workshop Bootstrap${NC}"
 echo -e "${BLUE}===============================================================================${NC}"
 echo
+echo -e "  Image source:  ${YELLOW}${IMAGE_SOURCE}${NC}"
+if [ "$IMAGE_SOURCE" = "ghcr" ]; then
+    echo -e "  GHCR base:     ${YELLOW}${GHCR_REGISTRY_BASE}${NC}"
+fi
 [ "$DRY_RUN" = true ] && echo -e "  DRY RUN:       ${YELLOW}yes (no changes will be made)${NC}"
 
 if [ "$DRY_RUN" = false ] && [ "$SKIP_PREREQ_GATE" = false ]; then

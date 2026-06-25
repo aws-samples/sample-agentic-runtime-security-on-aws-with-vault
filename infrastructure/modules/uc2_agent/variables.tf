@@ -78,18 +78,24 @@ variable "kb_region" {
 }
 
 variable "ui_image" {
-  description = "Container image URI for the SvelteKit banking UI (ECR repository + tag)."
+  description = "Container image URI for the SvelteKit banking UI. In ghcr mode this is the GHCR :v1 URI derived from locals in the workloads root; in ecr mode it is the ECR URI stamped by bootstrap."
   type        = string
 }
 
 variable "agent_image" {
-  description = "Container image URI for the Python Strands banking agent (ECR repository + tag)."
+  description = "Container image URI for the Python Strands banking agent. In ghcr mode this is the GHCR :v1 URI derived from locals in the workloads root; in ecr mode it is the ECR URI stamped by bootstrap."
   type        = string
 }
 
 variable "mcp_image" {
-  description = "Container image URI for the Node.js MCP server (ECR repository + tag)."
+  description = "Container image URI for the Node.js MCP server. In ghcr mode this is the GHCR :v1 URI derived from locals in the workloads root; in ecr mode it is the ECR URI stamped by bootstrap."
   type        = string
+}
+
+variable "image_pull_policy" {
+  description = "Kubernetes imagePullPolicy for all three banking-app containers (UI, agent, MCP). IfNotPresent for ghcr mode (pinned :v1 tag); Always for ecr mode (mutable :latest). Set by the workloads root; default keeps a standalone module plan valid."
+  type        = string
+  default     = "IfNotPresent"
 }
 
 variable "bedrock_model_id" {

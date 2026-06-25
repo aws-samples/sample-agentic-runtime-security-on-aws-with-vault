@@ -31,3 +31,78 @@ weight: 90
 - [SPIFFE for Agentic AI Blog](https://www.hashicorp.com/en/blog/spiffe-securing-the-identity-of-agentic-ai-and-non-human-actors)
 - [Native AI Agent Support in Vault (May 2026)](https://www.hashicorp.com/en/blog/announcing-native-ai-agent-support-in-hashicorp-vault) — agent registry, 4-layer policy intersection, OBO delegation, ephemeral authorization
 
+## Bring Your Own GHCR Registry
+
+A power-user/fork reference for hosting the five workshop images in your own GHCR namespace. This is **not** a step in the main deploy flow — the default `deploy-workshop.sh` pulls images from `ghcr.io/sharepointoscar` anonymously. Use this reference only if you want to repoint the GHCR base to your own account.
+
+### 1. Prerequisites
+
+You need:
+
+- A GitHub account with a `write:packages` scope on your CLI token:
+
+```bash
+gh auth refresh -h github.com -s write:packages
+```
+
+- A running container runtime (Docker or Podman) — publishing builds the images locally before pushing. See [Self-paced: build images locally](../20-prerequisites/23-pre-flight-checks/#self-paced-build-images-locally---image-source-ecr) for setup instructions.
+
+### 2. Publish to your namespace
+
+Build all five images (`--platform linux/amd64`) and push them to your GHCR base. The script reads the `write:packages` token from `GHCR_PAT` env or `gh auth token`:
+
+```bash
+bash infrastructure/scripts/publish-images.sh --registry-base ghcr.io/<your-github-username>
+```
+
+### 3. Make the five packages Public
+
+After pushing, set each of the five packages to **Public** visibility via the GitHub web UI (Settings → Packages on your GitHub profile). There is no REST API for container-package visibility.
+
+The five package names (under `ghcr.io/<your-github-username>/`):
+
+- `workshop-uc1-agent`
+- `workshop-banking-app-ui`
+- `workshop-banking-app-agent`
+- `workshop-banking-app-mcp`
+- `workshop-uc3-agent`
+
+### 4. Deploy pointing consume at your base
+
+Pass `--image-source ghcr` and `--ghcr-registry-base` so the deploy pulls from your namespace instead of the default:
+
+```bash
+bash infrastructure/scripts/deploy-workshop.sh --tier 1 --image-source ghcr --ghcr-registry-base ghcr.io/<your-github-username>
+bash infrastructure/scripts/deploy-workshop.sh --tier 2 --image-source ghcr --ghcr-registry-base ghcr.io/<your-github-username>
+bash infrastructure/scripts/deploy-workshop.sh --tier 3 --image-source ghcr --ghcr-registry-base ghcr.io/<your-github-username>
+```
+
+### 5. Gotcha — publish base must equal consume base
+
+The `--registry-base` you pass to `publish-images.sh` and the `--ghcr-registry-base` you pass to `deploy-workshop.sh` **must be identical**. Pointing the consume side at a base where the packages do not exist, or where they are still Private, results in `ImagePullBackOff` on all five pods with no other error message.
+
+| Publish flag | Script | Example |
+|---|---|---|
+| `--registry-base` | `publish-images.sh` | `ghcr.io/<your-github-username>` |
+| `--ghcr-registry-base` | `deploy-workshop.sh` | `ghcr.io/<your-github-username>` |
+
+### 6. Update an image after a change
+
+When you change one app's source, republish **only that image** at the next version — unchanged images keep their existing tag, so they never get a meaningless new version. The image names are `uc1-agent`, `banking-ui`, `banking-agent`, `banking-mcp`, `uc3-agent`.
+
+**6.1** Build and push just the changed image at a new version (here `banking-ui` to `v2`):
+
+```bash
+bash infrastructure/scripts/publish-images.sh --image banking-ui --version v2 --registry-base ghcr.io/<your-github-username>
+```
+
+**6.2** Bump the matching pin in `infrastructure/workloads/main.tf` (the `ghcr_*` locals) from the old tag to the new one — e.g. `workshop-banking-app-ui:v1` → `:v2`. Leave the other four locals untouched.
+
+**6.3** Re-deploy Tier 3. The new tag makes Terraform roll the Deployment and the pod pull the new image (`IfNotPresent` would never re-pull an unchanged tag):
+
+```bash
+bash infrastructure/scripts/deploy-workshop.sh --tier 3 --image-source ghcr --ghcr-registry-base ghcr.io/<your-github-username>
+```
+
+A new `:tag` on an existing public package is already Public, so no visibility step is needed (that one-time step applies only the first time a package is created).
+

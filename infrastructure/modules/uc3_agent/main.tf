@@ -209,7 +209,7 @@ resource "kubernetes_deployment" "uc3_agent" {
         container {
           name              = "uc3-agent"
           image             = var.uc3_agent_image
-          image_pull_policy = "Always"
+          image_pull_policy = var.image_pull_policy
 
           port {
             container_port = 8080

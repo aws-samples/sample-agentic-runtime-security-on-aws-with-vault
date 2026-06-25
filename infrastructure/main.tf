@@ -47,6 +47,7 @@ module "audit" {
 
 module "ecr" {
   source = "./modules/ecr"
+  count  = var.image_source == "ecr" ? 1 : 0
 
   repository_names = ["workshop/uc1-agent", "workshop/uc3-agent", "workshop-banking-app"]
   tags             = var.tags

@@ -273,7 +273,7 @@ resource "kubernetes_deployment" "banking_ui" {
         container {
           name              = "banking-ui"
           image             = var.ui_image
-          image_pull_policy = "Always"
+          image_pull_policy = var.image_pull_policy
 
           port {
             container_port = 5173
@@ -384,7 +384,7 @@ resource "kubernetes_deployment" "banking_agent" {
         container {
           name              = "banking-agent"
           image             = var.agent_image
-          image_pull_policy = "Always"
+          image_pull_policy = var.image_pull_policy
 
           port {
             container_port = 3002
@@ -476,7 +476,7 @@ resource "kubernetes_deployment" "banking_mcp_server" {
         container {
           name              = "banking-mcp-server"
           image             = var.mcp_image
-          image_pull_policy = "Always"
+          image_pull_policy = var.image_pull_policy
 
           port {
             container_port = 3001

@@ -94,6 +94,28 @@ variable "acme_email" {
 }
 
 #-------------------------------------------------------------------------------
+# Image Source Toggle
+# Controls whether EKS workloads pull pre-built public GHCR images (default)
+# or use the self-paced local-build → private ECR opt-in path.
+# ghcr: no container runtime required; imagePullPolicy IfNotPresent; ECR repos
+#       not provisioned; bootstrap does not stamp image URIs.
+# ecr:  today's local-build → push flow; ECR repos provisioned by the ecr module;
+#       bootstrap stamps <account>/<region> URIs into tier-3 tfvars.
+# The registry base var is tier-3 only (workloads root); ECR does not consume it.
+#-------------------------------------------------------------------------------
+
+variable "image_source" {
+  type        = string
+  description = "Image source mode: 'ghcr' (default — pull pre-built public images from GHCR, no build required) or 'ecr' (self-paced opt-in — build locally and push to private ECR)."
+  default     = "ghcr"
+
+  validation {
+    condition     = contains(["ghcr", "ecr"], var.image_source)
+    error_message = "image_source must be 'ghcr' or 'ecr'."
+  }
+}
+
+#-------------------------------------------------------------------------------
 # Resource Tags
 #-------------------------------------------------------------------------------
 

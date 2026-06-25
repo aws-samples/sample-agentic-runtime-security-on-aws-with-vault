@@ -6,25 +6,49 @@
 # This root (infrastructure/workloads/) deploys the end-user apps: uc1 agent,
 # uc2 banking (UI + agent + MCP), uc3 agent, plus the iviaop agent-uc2
 # redirect_uri patch. region / cluster / RDS / KB / ACM cert come from tier-1
-# state; Vault + IVIA wiring comes from tier-2 state. The ONLY inputs here are
-# the ECR image URIs (built by build-images.sh) and the Bedrock model id.
+# state; Vault + IVIA wiring comes from tier-2 state.
 #
-# bootstrap.sh stamps <account>/<region> for you — it derives them from your
-# live AWS account ID and the tier-1 region, then writes them into the seeded
-# terraform.tfvars. You only need to touch this file if you seed it WITHOUT
-# bootstrap: then replace <account>/<region> by hand, because these vars have no
-# default and the tier-3 apply fails with "No value for required variable" if
-# left as placeholders. deploy-workshop.sh builds + pushes these exact repo:tag
-# images before the tier-3 apply.
+# --------------------------------------------------------------------------
+# DEFAULT MODE: ghcr (no build, no ECR, no container runtime required)
+# --------------------------------------------------------------------------
+# Pre-built public GHCR images are pulled anonymously from ghcr.io/sharepointoscar.
+# The five image URIs are derived from ghcr_registry_base in locals — you do NOT
+# need to set the image vars below (they default to "" and are ignored in ghcr mode).
+# bootstrap.sh does NOT stamp image lines in ghcr mode.
+# deploy-workshop.sh skips the build step in ghcr mode.
+#
+# --------------------------------------------------------------------------
+# SELF-PACED OPT-IN: --image-source ecr  (requires Docker/Podman + AWS creds)
+# --------------------------------------------------------------------------
+# Set image_source = "ecr" to use the local-build → private ECR flow.
+# bootstrap.sh stamps <account>.dkr.ecr.<region>.amazonaws.com URIs into the
+# five image vars below. module.ecr provisions the ECR repos in tier-1.
+# deploy-workshop.sh builds and pushes the images before the tier-3 apply.
+#
+# To use ecr mode: uncomment image_source below and let bootstrap stamp the
+# five image lines (or fill them in by hand if seeding without bootstrap).
 ################################################################################
 
-uc1_agent_image = "<account>.dkr.ecr.<region>.amazonaws.com/workshop/uc1-agent:latest"
+# Image source mode (default: ghcr — no build required).
+# Uncomment and set to "ecr" for the self-paced local-build opt-in path.
+# image_source = "ecr"
 
-banking_app_ui_image    = "<account>.dkr.ecr.<region>.amazonaws.com/workshop-banking-app:ui"
-banking_app_agent_image = "<account>.dkr.ecr.<region>.amazonaws.com/workshop-banking-app:agent"
-banking_app_mcp_image   = "<account>.dkr.ecr.<region>.amazonaws.com/workshop-banking-app:mcp"
+# GHCR registry base (ghcr mode only).
+# Override only if you have published to your own GHCR namespace via
+# publish-images.sh --registry-base ghcr.io/<you>.  Default matches the
+# maintainer-published packages.
+# ghcr_registry_base = "ghcr.io/sharepointoscar"
 
-uc3_agent_image = "<account>.dkr.ecr.<region>.amazonaws.com/workshop/uc3-agent:latest"
+# ECR image URI overrides (ecr mode only).
+# In ghcr mode leave these commented — bootstrap does not stamp them and
+# the GHCR URIs derived from ghcr_registry_base take effect.
+# In ecr mode bootstrap.sh stamps these lines with your account/region values.
+#
+# uc1_agent_image         = "<account>.dkr.ecr.<region>.amazonaws.com/workshop/uc1-agent:latest"
+# banking_app_ui_image    = "<account>.dkr.ecr.<region>.amazonaws.com/workshop-banking-app:ui"
+# banking_app_agent_image = "<account>.dkr.ecr.<region>.amazonaws.com/workshop-banking-app:agent"
+# banking_app_mcp_image   = "<account>.dkr.ecr.<region>.amazonaws.com/workshop-banking-app:mcp"
+# uc3_agent_image         = "<account>.dkr.ecr.<region>.amazonaws.com/workshop/uc3-agent:latest"
 
 # Bedrock LLM — cross-region inference profile id for Amazon Nova Pro.
 bedrock_model_id = "us.amazon.nova-pro-v1:0"

@@ -65,6 +65,11 @@ SKIP_QUOTAS=false
 # for actions the principal can actually perform — Instruqt sandboxes. The
 # real test is the subsequent terraform apply. Set true by --skip-iam-sim.
 SKIP_IAM_SIM=false
+# Image source mode — controls whether the container-runtime gate fires.
+# ghcr (default): pre-built public GHCR images, no build required, no runtime needed.
+# ecr: local build + push to ECR — container runtime (Docker or Podman) required.
+# Set via env var or --image-source=<mode> flag.
+IMAGE_SOURCE="${WORKSHOP_IMAGE_SOURCE:-ghcr}"
 
 # Argument parsing — keep simple, no shift loops with positional args
 for arg in "$@"; do
@@ -74,9 +79,10 @@ for arg in "$@"; do
         --skip-tools)     SKIP_TOOLS=true ;;
         --skip-quotas)    SKIP_QUOTAS=true ;;
         --skip-iam-sim)   SKIP_IAM_SIM=true ;;
+        --image-source=*) IMAGE_SOURCE="${arg#--image-source=}" ;;
         --help|-h)
             cat <<USAGE
-Usage: $0 [--interactive] [--dry-run] [--skip-tools] [--skip-quotas] [--skip-iam-sim] [--help]
+Usage: $0 [--image-source=<ghcr|ecr>] [--interactive] [--dry-run] [--skip-tools] [--skip-quotas] [--skip-iam-sim] [--help]
 
 Workshop pre-flight: installs CLI prereqs, then verifies Bedrock model access,
 AWS service quotas, and IAM permissions for the workshop bootstrap.
@@ -85,6 +91,11 @@ Modes:
   (no flags)        Default: auto-install missing CLIs (no per-tool prompts),
                     then run Bedrock + quotas + IAM checks straight through.
                     Failures accumulate into a consolidated summary at the end.
+  --image-source=ghcr  Default: pre-built public GHCR images — no container
+                    runtime required (Docker/Podman check skipped).
+  --image-source=ecr   Local build + push to ECR — container runtime
+                    (Docker or Podman) is required and checked.
+                    Env fallback: WORKSHOP_IMAGE_SOURCE.
   --interactive     Prompt before each install AND before each check section
                     ("Install kubectl? [y/N]", "Run Bedrock check? [y/N]", ...).
   --dry-run         Print every install command prefixed [dry-run] without
@@ -429,11 +440,16 @@ else
 fi
 
 # Container runtime (Podman OR Docker) — required by build-images.sh (deploy
-# Step 3) to build + push the agent images. detect_container_runtime validates
-# the runtime and prints its own pass/fail line. NO `|| exit 1` here — this
-# script is continue-on-failure (the EXIT trap prints the consolidated summary),
-# so a missing/broken runtime is recorded and the remaining checks still run.
-detect_container_runtime
+# Step 3) to build + push the agent images in ecr mode. In ghcr mode (default)
+# no build is performed — pre-built public images are pulled from GHCR — so no
+# container runtime is needed and the check is skipped. detect_container_runtime
+# validates the runtime and prints its own pass/fail line. NO `|| exit 1` here —
+# this script is continue-on-failure; failures accumulate into the final summary.
+if [ "${IMAGE_SOURCE:-ghcr}" = "ecr" ]; then
+    detect_container_runtime
+else
+    print_pass "Container runtime: not required (${IMAGE_SOURCE:-ghcr} mode — pre-built public images from GHCR)"
+fi
 
 echo
 fi  # end if [ "$SKIP_TOOLS" = true ] ... else  (covers Sections 1 + 1.5)
