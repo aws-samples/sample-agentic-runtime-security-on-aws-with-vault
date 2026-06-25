@@ -86,3 +86,23 @@ The `--registry-base` you pass to `publish-images.sh` and the `--ghcr-registry-b
 | `--registry-base` | `publish-images.sh` | `ghcr.io/<your-github-username>` |
 | `--ghcr-registry-base` | `deploy-workshop.sh` | `ghcr.io/<your-github-username>` |
 
+### 6. Update an image after a change
+
+When you change one app's source, republish **only that image** at the next version — unchanged images keep their existing tag, so they never get a meaningless new version. The image names are `uc1-agent`, `banking-ui`, `banking-agent`, `banking-mcp`, `uc3-agent`.
+
+**6.1** Build and push just the changed image at a new version (here `banking-ui` to `v2`):
+
+```bash
+bash infrastructure/scripts/publish-images.sh --image banking-ui --version v2 --registry-base ghcr.io/<your-github-username>
+```
+
+**6.2** Bump the matching pin in `infrastructure/workloads/main.tf` (the `ghcr_*` locals) from the old tag to the new one — e.g. `workshop-banking-app-ui:v1` → `:v2`. Leave the other four locals untouched.
+
+**6.3** Re-deploy Tier 3. The new tag makes Terraform roll the Deployment and the pod pull the new image (`IfNotPresent` would never re-pull an unchanged tag):
+
+```bash
+bash infrastructure/scripts/deploy-workshop.sh --tier 3 --image-source ghcr --ghcr-registry-base ghcr.io/<your-github-username>
+```
+
+A new `:tag` on an existing public package is already Public, so no visibility step is needed (that one-time step applies only the first time a package is created).
+
