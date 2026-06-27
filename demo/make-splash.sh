@@ -46,4 +46,12 @@ magick "$RAW" -resize 1280x720 -background white -flatten demo/out/splash.png
 # self-running, so erase it. The line sits centered just below the logos on plain
 # white, clear of the corner gradient decorations — a white rectangle is seamless.
 magick demo/out/splash.png -fill white -draw "rectangle 510,460 770,518" demo/out/splash.png
+
+# Video-splash branding (does NOT touch the live deck): drop the AWS "powered by"
+# badge and center the HashiCorp logo. Erase the full slide-1 center logo block
+# (both logos + the space between), then composite HashiCorp at canvas center.
+magick demo/out/splash.png -fill white -draw "rectangle 460,260 910,440" demo/out/splash.png
+magick demo/out/splash.png \
+  \( assets/hashicorp_logo.png -resize 150x \) -gravity center -geometry +0-5 -composite \
+  demo/out/splash.png
 echo "DONE -> demo/out/splash.png ($(magick identify -format '%wx%h' demo/out/splash.png))"
