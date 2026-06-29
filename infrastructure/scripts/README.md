@@ -251,6 +251,37 @@ rm -f infrastructure/.acme-state
 bash infrastructure/scripts/deploy-workshop.sh
 ```
 
+## Recovery: interrupted Tier 2 — `vault-configure.sh` "path is already in use"
+
+If Tier 2 is interrupted mid-run and re-run, `vault-configure.sh` may fail its
+`terraform apply` with `path is already in use at jwt/` (or `kubernetes/`). This
+happens when a prior apply created the auth backend in Vault but the run died
+before the state write — leaving the mount **orphaned**: present in Vault but
+absent from `infrastructure/vault-config/terraform.tfstate`. On the retry
+terraform tries to create it again and Vault rejects the duplicate.
+
+`vault-configure.sh` now **self-heals** this automatically: on a `path is already
+in use` failure it unmounts the orphaned auth backend (confirmed present in
+`GET /sys/auth`) and retries the apply once. These auth backends are fully
+declarative, so terraform recreates them identically — the unmount is
+non-destructive. You will see `[WARN] Auth backend jwt/ is orphaned … unmounting
+to recover` followed by `[ OK ] … applied successfully (after self-heal)`.
+
+If the self-heal cannot clear it (e.g. the conflict is a non-auth secrets mount),
+recover manually, then re-run:
+
+```bash
+# Inspect the auth mounts (port-forward Vault first if needed)
+curl -s -H "X-Vault-Token: $VAULT_TOKEN" http://127.0.0.1:8200/v1/sys/auth | jq 'keys'
+
+# Unmount the orphaned path
+curl -sf -X DELETE -H "X-Vault-Token: $VAULT_TOKEN" \
+  http://127.0.0.1:8200/v1/sys/auth/jwt
+
+# Re-run Tier 2 (Vault already initialized, cert already valid)
+bash infrastructure/scripts/deploy-workshop.sh --tier 2 --skip-vault-init --skip-acme
+```
+
 ## SVG Regeneration
 
 ```bash
