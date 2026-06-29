@@ -104,6 +104,56 @@ _result_get() {
   return 1
 }
 
+# Recovery hint printed when a terraform apply fails on an orphaned Vault mount
+# and self-heal could not clear it (or the conflict was not an auth backend).
+_vault_orphan_fix_hint() {
+  info "Fix: 'path is already in use at <path>/' means a prior interrupted run left"
+  info "     a Vault mount that is absent from this workspace's terraform state."
+  info "     Inspect the auth mounts, unmount the orphan, then re-run tier 2:"
+  info "       curl -s -H \"X-Vault-Token: \$VAULT_TOKEN\" http://127.0.0.1:8200/v1/sys/auth | jq 'keys'"
+  info "       curl -sf -X DELETE -H \"X-Vault-Token: \$VAULT_TOKEN\" http://127.0.0.1:8200/v1/sys/auth/<path>"
+  info "       bash infrastructure/scripts/deploy-workshop.sh --tier 2 --skip-vault-init --skip-acme"
+}
+
+# Self-heal an interrupted prior run. Vault emits "path is already in use at
+# <path>/" ONLY when terraform tries to CREATE a mount that already exists in
+# Vault — which, by definition, means the mount is absent from this workspace's
+# state (the apply created it, then the run died before the state write). The
+# error message is itself the orphan signal. For each conflicting AUTH path that
+# is present in GET /sys/auth, unmount it so the retry re-creates it. These auth
+# backends are fully declarative (kubernetes/, jwt/) — terraform recreates them
+# identically — so unmount+retry is non-destructive. Returns 0 if it unmounted
+# at least one orphan (caller should retry apply), non-zero otherwise.
+heal_orphan_auth_mounts() {
+  local apply_log="$1" healed=false p conflicts auth_json
+  conflicts=$(grep -oE 'path is already in use at [A-Za-z0-9_-]+/' "$apply_log" \
+    | sed -E 's#.*at ([A-Za-z0-9_-]+)/#\1#' | sort -u)
+  [[ -z "$conflicts" ]] && return 1
+
+  auth_json=$(curl -sf -H "X-Vault-Token: ${VAULT_TOKEN}" \
+    http://127.0.0.1:8200/v1/sys/auth 2>/dev/null || echo '{}')
+
+  while IFS= read -r p; do
+    [[ -z "$p" ]] && continue
+    # Only heal auth-backend orphans — confirm the path is actually mounted under
+    # sys/auth before deleting (a secrets-mount conflict is left to the Fix hint).
+    if ! echo "$auth_json" | jq -e --arg k "${p}/" 'has($k)' >/dev/null 2>&1; then
+      warn "Conflict path ${p}/ is not an auth backend (not in /sys/auth) — skipping self-heal"
+      continue
+    fi
+    warn "Auth backend ${p}/ is orphaned (exists in Vault, absent from terraform state) — unmounting to recover"
+    if curl -sf -X DELETE -H "X-Vault-Token: ${VAULT_TOKEN}" \
+         "http://127.0.0.1:8200/v1/sys/auth/${p}" >/dev/null 2>&1; then
+      ok "Unmounted orphaned auth backend ${p}/"
+      healed=true
+    else
+      warn "Failed to unmount ${p}/ — manual recovery may be required"
+    fi
+  done <<< "$conflicts"
+
+  [[ "$healed" == true ]]
+}
+
 cleanup() {
   info "Cleaning up port-forwards..."
   [[ -n "${VAULT_PF_PID:-}" ]] && kill "$VAULT_PF_PID" 2>/dev/null || true
@@ -291,13 +341,32 @@ TFVARS
   fi
 
   info "Running terraform apply..."
-  if terraform -chdir="${VAULT_CONFIG_DIR}" apply -auto-approve -input=false 2>&1; then
+  # Capture apply output (pipefail is set, so the pipeline reflects terraform's
+  # exit, not tee's) so we can detect the "path is already in use" orphan signal
+  # and self-heal an interrupted prior run before failing the deploy.
+  local apply_log
+  apply_log="$(mktemp)"
+  if terraform -chdir="${VAULT_CONFIG_DIR}" apply -auto-approve -input=false 2>&1 | tee "$apply_log"; then
     ok "Vault configuration applied successfully"
+  elif grep -q 'path is already in use' "$apply_log" && heal_orphan_auth_mounts "$apply_log"; then
+    info "Retrying terraform apply after self-heal..."
+    if terraform -chdir="${VAULT_CONFIG_DIR}" apply -auto-approve -input=false 2>&1; then
+      ok "Vault configuration applied successfully (after self-heal)"
+    else
+      fail "terraform apply still failing after self-heal"
+      _vault_orphan_fix_hint
+      rm -f "$apply_log"
+      record "vault_config" "FAIL"
+      return 1
+    fi
   else
     fail "terraform apply failed"
+    grep -q 'path is already in use' "$apply_log" && _vault_orphan_fix_hint
+    rm -f "$apply_log"
     record "vault_config" "FAIL"
     return 1
   fi
+  rm -f "$apply_log"
 
   # Verify
   info "Verifying Vault configuration..."
@@ -380,8 +449,24 @@ phase_ivia_verify() {
     2>/dev/null | jq -r '.issuer // empty' 2>/dev/null || echo "")
 
   if [[ -n "$issuer" ]]; then
-    ok "OIDC issuer: ${issuer}"
-    record "ivia_verify" "PASS"
+    # A `.invalid` issuer is the pre-ACME placeholder IVIA serves until deploy
+    # Step 7 (ACME) re-applies module.ivia onto the real nip.io FQDN. This Phase 3
+    # runs at Step 8 — AFTER Step 7 — so on a full deploy the issuer must already
+    # be the real FQDN. A placeholder here is NOT a benign green check: it means
+    # ACME did not complete (or was skipped via --skip-acme). Surface it as WARN,
+    # never OK/PASS, so the misleading issuer is visible without masking a real
+    # ACME failure. (.invalid is an RFC 6761 reserved TLD — never a real issuer.)
+    if [[ "$issuer" == *".invalid"* ]]; then
+      warn "OIDC issuer is a pre-ACME placeholder: ${issuer}"
+      warn "  Expected ONLY if ACME (deploy Step 7) was skipped or has not run yet."
+      warn "  On a full deploy the issuer must be the real nip.io FQDN by Step 8 —"
+      warn "  a placeholder here means ACME did not complete. Re-run Step 7:"
+      warn "    bash infrastructure/scripts/deploy-workshop.sh --tier 2 --skip-vault-init"
+      record "ivia_verify" "WARN"
+    else
+      ok "OIDC issuer: ${issuer}"
+      record "ivia_verify" "PASS"
+    fi
   else
     warn "OIDC discovery not responding — IVIA may still be initializing"
     record "ivia_verify" "WARN"

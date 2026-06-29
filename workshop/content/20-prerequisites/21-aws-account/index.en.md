@@ -36,17 +36,21 @@ If the output starts with `arn:aws:sts::` (assumed role), note the underlying IA
 
 ## Step 3: Verify Bedrock Model Access
 
-The workshop uses two Amazon Nova models. Verify they are enabled:
+The workshop uses two Amazon Nova models. Verify they are enabled.
+
+**Nova Pro** is reached through a cross-region inference (CRIS) profile, so validate it with `get-inference-profile`. The `get-foundation-model` API does **not** accept `us.*` profile IDs — calling it on `us.amazon.nova-pro-v1:0` returns `ResourceNotFoundException`, which is expected and not an access problem:
 
 ```bash
-aws bedrock get-foundation-model \
-  --model-identifier us.amazon.nova-pro-v1:0 \
+aws bedrock get-inference-profile \
+  --inference-profile-identifier us.amazon.nova-pro-v1:0 \
   --region us-west-2 \
-  --query 'modelDetails.modelId' \
+  --query 'inferenceProfileId' \
   --output text
 ```
 
 **Expected output:** `us.amazon.nova-pro-v1:0`
+
+**Nova 2 Multimodal Embeddings** is a direct model, validated with `get-foundation-model`:
 
 ```bash
 aws bedrock get-foundation-model \
