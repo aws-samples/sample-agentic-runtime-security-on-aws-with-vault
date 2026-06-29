@@ -380,8 +380,24 @@ phase_ivia_verify() {
     2>/dev/null | jq -r '.issuer // empty' 2>/dev/null || echo "")
 
   if [[ -n "$issuer" ]]; then
-    ok "OIDC issuer: ${issuer}"
-    record "ivia_verify" "PASS"
+    # A `.invalid` issuer is the pre-ACME placeholder IVIA serves until deploy
+    # Step 7 (ACME) re-applies module.ivia onto the real nip.io FQDN. This Phase 3
+    # runs at Step 8 — AFTER Step 7 — so on a full deploy the issuer must already
+    # be the real FQDN. A placeholder here is NOT a benign green check: it means
+    # ACME did not complete (or was skipped via --skip-acme). Surface it as WARN,
+    # never OK/PASS, so the misleading issuer is visible without masking a real
+    # ACME failure. (.invalid is an RFC 6761 reserved TLD — never a real issuer.)
+    if [[ "$issuer" == *".invalid"* ]]; then
+      warn "OIDC issuer is a pre-ACME placeholder: ${issuer}"
+      warn "  Expected ONLY if ACME (deploy Step 7) was skipped or has not run yet."
+      warn "  On a full deploy the issuer must be the real nip.io FQDN by Step 8 —"
+      warn "  a placeholder here means ACME did not complete. Re-run Step 7:"
+      warn "    bash infrastructure/scripts/deploy-workshop.sh --tier 2 --skip-vault-init"
+      record "ivia_verify" "WARN"
+    else
+      ok "OIDC issuer: ${issuer}"
+      record "ivia_verify" "PASS"
+    fi
   else
     warn "OIDC discovery not responding — IVIA may still be initializing"
     record "ivia_verify" "WARN"
