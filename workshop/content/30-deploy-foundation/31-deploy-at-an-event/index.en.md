@@ -38,7 +38,7 @@ On your **first run** the script prompts for three values — paste each when as
 The CodeBuild build staged the Tier-1 Terraform state to an S3 bucket. Discover the bucket name from the CloudFormation stack output and pull the state to the exact path Tier 2 and Tier 3 read:
 
 ```bash
-STATE_BUCKET=$(aws cloudformation describe-stacks --query "Stacks[].Outputs[?OutputKey=='StateBucketName'].OutputValue|[]|[0]" --output text) && mkdir -p infrastructure && aws s3 cp "s3://${STATE_BUCKET}/infrastructure/terraform.tfstate" infrastructure/terraform.tfstate && test -s infrastructure/terraform.tfstate && echo "State pulled OK" || echo "ERROR: state file missing or empty"
+STATE_BUCKET=$(aws cloudformation describe-stacks --query "Stacks[].Outputs[?OutputKey=='StateBucketName'].OutputValue|[]|[0]" --output text) && aws s3 cp "s3://${STATE_BUCKET}/infrastructure/terraform.tfstate" infrastructure/terraform.tfstate && test -s infrastructure/terraform.tfstate && echo "State pulled OK" || echo "ERROR: state file missing or empty"
 ```
 
 ::::alert{header="State file path is load-bearing" type="warning"}
