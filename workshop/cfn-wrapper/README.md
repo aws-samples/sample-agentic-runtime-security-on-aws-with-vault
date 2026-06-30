@@ -18,6 +18,16 @@ Publishes this workshop to **AWS Workshop Studio** via the **CloudFormation → 
 - One non-TTY adjustment, **zero script change**: `bootstrap.sh --skip-prereq-gate` (the only `/dev/tty` read). `deploy-workshop.sh` is already non-interactive with tfvars pre-seeded.
 - Local Terraform state dies with the build container → tier-1 state is **staged** (state + tfvars uploaded; attendee pulls to the local path) while all roots stay on `backend="local"` (zero HCL change).
 
+## Teardown — why `delete-stack` does not remove tier-1
+
+`BuildOnDelete: false` (D-04): on CFN Delete the trigger Lambda is a no-op — no `terraform destroy`, no teardown build. Tier-1 (EKS/RDS/VPC/KB/audit) is created by Terraform *inside* CodeBuild, so it is **not** part of the CFN resource graph; deleting the stack removes only the stack's own resources (CodeBuild project, IAM roles, Lambda, StateBucket) and orphans the Terraform-created infra. `teardown.sh` (tag + well-known-name sweep, state-independent) is the teardown path.
+
+We *could* wire `BuildOnDelete: true` + a `CFN_EVENT_TYPE=Delete` branch in the buildspec that runs `teardown.sh`. We deliberately do **not**, for three reasons:
+
+1. **Redundant in production** — Workshop Studio reclaims the entire attendee account at event end, so a delete-time teardown buys nothing there.
+2. **Risk on the delete path** — a delete-build that hangs or fails *blocks stack deletion* (CFN waits on the callback), the worst place to get stuck.
+3. **One canonical teardown** — `teardown.sh` is the tested, state-independent sweep used for both self-paced and dev-account cleanup; the dev account is reused, so a manual run is fine.
+
 ## Dev-account sim (manual test outside Workshop Studio)
 
 Mirrors the reference repo's manual-test recipe. Region `us-west-2`, account from `aws sts get-caller-identity`. The dev-sim uses a local bucket in the CodeBuild region (real WS exposes its own assets bucket — see the VERIFY-ON-REAL-WS note in `contentspec.yaml`).
