@@ -9,8 +9,6 @@ The EKS cluster was already provisioned as part of your AWS account setup. You'l
 Follow **[Deploy — Self-paced](../31-deploy-self-paced/)** — you bootstrap and apply all three tiers yourself.
 ::::
 
-By default the deploy pulls the five Use Case images as pre-built public packages from GHCR (`ghcr.io/sharepointoscar/*:v1`) anonymously at pod start — no container runtime, no image build, no ECR.
-
 #### Step 1 — Clone the repository
 
 Clone the workshop repo at the pinned event tag from the public mirror:
