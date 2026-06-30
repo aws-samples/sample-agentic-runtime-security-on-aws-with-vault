@@ -1,0 +1,487 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >-
+  CloudFormation bootstrap for the Agentic Runtime Security on AWS workshop.
+  Provisions tier-1 (EKS foundation, 183 resources, ~17 min) via CodeBuild before
+  the attendee session opens. Attendees run tier-2/3 themselves as the hands-on lesson.
+  Template location: workshop/static/cfn_bootstrap.yml
+
+Parameters:
+  AcmeEmail:
+    Type: String
+    NoEcho: true
+    Description: >-
+      Let's Encrypt registration email for TLS certificate issuance (ACME).
+      Must be a real, reachable address — not *@example.com.
+      Event organizer fills this in the Workshop Studio event config.
+
+  CodeRepo:
+    Type: String
+    Default: "https://github.com/sharepointoscar/agentic-runtime-security-aws"
+    Description: >-
+      Public git-clone-able URL for the workshop repository. Defaults to the
+      sharepointoscar/github.com mirror (origin ibm.com/Oscar-Medina is private).
+
+  CodeRepoBranch:
+    Type: String
+    Default: "v1.0.0"
+    Description: >-
+      Pinned release tag (or branch) to check out. Bump this per event so all
+      attendee accounts in a session get byte-identical infrastructure. (D-03)
+
+  CodeRepoFolder:
+    Type: String
+    Default: "/"
+    Description: >-
+      Subfolder inside the repository that contains the deployable project root.
+      Set to "/" (not empty) for the repo root. Leading slash is optional.
+
+Resources:
+
+  # ─── S3: tier-1 state staging bucket ───────────────────────────────────────
+  # Tier-1 Terraform state is staged here after the CodeBuild run so attendees
+  # can pull it with `aws s3 cp` at the start of their tier-2/3 session (D-04).
+  # Threat T-11-01: SSE-AES256 + public-access block + versioning (no delete on CFN Delete — D-04).
+  StateBucket:
+    Type: "AWS::S3::Bucket"
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+
+  # ─── IAM: CodeBuild execution role ──────────────────────────────────────────
+  # INITIAL non-Admin role scoped to tier-1 service namespaces + IAM management
+  # (tier-1 Terraform creates 10+ IAM roles; PowerUserAccess alone is insufficient).
+  # Threat T-11-03: role is non-Admin (no wildcard-on-star grant). Action set is
+  # finalized in plan 11-04 via aws accessanalyzer against a live CloudTrail run.
+  CodeBuildServiceRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: "sts:AssumeRole"
+      Policies:
+        - PolicyName: Tier1DeployPermissions
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: Tier1ServiceNamespaces
+                Effect: Allow
+                Action:
+                  - "eks:*"
+                  - "ec2:*"
+                  - "ecr:*"
+                  - "rds:*"
+                  - "s3:*"
+                  - "bedrock:*"
+                  - "aoss:*"
+                  - "logs:*"
+                  - "cloudwatch:*"
+                  - "firehose:*"
+                  - "kms:*"
+                  - "acm:*"
+                  - "route53:*"
+                  - "elasticloadbalancing:*"
+                  - "cloudtrail:*"
+                  - "athena:*"
+                  - "dynamodb:*"
+                  - "lambda:*"
+                  - "sts:*"
+                  - "secretsmanager:*"
+                  - "ssm:*"
+                  - "ssmmessages:*"
+                  - "events:*"
+                  - "glue:*"
+                  - "opensearch:*"
+                  - "aoss:*"
+                  - "wafv2:*"
+                  - "xray:*"
+                  - "tag:*"
+                Resource: "*"
+              - Sid: Tier1IamManagement
+                # Tier-1 Terraform creates IAM roles (fluent-bit, firehose, vault-kms,
+                # bedrock-kb, IRSA roles, etc.). IAM management actions are required.
+                # PowerUserAccess denies all iam:* — this statement bridges that gap.
+                # Scoped to management CRUD actions only; NOT iam:* (which would be Admin).
+                Effect: Allow
+                Action:
+                  - "iam:Create*"
+                  - "iam:Attach*"
+                  - "iam:Detach*"
+                  - "iam:Delete*"
+                  - "iam:Get*"
+                  - "iam:List*"
+                  - "iam:Put*"
+                  - "iam:Tag*"
+                  - "iam:Untag*"
+                  - "iam:Update*"
+                  - "iam:PassRole"
+                  - "iam:AddRoleToInstanceProfile"
+                  - "iam:RemoveRoleFromInstanceProfile"
+                Resource: "*"
+
+  # ─── CodeBuild: tier-1 deploy project ──────────────────────────────────────
+  # NO_SOURCE + git clone in buildspec (avoids CodeBuild OAuth setup for public repos).
+  # Environment variables are injected from CFN parameters. ACME_EMAIL passes the
+  # NoEcho parameter securely — it is NOT echoed in the CFN console. (T-11-02)
+  CodeBuildProject:
+    Type: "AWS::CodeBuild::Project"
+    Properties:
+      ConcurrentBuildLimit: 1
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Environment:
+        ComputeType: BUILD_GENERAL1_MEDIUM
+        Image: "aws/codebuild/standard:7.0"
+        PrivilegedMode: false
+        Type: LINUX_CONTAINER
+        EnvironmentVariables:
+          - Name: PUBLIC_REPO
+            Type: PLAINTEXT
+            Value: !Ref CodeRepo
+          - Name: PUBLIC_REPO_BRANCH
+            Type: PLAINTEXT
+            Value: !Ref CodeRepoBranch
+          - Name: PUBLIC_REPO_FOLDER
+            Type: PLAINTEXT
+            Value: !Ref CodeRepoFolder
+          - Name: STATE_BUCKET
+            Type: PLAINTEXT
+            Value: !Ref StateBucket
+          - Name: ACME_EMAIL
+            Type: PLAINTEXT
+            Value: !Ref AcmeEmail
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      Source:
+        Type: NO_SOURCE
+        BuildSpec: |
+          version: 0.2
+          env:
+            exported-variables:
+              - REPO_ROOT
+
+          phases:
+            install:
+              commands:
+                - set -e
+                - export HOME=/root
+                - echo "=== installing tools (terraform, kubectl, helm, yq, bc, jq) ==="
+                - TF_VERSION=1.10.5
+                - curl -fsSL -o /tmp/tf.zip https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_amd64.zip && unzip -o /tmp/tf.zip -d /usr/local/bin >/dev/null && terraform version | head -1
+                - curl -fsSL -o /usr/local/bin/kubectl https://dl.k8s.io/release/v1.34.0/bin/linux/amd64/kubectl && chmod +x /usr/local/bin/kubectl && kubectl version --client | head -1
+                - curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash >/dev/null 2>&1 && helm version --short
+                - curl -fsSL -o /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 && chmod +x /usr/local/bin/yq && yq --version
+                - command -v bc >/dev/null 2>&1 || (apt-get update -y >/dev/null && apt-get install -y bc >/dev/null)
+                - command -v jq >/dev/null 2>&1 || (apt-get update -y >/dev/null && apt-get install -y jq >/dev/null)
+                - jq --version
+                - pip3 install "requests>=2.27,<3"
+            pre_build:
+              commands:
+                - set -e
+                - export HOME=/root
+                - echo "=== clone repo at pinned tag ==="
+                - rm -rf code 2>/dev/null || true
+                - git clone --single-branch -b "$PUBLIC_REPO_BRANCH" --depth 1 "$PUBLIC_REPO" code
+                - cd "code/${PUBLIC_REPO_FOLDER#/}"
+                - export REPO_ROOT="$PWD"
+                - echo "=== bootstrap: seed tfvars from .example + terraform init (all roots) ==="
+                - bash infrastructure/scripts/bootstrap.sh --skip-prereq-gate
+                - echo "=== inject acme_email (real value, must not be *@example.com) ==="
+                - sed -i "s|^acme_email = .*|acme_email = \"${ACME_EMAIL}\"|" infrastructure/terraform.tfvars
+                - echo "=== inject non-empty sentinels for tier-2 IVIA secrets ==="
+                - echo "    (preflight gate checks all 3 secrets unconditionally; these NEVER reach tier-1 Terraform)"
+                - sed -i 's|^icr_entitlement_key = ""|icr_entitlement_key = "tier1-build-only-not-used"|' infrastructure/services/terraform.tfvars
+                - sed -i 's|^ivia_mmfa_push_client_secret = ""|ivia_mmfa_push_client_secret = "tier1-build-only-not-used"|' infrastructure/services/terraform.tfvars
+                - echo "acme set:" $(grep -c '^acme_email = ".\+"' infrastructure/terraform.tfvars) "| icr sentinel:" $(grep -c 'tier1-build-only-not-used' infrastructure/services/terraform.tfvars) "lines"
+            build:
+              commands:
+                - |
+                  set -e; cd "$REPO_ROOT"; export HOME=/root
+                  SCR=infrastructure/scripts
+
+                  echo "=== TIER 1: deploy-workshop.sh --tier 1 ==="
+                  bash "$SCR/deploy-workshop.sh" --tier 1
+
+                  echo "=== STAGE tier-1 state + tfvars to S3 ==="
+                  aws s3 cp infrastructure/terraform.tfstate "s3://${STATE_BUCKET}/infrastructure/terraform.tfstate"
+                  aws s3 cp infrastructure/terraform.tfvars  "s3://${STATE_BUCKET}/infrastructure/terraform.tfvars.staged"
+
+                  echo "=== GRANT attendee EKS access (WSParticipantRole — discovered dynamically, never hardcoded) ==="
+                  CLUSTER_NAME=$(grep '^cluster_name' infrastructure/terraform.tfvars | sed 's/.*"\(.*\)"/\1/')
+                  REGION=$(grep '^region' infrastructure/terraform.tfvars | sed 's/.*"\(.*\)"/\1/')
+                  ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+                  PARTICIPANT_ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/WSParticipantRole"
+
+                  aws eks create-access-entry \
+                    --cluster-name "$CLUSTER_NAME" --region "$REGION" \
+                    --principal-arn "$PARTICIPANT_ROLE_ARN" --type STANDARD 2>/dev/null || \
+                    echo "access-entry already exists — idempotent"
+
+                  aws eks associate-access-policy \
+                    --cluster-name "$CLUSTER_NAME" --region "$REGION" \
+                    --principal-arn "$PARTICIPANT_ROLE_ARN" \
+                    --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy \
+                    --access-scope type=cluster 2>/dev/null || \
+                    echo "policy already associated — idempotent"
+
+                  echo "=== TIER 1 complete; attendee EKS access granted to ${PARTICIPANT_ROLE_ARN} ==="
+            finally:
+              commands:
+                - pip3 install "requests>=2.27,<3"
+                - |
+                  python3 - <<'PYEOF'
+                  import json, os
+                  try:
+                      import requests
+                  except ImportError:
+                      print("requests not available — cannot notify CloudFormation"); exit(0)
+                  resp_url = os.environ.get("CFN_EVENT_RESPONSE_URL")
+                  if not resp_url:
+                      print("No CFN response URL — not a CFN-triggered build, no-op"); exit(0)
+                  data = json.loads(os.environ["CFN_EVENT_DATA"])
+                  data["Status"] = "SUCCESS" if int(os.environ.get("CODEBUILD_BUILD_SUCCEEDING", "0")) else "FAILED"
+                  data["Reason"] = "See CodeBuild logs: /aws/codebuild/workshop-tier1"
+                  data["Data"] = {"StateBucketName": os.environ.get("STATE_BUCKET", "")}
+                  response = requests.put(resp_url, data=json.dumps(data))
+                  print(f"CFN notified: {data['Status']} (HTTP {response.status_code})")
+                  PYEOF
+      TimeoutInMinutes: 60
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: "/aws/codebuild/workshop-tier1"
+
+  # ─── IAM: Lambda trigger execution role ────────────────────────────────────
+  # Lambda role for the Custom::CodeBuildTrigger function.
+  # AWSLambdaBasicExecutionRole for CloudWatch Logs + StartBuild on THIS project only.
+  # Threat T-11-06: StartBuild scoped to single project ARN (not "*").
+  CodeBuildTriggerExecutionRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - "sts:AssumeRole"
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+      Policies:
+        - PolicyName: RunCodeBuildProject
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: RunCodeBuild
+                Effect: Allow
+                Action:
+                  - "codebuild:StartBuild"
+                Resource:
+                  - !GetAtt CodeBuildProject.Arn
+
+  # ─── Lambda: Custom::CodeBuildTrigger function ──────────────────────────────
+  # Starts the CodeBuild project on CFN Create/Update/Delete.
+  # Handler code copied verbatim from:
+  # aws-samples/sample-iac-cloudformation-wrapper/terraform-project/cfn_bootstrap.yml
+  # When CodeBuildCallback=true, injects CFN_EVENT_DATA + CFN_EVENT_RESPONSE_URL as
+  # env var overrides so the buildspec finally block can PUT the callback response.
+  CodeBuildTriggerFunction:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      Description: "Custom::CodeBuildTrigger — starts CodeBuild with CFN callback env vars injected"
+      Handler: "index.lambda_handler"
+      MemorySize: 128
+      Role: !GetAtt CodeBuildTriggerExecutionRole.Arn
+      Runtime: python3.13
+      Timeout: 900
+      Code:
+        ZipFile: |
+          # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+          """Custom CloudFormation Resource to kick off CodeBuild project builds
+
+          CFn Properties
+          --------------
+          ProjectName : string
+              Name of the AWS CodeBuild project to run
+          BuildOnDelete : Optional[bool]
+              Set `True` to also run a build on CloudFormation `Delete` events
+          CodeBuildCallback : Optional[bool]
+              Set `True` if your CodeBuild project handles the CFN CR callback,
+              or leave default (False) to report success as soon as build starts.
+          IgnoreUpdate : Optional[bool]
+              Set `True` to only trigger a build on initial `Create` and ignore `Update`s
+
+          CodeBuild Env Var Overrides (injected when CodeBuildCallback=true)
+          ---------------------------
+          CFN_EVENT_TYPE : Union["Create", "Update", "Delete"]
+          CFN_EVENT_DATA : str
+              JSON with LogicalResourceId, RequestId, StackId, NoEcho, Data.
+              Your buildspec finally block adds Status, Reason, PhysicalResourceId
+              and PUTs the whole object to CFN_EVENT_RESPONSE_URL.
+          CFN_EVENT_RESPONSE_URL : str
+              URL to PUT the CloudFormation response data to.
+          """
+
+          import json
+          import logging
+          import traceback
+
+          import boto3
+          import cfnresponse
+
+          codebuild = boto3.client("codebuild")
+
+
+          def lambda_handler(event, context):
+              try:
+                  request_type = event["RequestType"]
+                  if request_type == "Create":
+                      handle_create(event, context)
+                  elif request_type == "Update":
+                      handle_update(event, context)
+                  elif request_type == "Delete":
+                      handle_delete(event, context)
+                  else:
+                      cfnresponse.send(
+                          event, context, cfnresponse.FAILED, {},
+                          reason=f"Unsupported CFN RequestType '{request_type}'",
+                      )
+              except Exception as e:
+                  logging.error("Uncaught exception in CFN custom resource handler - reporting failure")
+                  traceback.print_exc()
+                  cfnresponse.send(
+                      event, context, cfnresponse.FAILED, {},
+                      reason=f"See CloudWatch {context.log_group_name} > {context.log_stream_name} - {str(e)}",
+                  )
+                  raise e
+
+
+          def get_cfn_env_var_overrides(event):
+              res_config = event.get("ResourceProperties", {})
+              result = [
+                  {"name": "CFN_EVENT_TYPE", "type": "PLAINTEXT", "value": event["RequestType"]},
+              ]
+              if res_config.get("CodeBuildCallback"):
+                  result += [
+                      {
+                          "name": "CFN_EVENT_DATA",
+                          "type": "PLAINTEXT",
+                          "value": json.dumps({
+                              "LogicalResourceId": event["LogicalResourceId"],
+                              "PhysicalResourceId": event["LogicalResourceId"],
+                              "RequestId": event["RequestId"],
+                              "StackId": event["StackId"],
+                              "NoEcho": event["ResourceProperties"].get("NoEcho", False),
+                              "Data": {},
+                          }),
+                      },
+                      {
+                          "name": "CFN_EVENT_RESPONSE_URL",
+                          "type": "PLAINTEXT",
+                          "value": event["ResponseURL"],
+                      },
+                  ]
+              return result
+
+
+          def handle_create(event, context):
+              logging.info("**Received create request - running CodeBuild job")
+              res_config = event["ResourceProperties"]
+              codebuild_env_vars = get_cfn_env_var_overrides(event)
+              result = codebuild.start_build(
+                  projectName=res_config["ProjectName"],
+                  environmentVariablesOverride=codebuild_env_vars,
+              )
+              if not res_config.get("CodeBuildCallback"):
+                  cfnresponse.send(
+                      event, context, cfnresponse.SUCCESS,
+                      {"Reason": f"Started CodeBuild #{result['build']['buildNumber']}"},
+                      physicalResourceId=event["LogicalResourceId"],
+                  )
+
+
+          def handle_delete(event, context):
+              logging.info("**Received delete event - no-op")
+              res_config = event.get("ResourceProperties", {})
+              build_on_delete = res_config.get("BuildOnDelete", False)
+              if build_on_delete:
+                  codebuild_env_vars = get_cfn_env_var_overrides(event)
+                  codebuild.start_build(
+                      projectName=res_config["ProjectName"],
+                      environmentVariablesOverride=codebuild_env_vars,
+                  )
+                  reason = "Deletion build initiated"
+              else:
+                  reason = "Delete is a no-op"
+              if not (build_on_delete and res_config.get("CodeBuildCallback")):
+                  cfnresponse.send(
+                      event, context, cfnresponse.SUCCESS, {"Reason": reason},
+                      physicalResourceId=event["PhysicalResourceId"],
+                  )
+
+
+          def handle_update(event, context):
+              logging.info("**Received update event")
+              res_config = event.get("ResourceProperties", {})
+              ignore_update = res_config.get("IgnoreUpdate", False)
+              if ignore_update:
+                  reason = "Update is a no-op"
+              else:
+                  codebuild_env_vars = get_cfn_env_var_overrides(event)
+                  result = codebuild.start_build(
+                      projectName=res_config["ProjectName"],
+                      environmentVariablesOverride=codebuild_env_vars,
+                  )
+                  if res_config.get("CodeBuildCallback"):
+                      reason = None
+                  else:
+                      reason = f"Started CodeBuild #{result['build']['buildNumber']}"
+              if reason is not None:
+                  cfnresponse.send(
+                      event, context, cfnresponse.SUCCESS, {"Reason": reason},
+                      physicalResourceId=event["PhysicalResourceId"],
+                  )
+
+  # ─── Custom Resource: fire the CodeBuild tier-1 build on stack CREATE ──────
+  # BuildOnDelete: false  → CFN Delete is a no-op; teardown.sh is the manual path (D-04)
+  # CodeBuildCallback: true → CFN waits for the buildspec finally block to PUT response (D-13)
+  # IgnoreUpdate: true → pinned deploy; don't re-run on parameter changes mid-event
+  Tier1Deployment:
+    Type: "Custom::CodeBuildTrigger"
+    DependsOn:
+      - CodeBuildProject
+      - CodeBuildTriggerFunction
+    Properties:
+      ServiceToken: !GetAtt CodeBuildTriggerFunction.Arn
+      ProjectName: !Ref CodeBuildProject
+      BuildOnDelete: false
+      CodeBuildCallback: true
+      IgnoreUpdate: true
+
+Outputs:
+  CodeBuildProjectName:
+    Description: "Name of the CodeBuild project that ran tier-1"
+    Value: !Ref CodeBuildProject
+
+  StateBucketName:
+    Description: "S3 bucket holding the staged tier-1 Terraform state (attendees pull from here)"
+    Value: !Ref StateBucket
+
+  CodeBuildConsoleLink:
+    Description: "Direct link to the CodeBuild project in the AWS console"
+    Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/codesuite/codebuild/${AWS::AccountId}/projects/${CodeBuildProject}"

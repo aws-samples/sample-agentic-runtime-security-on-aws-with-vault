@@ -11,8 +11,21 @@ awsAccountConfig:
   accountSources:
     - WorkshopStudio
   participantRole:
+    # INITIAL composition for the tier-2/3 attendee AWS-API surface.
+    # ReadOnlyAccess: broad describe/read (sts:GetCallerIdentity, eks:Describe,
+    #   s3:Get/List for state bucket, secretsmanager:Describe/Get, etc.)
+    # AWSCertificateManagerFullAccess: acm:ImportCertificate (tier-2 TLS setup)
+    # AmazonBedrockFullAccess: bedrock-agent:StartIngestionJob (tier-2 KB seed)
+    # SecretsManagerReadWrite: secrets read/write for Vault + IVIA config (tier-2)
+    # AmazonEC2ContainerRegistryPowerUser: ECR push/pull for image builds (tier-2)
+    # This composition is validated and tightened in plan 11-05 via a live tier-2/3 run.
+    # Scoped to the tier-2/3 surface only — not a wildcard-on-star grant.
     managedPolicies:
       - arn:aws:iam::aws:policy/ReadOnlyAccess
+      - arn:aws:iam::aws:policy/AWSCertificateManagerFullAccess
+      - arn:aws:iam::aws:policy/AmazonBedrockFullAccess
+      - arn:aws:iam::aws:policy/SecretsManagerReadWrite
+      - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPowerUser
   regionConfiguration:
     minAccessibleRegions: 1
     maxAccessibleRegions: 1
@@ -22,6 +35,23 @@ awsAccountConfig:
     deployableRegions:
       required:
         - us-west-2
+
+infrastructure:
+  cloudformationTemplates:
+    - templateLocation: static/cfn_bootstrap.yml
+      label: "Workshop Foundation (EKS + Vault) — CloudFormation Bootstrap"
+      participantAllStackOutputsVisible: true
+      # AcmeEmail: event organizer fills this in Workshop Studio event config (NoEcho in CFN).
+      # CodeRepoBranch: bump to the pinned release tag for each event (D-03).
+      parameters:
+        - templateParameter: AcmeEmail
+          defaultValue: ""
+        - templateParameter: CodeRepo
+          defaultValue: "https://github.com/sharepointoscar/agentic-runtime-security-aws"
+        - templateParameter: CodeRepoBranch
+          defaultValue: "v1.0.0"
+        - templateParameter: CodeRepoFolder
+          defaultValue: "/"
 
 # NOTE (Phase 1 Open Question 1): Service quota requests are NOT in the verified v2 schema
 # surface. Quota provisioning is documented in workshop/content/20-prerequisites/ as
