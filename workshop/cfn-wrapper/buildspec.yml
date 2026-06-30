@@ -37,7 +37,7 @@ phases:
       - git clone --single-branch -b "$PUBLIC_REPO_BRANCH" --depth 1 "$PUBLIC_REPO" code
       - cd "code/${PUBLIC_REPO_FOLDER#/}"
       - export REPO_ROOT="$PWD"
-      - echo "=== bootstrap: seed tfvars from .example + terraform init (all roots) ==="
+      - echo "=== bootstrap - seed tfvars from .example + terraform init (all roots) ==="
       - bash infrastructure/scripts/bootstrap.sh --skip-prereq-gate
       - echo "=== inject acme_email (real value, must not be *@example.com) ==="
       - sed -i "s|^acme_email = .*|acme_email = \"${ACME_EMAIL}\"|" infrastructure/terraform.tfvars
