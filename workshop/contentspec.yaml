@@ -38,20 +38,22 @@ awsAccountConfig:
 
 infrastructure:
   cloudformationTemplates:
-    - templateLocation: static/cfn_bootstrap.yml
+    - templateLocation: assets/cfn/bootstrap.yaml
       label: "Workshop Foundation (EKS + Vault) — CloudFormation Bootstrap"
       participantAllStackOutputsVisible: true
       # AcmeEmail: event organizer fills this in Workshop Studio event config (NoEcho in CFN).
-      # CodeRepoBranch: bump to the pinned release tag for each event (D-03).
+      # TerraformSourceBucket + AssetsKeyPrefix: where `aws s3 sync ./assets` (publish.sh)
+      # lands the workshop/assets/ tree — CodeBuild sources buildspec/ + terraform/ from here.
+      # VERIFY-ON-REAL-WS: the WS asset store is ws-assets-us-east-1 (us-east-1) while
+      # CodeBuild runs in us-west-2; confirm the region-local bucket WS exposes to the
+      # template at event time, and adjust TerraformSourceBucket if WS injects a different one.
       parameters:
         - templateParameter: AcmeEmail
           defaultValue: ""
-        - templateParameter: CodeRepo
-          defaultValue: "https://github.com/sharepointoscar/agentic-runtime-security-aws"
-        - templateParameter: CodeRepoBranch
-          defaultValue: "v1.0.0"
-        - templateParameter: CodeRepoFolder
-          defaultValue: "/"
+        - templateParameter: TerraformSourceBucket
+          defaultValue: "ws-assets-us-east-1"
+        - templateParameter: AssetsKeyPrefix
+          defaultValue: "agentic-runtime-security-aws/"
 
 # NOTE (Phase 1 Open Question 1): Service quota requests are NOT in the verified v2 schema
 # surface. Quota provisioning is documented in workshop/content/20-prerequisites/ as

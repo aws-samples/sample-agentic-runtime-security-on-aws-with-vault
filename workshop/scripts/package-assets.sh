@@ -36,3 +36,57 @@ for png in ws-otp-signin ws-email-passcode ws-open-console; do
         echo "  SKIP: $SRC_DIR/$png.png not found"
     fi
 done
+
+# ── Sync the tier-1 Terraform provisioning tree into the Workshop Studio assets ──
+# The CFN wrapper's CodeBuild project sources workshop/assets/ from S3 and runs
+# `deploy-workshop.sh --tier 1` against terraform/infrastructure/. We copy the WHOLE
+# infrastructure/ tree (single source of truth stays infrastructure/) so the proven
+# scripts work unchanged; the copy is gitignored (.gitignore) and regenerated here.
+#
+# SECURITY (deny-by-default): infrastructure/ on a deployed machine holds REAL secrets
+# in gitignored files — terraform.tfvars (acme_email/ICR key/MMFA secret), *.tfstate
+# (resource secrets), .acme-state. NONE may ship to the assets bucket. We exclude all
+# generated/stateful/secret artifacts and KEEP only HCL, *.tfvars.example, the provider
+# lock files, and scripts/. A hard gate below aborts if any secret leaks through.
+TF_SRC="$REPO_ROOT/infrastructure"
+TF_DST="$REPO_ROOT/workshop/assets/terraform/infrastructure"
+mkdir -p "$TF_DST"
+rsync -a --delete \
+    --exclude='.terraform/' \
+    --exclude='*.tfstate' \
+    --exclude='*.tfstate.*' \
+    --exclude='*.backup' \
+    --exclude='terraform.tfvars' \
+    --exclude='.acme-state' \
+    --exclude='.deploy-id' \
+    --exclude='logs/' \
+    --exclude='*.log' \
+    "$TF_SRC/" "$TF_DST/"
+echo "  synced infrastructure/ -> workshop/assets/terraform/infrastructure/ (HCL + *.example + lock + scripts)"
+
+# Hard secret-leak gate — abort the whole package if any real secret-bearing file
+# made it into the assets tree. (.example tfvars are safe; everything else is not.)
+LEAK="$(find "$REPO_ROOT/workshop/assets/terraform" \( -name '*.tfvars' ! -name '*.tfvars.example' \) -o -name '*.tfstate*' -o -name '.acme-state' 2>/dev/null)"
+if [ -n "$LEAK" ]; then
+    echo "  ABORT: secret-bearing files leaked into workshop/assets/terraform:" >&2
+    echo "$LEAK" >&2
+    rm -rf "$TF_DST"
+    exit 1
+fi
+echo "  secret-leak gate: PASS (no real tfvars/tfstate/.acme-state in assets)"
+
+# Buildspec lint — every command must be a YAML string. A ': ' (colon-space) inside an
+# unquoted echo silently parses as a YAML mapping, and CodeBuild rejects it at
+# DOWNLOAD_SOURCE before any deploy runs. yq catches it here, before publish/sim.
+BS="$REPO_ROOT/workshop/assets/buildspec/buildspec.yml"
+if command -v yq >/dev/null 2>&1; then
+    BAD="$(yq '[.phases[].commands[] | select(tag != "!!str")] | length' "$BS" 2>/dev/null)"
+    if [ "${BAD:-0}" -ne 0 ]; then
+        echo "  ABORT: buildspec has $BAD non-string command(s) — colon-space in an echo?" >&2
+        yq '.phases[].commands[] | select(tag != "!!str")' "$BS" >&2
+        exit 1
+    fi
+    echo "  buildspec lint: PASS (all commands are YAML strings)"
+else
+    echo "  buildspec lint: SKIP (yq not installed)"
+fi

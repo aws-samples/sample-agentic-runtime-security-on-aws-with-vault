@@ -1,12 +1,19 @@
 version: 0.2
-# Hybrid tier-1 buildspec — production version for Workshop Studio CFN wrapper.
-# This file is the canonical source; its content is embedded verbatim in
-# workshop/static/cfn_bootstrap.yml (AWS::CodeBuild::Project Source.BuildSpec).
+# Hybrid tier-1 buildspec — Workshop Studio CFN wrapper (S3-assets source pattern).
+#
+# Source mechanism (aligned to jonathanmhurley/agentic-runtime-security-on-aws):
+#   Workshop Studio uploads workshop/assets/ to its per-workshop S3 bucket
+#   (aws s3 sync ./assets s3://ws-assets-us-east-1/agentic-runtime-security-aws).
+#   The CodeBuild project sources that prefix as Source.Type=S3 (folder), so this
+#   file is read from <prefix>/buildspec/buildspec.yml and the full infrastructure/
+#   tree is materialised at $CODEBUILD_SRC_DIR/terraform/infrastructure/.
+#   No git clone, no public mirror.
 #
 # What this does:
 #   install  : pin all tools proven in sim (terraform, kubectl, helm, yq, jq, bc) + requests for CFN callback
-#   pre_build: clone repo at pinned tag, bootstrap, inject acme_email, inject non-empty sentinels for
-#              tier-2 IVIA secrets (preflight gate checks them unconditionally — they never reach tier-1 TF)
+#   pre_build: bootstrap (seed tfvars from *.example + terraform init all roots), inject acme_email,
+#              inject non-empty sentinels for tier-2 IVIA secrets (preflight gate checks them
+#              unconditionally — they never reach tier-1 TF)
 #   build    : deploy-workshop.sh --tier 1 ONLY; stage tier-1 state to S3; grant WSParticipantRole EKS access
 #   finally  : PUT SUCCESS/FAILED to CFN callback URL (no-op when not a CFN-triggered build)
 env:
@@ -32,11 +39,10 @@ phases:
     commands:
       - set -e
       - export HOME=/root
-      - echo "=== clone repo at pinned tag ==="
-      - rm -rf code 2>/dev/null || true
-      - git clone --single-branch -b "$PUBLIC_REPO_BRANCH" --depth 1 "$PUBLIC_REPO" code
-      - cd "code/${PUBLIC_REPO_FOLDER#/}"
+      - echo "=== locate the infrastructure tree (S3-sourced at terraform/, no git clone) ==="
+      - cd "$CODEBUILD_SRC_DIR/terraform"
       - export REPO_ROOT="$PWD"
+      - test -d infrastructure/scripts || { echo "ERROR - infrastructure/ not found under $REPO_ROOT (check the assets sync, terraform/ prefix)"; exit 1; }
       - echo "=== bootstrap - seed tfvars from .example + terraform init (all roots) ==="
       - bash infrastructure/scripts/bootstrap.sh --skip-prereq-gate
       - echo "=== inject acme_email (real value, must not be *@example.com) ==="
