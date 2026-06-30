@@ -25,3 +25,14 @@ for svg in architecture-overview uc1-flow uc2-oauth-flow uc3-ciba-flow audit-cor
         echo "  SKIP: $SRC_DIR/$svg.svg not found (run excalidraw-to-svg.py first)"
     fi
 done
+
+# Sync Workshop Studio join screenshots (canonical source: assets/ws-*.png).
+# Referenced in workshop content as /images/ws-*.png via Hugo's static path.
+for png in ws-otp-signin ws-email-passcode ws-open-console; do
+    if [ -f "$SRC_DIR/$png.png" ]; then
+        cp "$SRC_DIR/$png.png" "$DST_DIR/$png.png"
+        echo "  copied $png.png -> workshop/static/images/"
+    else
+        echo "  SKIP: $SRC_DIR/$png.png not found"
+    fi
+done
