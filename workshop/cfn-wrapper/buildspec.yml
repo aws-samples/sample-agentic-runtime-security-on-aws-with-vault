@@ -1,0 +1,52 @@
+version: 0.2
+env:
+  parameter-store:
+    ACME_EMAIL: /cfn-sim/acme_email
+    ICR_ENTITLEMENT_KEY: /cfn-sim/icr_entitlement_key
+    IVIA_MMFA_PUSH_CLIENT_SECRET: /cfn-sim/ivia_mmfa_push_client_secret
+phases:
+  install:
+    commands:
+      - set -e
+      - export HOME=/root
+      - echo "=== installing tools (terraform, kubectl, helm, yq, bc) ==="
+      - TF_VERSION=1.10.5
+      - curl -fsSL -o /tmp/tf.zip https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_amd64.zip && unzip -o /tmp/tf.zip -d /usr/local/bin >/dev/null && terraform version | head -1
+      - curl -fsSL -o /usr/local/bin/kubectl https://dl.k8s.io/release/v1.34.0/bin/linux/amd64/kubectl && chmod +x /usr/local/bin/kubectl && kubectl version --client | head -1
+      - curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash >/dev/null 2>&1 && helm version --short
+      - curl -fsSL -o /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 && chmod +x /usr/local/bin/yq && yq --version
+      - command -v bc >/dev/null 2>&1 || (apt-get update -y >/dev/null && apt-get install -y bc >/dev/null)
+      - command -v jq >/dev/null 2>&1 || (apt-get update -y >/dev/null && apt-get install -y jq >/dev/null)
+      - jq --version
+  pre_build:
+    commands:
+      - set -e
+      - cd "$CODEBUILD_SRC_DIR"
+      - export HOME=/root
+      - echo "=== bootstrap (seed tfvars from .example + terraform init all roots) ==="
+      - bash infrastructure/scripts/bootstrap.sh --skip-prereq-gate
+      - echo "=== inject 3 secrets from SSM into tfvars ==="
+      - sed -i "s|^acme_email = .*|acme_email = \"${ACME_EMAIL}\"|" infrastructure/terraform.tfvars
+      - sed -i "s|^icr_entitlement_key = .*|icr_entitlement_key = \"${ICR_ENTITLEMENT_KEY}\"|" infrastructure/services/terraform.tfvars
+      - sed -i "s|^ivia_mmfa_push_client_secret = .*|ivia_mmfa_push_client_secret = \"${IVIA_MMFA_PUSH_CLIENT_SECRET}\"|" infrastructure/services/terraform.tfvars
+      - echo "acme set:" $(grep -c '^acme_email = ".\+"' infrastructure/terraform.tfvars) "| icr set:" $(grep -c '^icr_entitlement_key = ".\+"' infrastructure/services/terraform.tfvars) "| mmfa set:" $(grep -c '^ivia_mmfa_push_client_secret = ".\+"' infrastructure/services/terraform.tfvars)
+  build:
+    commands:
+      - |
+        cd "$CODEBUILD_SRC_DIR"; export HOME=/root
+        SCR=infrastructure/scripts
+        run_tier(){ local n=$1 t0 t1 rc; echo "##################### TIER $n START $(date -u +%FT%TZ) #####################"; t0=$(date +%s); bash $SCR/deploy-workshop.sh --tier "$n"; rc=$?; t1=$(date +%s); echo "##################### TIER $n END rc=$rc dur=$(((t1-t0)/60))m$(((t1-t0)%60))s #####################"; return $rc; }
+        gate(){ echo "===== VERIFY: $* ====="; bash "$@"; }
+        OVERALL=0
+        # --- deploy: tier 1 -> 2 -> 3, gated on deploy success only (verifies run AFTER, per workshop page order) ---
+        run_tier 1 || { echo ">>> STOP: tier-1 deploy failed (rc!=0)"; exit 1; }
+        run_tier 2 || { echo ">>> STOP: tier-2 deploy failed (rc!=0) — possible known IVIA/ACME flake (NOT a bridge failure)"; exit 1; }
+        run_tier 3 || { echo ">>> STOP: tier-3 deploy failed (rc!=0)"; exit 1; }
+        # --- verification: all after the full deploy (matches workshop pages 33-38 / 52 / 73) ---
+        gate $SCR/test-foundation.sh   || { echo "FOUNDATION VERIFY FAILED"; OVERALL=1; }
+        gate $SCR/test-vault-verify.sh || { echo "VAULT VERIFY FAILED"; OVERALL=1; }
+        gate $SCR/verify-uc1.sh        || { echo "UC1 VERIFY FAILED"; OVERALL=1; }
+        echo "===== VERIFY: verify-uc3.sh --bypass ====="; bash $SCR/verify-uc3.sh --bypass || { echo "UC3 BYPASS VERIFY FAILED"; OVERALL=1; }
+        echo "NOTE: verify-uc2.sh + verify-uc3 happy-path need a live WebSEAL browser login (per script headers) — event-day exercises, not gated here."
+        echo "##################### ENGINE RESULT: OVERALL=$OVERALL #####################"
+        exit $OVERALL
