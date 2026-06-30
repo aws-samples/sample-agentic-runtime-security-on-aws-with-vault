@@ -63,10 +63,10 @@ This step takes approximately 17–22 minutes and happens during account setup �
 **Your hands-on work begins at Tier 2** (Vault + IBM Verify Identity Access) and **Tier 3** (Use Case 1, 2, and 3 agent pods). Those two tiers are the core of the workshop's security lesson and are what you deploy and explore yourself.
 ::::
 
-Your `WSParticipantRole` session already has EKS cluster access (granted by the CodeBuild build). You will use that access on the [Deploy the Workshop](../../30-deploy-foundation/31-deploy-stacks/) page to pull the Tier-1 state, configure kubectl, and run Tier 2 and Tier 3.
+Your `WSParticipantRole` session already has EKS cluster access (granted by the CodeBuild build). You will use that access on the [Deploy — At an Event](../../30-deploy-foundation/31-deploy-at-an-event/) page to pull the Tier-1 state and run Tier 2 and Tier 3.
 
 ## Next Steps
 
 1. **Obtain IVIA licenses** — [Obtain IVIA Licenses](../22-ivia-licensing/) walks you through the IBM Container Registry entitlement key and the 90-day IVIA trial certificate. Both are required before you deploy Tier 2.
 2. **Install the IBM Verify app** — Use Case 3 (CIBA mobile push) requires the IBM Verify mobile app. Install it on your phone now — see the [Prerequisites overview](../) for download links.
-3. **Continue to Deploy the Workshop** — [Deploy the Workshop](../../30-deploy-foundation/31-deploy-stacks/) is where you pull the Tier-1 state and run Tier 2 and Tier 3.
+3. **Continue to Deploy — At an Event** — [Deploy — At an Event](../../30-deploy-foundation/31-deploy-at-an-event/) is where you pull the Tier-1 state and run Tier 2 and Tier 3.
