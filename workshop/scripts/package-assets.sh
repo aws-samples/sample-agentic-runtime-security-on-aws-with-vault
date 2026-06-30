@@ -75,18 +75,26 @@ if [ -n "$LEAK" ]; then
 fi
 echo "  secret-leak gate: PASS (no real tfvars/tfstate/.acme-state in assets)"
 
-# Buildspec lint — every command must be a YAML string. A ': ' (colon-space) inside an
-# unquoted echo silently parses as a YAML mapping, and CodeBuild rejects it at
-# DOWNLOAD_SOURCE before any deploy runs. yq catches it here, before publish/sim.
+# Buildspec lint — two failure classes CodeBuild only reports at DOWNLOAD_SOURCE,
+# after a stack is already CREATE_IN_PROGRESS (and will hang on the callback):
+#   (1) a ': ' (colon-space) in an unquoted echo parses as a YAML mapping, not a string;
+#   (2) an invalid phase name (only install/pre_build/build/post_build are allowed —
+#       `finally` is a nested block inside a phase, never a top-level phase).
+# yq catches both here, before publish/sim.
 BS="$REPO_ROOT/workshop/assets/buildspec/buildspec.yml"
 if command -v yq >/dev/null 2>&1; then
-    BAD="$(yq '[.phases[].commands[] | select(tag != "!!str")] | length' "$BS" 2>/dev/null)"
+    BAD="$(yq '[.phases[] | (.commands[], .finally[])] | map(select(tag != "!!str")) | length' "$BS" 2>/dev/null)"
     if [ "${BAD:-0}" -ne 0 ]; then
         echo "  ABORT: buildspec has $BAD non-string command(s) — colon-space in an echo?" >&2
-        yq '.phases[].commands[] | select(tag != "!!str")' "$BS" >&2
+        yq '[.phases[] | (.commands[], .finally[])] | .[] | select(tag != "!!str")' "$BS" >&2
         exit 1
     fi
-    echo "  buildspec lint: PASS (all commands are YAML strings)"
+    BADPHASE="$(yq '.phases | keys | map(select(. != "install" and . != "pre_build" and . != "build" and . != "post_build")) | join(",")' "$BS" 2>/dev/null)"
+    if [ -n "$BADPHASE" ]; then
+        echo "  ABORT: buildspec has invalid phase name(s): $BADPHASE (finally is a nested block, not a phase)" >&2
+        exit 1
+    fi
+    echo "  buildspec lint: PASS (commands are strings; phases valid)"
 else
     echo "  buildspec lint: SKIP (yq not installed)"
 fi

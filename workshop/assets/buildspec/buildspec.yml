@@ -9,17 +9,14 @@ version: 0.2
 #   tree is materialised at $CODEBUILD_SRC_DIR/terraform/infrastructure/.
 #   No git clone, no public mirror.
 #
-# What this does:
-#   install  : pin all tools proven in sim (terraform, kubectl, helm, yq, jq, bc) + requests for CFN callback
-#   pre_build: bootstrap (seed tfvars from *.example + terraform init all roots), inject acme_email,
-#              inject non-empty sentinels for tier-2 IVIA secrets (preflight gate checks them
-#              unconditionally — they never reach tier-1 TF)
-#   build    : deploy-workshop.sh --tier 1 ONLY; stage tier-1 state to S3; grant WSParticipantRole EKS access
-#   finally  : PUT SUCCESS/FAILED to CFN callback URL (no-op when not a CFN-triggered build)
-env:
-  exported-variables:
-    - REPO_ROOT
-
+# Phase layout mirrors aws-samples/sample-iac-cloudformation-wrapper: all real work
+# lives in `build`, and the CFN callback is `build.finally` (NOT a top-level phase —
+# CodeBuild only knows install/pre_build/build/post_build). build.finally runs whether
+# the deploy succeeds or fails, so CloudFormation always gets a response.
+#   install : pin tools (terraform, kubectl, helm, yq, jq, bc) + requests for CFN callback
+#   build   : locate S3-sourced tree -> bootstrap -> inject acme_email + tier-2 sentinels ->
+#             deploy-workshop.sh --tier 1 -> stage tier-1 state to S3 -> grant WSParticipantRole EKS access
+#   finally : PUT SUCCESS/FAILED to CFN callback URL (no-op when not a CFN-triggered build)
 phases:
   install:
     commands:
@@ -35,31 +32,28 @@ phases:
       - command -v jq >/dev/null 2>&1 || (apt-get update -y >/dev/null && apt-get install -y jq >/dev/null)
       - jq --version
       - pip3 install "requests>=2.27,<3"
-  pre_build:
-    commands:
-      - set -e
-      - export HOME=/root
-      - echo "=== locate the infrastructure tree (S3-sourced at terraform/, no git clone) ==="
-      - cd "$CODEBUILD_SRC_DIR/terraform"
-      - export REPO_ROOT="$PWD"
-      - test -d infrastructure/scripts || { echo "ERROR - infrastructure/ not found under $REPO_ROOT (check the assets sync, terraform/ prefix)"; exit 1; }
-      - echo "=== bootstrap - seed tfvars from .example + terraform init (all roots) ==="
-      - bash infrastructure/scripts/bootstrap.sh --skip-prereq-gate
-      - echo "=== inject acme_email (real value, must not be *@example.com) ==="
-      - sed -i "s|^acme_email = .*|acme_email = \"${ACME_EMAIL}\"|" infrastructure/terraform.tfvars
-      - echo "=== inject non-empty sentinels for tier-2 IVIA secrets ==="
-      - echo "    (preflight gate checks all 3 secrets unconditionally; these NEVER reach tier-1 Terraform)"
-      - sed -i 's|^icr_entitlement_key = ""|icr_entitlement_key = "tier1-build-only-not-used"|' infrastructure/services/terraform.tfvars
-      - sed -i 's|^ivia_mmfa_push_client_secret = ""|ivia_mmfa_push_client_secret = "tier1-build-only-not-used"|' infrastructure/services/terraform.tfvars
-      - echo "acme set:" $(grep -c '^acme_email = ".\+"' infrastructure/terraform.tfvars) "| icr sentinel:" $(grep -c 'tier1-build-only-not-used' infrastructure/services/terraform.tfvars) "lines"
   build:
     commands:
       - |
-        set -e; cd "$REPO_ROOT"; export HOME=/root
-        SCR=infrastructure/scripts
+        set -e; export HOME=/root
+
+        echo "=== locate the infrastructure tree (S3-sourced at terraform/, no git clone) ==="
+        cd "$CODEBUILD_SRC_DIR/terraform"
+        export REPO_ROOT="$PWD"
+        test -d infrastructure/scripts || { echo "ERROR - infrastructure/ not found under $REPO_ROOT (check the assets sync, terraform/ prefix)"; exit 1; }
+
+        echo "=== bootstrap - seed tfvars from .example + terraform init (all roots) ==="
+        bash infrastructure/scripts/bootstrap.sh --skip-prereq-gate
+
+        echo "=== inject acme_email (real value, must not be *@example.com) ==="
+        sed -i "s|^acme_email = .*|acme_email = \"${ACME_EMAIL}\"|" infrastructure/terraform.tfvars
+        echo "=== inject non-empty sentinels for tier-2 IVIA secrets (never reach tier-1 TF) ==="
+        sed -i 's|^icr_entitlement_key = ""|icr_entitlement_key = "tier1-build-only-not-used"|' infrastructure/services/terraform.tfvars
+        sed -i 's|^ivia_mmfa_push_client_secret = ""|ivia_mmfa_push_client_secret = "tier1-build-only-not-used"|' infrastructure/services/terraform.tfvars
+        echo "acme set:" $(grep -c '^acme_email = ".\+"' infrastructure/terraform.tfvars) "| icr sentinel:" $(grep -c 'tier1-build-only-not-used' infrastructure/services/terraform.tfvars) "lines"
 
         echo "=== TIER 1: deploy-workshop.sh --tier 1 ==="
-        bash "$SCR/deploy-workshop.sh" --tier 1
+        bash infrastructure/scripts/deploy-workshop.sh --tier 1
 
         echo "=== STAGE tier-1 state + tfvars to S3 ==="
         aws s3 cp infrastructure/terraform.tfstate "s3://${STATE_BUCKET}/infrastructure/terraform.tfstate"
@@ -84,8 +78,7 @@ phases:
           echo "policy already associated — idempotent"
 
         echo "=== TIER 1 complete; attendee EKS access granted to ${PARTICIPANT_ROLE_ARN} ==="
-  finally:
-    commands:
+    finally:
       - pip3 install "requests>=2.27,<3"
       - |
         python3 - <<'PYEOF'
