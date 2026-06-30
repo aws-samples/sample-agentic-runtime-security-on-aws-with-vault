@@ -19,7 +19,7 @@ By default `deploy-workshop.sh` pulls the five Use Case images as pre-built publ
 
 ### At an Event
 
-Tier 1 (EKS foundation) was provisioned by CloudFormation + CodeBuild when your account was set up. You skip `bootstrap.sh` and `--tier 1`. Your hands-on work is Tier 2 (Vault + IBM Verify Identity Access) and Tier 3 (Use Case 1, 2, and 3 agent pods).
+Tier 1 (EKS foundation) was provisioned by CloudFormation + CodeBuild when your account was set up. You skip the `--tier 1` apply. Your hands-on work is Tier 2 (Vault + IBM Verify Identity Access) and Tier 3 (Use Case 1, 2, and 3 agent pods).
 
 #### Step 1 — Clone the repository
 
@@ -29,7 +29,21 @@ Clone the workshop repo at the pinned event tag from the public mirror:
 git clone https://github.com/sharepointoscar/agentic-runtime-security-aws.git && cd agentic-runtime-security-aws
 ```
 
-#### Step 2 — Pull the Tier-1 state
+#### Step 2 — Bootstrap (prep only — no infrastructure deploy)
+
+`bootstrap.sh` seeds the three `terraform.tfvars` files from their templates and runs `terraform init` in all three roots. It does **not** deploy infrastructure. This step is required so `deploy-workshop.sh` can read your IVIA secrets and run `terraform apply` for Tier 2 and Tier 3.
+
+```bash
+bash infrastructure/scripts/bootstrap.sh --skip-prereq-gate
+```
+
+On your **first run** the script prompts for three values — paste each when asked:
+
+- **Let's Encrypt contact email** — use the email address you registered with for this event (or any real, deliverable address).
+- **IBM Container Registry entitlement key** — from [Obtain IVIA Licenses](../../20-prerequisites/22-ivia-licensing/) (input hidden).
+- **IBM Verify MMFA push client secret** — required by Use Case 3 (input hidden).
+
+#### Step 3 — Pull the Tier-1 state
 
 The CodeBuild build staged the Tier-1 Terraform state to an S3 bucket. Discover the bucket name from the CloudFormation stack output and pull the state to the exact path Tier 2 and Tier 3 read:
 
@@ -57,7 +71,7 @@ aws s3 ls | grep -i workshop
 Copy the bucket name from the output and rerun: `aws s3 cp "s3://<bucket-name>/infrastructure/terraform.tfstate" infrastructure/terraform.tfstate`
 ::::
 
-#### Step 3 — Configure kubectl and validate the cluster
+#### Step 4 — Configure kubectl and validate the cluster
 
 Your `WSParticipantRole` session was granted EKS cluster access by the CodeBuild build. Update your kubeconfig and verify the nodes are ready:
 
@@ -78,9 +92,9 @@ ip-10-1-5-xxx.us-west-2.compute.internal  Ready    <none>   20m   v1.34.x-eks-xx
 
 If no nodes appear, confirm that `WSParticipantRole` is the identity your session is using (`aws sts get-caller-identity`) and that the CodeBuild build completed successfully (check the **CodeBuildConsoleLink** in the CloudFormation stack outputs).
 
-#### Step 4 — Deploy Tier 2 (Vault + IVIA)
+#### Step 5 — Deploy Tier 2 (Vault + IVIA)
 
-On your **first run** the script prompts for two values it cannot pre-provision: your IBM Container Registry entitlement key and your IBM Verify MMFA push client secret. Have them ready from [Obtain IVIA Licenses](../../20-prerequisites/22-ivia-licensing/). The Let's Encrypt email was provided by the event organizer — you do not need to supply it again.
+The IVIA credentials you entered during bootstrap are now in the gitignored `terraform.tfvars` files — the script uses them silently on this run.
 
 ```bash
 bash infrastructure/scripts/deploy-workshop.sh --tier 2
@@ -90,7 +104,7 @@ bash infrastructure/scripts/deploy-workshop.sh --tier 2
 ~10–15 min — Vault Raft converge ~3 min, IVIA pods ~5 min, ACME issuance + ACM import + IVIA re-apply ~3 min, Vault + IVIA configure ~2 min.
 ::::
 
-#### Step 5 — Deploy Tier 3 (Use Case workloads)
+#### Step 6 — Deploy Tier 3 (Use Case workloads)
 
 ```bash
 bash infrastructure/scripts/deploy-workshop.sh --tier 3
