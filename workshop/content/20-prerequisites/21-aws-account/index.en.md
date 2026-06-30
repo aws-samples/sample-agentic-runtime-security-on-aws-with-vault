@@ -96,7 +96,7 @@ The deploy script collects three values on its first run. Have them ready:
 
 The script writes all three into the gitignored `terraform.tfvars` files; subsequent tiers and re-runs reuse them silently.
 
-## Step 5: Deploy the Workshop
+## Step 5: Deploy
 
 Go to [Deploy — Self-paced](../../30-deploy-foundation/31-deploy-self-paced/): `bootstrap.sh` → Tier 1 → Tier 2 → Tier 3.
 
