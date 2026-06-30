@@ -3,7 +3,7 @@ title: 'Deploy — At an Event'
 weight: 31
 ---
 
-Tier 1 (the EKS foundation) was already provisioned by CloudFormation + CodeBuild when your event account was set up. **You skip the `--tier 1` apply** and go straight to your hands-on work — Tier 2 (Vault + IBM Verify Identity Access) and Tier 3 (the Use Case 1, 2, and 3 agent pods).
+The EKS cluster was already provisioned as part of your AWS account setup. You'll now deploy Vault + IBM Verify Identity Access, then the agent applications.
 
 ::::alert{header="On your own AWS account instead?" type="info"}
 Follow **[Deploy — Self-paced](../31-deploy-self-paced/)** — you bootstrap and apply all three tiers yourself.
@@ -19,7 +19,7 @@ Clone the workshop repo at the pinned event tag from the public mirror:
 git clone https://github.com/sharepointoscar/agentic-runtime-security-aws.git && cd agentic-runtime-security-aws
 ```
 
-#### Step 2 — Bootstrap (prep only — no infrastructure deploy)
+#### Step 2 — Bootstrap
 
 `bootstrap.sh` seeds the three `terraform.tfvars` files from their templates and runs `terraform init` in all three roots. It does **not** deploy infrastructure — it just prepares the repo so `deploy-workshop.sh` can read your IVIA secrets and run `terraform apply` for Tier 2 and Tier 3.
 
