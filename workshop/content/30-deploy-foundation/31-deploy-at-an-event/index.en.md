@@ -21,24 +21,18 @@ git clone https://github.com/sharepointoscar/agentic-runtime-security-aws.git &&
 
 #### Step 2 — Bootstrap
 
-`bootstrap.sh` seeds the three `terraform.tfvars` files from their templates and runs `terraform init` in all three roots. It does **not** deploy infrastructure — it just prepares the repo so `deploy-workshop.sh` can read your IVIA secrets and run `terraform apply` for Tier 2 and Tier 3.
+`bootstrap.sh` seeds the `terraform.tfvars` files from their templates and runs `terraform init` in all three roots. It does **not** deploy infrastructure and does **not** prompt for anything (you'll supply your IBM secrets at Step 4). It just prepares the repo so you can apply Tier 2 and Tier 3.
 
 ```bash
 bash infrastructure/scripts/bootstrap.sh --skip-prereq-gate
 ```
 
-On your **first run** the script prompts for three values — paste each when asked:
+#### Step 3 — Pull the Tier-1 state and config
 
-- **Let's Encrypt contact email** — the email you registered with for this event (or any real, deliverable address).
-- **IBM Container Registry entitlement key** — from [Obtain IVIA Licenses](../../20-prerequisites/22-ivia-licensing/) (input hidden).
-- **IBM Verify MMFA push client secret** — required by Use Case 3 (input hidden).
-
-#### Step 3 — Pull the Tier-1 state
-
-The CodeBuild build staged the Tier-1 Terraform state to an S3 bucket. Discover the bucket name from the CloudFormation stack output and pull the state to the exact path Tier 2 and Tier 3 read:
+The CodeBuild build staged the Tier-1 Terraform **state** and its **`terraform.tfvars`** (which already carries the event's Let's Encrypt email) to an S3 bucket. Discover the bucket name from the CloudFormation stack output and pull both to the paths Tier 2 and Tier 3 read:
 
 ```bash
-STATE_BUCKET=$(aws cloudformation describe-stacks --query "Stacks[].Outputs[?OutputKey=='StateBucketName'].OutputValue|[]|[0]" --output text) && aws s3 cp "s3://${STATE_BUCKET}/infrastructure/terraform.tfstate" infrastructure/terraform.tfstate && test -s infrastructure/terraform.tfstate && echo "State pulled OK" || echo "ERROR: state file missing or empty"
+STATE_BUCKET=$(aws cloudformation describe-stacks --query "Stacks[].Outputs[?OutputKey=='StateBucketName'].OutputValue|[]|[0]" --output text) && aws s3 cp "s3://${STATE_BUCKET}/infrastructure/terraform.tfstate" infrastructure/terraform.tfstate && aws s3 cp "s3://${STATE_BUCKET}/infrastructure/terraform.tfvars.staged" infrastructure/terraform.tfvars && test -s infrastructure/terraform.tfstate && echo "State + config pulled OK" || echo "ERROR: pull failed"
 ```
 
 ::::alert{header="State file path is load-bearing" type="warning"}
@@ -46,7 +40,7 @@ The state file must be at exactly `infrastructure/terraform.tfstate` relative to
 ::::
 
 ::::alert{header="If the CloudFormation query returns empty" type="info"}
-If `STATE_BUCKET` resolves to empty (for example, if the stack outputs aren't visible yet), list buckets and locate the state bucket by name, then rerun the `aws s3 cp` with that name:
+If `STATE_BUCKET` resolves to empty (for example, if the stack outputs aren't visible yet), list buckets and locate the state bucket by name, then rerun both `aws s3 cp` commands with that bucket name:
 
 ```bash
 aws s3 ls | grep -i workshop
@@ -55,7 +49,12 @@ aws s3 ls | grep -i workshop
 
 #### Step 4 — Deploy Tier 2 (Vault + IVIA)
 
-The IVIA credentials you entered during bootstrap are in the gitignored `terraform.tfvars` files — the script uses them silently.
+The **first** time you run `deploy-workshop.sh`, a preflight check prompts for the two IBM secrets it needs — paste each when asked (input is hidden):
+
+- **IBM Container Registry entitlement key** — from [Obtain IVIA Licenses](../../20-prerequisites/22-ivia-licensing/).
+- **IBM Verify MMFA push client secret** — required by Use Case 3.
+
+It does **not** ask for a Let's Encrypt email — that was set when CodeBuild provisioned Tier 1, and you pulled it in Step 3.
 
 ```bash
 bash infrastructure/scripts/deploy-workshop.sh --tier 2
