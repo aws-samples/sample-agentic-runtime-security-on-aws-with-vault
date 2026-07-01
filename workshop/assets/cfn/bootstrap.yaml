@@ -33,6 +33,17 @@ Parameters:
       live — e.g. "agentic-runtime-security-aws/" in Workshop Studio. Leave empty when
       assets are uploaded to the bucket root (dev-account sim).
 
+  AttendeeRoleName:
+    Type: String
+    Default: WSParticipantRole
+    Description: >-
+      IAM role NAME (not ARN) of the attendee identity that must receive EKS
+      cluster-admin after tier-1 is provisioned by CodeBuild. In Workshop Studio the
+      attendee assumes WSParticipantRole; override only if a real WS event exposes a
+      differently-named participant role (verify-on-real-WS). The buildspec builds the
+      full ARN as arn:aws:iam::<account-id>:role/<AttendeeRoleName> with the account id
+      resolved dynamically via STS — never hardcoded.
+
 Resources:
 
   # ─── S3: tier-1 state staging bucket ───────────────────────────────────────
@@ -158,6 +169,9 @@ Resources:
           - Name: ACME_EMAIL
             Type: PLAINTEXT
             Value: !Ref AcmeEmail
+          - Name: ATTENDEE_ROLE_NAME
+            Type: PLAINTEXT
+            Value: !Ref AttendeeRoleName
       ServiceRole: !GetAtt CodeBuildServiceRole.Arn
       Source:
         Type: S3

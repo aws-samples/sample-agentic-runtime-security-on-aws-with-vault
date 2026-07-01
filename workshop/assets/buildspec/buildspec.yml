@@ -15,7 +15,8 @@ version: 0.2
 # the deploy succeeds or fails, so CloudFormation always gets a response.
 #   install : pin tools (terraform, kubectl, helm, yq, jq, bc) + requests for CFN callback
 #   build   : locate S3-sourced tree -> bootstrap -> inject acme_email + tier-2 sentinels ->
-#             deploy-workshop.sh --tier 1 -> stage tier-1 state to S3 -> grant WSParticipantRole EKS access
+#             deploy-workshop.sh --tier 1 -> grant + VERIFY attendee (ATTENDEE_ROLE_NAME) EKS
+#             cluster-admin (fail-loud) -> stage tier-1 state + honest tfvars to S3
 #   finally : PUT SUCCESS/FAILED to CFN callback URL (no-op when not a CFN-triggered build)
 phases:
   install:
@@ -55,29 +56,46 @@ phases:
         echo "=== TIER 1: deploy-workshop.sh --tier 1 ==="
         bash infrastructure/scripts/deploy-workshop.sh --tier 1
 
-        echo "=== STAGE tier-1 state + tfvars to S3 ==="
-        aws s3 cp infrastructure/terraform.tfstate "s3://${STATE_BUCKET}/infrastructure/terraform.tfstate"
-        aws s3 cp infrastructure/terraform.tfvars  "s3://${STATE_BUCKET}/infrastructure/terraform.tfvars.staged"
-
-        echo "=== GRANT attendee EKS access (WSParticipantRole — discovered dynamically, never hardcoded) ==="
+        echo "=== resolve attendee identity (role NAME from ATTENDEE_ROLE_NAME, account via STS — never hardcoded) ==="
         CLUSTER_NAME=$(grep '^cluster_name' infrastructure/terraform.tfvars | sed 's/.*"\(.*\)"/\1/')
         REGION=$(grep '^region' infrastructure/terraform.tfvars | sed 's/.*"\(.*\)"/\1/')
         ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-        PARTICIPANT_ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/WSParticipantRole"
+        ATTENDEE_ROLE_NAME="${ATTENDEE_ROLE_NAME:-WSParticipantRole}"
+        PARTICIPANT_ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/${ATTENDEE_ROLE_NAME}"
 
-        aws eks create-access-entry \
-          --cluster-name "$CLUSTER_NAME" --region "$REGION" \
-          --principal-arn "$PARTICIPANT_ROLE_ARN" --type STANDARD 2>/dev/null || \
-          echo "access-entry already exists — idempotent"
+        echo "=== GRANT attendee EKS access — CodeBuild is the cluster creator, so the attendee ==="
+        echo "=== (a DIFFERENT principal) needs an explicit access entry. Fail-loud: only the ==="
+        echo "=== ResourceInUseException (entry already present) is benign; anything else aborts. ==="
+        create_out=$(aws eks create-access-entry --cluster-name "$CLUSTER_NAME" --region "$REGION" --principal-arn "$PARTICIPANT_ROLE_ARN" --type STANDARD 2>&1) || {
+          echo "$create_out" | grep -q 'ResourceInUseException' \
+            && echo "access entry already exists (idempotent)" \
+            || { echo "FATAL - create-access-entry failed for ${PARTICIPANT_ROLE_ARN}:"; echo "$create_out"; exit 1; }
+        }
+        assoc_out=$(aws eks associate-access-policy --cluster-name "$CLUSTER_NAME" --region "$REGION" --principal-arn "$PARTICIPANT_ROLE_ARN" --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy --access-scope type=cluster 2>&1) || {
+          echo "FATAL - associate-access-policy failed for ${PARTICIPANT_ROLE_ARN}:"; echo "$assoc_out"; exit 1;
+        }
 
-        aws eks associate-access-policy \
-          --cluster-name "$CLUSTER_NAME" --region "$REGION" \
-          --principal-arn "$PARTICIPANT_ROLE_ARN" \
-          --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy \
-          --access-scope type=cluster 2>/dev/null || \
-          echo "policy already associated — idempotent"
+        echo "=== VERIFY the grant is actually present (real proof is kubectl as the attendee, done in content) ==="
+        aws eks describe-access-entry --cluster-name "$CLUSTER_NAME" --region "$REGION" --principal-arn "$PARTICIPANT_ROLE_ARN" >/dev/null 2>&1 \
+          || { echo "FATAL - access entry for ${PARTICIPANT_ROLE_ARN} not present after create"; exit 1; }
+        POLICIES=$(aws eks list-associated-access-policies --cluster-name "$CLUSTER_NAME" --region "$REGION" --principal-arn "$PARTICIPANT_ROLE_ARN" --query 'associatedAccessPolicies[].policyArn' --output text 2>&1)
+        echo "$POLICIES" | grep -q 'AmazonEKSClusterAdminPolicy' \
+          || { echo "FATAL - AmazonEKSClusterAdminPolicy not associated to ${PARTICIPANT_ROLE_ARN} (got: ${POLICIES})"; exit 1; }
+        echo "VERIFIED - ${PARTICIPANT_ROLE_ARN} has cluster-admin access entry"
 
-        echo "=== TIER 1 complete; attendee EKS access granted to ${PARTICIPANT_ROLE_ARN} ==="
+        echo "=== STAGE tier-1 state + tfvars to S3 ==="
+        aws s3 cp infrastructure/terraform.tfstate "s3://${STATE_BUCKET}/infrastructure/terraform.tfstate"
+        # Staged-tfvars hygiene: bootstrap stamped admin_principal_arn = the CodeBuild role,
+        # which is ephemeral (deleted on stack teardown). Rewrite the STAGED copy to the
+        # attendee role so the pulled handoff is not a dangling reference. admin_principal_arn
+        # is a RECORD only — cluster-admin is granted by the EKS access entry above, not this
+        # var (see infrastructure/modules/eks/README.md).
+        STAGED_TFVARS="$(mktemp)"
+        cp infrastructure/terraform.tfvars "$STAGED_TFVARS"
+        sed -i "s|^admin_principal_arn = .*|admin_principal_arn = \"${PARTICIPANT_ROLE_ARN}\"  # cluster-admin granted via EKS access entry, not this var (see modules/eks/README.md)|" "$STAGED_TFVARS"
+        aws s3 cp "$STAGED_TFVARS" "s3://${STATE_BUCKET}/infrastructure/terraform.tfvars.staged"
+
+        echo "=== TIER 1 complete; attendee EKS access granted + verified for ${PARTICIPANT_ROLE_ARN} ==="
     finally:
       - pip3 install "requests>=2.27,<3"
       - |

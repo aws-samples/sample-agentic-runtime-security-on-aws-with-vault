@@ -51,7 +51,7 @@ CMK (Plan 02-04), and OpenSearch / CloudWatch CMK reuse (Plan 02-05).
 | `cluster_name`        | `string`       | Name of the EKS cluster                                                                                    |
 | `vpc_id`              | `string`       | VPC ID — passed from `module.vpc.vpc_id`                                                                   |
 | `private_subnet_ids`  | `list(string)` | Private subnet IDs for the control plane and managed node group — `module.vpc.private_subnet_ids`          |
-| `admin_principal_arn` | `string`       | ARN of the IAM principal granted `AmazonEKSClusterAdminPolicy` via Access Entries                          |
+| `admin_principal_arn` | `string`       | Record of the intended cluster-admin identity (stamped by `bootstrap.sh` from the deploying caller). NOT referenced by any resource — cluster-admin is granted to the cluster **creator** via `enable_cluster_creator_admin_permissions`. See the note below.                          |
 | `tags`                | `map(string)`  | Tags applied to all EKS resources                                                                          |
 
 ## Outputs
@@ -122,16 +122,35 @@ in `02-RESEARCH.md`:
   retrieve their Pod Identity tokens (pod-identity-agent). `main.tf` sets
   `before_compute = true` on both.
 - **E2 — Public-CIDR-allowlisted endpoint without admin Access Entry creates a
-  locked-out cluster.** `access_entries.workshop_admin` grants the
-  `var.admin_principal_arn` `AmazonEKSClusterAdminPolicy` so the endpoint is
-  reachable from any Workshop Studio attendee IP without leaving the cluster
-  unreachable.
+  locked-out cluster.** Cluster-admin is granted by
+  `enable_cluster_creator_admin_permissions = true` (see E3), which creates the
+  `cluster_creator` access entry for whoever runs `terraform apply`. That keeps
+  the public endpoint reachable without leaving the cluster unauthorized. The
+  module does **not** create a separate access entry from `var.admin_principal_arn`
+  — an explicit entry for the same principal would collide (409
+  `ResourceInUseException`), so `admin_principal_arn` is a record only.
 - **E3 — Cluster creator admin permissions persist post-apply.**
   `enable_cluster_creator_admin_permissions = true` is needed during the
   initial apply (otherwise the apply principal cannot bootstrap the cluster),
   but it persists in cluster state after teardown. Workshop accounts are
   ephemeral so this is acceptable; a long-lived environment would scrub the
   creator admin entry post-apply.
+
+### `admin_principal_arn` vs. the actual grant — and the hybrid (Workshop Studio) path
+
+`admin_principal_arn` is stamped by `bootstrap.sh` from the deploying caller and
+records *who the intended admin is*, but it is not referenced by any resource.
+The real grant is `enable_cluster_creator_admin_permissions` → the **creator**.
+In the **self-paced** path the deployer, the attendee, and the creator are the
+same identity, so the two coincide and kubectl "just works".
+
+In the **at-an-event (Workshop Studio) path** the cluster is created by the
+CodeBuild role, not the attendee, so creator-admin grants the *build role*. The
+attendee (an assumed `WSParticipantRole` session) is a different principal and
+receives its own `AmazonEKSClusterAdminPolicy` access entry, created imperatively
+by the CFN wrapper's buildspec after tier-1 applies
+(`workshop/assets/buildspec/buildspec.yml`). That grant lives in the WS-path
+adapter, not this module, so the proven self-paced apply stays untouched.
 
 ## References
 
