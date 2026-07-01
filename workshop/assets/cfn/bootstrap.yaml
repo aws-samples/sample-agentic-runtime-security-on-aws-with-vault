@@ -80,6 +80,10 @@ Resources:
                   - "eks:*"
                   - "ec2:*"
                   - "ecr:*"
+                  # tier-1 creates nested CloudFormation stacks via Terraform's
+                  # aws_cloudformation_stack (bedrock_kb_index AOSS index +
+                  # eks_blueprints_addons usage_telemetry) — CreateStack/DescribeStacks/etc.
+                  - "cloudformation:*"
                   - "rds:*"
                   - "s3:*"
                   - "bedrock:*"
