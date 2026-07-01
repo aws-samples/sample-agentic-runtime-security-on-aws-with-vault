@@ -248,6 +248,14 @@ Resources:
           codebuild = boto3.client("codebuild")
 
 
+          def _flag(value):
+              # CloudFormation serialises custom-resource properties as STRINGS, so a
+              # template `BuildOnDelete: false` arrives as the string "false" — which is
+              # truthy in Python. Coerce explicitly so false flags stay false. Without this,
+              # every stack rollback/delete fires a spurious build that re-runs the deploy.
+              return str(value).strip().lower() in ("true", "1", "yes")
+
+
           def lambda_handler(event, context):
               try:
                   request_type = event["RequestType"]
@@ -277,7 +285,7 @@ Resources:
               result = [
                   {"name": "CFN_EVENT_TYPE", "type": "PLAINTEXT", "value": event["RequestType"]},
               ]
-              if res_config.get("CodeBuildCallback"):
+              if _flag(res_config.get("CodeBuildCallback")):
                   result += [
                       {
                           "name": "CFN_EVENT_DATA",
@@ -319,7 +327,7 @@ Resources:
           def handle_delete(event, context):
               logging.info("**Received delete event - no-op")
               res_config = event.get("ResourceProperties", {})
-              build_on_delete = res_config.get("BuildOnDelete", False)
+              build_on_delete = _flag(res_config.get("BuildOnDelete"))
               if build_on_delete:
                   codebuild_env_vars = get_cfn_env_var_overrides(event)
                   codebuild.start_build(
@@ -329,7 +337,7 @@ Resources:
                   reason = "Deletion build initiated"
               else:
                   reason = "Delete is a no-op"
-              if not (build_on_delete and res_config.get("CodeBuildCallback")):
+              if not (build_on_delete and _flag(res_config.get("CodeBuildCallback"))):
                   cfnresponse.send(
                       event, context, cfnresponse.SUCCESS, {"Reason": reason},
                       physicalResourceId=event["PhysicalResourceId"],
@@ -339,7 +347,7 @@ Resources:
           def handle_update(event, context):
               logging.info("**Received update event")
               res_config = event.get("ResourceProperties", {})
-              ignore_update = res_config.get("IgnoreUpdate", False)
+              ignore_update = _flag(res_config.get("IgnoreUpdate"))
               if ignore_update:
                   reason = "Update is a no-op"
               else:
@@ -348,7 +356,7 @@ Resources:
                       projectName=res_config["ProjectName"],
                       environmentVariablesOverride=codebuild_env_vars,
                   )
-                  if res_config.get("CodeBuildCallback"):
+                  if _flag(res_config.get("CodeBuildCallback")):
                       reason = None
                   else:
                       reason = f"Started CodeBuild #{result['build']['buildNumber']}"
