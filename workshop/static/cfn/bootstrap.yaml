@@ -384,8 +384,11 @@ Resources:
                       physicalResourceId=event["PhysicalResourceId"],
                   )
 
-  # ─── Custom Resource: fire the CodeBuild tier-1 build on stack CREATE ──────
-  # BuildOnDelete: false  → CFN Delete is a no-op; teardown.sh is the manual path (D-04)
+  # ─── Custom Resource: fire the CodeBuild tier-1 build on stack CREATE/DELETE ──
+  # BuildOnDelete: true  → CFN Delete triggers a teardown build (the buildspec's Delete
+  #   branch runs teardown.sh), so deleting the stack tears down tier-1 too — symmetric
+  #   provision/deprovision via the stack. CFN waits for the finally callback; the 60-min
+  #   CodeBuild timeout is the backstop so a stuck teardown can't block stack deletion forever.
   # CodeBuildCallback: true → CFN waits for the buildspec finally block to PUT response (D-13)
   # IgnoreUpdate: true → pinned deploy; don't re-run on parameter changes mid-event
   Tier1Deployment:
@@ -396,7 +399,7 @@ Resources:
     Properties:
       ServiceToken: !GetAtt CodeBuildTriggerFunction.Arn
       ProjectName: !Ref CodeBuildProject
-      BuildOnDelete: false
+      BuildOnDelete: true
       CodeBuildCallback: true
       IgnoreUpdate: true
 

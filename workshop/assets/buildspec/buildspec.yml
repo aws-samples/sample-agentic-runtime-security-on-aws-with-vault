@@ -1,117 +1,125 @@
 version: 0.2
-# Hybrid tier-1 buildspec — Workshop Studio CFN wrapper (S3-assets source pattern).
-#
-# Source mechanism (aligned to jonathanmhurley/agentic-runtime-security-on-aws):
-#   Workshop Studio uploads workshop/assets/ to its per-workshop S3 bucket
-#   (aws s3 sync ./assets s3://ws-assets-us-east-1/agentic-runtime-security-aws).
-#   The CodeBuild project sources that prefix as Source.Type=S3 (folder), so this
-#   file is read from <prefix>/buildspec/buildspec.yml and the full infrastructure/
-#   tree is materialised at $CODEBUILD_SRC_DIR/terraform/infrastructure/.
-#   No git clone, no public mirror.
-#
-# Phase layout mirrors aws-samples/sample-iac-cloudformation-wrapper: all real work
-# lives in `build`, and the CFN callback is `build.finally` (NOT a top-level phase —
-# CodeBuild only knows install/pre_build/build/post_build). build.finally runs whether
-# the deploy succeeds or fails, so CloudFormation always gets a response.
-#   install : pin tools (terraform, kubectl, helm, yq, jq, bc) + requests for CFN callback
-#   build   : locate S3-sourced tree -> bootstrap -> inject acme_email + tier-2 sentinels ->
-#             deploy-workshop.sh --tier 1 -> grant + VERIFY attendee (ATTENDEE_ROLE_NAME) EKS
-#             cluster-admin (fail-loud) -> stage tier-1 state + honest tfvars to S3
-#   finally : PUT SUCCESS/FAILED to CFN callback URL (no-op when not a CFN-triggered build)
+
+env:
+  variables:
+    # Injected by CFN template at project-level:
+    #   STATE_BUCKET        — S3 bucket for staging tier-1 state
+    #   ACME_EMAIL          — Let's Encrypt registration email
+    #   ATTENDEE_ROLE_NAME  — IAM role name for EKS access (default: WSParticipantRole)
+    # Injected by Lambda at build-start (CodeBuildCallback=true):
+    #   CFN_EVENT_DATA          — JSON with LogicalResourceId, RequestId, StackId
+    #   CFN_EVENT_RESPONSE_URL  — URL to PUT the CFN custom resource response
+    #   CFN_EVENT_TYPE          — "Create", "Update", or "Delete"
+    TF_IN_AUTOMATION: "true"
+
 phases:
   install:
     commands:
-      - set -e
-      - export HOME=/root
-      - echo "=== installing tools (terraform, kubectl, helm, yq, bc, jq) ==="
-      - TF_VERSION=1.10.5
-      - curl -fsSL -o /tmp/tf.zip https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_amd64.zip && unzip -o /tmp/tf.zip -d /usr/local/bin >/dev/null && terraform version | head -1
-      - curl -fsSL -o /usr/local/bin/kubectl https://dl.k8s.io/release/v1.34.0/bin/linux/amd64/kubectl && chmod +x /usr/local/bin/kubectl && kubectl version --client | head -1
-      - curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash >/dev/null 2>&1 && helm version --short
-      - curl -fsSL -o /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 && chmod +x /usr/local/bin/yq && yq --version
-      - command -v bc >/dev/null 2>&1 || (apt-get update -y >/dev/null && apt-get install -y bc >/dev/null)
-      - command -v jq >/dev/null 2>&1 || (apt-get update -y >/dev/null && apt-get install -y jq >/dev/null)
-      - jq --version
-      - pip3 install "requests>=2.27,<3"
+      - echo "=== INSTALL PHASE ==="
+      - echo "Installing Terraform..."
+      - apt-get update -qq
+      - apt-get install -y -qq unzip jq gnupg software-properties-common
+      - curl -fsSL https://apt.releases.hashicorp.com/gpg | gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+      - echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/hashicorp.list
+      - apt-get update -qq && apt-get install -y -qq terraform
+      - terraform --version
+      - echo "Installing kubectl..."
+      - curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+      - chmod +x kubectl && mv kubectl /usr/local/bin/
+      - kubectl version --client
+      - echo "Installing Helm..."
+      - curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      - helm version
+
+  pre_build:
+    commands:
+      - echo "=== PRE_BUILD PHASE ==="
+      - echo "Setting up workspace..."
+      - export INFRA_DIR="$CODEBUILD_SRC_DIR/terraform/infrastructure"
+      - ls -la "$INFRA_DIR"
+      - echo "Running bootstrap (seeds tfvars, inits terraform)..."
+      - cd "$INFRA_DIR"
+      - bash scripts/bootstrap.sh --skip-prereq-gate --image-source ghcr
+      - echo "Injecting ACME_EMAIL='${ACME_EMAIL}' into terraform.tfvars..."
+      - sed -i "s|^acme_email.*|acme_email = \"${ACME_EMAIL}\"|" "$INFRA_DIR/terraform.tfvars"
+      # Tier-1 deploys where the WS organizer provisioned this event. CodeBuild runs in
+      # that region, so its region IS the deploy region. Write it into terraform.tfvars
+      # (the aws provider reads var.region, not the env). kb_region stays us-east-1.
+      - DEPLOY_REGION="${AWS_DEFAULT_REGION:-$AWS_REGION}"
+      - test -n "$DEPLOY_REGION" || { echo "FATAL - no AWS_DEFAULT_REGION/AWS_REGION in CodeBuild env; cannot set deploy region"; exit 1; }
+      - echo "Injecting deploy region '${DEPLOY_REGION}' (WS-provisioned) into terraform.tfvars..."
+      - sed -i "s|^region .*|region = \"${DEPLOY_REGION}\"|" "$INFRA_DIR/terraform.tfvars"
+      - sed -i "s|^azs .*|azs = [\"${DEPLOY_REGION}a\", \"${DEPLOY_REGION}b\", \"${DEPLOY_REGION}c\"]|" "$INFRA_DIR/terraform.tfvars"
+      - echo "Verifying acme_email + region are set:"
+      - grep -E '^(acme_email|region|azs|kb_region) ' "$INFRA_DIR/terraform.tfvars"
+      - echo "Pre-build complete."
+
   build:
     commands:
+      # Single block so the Delete early-exit actually skips the apply (each list item
+      # is its own shell in CodeBuild — an `exit 0` in one would not skip the next).
       - |
-        set -e; export HOME=/root
+        set -e
+        cd "$CODEBUILD_SRC_DIR/terraform/infrastructure"
 
-        echo "=== locate the infrastructure tree (S3-sourced at terraform/, no git clone) ==="
-        cd "$CODEBUILD_SRC_DIR/terraform"
-        export REPO_ROOT="$PWD"
-        test -d infrastructure/scripts || { echo "ERROR - infrastructure/ not found under $REPO_ROOT (check the assets sync, terraform/ prefix)"; exit 1; }
+        if [ "$CFN_EVENT_TYPE" = "Delete" ]; then
+          echo "=== DELETE EVENT — tearing down tier-1 (BuildOnDelete) ==="
+          # State-independent sweep (tag + well-known-name). pre_build already wrote the
+          # deploy region into terraform.tfvars, so teardown targets the right regions
+          # (EKS/RDS/VPC in $DEPLOY_REGION, KB/AOSS in kb_region us-east-1).
+          bash scripts/teardown.sh --post-destroy-only --yes
+          echo "Tier-1 teardown complete."
 
-        echo "=== bootstrap - seed tfvars from .example + terraform init (all roots) ==="
-        bash infrastructure/scripts/bootstrap.sh --skip-prereq-gate
+          # Empty the versioned StateBucket so CloudFormation can delete it as the stack
+          # tears down. It holds the staged tier-1 state we just destroyed; CFN refuses to
+          # delete a non-empty bucket (409 "must delete all versions"), which would otherwise
+          # leave the whole stack DELETE_FAILED even though every workshop resource is gone.
+          if [ -n "$STATE_BUCKET" ]; then
+            echo "Emptying StateBucket $STATE_BUCKET (versions + delete-markers)..."
+            aws s3api delete-objects --bucket "$STATE_BUCKET" --delete "$(aws s3api list-object-versions --bucket "$STATE_BUCKET" --output json --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}')" 2>/dev/null || true
+            aws s3api delete-objects --bucket "$STATE_BUCKET" --delete "$(aws s3api list-object-versions --bucket "$STATE_BUCKET" --output json --query '{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}')" 2>/dev/null || true
+            echo "StateBucket emptied."
+          fi
+          exit 0
+        fi
 
-        echo "=== inject acme_email (real value, must not be *@example.com) ==="
-        sed -i "s|^acme_email = .*|acme_email = \"${ACME_EMAIL}\"|" infrastructure/terraform.tfvars
-        echo "=== inject non-empty sentinels for tier-2 IVIA secrets (never reach tier-1 TF) ==="
-        sed -i 's|^icr_entitlement_key = ""|icr_entitlement_key = "tier1-build-only-not-used"|' infrastructure/services/terraform.tfvars
-        sed -i 's|^ivia_mmfa_push_client_secret = ""|ivia_mmfa_push_client_secret = "tier1-build-only-not-used"|' infrastructure/services/terraform.tfvars
-        echo "acme set:" $(grep -c '^acme_email = ".\+"' infrastructure/terraform.tfvars) "| icr sentinel:" $(grep -c 'tier1-build-only-not-used' infrastructure/services/terraform.tfvars) "lines"
+        echo "=== BUILD PHASE (Create/Update) — deploying tier-1 ==="
+        bash scripts/deploy-workshop.sh --tier 1 --image-source ghcr
+        echo "Tier-1 deploy complete."
 
-        echo "=== TIER 1: deploy-workshop.sh --tier 1 ==="
-        bash infrastructure/scripts/deploy-workshop.sh --tier 1
+        echo "Staging tier-1 state to S3..."
+        aws s3 cp terraform.tfstate "s3://${STATE_BUCKET}/tier1/terraform.tfstate"
+        aws s3 cp terraform.tfvars  "s3://${STATE_BUCKET}/tier1/terraform.tfvars"
+        echo "State staged to s3://${STATE_BUCKET}/tier1/"
 
-        echo "=== resolve attendee identity (role NAME from ATTENDEE_ROLE_NAME, account via STS — never hardcoded) ==="
-        CLUSTER_NAME=$(grep '^cluster_name' infrastructure/terraform.tfvars | sed 's/.*"\(.*\)"/\1/')
-        REGION=$(grep '^region' infrastructure/terraform.tfvars | sed 's/.*"\(.*\)"/\1/')
+        echo "Granting ${ATTENDEE_ROLE_NAME} EKS cluster-admin access..."
         ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-        ATTENDEE_ROLE_NAME="${ATTENDEE_ROLE_NAME:-WSParticipantRole}"
-        PARTICIPANT_ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/${ATTENDEE_ROLE_NAME}"
+        CLUSTER_NAME=$(grep '^cluster_name' terraform.tfvars | cut -d'"' -f2)
+        aws eks create-access-entry --cluster-name "$CLUSTER_NAME" --principal-arn "arn:aws:iam::${ACCOUNT_ID}:role/${ATTENDEE_ROLE_NAME}" --type STANDARD 2>/dev/null || true
+        aws eks associate-access-policy --cluster-name "$CLUSTER_NAME" --principal-arn "arn:aws:iam::${ACCOUNT_ID}:role/${ATTENDEE_ROLE_NAME}" --policy-arn "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy" --access-scope type=cluster 2>/dev/null || true
+        echo "EKS access granted to ${ATTENDEE_ROLE_NAME}."
 
-        echo "=== GRANT attendee EKS access — CodeBuild is the cluster creator, so the attendee ==="
-        echo "=== (a DIFFERENT principal) needs an explicit access entry. Fail-loud: only the ==="
-        echo "=== ResourceInUseException (entry already present) is benign; anything else aborts. ==="
-        create_out=$(aws eks create-access-entry --cluster-name "$CLUSTER_NAME" --region "$REGION" --principal-arn "$PARTICIPANT_ROLE_ARN" --type STANDARD 2>&1) || {
-          echo "$create_out" | grep -q 'ResourceInUseException' \
-            && echo "access entry already exists (idempotent)" \
-            || { echo "FATAL - create-access-entry failed for ${PARTICIPANT_ROLE_ARN}:"; echo "$create_out"; exit 1; }
-        }
-        assoc_out=$(aws eks associate-access-policy --cluster-name "$CLUSTER_NAME" --region "$REGION" --principal-arn "$PARTICIPANT_ROLE_ARN" --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy --access-scope type=cluster 2>&1) || {
-          echo "FATAL - associate-access-policy failed for ${PARTICIPANT_ROLE_ARN}:"; echo "$assoc_out"; exit 1;
-        }
-
-        echo "=== VERIFY the grant is actually present (real proof is kubectl as the attendee, done in content) ==="
-        aws eks describe-access-entry --cluster-name "$CLUSTER_NAME" --region "$REGION" --principal-arn "$PARTICIPANT_ROLE_ARN" >/dev/null 2>&1 \
-          || { echo "FATAL - access entry for ${PARTICIPANT_ROLE_ARN} not present after create"; exit 1; }
-        POLICIES=$(aws eks list-associated-access-policies --cluster-name "$CLUSTER_NAME" --region "$REGION" --principal-arn "$PARTICIPANT_ROLE_ARN" --query 'associatedAccessPolicies[].policyArn' --output text 2>&1)
-        echo "$POLICIES" | grep -q 'AmazonEKSClusterAdminPolicy' \
-          || { echo "FATAL - AmazonEKSClusterAdminPolicy not associated to ${PARTICIPANT_ROLE_ARN} (got: ${POLICIES})"; exit 1; }
-        echo "VERIFIED - ${PARTICIPANT_ROLE_ARN} has cluster-admin access entry"
-
-        echo "=== STAGE tier-1 state + tfvars to S3 ==="
-        aws s3 cp infrastructure/terraform.tfstate "s3://${STATE_BUCKET}/infrastructure/terraform.tfstate"
-        # Staged-tfvars hygiene: bootstrap stamped admin_principal_arn = the CodeBuild role,
-        # which is ephemeral (deleted on stack teardown). Rewrite the STAGED copy to the
-        # attendee role so the pulled handoff is not a dangling reference. admin_principal_arn
-        # is a RECORD only — cluster-admin is granted by the EKS access entry above, not this
-        # var (see infrastructure/modules/eks/README.md).
-        STAGED_TFVARS="$(mktemp)"
-        cp infrastructure/terraform.tfvars "$STAGED_TFVARS"
-        sed -i "s|^admin_principal_arn = .*|admin_principal_arn = \"${PARTICIPANT_ROLE_ARN}\"  # cluster-admin granted via EKS access entry, not this var (see modules/eks/README.md)|" "$STAGED_TFVARS"
-        aws s3 cp "$STAGED_TFVARS" "s3://${STATE_BUCKET}/infrastructure/terraform.tfvars.staged"
-
-        echo "=== TIER 1 complete; attendee EKS access granted + verified for ${PARTICIPANT_ROLE_ARN} ==="
+  post_build:
+    commands:
+      - echo "=== POST_BUILD PHASE ==="
+      - echo "Build status CODEBUILD_BUILD_SUCCEEDING=$CODEBUILD_BUILD_SUCCEEDING"
     finally:
-      - pip3 install "requests>=2.27,<3"
+      - echo "=== FINALLY (CFN Callback) ==="
       - |
-        python3 - <<'PYEOF'
-        import json, os
-        try:
-            import requests
-        except ImportError:
-            print("requests not available — cannot notify CloudFormation"); exit(0)
-        resp_url = os.environ.get("CFN_EVENT_RESPONSE_URL")
-        if not resp_url:
-            print("No CFN response URL — not a CFN-triggered build, no-op"); exit(0)
-        data = json.loads(os.environ["CFN_EVENT_DATA"])
-        data["Status"] = "SUCCESS" if int(os.environ.get("CODEBUILD_BUILD_SUCCEEDING", "0")) else "FAILED"
-        data["Reason"] = "See CodeBuild logs: /aws/codebuild/workshop-tier1"
-        data["Data"] = {"StateBucketName": os.environ.get("STATE_BUCKET", "")}
-        response = requests.put(resp_url, data=json.dumps(data))
-        print(f"CFN notified: {data['Status']} (HTTP {response.status_code})")
-        PYEOF
+        if [ -z "$CFN_EVENT_RESPONSE_URL" ]; then
+          echo "No CFN_EVENT_RESPONSE_URL — skipping callback (dev-sim mode)."
+          exit 0
+        fi
+        if [ "$CODEBUILD_BUILD_SUCCEEDING" = "1" ]; then
+          STATUS="SUCCESS"
+          REASON="Tier-1 deployed successfully"
+        else
+          STATUS="FAILED"
+          REASON="Tier-1 deploy failed — check CodeBuild logs"
+        fi
+        PHYSICAL_ID="tier1-$(date +%s)"
+        RESPONSE=$(echo "$CFN_EVENT_DATA" | jq --arg status "$STATUS" --arg reason "$REASON" --arg pid "$PHYSICAL_ID" \
+          '. + {Status: $status, Reason: $reason, PhysicalResourceId: $pid}')
+        echo "Sending CFN response: Status=$STATUS"
+        curl -s -X PUT -H "Content-Type:" -d "$RESPONSE" "$CFN_EVENT_RESPONSE_URL"
+        echo "CFN callback complete."
