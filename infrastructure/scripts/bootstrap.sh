@@ -321,7 +321,7 @@ step_summary() {
     echo -e "  - terraform init in all 3 roots (local state)"
     echo
     echo -e "${GREEN}Next steps (deploy one tier at a time):${NC}"
-    echo -e "  Tier 1 prompts you for the ICR entitlement key + Let's Encrypt email — no manual tfvars edit needed."
+    echo -e "  Each tier prompts for the inputs it needs — no manual tfvars edit (Tier 1: Let's Encrypt email · Tier 2: ICR entitlement key + IVIA MMFA secret)."
     echo -e "  1. Core infra (VPC/EKS/RDS/KB):   ${BLUE}./infrastructure/scripts/deploy-workshop.sh --tier 1${NC}"
     echo -e "  2. Vault + IVIA:                  ${BLUE}./infrastructure/scripts/deploy-workshop.sh --tier 2${NC}"
     echo -e "  3. Workloads (Use Cases 1-3):     ${BLUE}./infrastructure/scripts/deploy-workshop.sh --tier 3${NC}"

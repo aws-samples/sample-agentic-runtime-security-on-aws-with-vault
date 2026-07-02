@@ -372,7 +372,16 @@ echo ""
 # Interactive only: when stdin is not a TTY we cannot prompt, so we fail fast
 # with a clear message instead of hanging an automated run.
 #===============================================================================
-echo -e "${YELLOW}> Preflight: required inputs (Let's Encrypt email + IVIA secrets)${NC}"
+# Banner reflects only the inputs actually collected for the tier(s) in scope, so a
+# --tier 1 run (e.g. the Workshop Studio CodeBuild wrapper) doesn't imply it needs the
+# tier-2 IVIA secrets. Matches the tier-gated checks below.
+case "$TIER" in
+    1) _pf_inputs="Let's Encrypt email" ;;
+    2) _pf_inputs="IVIA secrets" ;;
+    3) _pf_inputs="none — tier-3 has no non-committable inputs" ;;
+    *) _pf_inputs="Let's Encrypt email + IVIA secrets" ;;
+esac
+echo -e "${YELLOW}> Preflight: required inputs (${_pf_inputs})${NC}"
 
 SERVICES_TFVARS="${SERVICES_DIR}/terraform.tfvars"
 
@@ -412,61 +421,75 @@ _require_tty() {
 }
 
 if [[ "$DRY_RUN" = true ]]; then
-    print_info "[DRY-RUN] Would ensure acme_email (tier-1) + icr_entitlement_key and ivia_mmfa_push_client_secret (tier-2) are set, prompting for any that are missing"
+    print_info "[DRY-RUN] Would ensure each in-scope tier's inputs are set (acme_email for tier-1; icr_entitlement_key + ivia_mmfa_push_client_secret for tier-2), prompting for any that are missing"
     print_pass "Preflight: required inputs (dry-run)"
 else
-    # The tfvars we write into are created by bootstrap.sh — fail loud if absent.
-    if [[ ! -f "$TFVARS" || ! -f "$SERVICES_TFVARS" ]]; then
+    # Only the tiers actually in scope (see --tier) have their inputs checked. A
+    # tier-1-only run — e.g. the Workshop Studio CodeBuild wrapper (deploy-workshop.sh
+    # --tier 1) — therefore never demands the two tier-2 IVIA secrets; those are
+    # attendee-supplied when tier-2 runs. The tfvars are created by bootstrap.sh.
+    if [[ ! -f "$TFVARS" ]]; then
         _die "Preflight: terraform.tfvars not found" \
              "Seed the roots first: bash infrastructure/scripts/bootstrap.sh"
     fi
 
     # 1) acme_email (tier-1) — required, must be a real address (not *@example.com)
-    acme_email="$(_tfvars_get "$TFVARS" acme_email)"
-    if [[ -z "$acme_email" || "$acme_email" == *@example.com ]]; then
-        _require_tty "acme_email" "$TFVARS"
-        email_re='^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$'
-        while :; do
-            read -r -p "  $(echo -e "${YELLOW}?${NC}") Let's Encrypt contact email (TLS cert issuance/renewal notices): " acme_email < /dev/tty
-            [[ "$acme_email" =~ $email_re && "$acme_email" != *@example.com ]] && break
-            print_warn "Enter a real, deliverable email — Let's Encrypt rejects blanks and the example.com domain."
-        done
-        _tfvars_set "$TFVARS" acme_email "$acme_email"
-        print_pass "Preflight: acme_email set (${acme_email})"
-    else
-        print_info "Preflight: acme_email already set (${acme_email}) — reusing"
+    if [[ -z "$TIER" || "$TIER" == "1" ]]; then
+        acme_email="$(_tfvars_get "$TFVARS" acme_email)"
+        if [[ -z "$acme_email" || "$acme_email" == *@example.com ]]; then
+            _require_tty "acme_email" "$TFVARS"
+            email_re='^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$'
+            while :; do
+                read -r -p "  $(echo -e "${YELLOW}?${NC}") Let's Encrypt contact email (TLS cert issuance/renewal notices): " acme_email < /dev/tty
+                [[ "$acme_email" =~ $email_re && "$acme_email" != *@example.com ]] && break
+                print_warn "Enter a real, deliverable email — Let's Encrypt rejects blanks and the example.com domain."
+            done
+            _tfvars_set "$TFVARS" acme_email "$acme_email"
+            print_pass "Preflight: acme_email set (${acme_email})"
+        else
+            print_info "Preflight: acme_email already set (${acme_email}) — reusing"
+        fi
     fi
 
-    # 2) icr_entitlement_key (tier-2) — required secret, hidden input
-    icr_key="$(_tfvars_get "$SERVICES_TFVARS" icr_entitlement_key)"
-    if [[ -z "$icr_key" || "$icr_key" == \<*\> ]]; then
-        _require_tty "icr_entitlement_key" "$SERVICES_TFVARS"
-        while :; do
-            read -r -s -p "  $(echo -e "${YELLOW}?${NC}") IBM Container Registry entitlement key (input hidden): " icr_key < /dev/tty
-            echo
-            [[ -n "$icr_key" ]] && break
-            print_warn "Entitlement key cannot be empty — IVIA image pull fails (ImagePullBackOff) without it."
-        done
-        _tfvars_set "$SERVICES_TFVARS" icr_entitlement_key "$icr_key"
-        print_pass "Preflight: icr_entitlement_key set (hidden)"
-    else
-        print_info "Preflight: icr_entitlement_key already set — reusing"
-    fi
+    # 2+3) tier-2 IVIA secrets — only checked when tier-2 is in scope, so --tier 1
+    # never touches them (bootstrap.sh still seeds SERVICES_TFVARS for later tiers).
+    if [[ -z "$TIER" || "$TIER" == "2" ]]; then
+        if [[ ! -f "$SERVICES_TFVARS" ]]; then
+            _die "Preflight: services terraform.tfvars not found" \
+                 "Seed the roots first: bash infrastructure/scripts/bootstrap.sh"
+        fi
 
-    # 3) ivia_mmfa_push_client_secret (tier-2) — required secret, hidden input
-    mmfa_secret="$(_tfvars_get "$SERVICES_TFVARS" ivia_mmfa_push_client_secret)"
-    if [[ -z "$mmfa_secret" ]]; then
-        _require_tty "ivia_mmfa_push_client_secret" "$SERVICES_TFVARS"
-        while :; do
-            read -r -s -p "  $(echo -e "${YELLOW}?${NC}") IBM Verify MMFA push client secret (input hidden): " mmfa_secret < /dev/tty
-            echo
-            [[ -n "$mmfa_secret" ]] && break
-            print_warn "MMFA push client secret cannot be empty."
-        done
-        _tfvars_set "$SERVICES_TFVARS" ivia_mmfa_push_client_secret "$mmfa_secret"
-        print_pass "Preflight: ivia_mmfa_push_client_secret set (hidden)"
-    else
-        print_info "Preflight: ivia_mmfa_push_client_secret already set — reusing"
+        # 2) icr_entitlement_key (tier-2) — required secret, hidden input
+        icr_key="$(_tfvars_get "$SERVICES_TFVARS" icr_entitlement_key)"
+        if [[ -z "$icr_key" || "$icr_key" == \<*\> ]]; then
+            _require_tty "icr_entitlement_key" "$SERVICES_TFVARS"
+            while :; do
+                read -r -s -p "  $(echo -e "${YELLOW}?${NC}") IBM Container Registry entitlement key (input hidden): " icr_key < /dev/tty
+                echo
+                [[ -n "$icr_key" ]] && break
+                print_warn "Entitlement key cannot be empty — IVIA image pull fails (ImagePullBackOff) without it."
+            done
+            _tfvars_set "$SERVICES_TFVARS" icr_entitlement_key "$icr_key"
+            print_pass "Preflight: icr_entitlement_key set (hidden)"
+        else
+            print_info "Preflight: icr_entitlement_key already set — reusing"
+        fi
+
+        # 3) ivia_mmfa_push_client_secret (tier-2) — required secret, hidden input
+        mmfa_secret="$(_tfvars_get "$SERVICES_TFVARS" ivia_mmfa_push_client_secret)"
+        if [[ -z "$mmfa_secret" ]]; then
+            _require_tty "ivia_mmfa_push_client_secret" "$SERVICES_TFVARS"
+            while :; do
+                read -r -s -p "  $(echo -e "${YELLOW}?${NC}") IBM Verify MMFA push client secret (input hidden): " mmfa_secret < /dev/tty
+                echo
+                [[ -n "$mmfa_secret" ]] && break
+                print_warn "MMFA push client secret cannot be empty."
+            done
+            _tfvars_set "$SERVICES_TFVARS" ivia_mmfa_push_client_secret "$mmfa_secret"
+            print_pass "Preflight: ivia_mmfa_push_client_secret set (hidden)"
+        else
+            print_info "Preflight: ivia_mmfa_push_client_secret already set — reusing"
+        fi
     fi
 fi
 echo ""
