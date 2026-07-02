@@ -26,34 +26,61 @@ awsAccountConfig:
       - arn:aws:iam::aws:policy/AmazonBedrockFullAccess
       - arn:aws:iam::aws:policy/SecretsManagerReadWrite
       - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPowerUser
+  # The event organizer picks the tier-1 deploy region (us-east-1 or us-west-2) when
+  # creating the WS event; the buildspec writes that region into terraform.tfvars so
+  # tier-1 follows it (Option A — auto-follow $AWS_DEFAULT_REGION). kb_region is ALWAYS
+  # us-east-1 (Nova/KB embeddings are us-east-1-only), so a us-west-2 event still touches
+  # us-east-1 for the Knowledge Base — hence BOTH regions must be accessible (max 2).
+  #
+  # @JONATHAN — two open questions on the us-west-2 path (us-east-1 single-region is
+  # proven; us-west-2 is NOT yet validated):
+  #   Q1. Is this the right regionConfiguration expression for "organizer chooses ONE
+  #       deploy region, KB always us-east-1"? i.e. both in accessibleRegions.required
+  #       + maxAccessibleRegions: 2 — or should us-east-1 be required and us-west-2
+  #       optional/recommended?
+  #   Q2. See the TerraformSourceBucket note below — a us-west-2 event only works if the
+  #       WS assets bucket is reachable by the us-west-2 CodeBuild. If it can't be, drop
+  #       us-west-2 here (single-region us-east-1) until the buildspec stages assets in
+  #       the event region first.
   regionConfiguration:
     minAccessibleRegions: 1
-    maxAccessibleRegions: 1
+    maxAccessibleRegions: 2
     accessibleRegions:
       required:
+        - us-east-1
         - us-west-2
     deployableRegions:
       required:
+        - us-east-1
         - us-west-2
 
 infrastructure:
   cloudformationTemplates:
-    - templateLocation: assets/cfn/bootstrap.yaml
-      label: "Workshop Foundation (EKS + Vault) — CloudFormation Bootstrap"
+    - templateLocation: static/cfn/bootstrap.yaml
+      label: "Workshop-Foundation-EKS-Vault-Bootstrap"
       participantAllStackOutputsVisible: true
       # AcmeEmail: event organizer fills this in Workshop Studio event config (NoEcho in CFN).
       # TerraformSourceBucket + AssetsKeyPrefix: where `aws s3 sync ./assets` (publish.sh)
       # lands the workshop/assets/ tree — CodeBuild sources buildspec/ + terraform/ from here.
-      # VERIFY-ON-REAL-WS: the WS asset store is ws-assets-us-east-1 (us-east-1) while
-      # CodeBuild runs in us-west-2; confirm the region-local bucket WS exposes to the
-      # template at event time, and adjust TerraformSourceBucket if WS injects a different one.
+      #
+      # @JONATHAN — the load-bearing durability question for the us-west-2 deployableRegion:
+      #   CodeBuild sources its S3 input from TerraformSourceBucket, and (per AWS docs, which
+      #   we still need to confirm) that bucket must be in the SAME region as the build/stack.
+      #   Q: does {{.AssetsBucketName}} resolve to a bucket in the EVENT region (us-west-2
+      #      for a us-west-2 event → works), or is it fixed us-east-1 (`ws-assets-us-east-1`,
+      #      per your earlier note → a us-west-2 CodeBuild can't source it → us-west-2 event
+      #      breaks)?
+      #   If it's fixed us-east-1, the durable fix is either (a) drop us-west-2 from
+      #   deployableRegions (ship single-region us-east-1), or (b) add a buildspec step that
+      #   copies the assets from the us-east-1 store into an in-event-region bucket before
+      #   `deploy-workshop.sh` runs. We deliberately did NEITHER yet — pending your answer.
       parameters:
         - templateParameter: AcmeEmail
-          defaultValue: ""
+          defaultValue: "hurleyjm@amazon.com"
         - templateParameter: TerraformSourceBucket
-          defaultValue: "ws-assets-us-east-1"
+          defaultValue: "{{.AssetsBucketName}}"
         - templateParameter: AssetsKeyPrefix
-          defaultValue: "agentic-runtime-security-aws/"
+          defaultValue: "{{.AssetsBucketPrefix}}"
 
 # NOTE (Phase 1 Open Question 1): Service quota requests are NOT in the verified v2 schema
 # surface. Quota provisioning is documented in workshop/content/20-prerequisites/ as
