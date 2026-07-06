@@ -23,11 +23,11 @@
 ################################################################################
 
 # Canonical region — every module receives this via var.region.
-region = "us-west-2"
+region = "us-east-1"
 
 cluster_name = "ars-workshop"
 vpc_cidr     = "10.1.0.0/16"
-azs          = ["us-west-2a", "us-west-2b", "us-west-2c"]
+azs          = ["us-east-1a", "us-east-1b", "us-east-1c"]
 
 # Bedrock KB region — Nova 2 Multimodal Embeddings is us-east-1 only.
 kb_region = "us-east-1"
@@ -51,7 +51,7 @@ admin_principal_arn = "arn:aws:iam::<account-id>:role/<your-role>"
 tags = {
   Environment = "workshop"
   Workshop    = "agentic-runtime-security"
-  Region      = "us-west-2"
+  Region      = "us-east-1"
   ManagedBy   = "terraform"
 }
 

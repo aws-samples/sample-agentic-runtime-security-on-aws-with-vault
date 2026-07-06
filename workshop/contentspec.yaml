@@ -44,15 +44,13 @@ awsAccountConfig:
   #       the event region first.
   regionConfiguration:
     minAccessibleRegions: 1
-    maxAccessibleRegions: 2
+    maxAccessibleRegions: 1
     accessibleRegions:
       required:
         - us-east-1
-        - us-west-2
     deployableRegions:
       required:
         - us-east-1
-        - us-west-2
 
 infrastructure:
   cloudformationTemplates:
