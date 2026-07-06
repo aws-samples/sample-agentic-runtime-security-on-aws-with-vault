@@ -65,7 +65,7 @@ The workshop uses two Amazon Nova models. Verify they are enabled before deployi
 **Nova Pro** is reached through a cross-region inference (CRIS) profile. Validate it with `get-inference-profile`:
 
 ```bash
-aws bedrock get-inference-profile --inference-profile-identifier us.amazon.nova-pro-v1:0 --region us-west-2 --query 'inferenceProfileId' --output text
+aws bedrock get-inference-profile --inference-profile-identifier us.amazon.nova-pro-v1:0 --query 'inferenceProfileId' --output text
 ```
 
 **Expected output:** `us.amazon.nova-pro-v1:0`
@@ -78,7 +78,7 @@ aws bedrock get-foundation-model --model-identifier amazon.nova-2-multimodal-emb
 
 **Expected output:** `amazon.nova-2-multimodal-embeddings-v1:0`
 
-If either command returns access denied, request access via the Bedrock console model-access page in both [us-west-2](https://us-west-2.console.aws.amazon.com/bedrock/home#/modelaccess) and [us-east-1](https://us-east-1.console.aws.amazon.com/bedrock/home#/modelaccess).
+If either command returns access denied, request access via the Bedrock console model-access page in **your deploy Region** (for Nova Pro) and in [**us-east-1**](https://us-east-1.console.aws.amazon.com/bedrock/home#/modelaccess) (for the Nova 2 embeddings model, which is us-east-1-only).
 
 ::::alert{header="Amazon Nova is usually enabled by default" type="info"}
 Amazon's own Nova family is generally enabled by default in fresh AWS accounts (no click-through acceptance), unlike Anthropic Claude models.

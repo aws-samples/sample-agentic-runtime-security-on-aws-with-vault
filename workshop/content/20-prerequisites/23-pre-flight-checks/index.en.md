@@ -32,7 +32,7 @@ terraform version && kubectl version --client && helm version --short && vault v
 
 ## Service quotas
 
-The script also verifies these service quotas in `us-west-2`:
+The script also verifies these service quotas in your deploy Region:
 
 | Quota | Minimum | Quota code |
 |-------|---------|------------|
@@ -45,7 +45,7 @@ The script also verifies these service quotas in `us-west-2`:
 If any quota is insufficient, the script prints the exact `aws service-quotas request-service-quota-increase` command. You can also check manually:
 
 ```bash
-aws service-quotas get-service-quota --service-code ec2 --quota-code L-1216C47A --region us-west-2 --query 'Quota.Value' --output text
+aws service-quotas get-service-quota --service-code ec2 --quota-code L-1216C47A --query 'Quota.Value' --output text
 ```
 
 :::alert{header="Workshop Studio quota auto-provisioning" type="info"}

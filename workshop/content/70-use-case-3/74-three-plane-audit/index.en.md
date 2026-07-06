@@ -24,29 +24,29 @@ The `workshop` Athena workgroup ships with a preconfigured query-result location
 ```bash
 # Run a query in the 'workshop' workgroup, wait for it, echo the execution id
 athena_run() {
-  local QID=$(aws athena start-query-execution --region us-west-2 --work-group workshop \
+  local QID=$(aws athena start-query-execution --work-group workshop \
     --query-string "$1" --query 'QueryExecutionId' --output text)
   for i in $(seq 1 30); do
-    local S=$(aws athena get-query-execution --region us-west-2 --query-execution-id "$QID" \
+    local S=$(aws athena get-query-execution --query-execution-id "$QID" \
       --query 'QueryExecution.Status.State' --output text)
     [ "$S" = "SUCCEEDED" ] && { echo "$QID"; return 0; }
-    [ "$S" = "FAILED" ] && { aws athena get-query-execution --region us-west-2 --query-execution-id "$QID" \
+    [ "$S" = "FAILED" ] && { aws athena get-query-execution --query-execution-id "$QID" \
       --query 'QueryExecution.Status.StateChangeReason' --output text >&2; return 1; }
     sleep 2
   done
 }
 
 # Multi-row aligned table
-athena_query() { aws athena get-query-results --region us-west-2 --query-execution-id "$(athena_run "$1")" \
+athena_query() { aws athena get-query-results --query-execution-id "$(athena_run "$1")" \
   --output json | jq -r '.ResultSet.Rows[] | [.Data[] | (.VarCharValue // "-")] | @tsv' | column -t -s $'\t'; }
 
 # Single row, vertical (field -> value)
-athena_record() { aws athena get-query-results --region us-west-2 --query-execution-id "$(athena_run "$1")" \
+athena_record() { aws athena get-query-results --query-execution-id "$(athena_run "$1")" \
   --output json | jq -r '.ResultSet.Rows as $r | range(0; ($r[0].Data|length)) as $i
     | "\($r[0].Data[$i].VarCharValue)\t\($r[1].Data[$i].VarCharValue // "-")"' | column -t -s $'\t'; }
 
 # First value only (capture into a variable)
-athena_scalar() { aws athena get-query-results --region us-west-2 --query-execution-id "$(athena_run "$1")" \
+athena_scalar() { aws athena get-query-results --query-execution-id "$(athena_run "$1")" \
   --query 'ResultSet.Rows[1].Data[0].VarCharValue' --output text; }
 ```
 

@@ -44,11 +44,11 @@ You now hold the credential's full `lease_id` and the ephemeral Postgres role na
 The Vault dynamic secrets engine just created `${PG_USER}` as a real Postgres role. Pull the RDS master credentials from AWS Secrets Manager and run a transient `postgres:16-alpine` pod to confirm:
 
 ```bash
-SECRET_ID=$(aws secretsmanager list-secrets --region us-west-2 \
+SECRET_ID=$(aws secretsmanager list-secrets \
   --query 'SecretList[?contains(Name,`rds!db`)].Name | [0]' --output text)
-MASTER_USER=$(aws secretsmanager get-secret-value --region us-west-2 --secret-id "${SECRET_ID}" \
+MASTER_USER=$(aws secretsmanager get-secret-value --secret-id "${SECRET_ID}" \
   --query SecretString --output text | jq -r '.username')
-MASTER_PASS=$(aws secretsmanager get-secret-value --region us-west-2 --secret-id "${SECRET_ID}" \
+MASTER_PASS=$(aws secretsmanager get-secret-value --secret-id "${SECRET_ID}" \
   --query SecretString --output text | jq -r '.password')
 RDS_HOST=$(kubectl get configmap banking-mcp-config -n banking-app -o jsonpath='{.data.RDS_ADDRESS}')
 
@@ -163,17 +163,17 @@ Define a small helper to submit a query, wait for completion, and pretty-print t
 ```bash
 athena_query() {
   local Q="$1"
-  local QID=$(aws athena start-query-execution --region us-west-2 --work-group workshop \
+  local QID=$(aws athena start-query-execution --work-group workshop \
     --query-string "$Q" --query 'QueryExecutionId' --output text)
   for i in $(seq 1 30); do
-    STATE=$(aws athena get-query-execution --region us-west-2 --query-execution-id "$QID" \
+    STATE=$(aws athena get-query-execution --query-execution-id "$QID" \
       --query 'QueryExecution.Status.State' --output text)
     [ "$STATE" = "SUCCEEDED" ] && break
-    [ "$STATE" = "FAILED" ] && { aws athena get-query-execution --region us-west-2 \
+    [ "$STATE" = "FAILED" ] && { aws athena get-query-execution \
       --query-execution-id "$QID" --query 'QueryExecution.Status.StateChangeReason' --output text; return 1; }
     sleep 2
   done
-  aws athena get-query-results --region us-west-2 --query-execution-id "$QID" --output json \
+  aws athena get-query-results --query-execution-id "$QID" --output json \
     | jq -r '.ResultSet.Rows[] | [.Data[] | (.VarCharValue // "" | if . == "" then "-" else . end)] | @tsv' \
     | column -t -s $'\t'
 }
