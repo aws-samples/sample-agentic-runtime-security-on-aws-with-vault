@@ -30,7 +30,7 @@ bash infrastructure/scripts/bootstrap.sh --skip-prereq-gate
 The CodeBuild build staged the Tier-1 Terraform **state** and its **`terraform.tfvars`** (which already carries the event's Let's Encrypt email) to an S3 bucket. Discover the bucket name from the CloudFormation stack output and pull both to the paths Tier 2 and Tier 3 read:
 
 ```bash
-STATE_BUCKET=$(aws cloudformation describe-stacks --query "Stacks[].Outputs[?OutputKey=='StateBucketName'].OutputValue|[]|[0]" --output text) && aws s3 cp "s3://${STATE_BUCKET}/infrastructure/terraform.tfstate" infrastructure/terraform.tfstate && aws s3 cp "s3://${STATE_BUCKET}/infrastructure/terraform.tfvars.staged" infrastructure/terraform.tfvars && test -s infrastructure/terraform.tfstate && echo "State + config pulled OK" || echo "ERROR: pull failed"
+STATE_BUCKET=$(aws cloudformation describe-stacks --query "Stacks[].Outputs[?OutputKey=='StateBucketName'].OutputValue|[]|[0]" --output text) && aws s3 cp "s3://${STATE_BUCKET}/tier1/terraform.tfstate" infrastructure/terraform.tfstate && aws s3 cp "s3://${STATE_BUCKET}/tier1/terraform.tfvars" infrastructure/terraform.tfvars && test -s infrastructure/terraform.tfstate && echo "State + config pulled OK" || echo "ERROR: pull failed"
 ```
 
 ::::alert{header="State file path is load-bearing" type="warning"}
@@ -41,7 +41,7 @@ The state file must be at exactly `infrastructure/terraform.tfstate` relative to
 If `STATE_BUCKET` resolves to empty (for example, if the stack outputs aren't visible yet), list buckets and locate the state bucket by name, then rerun both `aws s3 cp` commands with that bucket name:
 
 ```bash
-aws s3 ls | grep -i workshop
+aws s3 ls | grep -i bootstrap-statebucket
 ```
 ::::
 
