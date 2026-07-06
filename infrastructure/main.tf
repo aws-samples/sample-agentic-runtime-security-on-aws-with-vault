@@ -151,6 +151,25 @@ module "eks" {
 }
 
 #-------------------------------------------------------------------------------
+# Cross-node LDAPS (TCP/636) on the EKS node SG. IVIA's pdconfig (iviaruntime
+# pod) may schedule on a different node than the openldap pod; the node SG
+# default ingress does not include TCP/636 between same-SG nodes. Source = same
+# SG (self). Owned by Tier 1 because it mutates the EKS-created node SG — an EC2
+# write the Tier-2/3 attendee role (WSParticipantRole) is not allowed to perform.
+# Consumed at runtime by module.ivia (Tier 2).
+#-------------------------------------------------------------------------------
+
+resource "aws_security_group_rule" "ivia_node_ldaps_self" {
+  type                     = "ingress"
+  from_port                = 636
+  to_port                  = 636
+  protocol                 = "tcp"
+  security_group_id        = module.eks.node_security_group_id
+  source_security_group_id = module.eks.node_security_group_id
+  description              = "IVIA pdconfig: cross-node LDAPS from iviaruntime to openldap pod"
+}
+
+#-------------------------------------------------------------------------------
 # Bedrock KB AOSS
 # Owns AOSS collection + 3 policies + IAM + S3 + corpus. Uses provider aws.kb
 # (us-east-1) — Nova 2 Multimodal Embeddings is us-east-1 only.
