@@ -99,24 +99,6 @@ resource "kubernetes_secret" "ivia_mmfa_push" {
 }
 
 #-------------------------------------------------------------------------------
-# Cross-node LDAPS (TCP/636). pdconfig running on iviaruntime pod may schedule
-# on a different node than the openldap pod; the EKS node SG default ingress
-# rules do not include TCP/636 between same-SG nodes. Source = same SG (self).
-# Sibling reference: phase-a/03-ivia-deploy.sh:23-30. Pattern matches target's
-# existing modules/rds/main.tf:54-72.
-#-------------------------------------------------------------------------------
-
-resource "aws_security_group_rule" "node_ldaps_self" {
-  type                     = "ingress"
-  from_port                = 636
-  to_port                  = 636
-  protocol                 = "tcp"
-  security_group_id        = var.node_security_group_id
-  source_security_group_id = var.node_security_group_id
-  description              = "IVIA pdconfig: cross-node LDAPS from iviaruntime to openldap pod (sibling 03-ivia-deploy.sh:24-30)"
-}
-
-#-------------------------------------------------------------------------------
 # RBAC for the autoconf Job. ibmvia_autoconf 0.3.21 requires:
 #   - get/list secrets + configmaps   for !secret <ns>/<name>:<key> resolution
 #   - get/list/patch deployments.apps for _restart_k8s_deployments

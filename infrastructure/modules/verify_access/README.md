@@ -232,8 +232,6 @@ advisor:
 | `region` | AWS region (tagging) |
 | `cluster_name` | EKS cluster name (tagging) |
 | `icr_entitlement_key` | ICR pull credential (builds `dockerlogin` Secret) |
-| `node_security_group_id` | EKS node SG (target for cross-node TCP/636 rule) |
-| `tags` | AWS resource tags |
 
 ## Outputs
 

@@ -77,8 +77,6 @@ module "ivia" {
   cluster_name                 = local.infra.cluster_name
   icr_entitlement_key          = var.icr_entitlement_key
   ivia_mmfa_push_client_secret = var.ivia_mmfa_push_client_secret
-  node_security_group_id       = local.infra.node_security_group_id
   tls_certificate_arn          = local.infra.tls_certificate_arn
   nip_io_wrp_host              = local.nip_io_wrp_host
-  tags                         = local.infra.tags
 }
