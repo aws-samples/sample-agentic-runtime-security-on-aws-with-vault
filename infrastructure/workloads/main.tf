@@ -57,9 +57,9 @@ locals {
   # ---------------------------------------------------------------------------
   ghcr_uc1_agent     = "${var.ghcr_registry_base}/workshop-uc1-agent:v1"
   ghcr_banking_ui    = "${var.ghcr_registry_base}/workshop-banking-app-ui:v2"
-  ghcr_banking_agent = "${var.ghcr_registry_base}/workshop-banking-app-agent:v2"
+  ghcr_banking_agent = "${var.ghcr_registry_base}/workshop-banking-app-agent:v3"
   ghcr_banking_mcp   = "${var.ghcr_registry_base}/workshop-banking-app-mcp:v1"
-  ghcr_uc3_agent     = "${var.ghcr_registry_base}/workshop-uc3-agent:v1"
+  ghcr_uc3_agent     = "${var.ghcr_registry_base}/workshop-uc3-agent:v2"
 
   # Mode-driven imagePullPolicy (D-14):
   #   ghcr mode → IfNotPresent (pinned immutable :tags; per-node cache avoids redundant pulls)

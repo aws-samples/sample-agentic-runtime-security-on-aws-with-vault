@@ -861,7 +861,9 @@ def build_uc3_agent(vault_client=None, session_id: str = "default") -> Agent:
     global _vault_client
     _vault_client = vault_client
 
-    region = os.getenv("REGION", "us-west-2")
+    region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION")
+    if not region:
+        raise RuntimeError("AWS_REGION (or AWS_DEFAULT_REGION) must be set")
     model_id = os.getenv("BEDROCK_MODEL_ID", "us.amazon.nova-pro-v1:0")
 
     boto_session = None

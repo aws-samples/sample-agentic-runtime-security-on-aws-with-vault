@@ -19,7 +19,7 @@ Env vars consumed (set via Kubernetes ConfigMap):
   DB_PORT              — PostgreSQL port (default: 5432)
   DB_NAME              — PostgreSQL database name (default: workshop)
   BEDROCK_MODEL_ID     — Bedrock model ID (default: us.amazon.nova-pro-v1:0)
-  REGION               — AWS region (default: us-west-2)
+  AWS_REGION           — AWS region (injected by EKS Pod Identity; or AWS_DEFAULT_REGION)
 """
 
 import asyncio
