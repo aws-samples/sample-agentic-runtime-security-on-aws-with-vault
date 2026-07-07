@@ -173,7 +173,9 @@ def build_uc2_model(vault_client=None) -> BedrockModel:
     Returns:
         Configured strands.models.BedrockModel for build_uc2_agent to wrap.
     """
-    region = os.getenv("REGION", "us-west-2")
+    region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION")
+    if not region:
+        raise RuntimeError("AWS_REGION (or AWS_DEFAULT_REGION) must be set")
     model_id = os.getenv("BEDROCK_MODEL_ID", "us.amazon.nova-pro-v1:0")
 
     boto_session = None

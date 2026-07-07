@@ -180,7 +180,9 @@ class UC3VaultClient:
             vault_aws_role: The Vault aws/sts/<role> path suffix (e.g., "bedrock-reader").
             log_event: Structured log event name to emit on each lease issuance.
         """
-        region = os.getenv("REGION", "us-west-2")
+        region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION")
+        if not region:
+            raise RuntimeError("AWS_REGION (or AWS_DEFAULT_REGION) must be set")
         vault_path = f"aws/sts/{vault_aws_role}"
 
         def _refresh() -> dict:
