@@ -10,7 +10,7 @@ You are attending an **AWS-led workshop event**. Before joining, read through th
 - **Log out of any existing AWS accounts** in your browser. The workshop gives you a fresh, temporary account — if another session is active, the sign-in link may land on the wrong account.
 - **No confidential data.** The workshop account is shared infrastructure for the event duration. Do not upload personal files, credentials, or proprietary data.
 - **Temporary account.** The account and all resources are reclaimed by AWS after the event. Do not save work here that you need after the workshop.
-- **Region: `us-west-2`.** Every resource the workshop deploys lives in us-west-2 (Oregon). Confirm the region selector in the AWS console top-right shows **US West (Oregon)** after signing in.
+- **Region.** Every resource the workshop deploys lives in the AWS Region your event was created in. After signing in, confirm the region selector in the AWS console top-right matches the Region shown in your Workshop Studio event details.
 
 ## Access Steps
 
@@ -46,7 +46,7 @@ This opens a federated AWS console session under the **`WSParticipantRole`** ide
 
 ### Step 4 — Confirm the region
 
-In the AWS console, check the region selector in the top-right corner. It must show **US West (Oregon) — us-west-2**. If it shows a different region, click the selector and switch to **us-west-2** before proceeding.
+In the AWS console, check the region selector in the top-right corner. It must match the Region your event was created in (shown in your Workshop Studio event details). If it shows a different Region, click the selector and switch to your event's Region before proceeding.
 
 ## What Is Already Provisioned for You
 

@@ -55,14 +55,14 @@ The script runs a built-in audit, but you can run these spot-checks manually to 
 
 **EKS cluster gone:**
 ```bash
-aws eks describe-cluster --name agentic-runtime-usw2 --region us-west-2
+aws eks describe-cluster --name ars-workshop
 ```
 Expected: `ResourceNotFoundException`
 
 **RDS instance gone:**
 ```bash
-aws rds describe-db-instances --region us-west-2 \
-  --query "DBInstances[?starts_with(DBInstanceIdentifier,'agentic-runtime')].DBInstanceIdentifier" \
+aws rds describe-db-instances \
+  --query "DBInstances[?starts_with(DBInstanceIdentifier,'ars-workshop')].DBInstanceIdentifier" \
   --output text
 ```
 Expected: empty output

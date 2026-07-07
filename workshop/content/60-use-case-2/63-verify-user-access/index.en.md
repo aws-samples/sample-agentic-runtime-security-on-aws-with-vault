@@ -91,11 +91,11 @@ pod "pg-client-jaime" deleted
 The RLS policy lives in the `pg_policy` system catalog. Reading it requires admin access (the `uc2-personal-readonly` Vault-vended role is non-superuser and cannot query `pg_policy`). The RDS master credentials are stored in AWS Secrets Manager — pull them and run a SELECT against the catalog from a transient `postgres:16-alpine` pod:
 
 ```bash
-SECRET_ID=$(aws secretsmanager list-secrets --region us-west-2 \
+SECRET_ID=$(aws secretsmanager list-secrets \
   --query 'SecretList[?contains(Name,`rds!db`)].Name | [0]' --output text)
-MASTER_USER=$(aws secretsmanager get-secret-value --region us-west-2 --secret-id "${SECRET_ID}" \
+MASTER_USER=$(aws secretsmanager get-secret-value --secret-id "${SECRET_ID}" \
   --query SecretString --output text | jq -r '.username')
-MASTER_PASS=$(aws secretsmanager get-secret-value --region us-west-2 --secret-id "${SECRET_ID}" \
+MASTER_PASS=$(aws secretsmanager get-secret-value --secret-id "${SECRET_ID}" \
   --query SecretString --output text | jq -r '.password')
 
 kubectl run pg-client-policy --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \

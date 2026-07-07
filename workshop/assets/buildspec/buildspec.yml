@@ -99,6 +99,20 @@ phases:
         aws eks associate-access-policy --cluster-name "$CLUSTER_NAME" --principal-arn "arn:aws:iam::${ACCOUNT_ID}:role/${ATTENDEE_ROLE_NAME}" --policy-arn "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy" --access-scope type=cluster 2>/dev/null || true
         echo "EKS access granted to ${ATTENDEE_ROLE_NAME}."
 
+        # Grant the attendee role the scoped audit-query permissions the 5 contentspec
+        # managed policies do NOT cover: athena:Start/StopQueryExecution (ReadOnlyAccess
+        # is read-only) and s3:PutObject to the CMK-SSE Athena results bucket (UC2 page 65
+        # + UC3 page 74). Query READS of the Firehose log bucket are covered by
+        # ReadOnlyAccess (s3:Get*/List*); the CMK crypto ops are granted by the workshop
+        # CMK key policy (modules/audit AllowAttendeeViaSecretsManagerAndS3). This is the
+        # in-our-control delivery (contentspec participantRole inline-policy support is not
+        # confirmed in the WS v2 schema, so we do NOT rely on it). PUT semantics = idempotent.
+        echo "Granting ${ATTENDEE_ROLE_NAME} scoped Athena audit-query permissions..."
+        REGION=$(grep '^region' terraform.tfvars | cut -d'"' -f2)
+        printf '{"Version":"2012-10-17","Statement":[{"Sid":"AthenaAuditQueryExecution","Effect":"Allow","Action":["athena:StartQueryExecution","athena:StopQueryExecution","athena:GetQueryExecution","athena:GetQueryResults","athena:GetWorkGroup"],"Resource":"arn:aws:athena:%s:%s:workgroup/workshop"},{"Sid":"AthenaResultsBucketWrite","Effect":"Allow","Action":["s3:GetObject","s3:PutObject","s3:GetBucketLocation","s3:ListBucket","s3:ListBucketMultipartUploads","s3:ListMultipartUploadParts","s3:AbortMultipartUpload"],"Resource":["arn:aws:s3:::workshop-athena-*","arn:aws:s3:::workshop-athena-*/*"]}]}' "$REGION" "$ACCOUNT_ID" > /tmp/ws-athena-audit.json
+        aws iam put-role-policy --role-name "${ATTENDEE_ROLE_NAME}" --policy-name WorkshopAthenaAudit --policy-document file:///tmp/ws-athena-audit.json
+        echo "Athena audit-query permissions granted to ${ATTENDEE_ROLE_NAME}."
+
   post_build:
     commands:
       - echo "=== POST_BUILD PHASE ==="

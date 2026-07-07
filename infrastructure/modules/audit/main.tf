@@ -109,6 +109,49 @@ data "aws_iam_policy_document" "workshop_cmk" {
       identifiers = ["aoss.amazonaws.com", "bedrock.amazonaws.com"]
     }
   }
+
+  # Attendee crypto access (WSParticipantRole on a WS event / the self-paced
+  # user's own identity). None of the attendee's managed policies grant
+  # kms:Decrypt/GenerateDataKey, and the CMK's RootAccount stmt only DELEGATES to
+  # IAM — so the attendee cannot use the CMK without a direct key-policy grant.
+  # This statement grants exactly the crypto ops the attendee needs INDIRECTLY:
+  #   - via Secrets Manager: reading the RDS-managed master secret (CMK-encrypted)
+  #     in vault-configure (Step 8), seed-banking-db (Step 13), UC2 page 65.
+  #   - via S3: UC2/UC3 Athena audit queries decrypt the CMK-SSE Firehose log
+  #     bucket (kms:Decrypt) and write CMK-SSE query results (kms:GenerateDataKey).
+  # Principal:* scoped by kms:ViaService + kms:CallerAccount is a DIRECT grant
+  # (mirrors how aws/secretsmanager + aws/s3 default keys authorize account
+  # principals), so it needs no attendee IAM change and no named-principal
+  # plumbing. ViaService keeps raw KMS denied; CallerAccount blocks cross-account.
+  statement {
+    sid = "AllowAttendeeViaSecretsManagerAndS3"
+    actions = [
+      "kms:Decrypt",
+      "kms:GenerateDataKey*",
+      "kms:DescribeKey",
+    ]
+    resources = ["*"]
+
+    principals {
+      type        = "AWS"
+      identifiers = ["*"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values = [
+        "secretsmanager.${var.region}.amazonaws.com",
+        "s3.${var.region}.amazonaws.com",
+      ]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "kms:CallerAccount"
+      values   = [data.aws_caller_identity.this.account_id]
+    }
+  }
 }
 
 resource "aws_kms_key" "workshop" {
