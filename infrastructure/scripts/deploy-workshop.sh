@@ -1303,6 +1303,12 @@ step_14_sync_bedrock_kb() {
 #===============================================================================
 _run_if_tier 1 step_01_apply_tier1
 _run_if_tier 1 step_02_configure_kubectl
+# At an event, Tier 1 is pre-provisioned, so the attendee's entry point is
+# --tier 2 (and later --tier 3) — the tier-1 call above never runs for them,
+# yet steps 5-14 shell out to `kubectl --context workshop`, so the first such
+# call fails (e.g. "vault" namespace not found). update-kubeconfig is idempotent;
+# re-run it at those entry points. (Bare mode already configured it above.)
+[[ "$TIER" == "2" || "$TIER" == "3" ]] && step_02_configure_kubectl
 _run_if_tier 1 step_03_build_push_images
 _run_if_tier 1 step_04_lbc_readiness_gate
 _run_if_tier 2 step_05_apply_tier2
