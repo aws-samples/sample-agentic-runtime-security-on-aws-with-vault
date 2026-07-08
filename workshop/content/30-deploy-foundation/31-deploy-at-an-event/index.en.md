@@ -21,8 +21,10 @@ git clone https://github.com/sharepointoscar/agentic-runtime-security-aws.git &&
 
 `bootstrap.sh` seeds the `terraform.tfvars` files from their templates and runs `terraform init` in all three roots. It does **not** deploy infrastructure and does **not** prompt for anything (you'll supply your IBM secrets at Step 4). It just prepares the repo so you can apply Tier 2 and Tier 3.
 
+`--image-source ecr` points the workload images at **your own account's ECR** — the CodeBuild that provisioned Tier 1 already built and pushed the Use Case images there, so bootstrap stamps the `<account>.dkr.ecr.<region>...` URIs (your account + region, resolved automatically) into the Tier-3 config. No public image pulls at runtime.
+
 ```bash
-bash infrastructure/scripts/bootstrap.sh --skip-prereq-gate
+bash infrastructure/scripts/bootstrap.sh --skip-prereq-gate --image-source ecr
 ```
 
 #### Step 3 — Pull the Tier-1 state and config

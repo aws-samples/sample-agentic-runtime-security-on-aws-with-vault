@@ -260,28 +260,39 @@ step_generate_tfvars_and_init() {
         echo -e "${GREEN}OK: tier-3 ghcr_registry_base = ${GHCR_REGISTRY_BASE}${NC}"
     fi
 
-    # --- tier-3: stamp the five derived ECR image URIs (ecr mode only) ----------
-    # In ghcr mode the GHCR-derived locals in workloads/main.tf stand — no image
-    # URI stamping needed. In ecr mode: account ID from Step 2 (live caller identity),
-    # region from tier-1 tfvars. Idempotent: placeholders are only filled once;
-    # already-real values are left as-is (the grep -q guard is the idempotency gate).
+    # --- tier-3: stamp the five ACTIVE ECR image URIs (ecr mode only) ------------
+    # In ghcr mode the GHCR-derived locals in workloads/main.tf stand — no image URI
+    # stamping needed. In ecr mode Terraform must SEE five active image vars, so we
+    # write them as live assignments (the tfvars.example ships them commented; simply
+    # filling <account>/<region> in the commented lines would leave them inert). Same
+    # grep-active ? replace : append idiom bootstrap uses above for image_source /
+    # ghcr_registry_base. Account = live STS caller identity; region = tier-1 tfvars.
+    # repo:tag pairs match what module.ecr creates + what the build scripts push:
+    #   build-{uc1,uc3}-agent.sh -> workshop/{uc1,uc3}-agent:latest
+    #   build-banking-app.sh     -> workshop-banking-app:{ui,agent,mcp} (one repo, 3 tags)
     if [ "$IMAGE_SOURCE" = "ecr" ] && [ -f "$T3_FILE" ]; then
-        # Only the image-URI lines carry placeholders; the instructional comment
-        # mentions <account>/<region> in prose, so we scope both the check and
-        # the substitution to lines containing "dkr.ecr" — never touch comments.
-        if grep -E 'dkr\.ecr' "$T3_FILE" | grep -q '<account>\|<region>'; then
-            local REGION
-            REGION=$(grep -E '^[[:space:]]*region[[:space:]]*=' "$T1_FILE" | head -1 | sed 's/.*"\(.*\)".*/\1/')
-            if [ -z "$AWS_ACCOUNT_ID" ] || [ -z "$REGION" ]; then
-                echo -e "${RED}Error: cannot stamp tier-3 image URIs (account='${AWS_ACCOUNT_ID}', region='${REGION}')${NC}"
-                return 1
-            fi
-            sed -i.bak "/dkr\.ecr/ { s|<account>|${AWS_ACCOUNT_ID}|g; s|<region>|${REGION}|g; }" "$T3_FILE"
-            rm -f "${T3_FILE}.bak"
-            echo -e "${GREEN}OK: stamped tier-3 ECR image URIs (account ${AWS_ACCOUNT_ID}, region ${REGION})${NC}"
-        else
-            echo -e "${GREEN}OK: tier-3 image URIs already resolved — leaving as-is${NC}"
+        local REGION
+        REGION=$(grep -E '^[[:space:]]*region[[:space:]]*=' "$T1_FILE" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+        if [ -z "$AWS_ACCOUNT_ID" ] || [ -z "$REGION" ]; then
+            echo -e "${RED}Error: cannot stamp tier-3 image URIs (account='${AWS_ACCOUNT_ID}', region='${REGION}')${NC}"
+            return 1
         fi
+        local ECR_BASE="${AWS_ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"
+        _stamp_tier3_image() {  # $1 = var name, $2 = repo:tag suffix
+            local var="$1" uri="${ECR_BASE}/$2"
+            if grep -qE "^[[:space:]]*${var}[[:space:]]*=" "$T3_FILE"; then
+                sed -i.bak "s|^[[:space:]]*${var}[[:space:]]*=.*|${var} = \"${uri}\"|" "$T3_FILE"
+                rm -f "${T3_FILE}.bak"
+            else
+                echo "${var} = \"${uri}\"" >> "$T3_FILE"
+            fi
+        }
+        _stamp_tier3_image uc1_agent_image         "workshop/uc1-agent:latest"
+        _stamp_tier3_image uc3_agent_image         "workshop/uc3-agent:latest"
+        _stamp_tier3_image banking_app_ui_image    "workshop-banking-app:ui"
+        _stamp_tier3_image banking_app_agent_image "workshop-banking-app:agent"
+        _stamp_tier3_image banking_app_mcp_image   "workshop-banking-app:mcp"
+        echo -e "${GREEN}OK: stamped 5 active tier-3 ECR image URIs (account ${AWS_ACCOUNT_ID}, region ${REGION})${NC}"
     elif [ "$IMAGE_SOURCE" != "ecr" ]; then
         echo -e "${GREEN}OK: ECR image URI stamping skipped (${IMAGE_SOURCE} mode — GHCR defaults stand)${NC}"
     fi
