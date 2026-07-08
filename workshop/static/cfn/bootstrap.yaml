@@ -160,7 +160,11 @@ Resources:
       Environment:
         ComputeType: BUILD_GENERAL1_MEDIUM
         Image: "aws/codebuild/standard:7.0"
-        PrivilegedMode: false
+        # Required to run the Docker daemon: in `ecr` image-source mode the buildspec
+        # builds the Use Case images from source and pushes them to the attendee's ECR
+        # (`docker build`/`docker push`). The standard:7.0 image ships Docker; privileged
+        # mode starts the daemon. Proven end-to-end in a dev-account CodeBuild build.
+        PrivilegedMode: true
         Type: LINUX_CONTAINER
         EnvironmentVariables:
           - Name: STATE_BUCKET
