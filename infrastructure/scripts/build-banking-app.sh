@@ -241,10 +241,14 @@ build_and_push() {
 build_and_push "ui"    "${REPO_ROOT}/applications/banking-app/ui"
 build_and_push "agent" "${REPO_ROOT}/applications/banking-app/agent"
 
-# MCP server: compile TypeScript on host (tsc OOMs under QEMU emulation on ARM Macs)
+# MCP server: compile TypeScript on host (tsc OOMs under QEMU emulation on ARM Macs).
+# NODE_OPTIONS raises V8's old-space ceiling: on a memory-constrained host (e.g. the
+# CodeBuild MEDIUM container, 7 GB) Node's default heap (~2 GB) is too small for the
+# tsc compile and it dies "JavaScript heap out of memory". 4 GB fits the container and
+# is a no-op on a dev Mac that already has the RAM.
 print_info "Compiling MCP server TypeScript on host..."
 mcp_dir="${REPO_ROOT}/applications/banking-app/mcp-server"
-(cd "$mcp_dir" && npm ci --silent 2>/dev/null && npm run build) || {
+(cd "$mcp_dir" && npm ci --silent 2>/dev/null && NODE_OPTIONS=--max-old-space-size=4096 npm run build) || {
     print_fail "MCP server TypeScript compilation failed"
     exit 1
 }
