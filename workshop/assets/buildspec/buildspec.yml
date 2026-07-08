@@ -39,7 +39,7 @@ phases:
       - ls -la "$INFRA_DIR"
       - echo "Running bootstrap (seeds tfvars, inits terraform)..."
       - cd "$INFRA_DIR"
-      - bash scripts/bootstrap.sh --skip-prereq-gate --image-source ghcr
+      - bash scripts/bootstrap.sh --skip-prereq-gate --image-source "${IMAGE_SOURCE:-ghcr}"
       - echo "Injecting ACME_EMAIL='${ACME_EMAIL}' into terraform.tfvars..."
       - sed -i "s|^acme_email.*|acme_email = \"${ACME_EMAIL}\"|" "$INFRA_DIR/terraform.tfvars"
       # Tier-1 deploys where the WS organizer provisioned this event. CodeBuild runs in
@@ -84,7 +84,7 @@ phases:
         fi
 
         echo "=== BUILD PHASE (Create/Update) — deploying tier-1 ==="
-        bash scripts/deploy-workshop.sh --tier 1 --image-source ghcr
+        bash scripts/deploy-workshop.sh --tier 1 --image-source "${IMAGE_SOURCE:-ghcr}"
         echo "Tier-1 deploy complete."
 
         echo "Staging tier-1 state to S3..."

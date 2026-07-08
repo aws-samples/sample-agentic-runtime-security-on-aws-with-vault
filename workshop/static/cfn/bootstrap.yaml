@@ -44,6 +44,20 @@ Parameters:
       full ARN as arn:aws:iam::<account-id>:role/<AttendeeRoleName> with the account id
       resolved dynamically via STS — never hardcoded.
 
+  ImageSource:
+    Type: String
+    Default: ecr
+    AllowedValues:
+      - ecr
+      - ghcr
+    Description: >-
+      How the Use Case container images are sourced at-an-event. Default "ecr":
+      CodeBuild builds the images from source and pushes them to the attendee's own
+      ECR (requires PrivilegedMode). Set "ghcr" to fall back — with ZERO code change —
+      to pulling the maintainer-published public images from ghcr.io/sharepointoscar
+      at runtime (the pre-parameterization behavior). Flows to the buildspec as the
+      IMAGE_SOURCE env var and on to bootstrap.sh / deploy-workshop.sh --image-source.
+
 Resources:
 
   # ─── S3: tier-1 state staging bucket ───────────────────────────────────────
@@ -176,6 +190,9 @@ Resources:
           - Name: ATTENDEE_ROLE_NAME
             Type: PLAINTEXT
             Value: !Ref AttendeeRoleName
+          - Name: IMAGE_SOURCE
+            Type: PLAINTEXT
+            Value: !Ref ImageSource
       ServiceRole: !GetAtt CodeBuildServiceRole.Arn
       Source:
         Type: S3
