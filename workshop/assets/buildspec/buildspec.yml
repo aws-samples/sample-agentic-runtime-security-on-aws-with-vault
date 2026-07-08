@@ -39,6 +39,10 @@ phases:
       - ls -la "$INFRA_DIR"
       - echo "Running bootstrap (seeds tfvars, inits terraform)..."
       - cd "$INFRA_DIR"
+      # S3 (the CodeBuild source) does not carry POSIX perms, so scripts arrive as 644.
+      # deploy-workshop.sh direct-execs step scripts (e.g. build-images.sh) — restore +x
+      # so `--image-source ecr` Step 3 can run the image build. (self-paced keeps +x via git.)
+      - chmod +x scripts/*.sh
       - bash scripts/bootstrap.sh --skip-prereq-gate --image-source "${IMAGE_SOURCE:-ghcr}"
       - echo "Injecting ACME_EMAIL='${ACME_EMAIL}' into terraform.tfvars..."
       - sed -i "s|^acme_email.*|acme_email = \"${ACME_EMAIL}\"|" "$INFRA_DIR/terraform.tfvars"
