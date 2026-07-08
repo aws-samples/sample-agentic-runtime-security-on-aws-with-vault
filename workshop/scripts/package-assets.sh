@@ -64,16 +64,41 @@ rsync -a --delete \
     "$TF_SRC/" "$TF_DST/"
 echo "  synced infrastructure/ -> workshop/assets/terraform/infrastructure/ (HCL + *.example + lock + scripts)"
 
+# ── Sync the application source trees (uc3-agent + banking-app) for image builds ──
+# In `ecr` image-source mode the CodeBuild project builds the Use Case images from
+# source, so their Docker build contexts must ride along in the assets bundle. The
+# build scripts resolve REPO_ROOT to `.../terraform/`, so applications/ must sit as a
+# SIBLING of infrastructure/ at terraform/applications/. (uc1-agent's source lives at
+# infrastructure/modules/uc1_agent/agent and already ships via the sync above; only
+# uc3-agent + banking-app live under applications/.) Exclude heavy/regenerable build
+# artifacts — Docker rebuilds them at image-build time (npm install, pip install).
+APP_SRC="$REPO_ROOT/applications"
+APP_DST="$REPO_ROOT/workshop/assets/terraform/applications"
+mkdir -p "$APP_DST"
+rsync -a --delete \
+    --exclude='node_modules/' \
+    --exclude='__pycache__/' \
+    --exclude='.venv/' \
+    --exclude='*.pyc' \
+    --exclude='.pytest_cache/' \
+    --exclude='dist/' \
+    --exclude='build/' \
+    --exclude='*.log' \
+    "$APP_SRC/" "$APP_DST/"
+echo "  synced applications/ -> workshop/assets/terraform/applications/ (uc3-agent + banking-app build contexts)"
+
 # Hard secret-leak gate — abort the whole package if any real secret-bearing file
 # made it into the assets tree. (.example tfvars are safe; everything else is not.)
-LEAK="$(find "$REPO_ROOT/workshop/assets/terraform" \( -name '*.tfvars' ! -name '*.tfvars.example' \) -o -name '*.tfstate*' -o -name '.acme-state' 2>/dev/null)"
+# Scans both trees: tfvars/tfstate/.acme-state from infrastructure/, plus a bare .env
+# from the app trees (a developer's uncommitted local secrets must never ship).
+LEAK="$(find "$REPO_ROOT/workshop/assets/terraform" \( -name '*.tfvars' ! -name '*.tfvars.example' \) -o -name '*.tfstate*' -o -name '.acme-state' -o -name '.env' 2>/dev/null)"
 if [ -n "$LEAK" ]; then
     echo "  ABORT: secret-bearing files leaked into workshop/assets/terraform:" >&2
     echo "$LEAK" >&2
-    rm -rf "$TF_DST"
+    rm -rf "$TF_DST" "$APP_DST"
     exit 1
 fi
-echo "  secret-leak gate: PASS (no real tfvars/tfstate/.acme-state in assets)"
+echo "  secret-leak gate: PASS (no real tfvars/tfstate/.acme-state/.env in assets)"
 
 # Buildspec lint — two failure classes CodeBuild only reports at DOWNLOAD_SOURCE,
 # after a stack is already CREATE_IN_PROGRESS (and will hang on the callback):
