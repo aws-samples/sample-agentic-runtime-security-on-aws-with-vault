@@ -1076,8 +1076,12 @@ resource "kubernetes_config_map" "iviaop_config" {
     # kubernetes_secret.iviaop_key (never a ConfigMap, unencrypted at rest). Only
     # the PUBLIC cert stays in the ConfigMap. Both are merged into /var/isvaop/config
     # via the projected volume on the iviaop Deployment below.
-    "iviaop.pem"     = tls_self_signed_cert.iviaop.cert_pem
-    "iviawrprp1.pem" = file("${path.module}/iviaop-config/iviawrprp1.pem")
+    "iviaop.pem" = tls_self_signed_cert.iviaop.cert_pem
+    # WRP public cert. Vestigial in this mount (provider.yml.tftpl trusts only
+    # @iviaop.pem/@postgres.crt), but now that the WRP keypair is Terraform-owned
+    # (tls_self_signed_cert.iviawrprp1) this MUST be state-derived, never the old
+    # committed PEM — a stale committed cert would contradict what WRP serves.
+    "iviawrprp1.pem" = tls_self_signed_cert.iviawrprp1.cert_pem
     # Dynamic — must match the cert the postgresql pod serves (postgresql-keys.server.pem)
     "postgres.crt" = tls_self_signed_cert.postgresql.cert_pem
   }

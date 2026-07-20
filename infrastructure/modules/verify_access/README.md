@@ -111,7 +111,7 @@ works for `iviaop` and `iviawrprp1`:
    `tls_self_signed_cert` (modeled on the existing `tls_self_signed_cert.postgresql` in
    `main.tf` — same module).
 2. Mount the new key + cert into the `ivia-base-layer` ConfigMap (alongside the existing
-   `iviaop.pem` + `iviawrprp1.pem` signer-trust entries).
+   `iviaop.pem` signer-trust entry).
 3. Add an autoconf YAML stanza in `base_layer.yaml.tftpl` to install that keypair into the
    AAC runtime's Liberty defaultKeyStore. **The exact autoconf stanza name for the AAC
    runtime serving keystore is not yet verified** — must be confirmed against
