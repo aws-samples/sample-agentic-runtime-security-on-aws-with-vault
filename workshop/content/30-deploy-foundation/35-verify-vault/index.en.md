@@ -5,7 +5,7 @@ weight: 35
 
 Vault was deployed as a 3-node Raft HA cluster, initialized, and unsealed by `terraform apply` plus `deploy-workshop.sh`. Confirm it is healthy before proceeding.
 
-![Vault authorization flow — ephemeral, per-request credentials across Use Cases 1, 2, and 3](/static/images/vault-authorization-flow.svg)
+![Vault authorization flow — ephemeral, per-request credentials across Use Cases 1, 2, and 3](/static/images/vault-authorization-flow.png)
 
 :::alert{header="Root token location" type="info"}
 `vault-init.sh` (run by `deploy-workshop.sh`) wrote the Vault root token to `~/vault-init.json` during initialization. Load it before running the authenticated checks below:

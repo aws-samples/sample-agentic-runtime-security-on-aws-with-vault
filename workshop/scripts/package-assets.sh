@@ -17,10 +17,21 @@ DST_DIR="$REPO_ROOT/workshop/static/images"
 
 mkdir -p "$DST_DIR"
 
+# Workshop Studio's markdown renderer does NOT support inline .svg, so every
+# diagram must ship as PNG. The SVGs stay the single editable source of truth
+# (assets/*.svg); we rasterize them at build time so the dark theme is preserved
+# exactly — #0d1117 is baked into each SVG's full-canvas rect, so the PNG comes
+# out dark with no manual conversion and no light-mode surprises. 2x zoom keeps
+# text crisp on hi-dpi displays.
+if ! command -v rsvg-convert >/dev/null 2>&1; then
+    echo "  ABORT: rsvg-convert not found — install librsvg (brew install librsvg / apt-get install librsvg2-bin)" >&2
+    exit 1
+fi
+rm -f "$DST_DIR"/*.svg   # drop any stale synced SVGs; Workshop Studio serves the PNGs below
 for svg in architecture-overview uc1-flow uc2-oauth-flow uc3-ciba-flow audit-correlation verify-vault-split vault-authorization-flow ivia-stack; do
     if [ -f "$SRC_DIR/$svg.svg" ]; then
-        cp "$SRC_DIR/$svg.svg" "$DST_DIR/$svg.svg"
-        echo "  copied $svg.svg -> workshop/static/images/"
+        rsvg-convert -z 2 -b '#0d1117' -o "$DST_DIR/$svg.png" "$SRC_DIR/$svg.svg"
+        echo "  rasterized $svg.svg -> workshop/static/images/$svg.png"
     else
         echo "  SKIP: $SRC_DIR/$svg.svg not found (run excalidraw-to-svg.py first)"
     fi
