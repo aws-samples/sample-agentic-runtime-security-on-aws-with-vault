@@ -111,6 +111,21 @@ if [ -n "$LEAK" ]; then
 fi
 echo "  secret-leak gate: PASS (no real tfvars/tfstate/.acme-state/.env in assets)"
 
+# Private-key content gate — TLS/SSH private keys are now Terraform-generated at
+# deploy time (tls_private_key.*), never committed. This gate enforces that
+# invariant durably: it scans the assets tree for actual PEM private-key material
+# (the BEGIN banner), so a future accidental re-commit of a *.key/*.pem private
+# key can never be published to the S3 assets bucket. Public certs (*.crt, *.pem
+# CERTIFICATE, dhparam.pem) do NOT match and ship normally.
+KEYLEAK="$(grep -rlE -- '-----BEGIN (RSA |EC |OPENSSH |DSA |ENCRYPTED )?PRIVATE KEY-----' "$REPO_ROOT/workshop/assets/terraform" 2>/dev/null)"
+if [ -n "$KEYLEAK" ]; then
+    echo "  ABORT: private-key material leaked into workshop/assets/terraform:" >&2
+    echo "$KEYLEAK" >&2
+    rm -rf "$TF_DST" "$APP_DST"
+    exit 1
+fi
+echo "  private-key gate: PASS (no PEM private keys in assets — keys are Terraform-generated at deploy)"
+
 # Buildspec lint — two failure classes CodeBuild only reports at DOWNLOAD_SOURCE,
 # after a stack is already CREATE_IN_PROGRESS (and will hang on the callback):
 #   (1) a ': ' (colon-space) in an unquoted echo parses as a YAML mapping, not a string;
