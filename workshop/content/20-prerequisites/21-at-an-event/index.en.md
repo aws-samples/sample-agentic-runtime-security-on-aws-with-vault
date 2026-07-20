@@ -30,17 +30,17 @@ Workshop Studio authenticates you with a one-time passcode sent to your email ad
 
 Enter your email address on the sign-in page and click **Send passcode**:
 
-![Workshop Studio OTP sign-in — enter email to receive a one-time passcode](/images/ws-otp-signin.png)
+![Workshop Studio OTP sign-in — enter email to receive a one-time passcode](/static/images/ws-otp-signin.png)
 
 Check your inbox for the 6-digit passcode and enter it:
 
-![Workshop Studio email OTP entry — enter the 6-digit passcode from your inbox](/images/ws-email-passcode.png)
+![Workshop Studio email OTP entry — enter the 6-digit passcode from your inbox](/static/images/ws-email-passcode.png)
 
 ### Step 3 — Join the event and open the AWS console
 
 After signing in you land on the event page. Click **Join event**, then **Open AWS console**:
 
-![Workshop Studio event page — Join event button, then Open AWS console](/images/ws-open-console.png)
+![Workshop Studio event page — Join event button, then Open AWS console](/static/images/ws-open-console.png)
 
 This opens a federated AWS console session under the **`WSParticipantRole`** identity — your workshop account for the event.
 
