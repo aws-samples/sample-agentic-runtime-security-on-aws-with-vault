@@ -365,6 +365,102 @@ resource "tls_self_signed_cert" "iviaruntime" {
 }
 
 #-------------------------------------------------------------------------------
+# iviaop keypair (isvaop_keys/httpserverkey) — DOUBLE DUTY:
+#   1. TLS serving cert on :8436 (provider.yml ssl.server key/certificate)
+#   2. RS256 JWT signing key (provider.yml signing_keystore=isvaop_keys,
+#      signing_keylabel=httpserverkey) — the id_token signing key.
+# Terraform state owns the keypair instead of committing iviaop.key/iviaop.pem
+# (AWS security review: no private keys at rest in git). Regenerating is SAFE:
+# every truster fetches the public half live via JWKS (Vault jwt auth jwks_url)
+# or via the ivia_oidc_ca_pem output (uc2 + uc3 agents), so a rotated key flows
+# through with no pinning. The public cert (.cert_pem) feeds the iviaop-config
+# ConfigMap, the base_layer signer truststore, AND outputs.tf ivia_oidc_ca_pem;
+# the private key (.private_key_pem_pkcs8 — PKCS#8, required by the Liberty/Java
+# ISVAOP PEM loader) lives ONLY in kubernetes_secret.iviaop_key, never a
+# ConfigMap. CN/SAN reproduce the previous committed cert exactly so hostname
+# verification by Vault (jwks_ca_pem) and the agents' CA-bundle trust still pass.
+#-------------------------------------------------------------------------------
+
+resource "tls_private_key" "iviaop" {
+  algorithm = "RSA"
+  rsa_bits  = 2048
+}
+
+resource "tls_self_signed_cert" "iviaop" {
+  private_key_pem = tls_private_key.iviaop.private_key_pem
+
+  subject {
+    common_name  = "iviaop.verify-access.svc.cluster.local"
+    organization = "ibm"
+    country      = "US"
+  }
+
+  validity_period_hours = 87600 # 10 years
+  early_renewal_hours   = 720
+
+  allowed_uses = [
+    "key_encipherment",
+    "digital_signature",
+    "server_auth",
+  ]
+
+  dns_names = [
+    "iviaop",
+    "iviaop.verify-access",
+    "iviaop.verify-access.svc",
+    "iviaop.verify-access.svc.cluster.local",
+  ]
+}
+
+#-------------------------------------------------------------------------------
+# openldap serving keypair (LDAPS :636). Terraform state owns it instead of the
+# committed base_layer/openldap-keys/ldap.key + ldap.crt + ca.crt (AWS security
+# review). The previous committed set was self-signed with ldap.crt == ca.crt
+# (byte-identical), so one generated self-signed cert fills BOTH the leaf
+# (ldap.crt) and trust-anchor (ca.crt) slots; IVIA imports ldap.crt as an
+# lmi_trust_store signer to trust the LDAPS endpoint it binds to. CN=openldap
+# reproduces the previous cert; a DNS SAN is added (the committed cert had none)
+# so modern SAN-checking TLS clients validate cleanly. dhparam.pem is public
+# (DH params, not a key) and stays committed. PKCS#8 private key for loader
+# compatibility.
+#-------------------------------------------------------------------------------
+
+resource "tls_private_key" "openldap" {
+  algorithm = "RSA"
+  rsa_bits  = 2048
+}
+
+resource "tls_self_signed_cert" "openldap" {
+  private_key_pem = tls_private_key.openldap.private_key_pem
+
+  subject {
+    common_name  = "openldap"
+    organization = "ibm"
+    country      = "us"
+  }
+
+  validity_period_hours = 87600 # 10 years
+  early_renewal_hours   = 720
+
+  allowed_uses = [
+    "key_encipherment",
+    "digital_signature",
+    "server_auth",
+  ]
+
+  # IVIA binds LDAPS to the bare host "openldap" (base_layer.yaml.tftpl `host: "openldap"`).
+  # The previous committed cert had NO SAN (CN-only); adding a SAN makes CN matching moot
+  # per RFC 6125, so the SAN MUST include every form a client could connect with — bare
+  # host first, plus the cluster-DNS forms — or a SAN-checking TLS client hard-fails.
+  dns_names = [
+    "openldap",
+    "openldap.verify-access",
+    "openldap.verify-access.svc",
+    "openldap.verify-access.svc.cluster.local",
+  ]
+}
+
+#-------------------------------------------------------------------------------
 # kubernetes_secret bundle. All names match sibling's pod-manifest references
 # and base_layer.yaml `!secret verify-access/<name>:<key>` lookups
 # (RESEARCH §8.5 + §8.6).
@@ -417,12 +513,16 @@ resource "kubernetes_secret" "openldap_keys" {
     labels    = local.common_labels
   }
   type = "Opaque"
-  # Use binary_data — dhparam.pem and the certs are PEM ASCII but we treat
-  # the bundle as a binary blob to avoid any newline/encoding surprises.
+  # ldap.crt / ldap.key / ca.crt are Terraform-generated (tls_self_signed_cert.openldap)
+  # so no private key sits in git — the leaf and CA slots share the one self-signed
+  # cert (the previous committed set had ldap.crt == ca.crt). dhparam.pem is public
+  # DH params (not a key), still sourced from the committed file via binary_data.
+  data = {
+    "ldap.crt" = tls_self_signed_cert.openldap.cert_pem
+    "ldap.key" = tls_private_key.openldap.private_key_pem_pkcs8
+    "ca.crt"   = tls_self_signed_cert.openldap.cert_pem
+  }
   binary_data = {
-    "ldap.crt"    = filebase64("${path.module}/base_layer/openldap-keys/ldap.crt")
-    "ldap.key"    = filebase64("${path.module}/base_layer/openldap-keys/ldap.key")
-    "ca.crt"      = filebase64("${path.module}/base_layer/openldap-keys/ca.crt")
     "dhparam.pem" = filebase64("${path.module}/base_layer/openldap-keys/dhparam.pem")
   }
 }
@@ -928,8 +1028,11 @@ resource "kubernetes_config_map" "iviaop_config" {
       ivia_client_secret = random_password.ivia_oauth_client_secret.result
       uc2_redirect_uri   = "http://placeholder.invalid/callback"
     })
-    "iviaop.key"     = file("${path.module}/iviaop-config/iviaop.key")
-    "iviaop.pem"     = file("${path.module}/iviaop-config/iviaop.pem")
+    # iviaop.key is NOT here — the RS256 signing/serving PRIVATE key lives in
+    # kubernetes_secret.iviaop_key (never a ConfigMap, unencrypted at rest). Only
+    # the PUBLIC cert stays in the ConfigMap. Both are merged into /var/isvaop/config
+    # via the projected volume on the iviaop Deployment below.
+    "iviaop.pem"     = tls_self_signed_cert.iviaop.cert_pem
     "iviawrprp1.pem" = file("${path.module}/iviaop-config/iviawrprp1.pem")
     # Dynamic — must match the cert the postgresql pod serves (postgresql-keys.server.pem)
     "postgres.crt" = tls_self_signed_cert.postgresql.cert_pem
@@ -951,6 +1054,26 @@ resource "kubernetes_config_map" "iviaop_config" {
       data["provider.yml"],
       data["clients.yml"],
     ]
+  }
+}
+
+#-------------------------------------------------------------------------------
+# iviaop signing/serving PRIVATE key — held in a Secret (encryptable at rest),
+# NOT the iviaop-config ConfigMap (AWS security review: no private keys in a
+# ConfigMap). The iviaop Deployment merges this Secret alongside the ConfigMap
+# into /var/isvaop/config via a projected volume, so ISVAOP loads iviaop.key
+# exactly as before. PKCS#8 PEM — the Liberty/Java ISVAOP loader requires the
+# unencrypted PKCS#8 header form (BEGIN PRIVATE KEY), not PKCS#1's RSA variant.
+#-------------------------------------------------------------------------------
+resource "kubernetes_secret" "iviaop_key" {
+  metadata {
+    name      = "iviaop-key"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels    = local.common_labels
+  }
+  type = "Opaque"
+  data = {
+    "iviaop.key" = tls_private_key.iviaop.private_key_pem_pkcs8
   }
 }
 
@@ -1103,16 +1226,34 @@ resource "kubernetes_deployment" "iviaop" {
         # reads /var/isvaop/config on startup — without this, ConfigMap edits
         # would be invisible until the next pod recreation.
         annotations = {
-          "checksum/iviaop-config" = sha256(jsonencode(kubernetes_config_map.iviaop_config.data))
+          # Hash BOTH the ConfigMap data and the private-key Secret so a rotation
+          # of either (incl. the state-derived iviaop.key/iviaop.pem) rolls the pod.
+          "checksum/iviaop-config" = sha256(jsonencode(merge(
+            kubernetes_config_map.iviaop_config.data,
+            kubernetes_secret.iviaop_key.data,
+          )))
         }
       }
       spec {
         image_pull_secrets { name = kubernetes_secret.dockerlogin.metadata[0].name }
 
+        # Projected volume merges the iviaop-config ConfigMap (provider.yml,
+        # clients.yml, iviaop.pem, …) with the iviaop-key Secret (iviaop.key) into
+        # one directory at /var/isvaop/config, so ISVAOP sees the same file layout
+        # while the private key comes from a Secret, not a ConfigMap.
         volume {
           name = "iviaop-config"
-          config_map {
-            name = kubernetes_config_map.iviaop_config.metadata[0].name
+          projected {
+            sources {
+              config_map {
+                name = kubernetes_config_map.iviaop_config.metadata[0].name
+              }
+            }
+            sources {
+              secret {
+                name = kubernetes_secret.iviaop_key.metadata[0].name
+              }
+            }
           }
         }
 
@@ -1490,7 +1631,10 @@ resource "kubernetes_config_map" "base_layer" {
     # device enrollment — see api_protection note in base_layer.yaml.tftpl.
     "mmfa_oauth_posttoken_mapping.js" = file("${path.module}/base_layer/mmfa_oauth_posttoken_mapping.js")
     "ISAM-Trial-HashiCorp.cer"        = file("${path.module}/base_layer/ISAM-Trial-HashiCorp.cer")
-    "iviaop.pem"                      = file("${path.module}/base_layer/iviaop.pem")
+    # Terraform-owned iviaop signing/serving cert (public half). Imported as an
+    # lmi_trust_store signer so IVIA trusts the OIDC provider endpoint. State-derived
+    # (was committed base_layer/iviaop.pem) — matches iviaop-config ConfigMap + outputs.
+    "iviaop.pem" = tls_self_signed_cert.iviaop.cert_pem
     # Terraform-owned iviaruntime serving keypair. Minted into iviaruntime.p12 by
     # the autoconf job's bash preamble (Python cryptography lib), then imported
     # into LMI rt_profile_keys keystore as personal cert "server" (replacing the
@@ -1498,7 +1642,7 @@ resource "kubernetes_config_map" "base_layer" {
     # pod restarts + module.ivia rebuilds via iviaconfig PVC.
     "iviaruntime.cert.pem"     = tls_self_signed_cert.iviaruntime.cert_pem
     "iviaruntime.key.pem"      = tls_private_key.iviaruntime.private_key_pem
-    "ldap.crt"                 = file("${path.module}/base_layer/ldap.crt")
+    "ldap.crt"                 = tls_self_signed_cert.openldap.cert_pem
     "DigiCertGlobalRootG3.crt" = file("${path.module}/base_layer/DigiCertGlobalRootG3.crt")
     "postgres.crt"             = tls_self_signed_cert.postgresql.cert_pem
     "req_openid_config.lua"    = file("${path.module}/base_layer/req_openid_config.lua")

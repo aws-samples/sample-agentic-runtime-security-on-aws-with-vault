@@ -35,8 +35,8 @@ output "ivia_ingress_hostname" {
 }
 
 output "ivia_oidc_ca_pem" {
-  description = "IVIA OIDC Provider self-signed TLS cert (iviaop-config/iviaop.pem) that iviaop serves on :8436. Vault consumes it as jwks_ca_pem to trust the JWKS endpoint. Static repo file — never drifts on a rebuild (unlike the ELB-derived issuer)."
-  value       = file("${path.module}/iviaop-config/iviaop.pem")
+  description = "IVIA OIDC Provider self-signed TLS cert (tls_self_signed_cert.iviaop) that iviaop serves on :8436. Vault consumes it as jwks_ca_pem to trust the JWKS endpoint; uc2/uc3 agents trust it as their CA bundle. Terraform-owned (was committed iviaop-config/iviaop.pem) — no private key at rest in git; the public cert is stable across pod restarts because the keypair lives in state."
+  value       = tls_self_signed_cert.iviaop.cert_pem
 }
 
 output "ivia_runtime_user" {
