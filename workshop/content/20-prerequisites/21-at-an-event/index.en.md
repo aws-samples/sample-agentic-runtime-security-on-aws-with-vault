@@ -10,7 +10,7 @@ You are attending an **AWS-led workshop event**. Before joining, read through th
 - **Log out of any existing AWS accounts** in your browser. The workshop gives you a fresh, temporary account — if another session is active, the sign-in link may land on the wrong account.
 - **No confidential data.** The workshop account is shared infrastructure for the event duration. Do not upload personal files, credentials, or proprietary data.
 - **Temporary account.** The account and all resources are reclaimed by AWS after the event. Do not save work here that you need after the workshop.
-- **Region.** Every resource the workshop deploys lives in the AWS Region your event was created in. After signing in, confirm the region selector in the AWS console top-right matches the Region shown in your Workshop Studio event details.
+- **Region: `:param{key=region}`.** Every resource the workshop deploys lives in `:param{key=region}`. Confirm the region selector in the AWS console top-right matches **`:param{key=region}`** after signing in.
 
 ## Access Steps
 
@@ -44,9 +44,13 @@ After signing in you land on the event page. Click **Join event**, then **Open A
 
 This opens a federated AWS console session under the **`WSParticipantRole`** identity — your workshop account for the event.
 
+Most of the hands-on work runs from **AWS CloudShell** (a browser-based terminal with the AWS CLI pre-installed). Once your console session is open, launch CloudShell in the workshop region:
+
+:button[Open CloudShell]{href="https://:param{key=region}.console.aws.amazon.com/cloudshell/home?region=:param{key=region}" target="_blank" variant="primary" iconName="external" iconAlign="right"}
+
 ### Step 4 — Confirm the region
 
-In the AWS console, check the region selector in the top-right corner. It must match the Region your event was created in (shown in your Workshop Studio event details). If it shows a different Region, click the selector and switch to your event's Region before proceeding.
+In the AWS console, check the region selector in the top-right corner. It must show **`:param{key=region}`**. If it shows a different region, click the selector and switch to **`:param{key=region}`** before proceeding.
 
 ## What Is Already Provisioned for You
 

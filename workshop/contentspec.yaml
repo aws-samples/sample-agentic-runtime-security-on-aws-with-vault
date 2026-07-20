@@ -7,6 +7,13 @@ defaultLocaleCode: en-US
 localeCodes:
   - en-US
 
+# Content params referenced in pages via :param{key=...}. Single source of truth for
+# the deploy region so page copy + the CloudShell button track one value. NOTE: this is
+# a STATIC author-defined value (WS does not yet expose a per-event region param). When
+# you change the deploy region, update this AND the tier-1 region path.
+params:
+  region: us-east-1
+
 awsAccountConfig:
   accountSources:
     - WorkshopStudio
@@ -26,6 +33,7 @@ awsAccountConfig:
       - arn:aws:iam::aws:policy/AmazonBedrockFullAccess
       - arn:aws:iam::aws:policy/SecretsManagerReadWrite
       - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPowerUser
+      - arn:aws:iam::aws:policy/AWSCloudShellFullAccess
   # The event organizer picks the tier-1 deploy region (us-east-1 or us-west-2) when
   # creating the WS event; the buildspec writes that region into terraform.tfvars so
   # tier-1 follows it (Option A — auto-follow $AWS_DEFAULT_REGION). kb_region is ALWAYS
