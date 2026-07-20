@@ -111,6 +111,35 @@ if [ -n "$LEAK" ]; then
 fi
 echo "  secret-leak gate: PASS (no real tfvars/tfstate/.acme-state/.env in assets)"
 
+# Private-key content gate — TLS/SSH private keys are now Terraform-generated at
+# deploy time (tls_private_key.*), never committed. This gate enforces that
+# invariant durably: it scans the assets tree for actual PEM private-key material
+# (the BEGIN banner), so a future accidental re-commit of a *.key/*.pem private
+# key can never be published to the S3 assets bucket. Public certs (*.crt, *.pem
+# CERTIFICATE, dhparam.pem) do NOT match and ship normally.
+KEYLEAK="$(grep -rlE -- '-----BEGIN (RSA |EC |OPENSSH |DSA |ENCRYPTED )?PRIVATE KEY-----' "$REPO_ROOT/workshop/assets/terraform" 2>/dev/null)"
+if [ -n "$KEYLEAK" ]; then
+    echo "  ABORT: private-key material leaked into workshop/assets/terraform:" >&2
+    echo "$KEYLEAK" >&2
+    rm -rf "$TF_DST" "$APP_DST"
+    exit 1
+fi
+echo "  private-key gate: PASS (no PEM private keys in assets — keys are Terraform-generated at deploy)"
+
+# Binary-keystore gate — the PEM content grep above cannot see inside binary
+# PKCS#12/JKS/PFX keystores (they hold DER-encoded private keys). iviawrprp1.p12
+# was the one committed binary keystore and is now minted at deploy, so NO
+# keystore should ship. This filename gate blocks any *.p12/.jks/.pfx/.keystore
+# from reaching the assets bucket if one is ever re-committed.
+KSLEAK="$(find "$REPO_ROOT/workshop/assets/terraform" \( -name '*.p12' -o -name '*.jks' -o -name '*.pfx' -o -name '*.keystore' \) 2>/dev/null)"
+if [ -n "$KSLEAK" ]; then
+    echo "  ABORT: binary keystore(s) leaked into workshop/assets/terraform:" >&2
+    echo "$KSLEAK" >&2
+    rm -rf "$TF_DST" "$APP_DST"
+    exit 1
+fi
+echo "  binary-keystore gate: PASS (no .p12/.jks/.pfx in assets — the WRP p12 is minted at deploy)"
+
 # Buildspec lint — two failure classes CodeBuild only reports at DOWNLOAD_SOURCE,
 # after a stack is already CREATE_IN_PROGRESS (and will hang on the callback):
 #   (1) a ': ' (colon-space) in an unquoted echo parses as a YAML mapping, not a string;

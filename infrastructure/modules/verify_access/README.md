@@ -79,8 +79,8 @@ Two of the three pods serve a Terraform-owned cert imported via autoconf; the th
 
 | Pod | Serves on | Cert ownership | Autoconf import mechanism | Stable across pod restart / rebuild? |
 | --- | --- | --- | --- | --- |
-| `iviaop` (ISVAOP) | :8436 | Terraform-owned files `iviaop-config/iviaop.key` + `iviaop.pem` | `iviaop-config/provider.yml.tftpl` `keystore: isvaop_keys, type: pem` → `'@iviaop.pem'`, `'@iviaop.key'` | **Yes** — identical cert every rebuild |
-| `iviawrprp1` (WebSEAL) | :443 | Terraform-owned PKCS#12 `base_layer/iviawrprp1.p12` (cert + key) | `base_layer/base_layer.yaml.tftpl` `keystore: pdsrv, personal_certificates: [{name: WRP, p12_file: iviawrprp1.p12}]` | **Yes** — identical cert every rebuild |
+| `iviaop` (ISVAOP) | :8436 | Terraform-generated keypair `tls_self_signed_cert.iviaop` (RSA 2048, `main.tf`) — public cert in the `iviaop-config` ConfigMap (`iviaop.pem`), private key in the `iviaop-key` **Secret** (`iviaop.key`); both projected into `/var/isvaop/config`. No PEM at rest in git. | `iviaop-config/provider.yml.tftpl` `keystore: isvaop_keys, type: pem` → `'@iviaop.pem'`, `'@iviaop.key'` | **Yes** — state-owned keypair, identical cert every rebuild |
+| `iviawrprp1` (WebSEAL) | :443 | Terraform-generated keypair `tls_self_signed_cert.iviawrprp1` (RSA 2048, `main.tf`). The PEM cert+key flow into the base_layer ConfigMap; the autoconf preamble mints `iviawrprp1.p12` in-cluster (sealed with `random_password.wrp_p12_secret`), replacing the committed binary `.p12`. No private key at rest in git. | `base_layer/base_layer.yaml.tftpl` `keystore: pdsrv, personal_certificates: [{name: WRP, p12_file: iviawrprp1.p12}]` (loaded from the deploy-minted p12) | **Yes** — state-owned keypair, identical cert every rebuild |
 | `iviaruntime` (AAC runtime, Liberty) | :9443 | Liberty defaultKeyStore auto-self-signs on first start (no Terraform keypair, no PVC) | None — autoconf does NOT install a serving cert into the runtime's defaultKeyStore (the `rt_profile_keys` keystore at `base_layer.yaml.tftpl:27-35` holds only **signer/trust** certs: `postgres.crt`, `DigiCertGlobalRootG3.crt`) | **No** — fresh self-signed cert on every pod restart |
 
 ### Why iviaruntime is the outlier
@@ -111,7 +111,7 @@ works for `iviaop` and `iviawrprp1`:
    `tls_self_signed_cert` (modeled on the existing `tls_self_signed_cert.postgresql` in
    `main.tf` — same module).
 2. Mount the new key + cert into the `ivia-base-layer` ConfigMap (alongside the existing
-   `iviaop.pem` + `iviawrprp1.pem` signer-trust entries).
+   `iviaop.pem` signer-trust entry).
 3. Add an autoconf YAML stanza in `base_layer.yaml.tftpl` to install that keypair into the
    AAC runtime's Liberty defaultKeyStore. **The exact autoconf stanza name for the AAC
    runtime serving keystore is not yet verified** — must be confirmed against
