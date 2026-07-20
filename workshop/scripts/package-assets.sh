@@ -126,6 +126,20 @@ if [ -n "$KEYLEAK" ]; then
 fi
 echo "  private-key gate: PASS (no PEM private keys in assets — keys are Terraform-generated at deploy)"
 
+# Binary-keystore gate — the PEM content grep above cannot see inside binary
+# PKCS#12/JKS/PFX keystores (they hold DER-encoded private keys). iviawrprp1.p12
+# was the one committed binary keystore and is now minted at deploy, so NO
+# keystore should ship. This filename gate blocks any *.p12/.jks/.pfx/.keystore
+# from reaching the assets bucket if one is ever re-committed.
+KSLEAK="$(find "$REPO_ROOT/workshop/assets/terraform" \( -name '*.p12' -o -name '*.jks' -o -name '*.pfx' -o -name '*.keystore' \) 2>/dev/null)"
+if [ -n "$KSLEAK" ]; then
+    echo "  ABORT: binary keystore(s) leaked into workshop/assets/terraform:" >&2
+    echo "$KSLEAK" >&2
+    rm -rf "$TF_DST" "$APP_DST"
+    exit 1
+fi
+echo "  binary-keystore gate: PASS (no .p12/.jks/.pfx in assets — the WRP p12 is minted at deploy)"
+
 # Buildspec lint — two failure classes CodeBuild only reports at DOWNLOAD_SOURCE,
 # after a stack is already CREATE_IN_PROGRESS (and will hang on the callback):
 #   (1) a ': ' (colon-space) in an unquoted echo parses as a YAML mapping, not a string;

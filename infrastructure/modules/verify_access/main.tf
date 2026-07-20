@@ -461,6 +461,50 @@ resource "tls_self_signed_cert" "openldap" {
 }
 
 #-------------------------------------------------------------------------------
+# iviawrprp1 (WebSEAL/WRP) serving keypair — pdsrv keystore personal cert "WRP",
+# served on :443/:9443. Terraform state owns it instead of the committed binary
+# base_layer/iviawrprp1.p12 (AWS security review — no private key at rest in git,
+# incl. binary PKCS#12). Same mint-at-deploy pattern already proven for
+# iviaruntime.p12: the public PEM cert + private key flow into the base_layer
+# ConfigMap, the autoconf preamble seals them into iviawrprp1.p12 (sealed with
+# random_password.wrp_p12_secret — the regeneration the wrp_p12_creds comment
+# always anticipated), and LMI imports the p12 into pdsrv. CN/SAN reproduce the
+# previous committed cert (CN=isvawrp.ibm.com) plus cluster-DNS forms.
+#-------------------------------------------------------------------------------
+
+resource "tls_private_key" "iviawrprp1" {
+  algorithm = "RSA"
+  rsa_bits  = 2048
+}
+
+resource "tls_self_signed_cert" "iviawrprp1" {
+  private_key_pem = tls_private_key.iviawrprp1.private_key_pem
+
+  subject {
+    common_name  = "isvawrp.ibm.com"
+    organization = "ibm"
+    country      = "us"
+  }
+
+  validity_period_hours = 87600 # 10 years
+  early_renewal_hours   = 720
+
+  allowed_uses = [
+    "key_encipherment",
+    "digital_signature",
+    "server_auth",
+  ]
+
+  dns_names = [
+    "www.iamlab.ibm.com",
+    "iviawrprp1",
+    "iviawrprp1.verify-access",
+    "iviawrprp1.verify-access.svc",
+    "iviawrprp1.verify-access.svc.cluster.local",
+  ]
+}
+
+#-------------------------------------------------------------------------------
 # kubernetes_secret bundle. All names match sibling's pod-manifest references
 # and base_layer.yaml `!secret verify-access/<name>:<key>` lookups
 # (RESEARCH §8.5 + §8.6).
@@ -560,13 +604,13 @@ resource "kubernetes_secret" "wrp_p12_creds" {
   }
   type = "Opaque"
   data = {
-    # Sibling's isvawrp.p12 is exported with passout 'Passw0rd' (common/create-ivia-pki.sh:36).
-    # Since we commit the P12 verbatim, base_layer.yaml's `secret:` value MUST be
-    # the same string the P12 was wrapped with: "Passw0rd". When we later
-    # regenerate the P12 (post-Phase 7), this random_password will drive the
-    # passout. For now, override with the sibling-locked string.
-    # CONTEXT D4 documented exception.
-    secret = "Passw0rd"
+    # Sealing password for the in-cluster-minted iviawrprp1.p12. The committed
+    # binary .p12 is gone (AWS security review) — the autoconf preamble now mints
+    # it from the Terraform-owned iviawrprp1 PEM keypair, sealed with this random
+    # password, exactly the regeneration this secret always anticipated. base_layer.yaml
+    # unwraps via `!secret verify-access/wrp-p12-creds:secret`, so the seal here and
+    # the LMI import password stay in lockstep. No hardcoded seal password.
+    secret = random_password.wrp_p12_secret.result
   }
 }
 
@@ -1640,8 +1684,13 @@ resource "kubernetes_config_map" "base_layer" {
     # into LMI rt_profile_keys keystore as personal cert "server" (replacing the
     # Liberty-auto-generated cert of the same label). State-derived; survives all
     # pod restarts + module.ivia rebuilds via iviaconfig PVC.
-    "iviaruntime.cert.pem"     = tls_self_signed_cert.iviaruntime.cert_pem
-    "iviaruntime.key.pem"      = tls_private_key.iviaruntime.private_key_pem
+    "iviaruntime.cert.pem" = tls_self_signed_cert.iviaruntime.cert_pem
+    "iviaruntime.key.pem"  = tls_private_key.iviaruntime.private_key_pem
+    # Terraform-owned iviawrprp1 (WRP) serving keypair — the autoconf preamble seals
+    # these into iviawrprp1.p12 (mirrors the iviaruntime.p12 mint), replacing the
+    # committed binary .p12. State-derived; identical cert every rebuild.
+    "iviawrprp1.cert.pem"      = tls_self_signed_cert.iviawrprp1.cert_pem
+    "iviawrprp1.key.pem"       = tls_private_key.iviawrprp1.private_key_pem
     "ldap.crt"                 = tls_self_signed_cert.openldap.cert_pem
     "DigiCertGlobalRootG3.crt" = file("${path.module}/base_layer/DigiCertGlobalRootG3.crt")
     "postgres.crt"             = tls_self_signed_cert.postgresql.cert_pem
@@ -1651,11 +1700,11 @@ resource "kubernetes_config_map" "base_layer" {
 }
 
 #-------------------------------------------------------------------------------
-# base_layer P12 Secret — isvawrp.p12 is binary PKCS#12 with a private key.
-# Separated from the ConfigMap to keep binary bytes via binary_data and
-# private-key material in a Secret rather than a ConfigMap. The initContainer
-# in the autoconf Job copies both volumes into the merged emptyDir so the
-# Python tool sees one flat /base_layer directory.
+# base_layer binary Secret — now holds only the branded management-pages zip.
+# iviawrprp1.p12 was removed (AWS security review): the WRP keypair is Terraform-
+# owned and the .p12 is minted in-cluster by the autoconf preamble, so no binary
+# private key ships in git. Kept as a Secret (not ConfigMap) since the initContainer
+# copies both volumes into one flat /base_layer dir for the Python tool.
 #-------------------------------------------------------------------------------
 
 # OscarVault-branded WebSEAL management pages, zipped at plan time. The source
@@ -1677,9 +1726,9 @@ resource "kubernetes_secret" "base_layer_p12" {
   }
   type = "Opaque"
   binary_data = {
-    "iviawrprp1.p12" = filebase64("${path.module}/base_layer/iviawrprp1.p12")
     # Branded login page bundle — flat name matches `management_root` in
     # base_layer.yaml; the autoconf init container copies it into /base_layer.
+    # (iviawrprp1.p12 is no longer here — minted at deploy from the TF keypair.)
     "reverse_proxy.zip" = filebase64(data.archive_file.ivia_management_pages.output_path)
   }
 }
@@ -1874,12 +1923,29 @@ resource "kubernetes_job_v1" "ivia_autoconf" {
             # IVIA_CONFIG_BASE first; symlink into /base_layer is not possible (RO).
             # Workaround: set IVIA_CONFIG_BASE to a writable merged dir below.
             print(f"WROTE {out} ({len(p12)} bytes) sealed with random_password.ivia_runtime_p12_secret", flush=True)
+            # MINT iviawrprp1.p12 the same way — replaces the committed binary .p12.
+            # LMI imports it into pdsrv as personal cert "WRP" (base_layer.yaml.tftpl
+            # personal_certificates[name=WRP].p12_file), sealed with the wrp-p12-creds
+            # secret that base_layer.yaml unwraps via `!secret verify-access/wrp-p12-creds:secret`.
+            wrp_key = load_pem_private_key(open(f"{base}/iviawrprp1.key.pem", "rb").read(), password=None)
+            wrp_cert = x509.load_pem_x509_certificate(open(f"{base}/iviawrprp1.cert.pem", "rb").read())
+            wrp_p12 = pkcs12.serialize_key_and_certificates(
+                name=b"WRP",
+                key=wrp_key,
+                cert=wrp_cert,
+                cas=None,
+                encryption_algorithm=BestAvailableEncryption(os.environ["IVIA_WRP_P12_PASSWORD"].encode()),
+            )
+            wrp_out = "/tmp/iviawrprp1.p12"
+            open(wrp_out, "wb").write(wrp_p12)
+            print(f"WROTE {wrp_out} ({len(wrp_p12)} bytes) sealed with random_password.wrp_p12_secret", flush=True)
             PY
             # Stage a writable merged config dir so FILE_LOADER can resolve both the
             # ConfigMap-mounted files and the just-minted iviaruntime.p12.
             mkdir -p /tmp/base_layer
             cp -L /base_layer/* /tmp/base_layer/
             cp /tmp/iviaruntime.p12 /tmp/base_layer/
+            cp /tmp/iviawrprp1.p12 /tmp/base_layer/
             chmod -R 644 /tmp/base_layer/
             # PATCH autoconf 0.3.21 push_notifications() idempotency bug (verified
             # against SDK source + the live API response). On the UPDATE path it
@@ -1983,6 +2049,20 @@ resource "kubernetes_job_v1" "ivia_autoconf" {
             value_from {
               secret_key_ref {
                 name = kubernetes_secret.ivia_runtime_p12_creds.metadata[0].name
+                key  = "secret"
+              }
+            }
+          }
+
+          # PKCS#12 seal password for the in-cluster-minted iviawrprp1.p12. Must
+          # equal kubernetes_secret.wrp_p12_creds.data.secret so the `!secret
+          # verify-access/wrp-p12-creds:secret` lookup in base_layer.yaml.tftpl
+          # resolves to the same value autoconf gives LMI for the WRP cert import.
+          env {
+            name = "IVIA_WRP_P12_PASSWORD"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret.wrp_p12_creds.metadata[0].name
                 key  = "secret"
               }
             }
