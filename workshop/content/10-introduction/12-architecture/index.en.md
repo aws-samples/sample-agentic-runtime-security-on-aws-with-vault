@@ -5,7 +5,7 @@ weight: 12
 
 ## The IBM Verify + HashiCorp Vault answer
 
-![Workshop Architecture](/static/images/architecture-overview.svg)
+![Workshop Architecture](/static/images/architecture-overview.png)
 
 IBM Verify Identity Access owns the user-identity plane: OAuth, OIDC, CIBA, and the JWT signing key. IVIA authenticates users against your organization's directory (an in-cluster OpenLDAP directory in this workshop) via LDAP. HashiCorp Vault owns the workload-identity plane and the credential-vending plane: Kubernetes auth method bound to the EKS OIDC provider, `jwt` auth method bound to IVIA's OIDC discovery URL, and dynamic Postgres + AWS secrets engines. The two systems meet at a single seam — Vault's `jwt` auth trusts IVIA's OIDC discovery URL — which is where user intent gets converted into a Vault-vended credential.
 

@@ -5,7 +5,7 @@ weight: 36
 
 IBM Verify Identity Access (IVIA) runs as a self-contained seven-pod stack in the `verify-access` namespace. The autoconf Job configured it fully unattended — confirm all pods are healthy and OIDC is serving before continuing.
 
-![IBM Verify Identity Access — self-contained seven-pod stack on EKS](/static/images/ivia-stack.svg)
+![IBM Verify Identity Access — self-contained seven-pod stack on EKS](/static/images/ivia-stack.png)
 
 ::::expand{header="Pod reference — what each pod does"}
 | Pod | Role |
