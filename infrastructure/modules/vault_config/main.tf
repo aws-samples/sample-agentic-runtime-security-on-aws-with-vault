@@ -493,3 +493,157 @@ resource "vault_kubernetes_auth_backend_role" "uc3" {
 # uc3 roles are UNTOUCHED (UC1 is pure workload; UC2/UC3 human+agent entities are
 # added by Plan 05).
 ################################################################################
+
+################################################################################
+# Phase 9, Plan 05 — Native Agent-Identity model (Agent Registry + OBO)
+#
+# The CORRECTED per-UC identity model (09-DISCOVERY, authoritative):
+#   - UC1 = Kubernetes auth. Registry identity only (entity + registration +
+#     k8s-mount alias). Ceiling INERT (k8s tokens carry no act.sub, so the
+#     agent's own ceiling never self-applies — 09-DISCOVERY
+#     CEILING_SELF_APPLIES_SUBJECT_ONLY=no). Enforcement floor is the EXISTING
+#     vault_policy.uc1_readonly bound to the uc1 k8s role above — NOT anything
+#     added here.
+#   - UC2 / UC3 = On-Behalf-Of (OBO). Effective permission =
+#     human baseline (∩) agent ceiling (∩) per-request RAR — three layers.
+#     `sub`=human resolves the human entity's baseline; `act.sub`=agent resolves
+#     the agent entity, contributing its registration ceiling_policies.
+#
+# Policy CONTENTS below are the 09-DISCOVERY STARTING probe envelopes
+# (09-DISCOVERY lines 203-207). They are TUNED against the live workshop dev env
+# in the apply->verify loop (locked decision (d); Plan 08 authoritative) — every
+# path/capability traces to that envelope, none is invented.
+#
+# LAYER 1 — UC1 inert ceiling (forward-compat envelope for the registration only)
+################################################################################
+
+# UC1 registry ceiling — INERT. Declared solely so the uc1-agent registration has
+# a ceiling_policies envelope; it does NOT restrict UC1 at runtime (no act.sub →
+# ceiling never self-applies). UC1 enforcement stays vault_policy.uc1_readonly.
+# Starting envelope: 09-DISCOVERY line 203 (uc1 registry ceiling).
+resource "vault_policy" "uc1_ceiling" {
+  name = "uc1-ceiling"
+
+  policy = <<-EOT
+    # UC1 registry ceiling (INERT — k8s auth carries no act.sub; never self-applies).
+    # Forward-compat max envelope only; the enforcement floor is uc1-readonly.
+    path "database/creds/uc1-readonly" {
+      capabilities = ["read"]
+    }
+    path "aws/sts/bedrock-reader" {
+      capabilities = ["read", "update"]
+    }
+    path "auth/token/lookup-self" {
+      capabilities = ["read"]
+    }
+    path "sys/leases/renew" {
+      capabilities = ["update"]
+    }
+  EOT
+}
+
+################################################################################
+# LAYER 2 — UC2/UC3 HUMAN baselines (attached to the human entity; the human MAX)
+################################################################################
+
+# UC2 human baseline — the shared envelope for the closed human set {oscar, jaime}
+# (each human's MAX for UC2 personal-data access). Attached to each UC2 human
+# entity. Starting envelope: 09-DISCOVERY line 204 (uc2 human baseline, from the
+# uc2-personal policy set).
+resource "vault_policy" "uc2_human_baseline" {
+  name = "uc2-human-baseline"
+
+  policy = <<-EOT
+    # UC2 human baseline (sub in {oscar, jaime}) — personal-data read envelope.
+    path "database/creds/uc2-personal-readonly" {
+      capabilities = ["read"]
+    }
+    path "auth/token/lookup-self" {
+      capabilities = ["read"]
+    }
+    path "sys/leases/renew" {
+      capabilities = ["update"]
+    }
+  EOT
+}
+
+# UC3 human baseline — jaime's refund-approver envelope (his MAX for UC3). jaime's
+# entity carries BOTH this and uc2-human-baseline (his max across both UCs); the
+# per-UC agent ceiling intersects it down per request. Starting envelope:
+# 09-DISCOVERY line 206 (uc3 human baseline, from the uc3-refund-writer policy set).
+resource "vault_policy" "uc3_human_baseline" {
+  name = "uc3-human-baseline"
+
+  policy = <<-EOT
+    # UC3 human baseline (sub = jaime) — refund-approver envelope.
+    path "database/creds/uc3-refund-writer" {
+      capabilities = ["read"]
+    }
+    path "database/creds/uc3-readonly" {
+      capabilities = ["read"]
+    }
+    path "auth/token/lookup-self" {
+      capabilities = ["read"]
+    }
+    path "sys/leases/renew" {
+      capabilities = ["update"]
+    }
+  EOT
+}
+
+################################################################################
+# LAYER 3 — UC2/UC3 AGENT ceilings (attached to the registration; restrict-only)
+#
+# The ceiling is the agent's MAX envelope. In OBO it enforces as an intersection
+# with the human baseline (09-DISCOVERY CEILING_ENFORCED_IN_OBO=yes). It never
+# GRANTS beyond the human baseline (the human baseline is a floor — a path in the
+# ceiling but not the baseline is still denied, 09-DISCOVERY ceiling transcript).
+################################################################################
+
+# UC2 agent ceiling (act.sub = agent-uc2). Starting envelope: 09-DISCOVERY line 205.
+resource "vault_policy" "uc2_agent_ceiling" {
+  name = "uc2-agent-ceiling"
+
+  policy = <<-EOT
+    # UC2 agent ceiling (act.sub = agent-uc2) — restrict-only max envelope.
+    path "database/creds/uc2-personal-readonly" {
+      capabilities = ["read"]
+    }
+    path "aws/sts/bedrock-reader" {
+      capabilities = ["read", "update"]
+    }
+    path "auth/token/lookup-self" {
+      capabilities = ["read"]
+    }
+    path "sys/leases/renew" {
+      capabilities = ["update"]
+    }
+  EOT
+}
+
+# UC3 agent ceiling (act.sub = uc3-actor). Starting envelope: 09-DISCOVERY line 207.
+resource "vault_policy" "uc3_agent_ceiling" {
+  name = "uc3-agent-ceiling"
+
+  policy = <<-EOT
+    # UC3 agent ceiling (act.sub = uc3-actor) — restrict-only max envelope.
+    path "database/creds/uc3-refund-writer" {
+      capabilities = ["read"]
+    }
+    path "database/creds/uc3-readonly" {
+      capabilities = ["read"]
+    }
+    path "aws/sts/bedrock-reader" {
+      capabilities = ["read", "update"]
+    }
+    path "aws/sts/uc3-logs-writer" {
+      capabilities = ["read", "update"]
+    }
+    path "auth/token/lookup-self" {
+      capabilities = ["read"]
+    }
+    path "sys/leases/renew" {
+      capabilities = ["update"]
+    }
+  EOT
+}
