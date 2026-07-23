@@ -37,6 +37,31 @@ locals {
   }
 }
 
+################################################################################
+# OBO identity constants — authoritative single source of truth (Plan 05, BLOCKER 1)
+#
+# These four static workshop constants are the SAME literals that this module's
+# load-bearing IVIA config templates already embed:
+#   - agent OAuth client_ids  → iviaop-config/clients.yml.tftpl (agent-uc2 :19,
+#     uc3-actor :60)
+#   - human LDAP usernames    → base_layer/base_layer.yaml.tftpl (oscar :190,
+#     jaime :195)
+# They are re-declared here (output-only) rather than threaded INTO those
+# templates: base_layer.yaml.tftpl / clients.yml.tftpl are load-bearing IVIA
+# configs where a templatefile()-var refactor risks changing rendered output, so
+# the templates are left byte-identical (git diff none). This localized, single-
+# file duplication is intentionally reviewable; Plan 08's live OBO resolve is the
+# drift backstop (a value here diverging from what IVIA issues → red gate).
+# Vault (vault_config) consumes these via services -> vault-config so the entity
+# aliases bind to exactly the sub/act.sub values IVIA emits.
+################################################################################
+locals {
+  obo_uc2_agent_identity = "agent-uc2"        # clients.yml.tftpl:19  (act.sub for UC2)
+  obo_uc3_agent_identity = "uc3-actor"        # clients.yml.tftpl:60  (act.sub for UC3)
+  obo_uc3_human_sub      = "jaime"            # base_layer.yaml.tftpl:195 (UC3 CIBA approver)
+  obo_uc2_human_subs     = ["oscar", "jaime"] # base_layer.yaml.tftpl:190,195 (UC2 closed set)
+}
+
 #-------------------------------------------------------------------------------
 # Namespace
 #-------------------------------------------------------------------------------

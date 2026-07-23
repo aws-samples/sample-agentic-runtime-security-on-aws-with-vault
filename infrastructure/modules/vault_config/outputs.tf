@@ -42,3 +42,43 @@ output "uc3_role_name" {
   description = "Kubernetes auth role name for Use Case 3 (value: 'uc3'). Vault Agent init container annotation: vault.hashicorp.com/role=uc3."
   value       = vault_kubernetes_auth_backend_role.uc3.role_name
 }
+
+################################################################################
+# Native Agent-Identity model (Phase 9, Plan 05) — entity + registration ids
+# Consumed by verify scripts (Plan 08) to assert the registry/OBO wiring.
+################################################################################
+
+output "uc1_agent_entity_id" {
+  description = "Vault identity entity id for the UC1 agent (uc1-agent) — the k8s registry identity."
+  value       = vault_identity_entity.uc1_agent.id
+}
+
+output "uc1_agent_registration_id" {
+  description = "Agent Registry registration id for uc1-agent (registry identity only; ceiling inert)."
+  value       = vault_agent_registration.uc1_agent.id
+}
+
+output "human_entity_ids" {
+  description = "Map of human OAuth sub -> Vault identity entity id for the closed OBO human set {oscar, jaime} (jaime shared once across UC2+UC3)."
+  value       = { for k, e in vault_identity_entity.human : k => e.id }
+}
+
+output "agent_uc2_entity_id" {
+  description = "Vault identity entity id for the UC2 agent (agent-uc2) — the act.sub actor identity."
+  value       = vault_identity_entity.agent_uc2.id
+}
+
+output "agent_uc2_registration_id" {
+  description = "Agent Registry registration id for agent-uc2 (UC2 ceiling; optional_authorization_details=true)."
+  value       = vault_agent_registration.agent_uc2.id
+}
+
+output "uc3_actor_entity_id" {
+  description = "Vault identity entity id for the UC3 agent (uc3-actor) — the act.sub actor identity (NOT the human sub)."
+  value       = vault_identity_entity.uc3_actor.id
+}
+
+output "uc3_actor_registration_id" {
+  description = "Agent Registry registration id for uc3-actor (UC3 ceiling; optional_authorization_details=false, RAR mandatory)."
+  value       = vault_agent_registration.uc3_actor.id
+}

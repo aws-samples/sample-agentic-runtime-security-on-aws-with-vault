@@ -428,6 +428,16 @@ resource "vault_kubernetes_auth_backend_role" "uc1" {
   token_policies                   = [vault_policy.uc1_readonly.name]
   token_ttl                        = 3600 # 1 hour
   token_max_ttl                    = 7200 # 2 hours
+
+  # Plan 05 (Task 3): make the k8s entity-alias name DETERMINISTIC so the UC1
+  # registry-identity alias can be declared in Terraform. Default source
+  # "serviceaccount_uid" yields a k8s-runtime UID (unknowable at plan time);
+  # "serviceaccount_name" yields "<namespace>/<sa>" = "uc1/uc1-retriever-sa",
+  # which vault_identity_entity_alias.uc1_agent binds to the uc1-agent entity.
+  # This does NOT change UC1 enforcement — token_policies=[uc1-readonly] is
+  # assigned by this role at login independent of the entity alias; the alias
+  # only links the login to the uc1-agent Agent-Registry identity.
+  alias_name_source = "serviceaccount_name"
 }
 
 resource "vault_kubernetes_auth_backend_role" "uc2" {
@@ -493,3 +503,314 @@ resource "vault_kubernetes_auth_backend_role" "uc3" {
 # uc3 roles are UNTOUCHED (UC1 is pure workload; UC2/UC3 human+agent entities are
 # added by Plan 05).
 ################################################################################
+
+################################################################################
+# Phase 9, Plan 05 — Native Agent-Identity model (Agent Registry + OBO)
+#
+# The CORRECTED per-UC identity model (09-DISCOVERY, authoritative):
+#   - UC1 = Kubernetes auth. Registry identity only (entity + registration +
+#     k8s-mount alias). Ceiling INERT (k8s tokens carry no act.sub, so the
+#     agent's own ceiling never self-applies — 09-DISCOVERY
+#     CEILING_SELF_APPLIES_SUBJECT_ONLY=no). Enforcement floor is the EXISTING
+#     vault_policy.uc1_readonly bound to the uc1 k8s role above — NOT anything
+#     added here.
+#   - UC2 / UC3 = On-Behalf-Of (OBO). Effective permission =
+#     human baseline (∩) agent ceiling (∩) per-request RAR — three layers.
+#     `sub`=human resolves the human entity's baseline; `act.sub`=agent resolves
+#     the agent entity, contributing its registration ceiling_policies.
+#
+# Policy CONTENTS below are the 09-DISCOVERY STARTING probe envelopes
+# (09-DISCOVERY lines 203-207). They are TUNED against the live workshop dev env
+# in the apply->verify loop (locked decision (d); Plan 08 authoritative) — every
+# path/capability traces to that envelope, none is invented.
+#
+# LAYER 1 — UC1 inert ceiling (forward-compat envelope for the registration only)
+################################################################################
+
+# UC1 registry ceiling — INERT. Declared solely so the uc1-agent registration has
+# a ceiling_policies envelope; it does NOT restrict UC1 at runtime (no act.sub →
+# ceiling never self-applies). UC1 enforcement stays vault_policy.uc1_readonly.
+# Starting envelope: 09-DISCOVERY line 203 (uc1 registry ceiling).
+resource "vault_policy" "uc1_ceiling" {
+  name = "uc1-ceiling"
+
+  policy = <<-EOT
+    # UC1 registry ceiling (INERT — k8s auth carries no act.sub; never self-applies).
+    # Forward-compat max envelope only; the enforcement floor is uc1-readonly.
+    path "database/creds/uc1-readonly" {
+      capabilities = ["read"]
+    }
+    path "aws/sts/bedrock-reader" {
+      capabilities = ["read", "update"]
+    }
+    path "auth/token/lookup-self" {
+      capabilities = ["read"]
+    }
+    path "sys/leases/renew" {
+      capabilities = ["update"]
+    }
+  EOT
+}
+
+################################################################################
+# LAYER 2 — UC2/UC3 HUMAN baselines (attached to the human entity; the human MAX)
+################################################################################
+
+# UC2 human baseline — the shared envelope for the closed human set {oscar, jaime}
+# (each human's MAX for UC2 personal-data access). Attached to each UC2 human
+# entity. Starting envelope: 09-DISCOVERY line 204 (uc2 human baseline, from the
+# uc2-personal policy set).
+resource "vault_policy" "uc2_human_baseline" {
+  name = "uc2-human-baseline"
+
+  policy = <<-EOT
+    # UC2 human baseline (sub in {oscar, jaime}) — personal-data read envelope.
+    path "database/creds/uc2-personal-readonly" {
+      capabilities = ["read"]
+    }
+    path "auth/token/lookup-self" {
+      capabilities = ["read"]
+    }
+    path "sys/leases/renew" {
+      capabilities = ["update"]
+    }
+  EOT
+}
+
+# UC3 human baseline — jaime's refund-approver envelope (his MAX for UC3). jaime's
+# entity carries BOTH this and uc2-human-baseline (his max across both UCs); the
+# per-UC agent ceiling intersects it down per request. Starting envelope:
+# 09-DISCOVERY line 206 (uc3 human baseline, from the uc3-refund-writer policy set).
+resource "vault_policy" "uc3_human_baseline" {
+  name = "uc3-human-baseline"
+
+  policy = <<-EOT
+    # UC3 human baseline (sub = jaime) — refund-approver envelope.
+    path "database/creds/uc3-refund-writer" {
+      capabilities = ["read"]
+    }
+    path "database/creds/uc3-readonly" {
+      capabilities = ["read"]
+    }
+    path "auth/token/lookup-self" {
+      capabilities = ["read"]
+    }
+    path "sys/leases/renew" {
+      capabilities = ["update"]
+    }
+  EOT
+}
+
+################################################################################
+# LAYER 3 — UC2/UC3 AGENT ceilings (attached to the registration; restrict-only)
+#
+# The ceiling is the agent's MAX envelope. In OBO it enforces as an intersection
+# with the human baseline (09-DISCOVERY CEILING_ENFORCED_IN_OBO=yes). It never
+# GRANTS beyond the human baseline (the human baseline is a floor — a path in the
+# ceiling but not the baseline is still denied, 09-DISCOVERY ceiling transcript).
+################################################################################
+
+# UC2 agent ceiling (act.sub = agent-uc2). Starting envelope: 09-DISCOVERY line 205.
+resource "vault_policy" "uc2_agent_ceiling" {
+  name = "uc2-agent-ceiling"
+
+  policy = <<-EOT
+    # UC2 agent ceiling (act.sub = agent-uc2) — restrict-only max envelope.
+    path "database/creds/uc2-personal-readonly" {
+      capabilities = ["read"]
+    }
+    path "aws/sts/bedrock-reader" {
+      capabilities = ["read", "update"]
+    }
+    path "auth/token/lookup-self" {
+      capabilities = ["read"]
+    }
+    path "sys/leases/renew" {
+      capabilities = ["update"]
+    }
+  EOT
+}
+
+# UC3 agent ceiling (act.sub = uc3-actor). Starting envelope: 09-DISCOVERY line 207.
+resource "vault_policy" "uc3_agent_ceiling" {
+  name = "uc3-agent-ceiling"
+
+  policy = <<-EOT
+    # UC3 agent ceiling (act.sub = uc3-actor) — restrict-only max envelope.
+    path "database/creds/uc3-refund-writer" {
+      capabilities = ["read"]
+    }
+    path "database/creds/uc3-readonly" {
+      capabilities = ["read"]
+    }
+    path "aws/sts/bedrock-reader" {
+      capabilities = ["read", "update"]
+    }
+    path "aws/sts/uc3-logs-writer" {
+      capabilities = ["read", "update"]
+    }
+    path "auth/token/lookup-self" {
+      capabilities = ["read"]
+    }
+    path "sys/leases/renew" {
+      capabilities = ["update"]
+    }
+  EOT
+}
+
+################################################################################
+# Identity entities + Agent Registry registrations (Task 2)
+#
+# FIVE entities: uc1-agent, {oscar, jaime} (shared humans), agent-uc2, uc3-actor.
+# THREE registrations: uc1-agent, agent-uc2, uc3-actor (humans are SUBJECTS, not
+# registered agents). owner = the operating SERVICE principal (a stable
+# service/workload label), NEVER an end-user human — owner is single-valued
+# accountability metadata and is NOT load-bearing for OBO resolution
+# (09-PATTERNS: resolution is proven via the subject + actor aliases). A shared
+# OBO agent (agent-uc2 serves BOTH oscar and jaime) therefore cannot be owned by
+# a persona.
+################################################################################
+
+locals {
+  # Closed OBO human set. jaime overlaps UC2+UC3 → toset() dedupes to ONE entity
+  # (aliases are keyed by mount_accessor+external_id; jaime presents the same sub
+  # through the same oauth mount in both UCs, so exactly one entity + one alias).
+  obo_human_subs = toset(concat(var.uc2_human_subs, [var.uc3_human_sub]))
+
+  # Per-human baseline policy attachment = the human's MAX across the UCs they
+  # drive. oscar (UC2 only) -> uc2 baseline; jaime (UC2 + UC3) -> both baselines.
+  obo_human_policies = {
+    for h in local.obo_human_subs : h => compact([
+      contains(var.uc2_human_subs, h) ? vault_policy.uc2_human_baseline.name : "",
+      h == var.uc3_human_sub ? vault_policy.uc3_human_baseline.name : "",
+    ])
+  }
+}
+
+# --- UC1: Kubernetes registry identity (entity + registration; alias in Task 3) ---
+resource "vault_identity_entity" "uc1_agent" {
+  name = "uc1-agent"
+  # No entity policies: UC1's enforcement floor is vault_policy.uc1_readonly bound
+  # to the uc1 k8s role. This entity exists purely as the Agent Registry identity;
+  # its ceiling is inert (k8s tokens carry no act.sub).
+}
+
+resource "vault_agent_registration" "uc1_agent" {
+  entity_id                 = vault_identity_entity.uc1_agent.id
+  display_name              = "uc1-agent" # required, unique, IMMUTABLE
+  ceiling_policies          = [vault_policy.uc1_ceiling.name]
+  no_default_ceiling_policy = true                    # keep the (inert) ceiling pure
+  owner                     = "uc1-retriever-service" # operating SERVICE principal, not a human
+  # optional_authorization_details left computed: RAR-optionality is moot for k8s
+  # (UC1 presents no OAuth token to Vault).
+}
+
+# --- UC2/UC3: shared HUMAN subject entities {oscar, jaime} (NOT registered) ---
+resource "vault_identity_entity" "human" {
+  for_each = local.obo_human_subs
+  name     = each.value
+  policies = local.obo_human_policies[each.key]
+}
+
+# --- UC2 agent (agent-uc2): entity + registration ---
+resource "vault_identity_entity" "agent_uc2" {
+  name = var.uc2_agent_identity # "agent-uc2"
+  # No baseline policies: in OBO the agent contributes its ceiling via the
+  # registration below, not via entity policies.
+}
+
+resource "vault_agent_registration" "agent_uc2" {
+  entity_id                      = vault_identity_entity.agent_uc2.id
+  display_name                   = var.uc2_agent_identity
+  ceiling_policies               = [vault_policy.uc2_agent_ceiling.name]
+  no_default_ceiling_policy      = true
+  owner                          = "banking-app-service" # operating SERVICE principal (serves oscar AND jaime — never a persona)
+  optional_authorization_details = true                  # UC2 RAR OPTIONAL (locked decision (b), cutover committed)
+}
+
+# --- UC3 agent (uc3-actor): entity + registration ---
+resource "vault_identity_entity" "uc3_actor" {
+  name = var.uc3_agent_identity # "uc3-actor" — the ACTOR, not the human sub
+}
+
+resource "vault_agent_registration" "uc3_actor" {
+  entity_id                      = vault_identity_entity.uc3_actor.id
+  display_name                   = var.uc3_agent_identity
+  ceiling_policies               = [vault_policy.uc3_agent_ceiling.name]
+  no_default_ceiling_policy      = true
+  owner                          = "uc3-refund-agent-service" # operating SERVICE principal (jaime is the SUBJECT, not the owner)
+  optional_authorization_details = false                      # UC3 RAR MANDATORY
+}
+
+################################################################################
+# Identity entity ALIASES (Task 3)
+#
+# UC1 = ONE Kubernetes-mount alias (no issuer) binding the uc1-retriever-sa login
+# to the uc1-agent entity — provider-native vault_identity_entity_alias.
+#
+# UC2/UC3 = OAuth-resource-server aliases (subject + actor). These carry an
+# `issuer` binding that the OAuth resource server REQUIRES (09-DISCOVERY: an alias
+# without it validates but then fails JWT auth — issuer is part of the anti-spoof
+# actor binding, threat T-09-05-01). The provider resource
+# vault_identity_entity_alias exposes ONLY name/mount_accessor/canonical_id — it
+# has NO `issuer` field (confirmed against the 5.10.1 schema + provider docs; no
+# later 5.x adds it). So the oauth aliases are written via vault_generic_endpoint
+# to identity/entity-alias, faithfully replaying the raw write the 09-DISCOVERY
+# probe confirmed on the live 2.0.3-ent binary (name=<claim value>, canonical_id,
+# mount_accessor, issuer). See 09-05-SUMMARY "Deviations".
+#
+# mount_accessor is PROVIDED as the synthetic string oauth-resource-server_root_
+# <config_id> (09-DISCOVERY MOUNT_ACCESSOR_FORM; the config_id is this profile's
+# resource id). depends_on the profile so the synthetic accessor exists first
+# (threat T-09-05-05).
+################################################################################
+
+# --- UC1 Kubernetes-mount alias (no issuer; provider-native) ---
+resource "vault_identity_entity_alias" "uc1_agent" {
+  # alias_name_source="serviceaccount_name" on the uc1 role → "<ns>/<sa>".
+  name           = "uc1/uc1-retriever-sa"
+  mount_accessor = vault_auth_backend.kubernetes.accessor
+  canonical_id   = vault_identity_entity.uc1_agent.id
+}
+
+locals {
+  # Synthetic OAuth-resource-server mount accessor (09-DISCOVERY MOUNT_ACCESSOR_FORM).
+  oauth_mount_accessor = "oauth-resource-server_root_${vault_oauth_resource_server_config_profile.ivia.id}"
+
+  # All OAuth entity aliases, keyed by the OAuth claim value (= alias name):
+  #   SUBJECT aliases → human `sub` (oscar, jaime) → the human entity.
+  #   ACTOR   aliases → agent `act.sub` (agent-uc2, uc3-actor) → the agent entity.
+  # jaime appears once (subject side); all four keys are distinct.
+  oauth_aliases = merge(
+    { for h in local.obo_human_subs : h => vault_identity_entity.human[h].id },
+    {
+      (var.uc2_agent_identity) = vault_identity_entity.agent_uc2.id
+      (var.uc3_agent_identity) = vault_identity_entity.uc3_actor.id
+    },
+  )
+}
+
+# --- UC2/UC3 OAuth subject + actor aliases (issuer-bound; raw write) ---
+resource "vault_generic_endpoint" "oauth_alias" {
+  for_each = local.oauth_aliases
+
+  path = "identity/entity-alias"
+  # identity/entity-alias has no readable-by-name GET and no deletable item URL
+  # from this collection path — the documented generic_endpoint identity pattern.
+  # Create is an upsert keyed by (mount_accessor, name), so re-apply is idempotent.
+  # Alias lifecycle/cleanup is reconciled at the apply wave; workshop teardown
+  # destroys the Vault server, so per-alias deletes are moot.
+  disable_read         = true
+  disable_delete       = true
+  ignore_absent_fields = true
+  write_fields         = ["id"]
+
+  data_json = jsonencode({
+    name           = each.key # the OAuth claim value (= external_id)
+    canonical_id   = each.value
+    mount_accessor = local.oauth_mount_accessor
+    issuer         = var.ivia_issuer # = profile issuer_id; REQUIRED for JWT auth
+  })
+
+  depends_on = [vault_oauth_resource_server_config_profile.ivia]
+}
