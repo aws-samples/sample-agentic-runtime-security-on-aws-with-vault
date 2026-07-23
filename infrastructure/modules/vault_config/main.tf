@@ -647,3 +647,87 @@ resource "vault_policy" "uc3_agent_ceiling" {
     }
   EOT
 }
+
+################################################################################
+# Identity entities + Agent Registry registrations (Task 2)
+#
+# FIVE entities: uc1-agent, {oscar, jaime} (shared humans), agent-uc2, uc3-actor.
+# THREE registrations: uc1-agent, agent-uc2, uc3-actor (humans are SUBJECTS, not
+# registered agents). owner = the operating SERVICE principal (a stable
+# service/workload label), NEVER an end-user human — owner is single-valued
+# accountability metadata and is NOT load-bearing for OBO resolution
+# (09-PATTERNS: resolution is proven via the subject + actor aliases). A shared
+# OBO agent (agent-uc2 serves BOTH oscar and jaime) therefore cannot be owned by
+# a persona.
+################################################################################
+
+locals {
+  # Closed OBO human set. jaime overlaps UC2+UC3 → toset() dedupes to ONE entity
+  # (aliases are keyed by mount_accessor+external_id; jaime presents the same sub
+  # through the same oauth mount in both UCs, so exactly one entity + one alias).
+  obo_human_subs = toset(concat(var.uc2_human_subs, [var.uc3_human_sub]))
+
+  # Per-human baseline policy attachment = the human's MAX across the UCs they
+  # drive. oscar (UC2 only) -> uc2 baseline; jaime (UC2 + UC3) -> both baselines.
+  obo_human_policies = {
+    for h in local.obo_human_subs : h => compact([
+      contains(var.uc2_human_subs, h) ? vault_policy.uc2_human_baseline.name : "",
+      h == var.uc3_human_sub ? vault_policy.uc3_human_baseline.name : "",
+    ])
+  }
+}
+
+# --- UC1: Kubernetes registry identity (entity + registration; alias in Task 3) ---
+resource "vault_identity_entity" "uc1_agent" {
+  name = "uc1-agent"
+  # No entity policies: UC1's enforcement floor is vault_policy.uc1_readonly bound
+  # to the uc1 k8s role. This entity exists purely as the Agent Registry identity;
+  # its ceiling is inert (k8s tokens carry no act.sub).
+}
+
+resource "vault_agent_registration" "uc1_agent" {
+  entity_id                 = vault_identity_entity.uc1_agent.id
+  display_name              = "uc1-agent" # required, unique, IMMUTABLE
+  ceiling_policies          = [vault_policy.uc1_ceiling.name]
+  no_default_ceiling_policy = true                    # keep the (inert) ceiling pure
+  owner                     = "uc1-retriever-service" # operating SERVICE principal, not a human
+  # optional_authorization_details left computed: RAR-optionality is moot for k8s
+  # (UC1 presents no OAuth token to Vault).
+}
+
+# --- UC2/UC3: shared HUMAN subject entities {oscar, jaime} (NOT registered) ---
+resource "vault_identity_entity" "human" {
+  for_each = local.obo_human_subs
+  name     = each.value
+  policies = local.obo_human_policies[each.key]
+}
+
+# --- UC2 agent (agent-uc2): entity + registration ---
+resource "vault_identity_entity" "agent_uc2" {
+  name = var.uc2_agent_identity # "agent-uc2"
+  # No baseline policies: in OBO the agent contributes its ceiling via the
+  # registration below, not via entity policies.
+}
+
+resource "vault_agent_registration" "agent_uc2" {
+  entity_id                      = vault_identity_entity.agent_uc2.id
+  display_name                   = var.uc2_agent_identity
+  ceiling_policies               = [vault_policy.uc2_agent_ceiling.name]
+  no_default_ceiling_policy      = true
+  owner                          = "banking-app-service" # operating SERVICE principal (serves oscar AND jaime — never a persona)
+  optional_authorization_details = true                  # UC2 RAR OPTIONAL (locked decision (b), cutover committed)
+}
+
+# --- UC3 agent (uc3-actor): entity + registration ---
+resource "vault_identity_entity" "uc3_actor" {
+  name = var.uc3_agent_identity # "uc3-actor" — the ACTOR, not the human sub
+}
+
+resource "vault_agent_registration" "uc3_actor" {
+  entity_id                      = vault_identity_entity.uc3_actor.id
+  display_name                   = var.uc3_agent_identity
+  ceiling_policies               = [vault_policy.uc3_agent_ceiling.name]
+  no_default_ceiling_policy      = true
+  owner                          = "uc3-refund-agent-service" # operating SERVICE principal (jaime is the SUBJECT, not the owner)
+  optional_authorization_details = false                      # UC3 RAR MANDATORY
+}
