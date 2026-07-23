@@ -67,8 +67,30 @@ resource "kubernetes_service_account" "vault" {
 }
 
 ################################################################################
+# Vault Enterprise License Secret
+# Enterprise binary hard-fails init without an autoloaded license (Phase 9).
+# License content is a per-attendee deploy input (var.vault_enterprise_license,
+# sensitive, no default) sourced from a file by deploy-workshop.sh — NEVER a
+# committed literal. Mirrors the kubernetes_secret shape in
+# verify_access/main.tf:516-526. Referenced by Helm server.enterpriseLicense
+# below (secretName/secretKey) and listed in the helm_release depends_on so
+# the secret exists before the chart installs.
+################################################################################
+
+resource "kubernetes_secret" "vault_ent_license" {
+  metadata {
+    name      = "vault-ent-license"
+    namespace = kubernetes_namespace.vault.metadata[0].name
+  }
+  type = "Opaque"
+  data = {
+    license = var.vault_enterprise_license
+  }
+}
+
+################################################################################
 # Vault Helm Release
-# Chart: hashicorp/vault 0.32.0 (Vault server image 2.0.0)
+# Chart: hashicorp/vault 0.32.0 (Vault server image hashicorp/vault-enterprise:2.0.3-ent)
 # HA values rendered from vault-ha.yaml.tpl. KMS key id is supplied by tier 1.
 #
 # POST-DEPLOY — Two-phase bootstrap (handled by deploy-workshop.sh):
@@ -88,9 +110,8 @@ resource "helm_release" "vault" {
 
   values = [
     templatefile("${path.module}/values/vault-ha.yaml.tpl", {
-      vault_image_tag = "2.0.0"
-      kms_key_id      = var.kms_key_id
-      region          = var.region
+      kms_key_id = var.kms_key_id
+      region     = var.region
     })
   ]
 
@@ -99,5 +120,6 @@ resource "helm_release" "vault" {
 
   depends_on = [
     kubernetes_service_account.vault,
+    kubernetes_secret.vault_ent_license,
   ]
 }

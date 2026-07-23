@@ -17,3 +17,9 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "vault_enterprise_license" {
+  description = "Vault Enterprise license (.hclic contents) autoloaded via a K8s secret + Helm server.enterpriseLicense. Per-attendee deploy input — NEVER a default; identity/secret material must never have a default."
+  type        = string
+  sensitive   = true
+}

@@ -26,3 +26,9 @@ variable "deploy_id_state_path" {
   default     = "../.acme-state"
   description = "Path (resolved from infrastructure/services/) to the local .acme-state file written by deploy-workshop.sh ACME step. Lives at infrastructure/.acme-state, so the default reaches up one level. Gitignored."
 }
+
+variable "vault_enterprise_license" {
+  type        = string
+  sensitive   = true
+  description = "Vault Enterprise license (.hclic contents). Per-attendee deploy input written into the gitignored terraform.tfvars by deploy-workshop.sh's license-injection preflight step — NEVER a default (identity/secret material must never have a default)."
+}
