@@ -428,6 +428,16 @@ resource "vault_kubernetes_auth_backend_role" "uc1" {
   token_policies                   = [vault_policy.uc1_readonly.name]
   token_ttl                        = 3600 # 1 hour
   token_max_ttl                    = 7200 # 2 hours
+
+  # Plan 05 (Task 3): make the k8s entity-alias name DETERMINISTIC so the UC1
+  # registry-identity alias can be declared in Terraform. Default source
+  # "serviceaccount_uid" yields a k8s-runtime UID (unknowable at plan time);
+  # "serviceaccount_name" yields "<namespace>/<sa>" = "uc1/uc1-retriever-sa",
+  # which vault_identity_entity_alias.uc1_agent binds to the uc1-agent entity.
+  # This does NOT change UC1 enforcement — token_policies=[uc1-readonly] is
+  # assigned by this role at login independent of the entity alias; the alias
+  # only links the login to the uc1-agent Agent-Registry identity.
+  alias_name_source = "serviceaccount_name"
 }
 
 resource "vault_kubernetes_auth_backend_role" "uc2" {
@@ -730,4 +740,77 @@ resource "vault_agent_registration" "uc3_actor" {
   no_default_ceiling_policy      = true
   owner                          = "uc3-refund-agent-service" # operating SERVICE principal (jaime is the SUBJECT, not the owner)
   optional_authorization_details = false                      # UC3 RAR MANDATORY
+}
+
+################################################################################
+# Identity entity ALIASES (Task 3)
+#
+# UC1 = ONE Kubernetes-mount alias (no issuer) binding the uc1-retriever-sa login
+# to the uc1-agent entity — provider-native vault_identity_entity_alias.
+#
+# UC2/UC3 = OAuth-resource-server aliases (subject + actor). These carry an
+# `issuer` binding that the OAuth resource server REQUIRES (09-DISCOVERY: an alias
+# without it validates but then fails JWT auth — issuer is part of the anti-spoof
+# actor binding, threat T-09-05-01). The provider resource
+# vault_identity_entity_alias exposes ONLY name/mount_accessor/canonical_id — it
+# has NO `issuer` field (confirmed against the 5.10.1 schema + provider docs; no
+# later 5.x adds it). So the oauth aliases are written via vault_generic_endpoint
+# to identity/entity-alias, faithfully replaying the raw write the 09-DISCOVERY
+# probe confirmed on the live 2.0.3-ent binary (name=<claim value>, canonical_id,
+# mount_accessor, issuer). See 09-05-SUMMARY "Deviations".
+#
+# mount_accessor is PROVIDED as the synthetic string oauth-resource-server_root_
+# <config_id> (09-DISCOVERY MOUNT_ACCESSOR_FORM; the config_id is this profile's
+# resource id). depends_on the profile so the synthetic accessor exists first
+# (threat T-09-05-05).
+################################################################################
+
+# --- UC1 Kubernetes-mount alias (no issuer; provider-native) ---
+resource "vault_identity_entity_alias" "uc1_agent" {
+  # alias_name_source="serviceaccount_name" on the uc1 role → "<ns>/<sa>".
+  name           = "uc1/uc1-retriever-sa"
+  mount_accessor = vault_auth_backend.kubernetes.accessor
+  canonical_id   = vault_identity_entity.uc1_agent.id
+}
+
+locals {
+  # Synthetic OAuth-resource-server mount accessor (09-DISCOVERY MOUNT_ACCESSOR_FORM).
+  oauth_mount_accessor = "oauth-resource-server_root_${vault_oauth_resource_server_config_profile.ivia.id}"
+
+  # All OAuth entity aliases, keyed by the OAuth claim value (= alias name):
+  #   SUBJECT aliases → human `sub` (oscar, jaime) → the human entity.
+  #   ACTOR   aliases → agent `act.sub` (agent-uc2, uc3-actor) → the agent entity.
+  # jaime appears once (subject side); all four keys are distinct.
+  oauth_aliases = merge(
+    { for h in local.obo_human_subs : h => vault_identity_entity.human[h].id },
+    {
+      (var.uc2_agent_identity) = vault_identity_entity.agent_uc2.id
+      (var.uc3_agent_identity) = vault_identity_entity.uc3_actor.id
+    },
+  )
+}
+
+# --- UC2/UC3 OAuth subject + actor aliases (issuer-bound; raw write) ---
+resource "vault_generic_endpoint" "oauth_alias" {
+  for_each = local.oauth_aliases
+
+  path = "identity/entity-alias"
+  # identity/entity-alias has no readable-by-name GET and no deletable item URL
+  # from this collection path — the documented generic_endpoint identity pattern.
+  # Create is an upsert keyed by (mount_accessor, name), so re-apply is idempotent.
+  # Alias lifecycle/cleanup is reconciled at the apply wave; workshop teardown
+  # destroys the Vault server, so per-alias deletes are moot.
+  disable_read         = true
+  disable_delete       = true
+  ignore_absent_fields = true
+  write_fields         = ["id"]
+
+  data_json = jsonencode({
+    name           = each.key # the OAuth claim value (= external_id)
+    canonical_id   = each.value
+    mount_accessor = local.oauth_mount_accessor
+    issuer         = var.ivia_issuer # = profile issuer_id; REQUIRED for JWT auth
+  })
+
+  depends_on = [vault_oauth_resource_server_config_profile.ivia]
 }
