@@ -5,7 +5,8 @@
 # to the agent use cases (Phases 4-6):
 #   - Audit device (PLAT-05): file type → stdout, json format, fluent-bit pickup
 #   - Kubernetes auth backend (CONF-01): EKS CA + OIDC issuer
-#   - JWT auth backend (CONF-02): IVIA OIDC discovery URL
+#   - OAuth resource server (CONF-02): IVIA-native OAuth JWT authorizes Vault
+#     directly via X-Vault-Token (jwt auth backend retired — decision (e))
 #   - PostgreSQL secrets engine (CONF-03): 3 roles (uc1-readonly,
 #     uc2-personal-readonly, uc3-refund-writer)
 #   - AWS secrets engine (CONF-04): assumed_role for scoped Bedrock STS credentials
@@ -18,8 +19,11 @@
 terraform {
   required_providers {
     vault = {
-      source  = "hashicorp/vault"
-      version = "~> 4.0"
+      source = "hashicorp/vault"
+      # 5.10.1 is the first release exposing vault_oauth_resource_server_config_profile
+      # + vault_agent_registration (09-DISCOVERY PROVIDER_MIN=hashicorp/vault>=5.10.1).
+      # Pin the exact patch floor (~> 5.10 would admit 5.10.0, which lacks the resource).
+      version = ">= 5.10.1, < 6.0.0"
     }
     aws = {
       source  = "hashicorp/aws"
@@ -72,16 +76,53 @@ resource "vault_kubernetes_auth_backend_config" "this" {
 }
 
 ################################################################################
-# JWT auth backend — CONF-02
-# IVIA OIDC discovery URL; used by uc2-jwt and uc3-jwt roles
+# OAuth resource server — CONF-02 (Vault-native cutover, replaces the jwt backend)
+#
+# Locked decision (e): the IVIA jwt auth backend + uc2-jwt/uc3-jwt roles are
+# RETIRED (full native cutover, no fallback). IVIA's OAuth JWT now authorizes a
+# Vault request DIRECTLY via the X-Vault-Token header against this resource-server
+# profile — no jwt_login round-trip, no synthetic Vault token.
+#
+# The profile maps 1:1 onto the retired backend's connection facts
+# (issuer/JWKS/CA/audiences/RS256). user_claim="sub" extracts the SUBJECT (human
+# `sub` for UC3, app `sub` for UC2 — 09-DISCOVERY USER_CLAIM_UNIFORM=yes → ONE
+# profile serves both OAuth UCs). The AGENT is resolved by Vault's NATIVE OBO
+# handling of the RFC 8693 `act.sub` claim (Plan 04 makes IVIA emit it; Plan 05's
+# actor alias binds it), NOT via user_claim — do NOT set user_claim to
+# /may_act/sub or act.sub. The wrong-actor deny that the retired role's
+# bound_claims (/may_act/sub=uc3-actor) performed is re-homed natively:
+# 09-DISCOVERY DELEGATION_ENFORCED=yes proves a wrong actor → 403, so no extra
+# profile-level control is required.
+#
+# optional_authorization_details is deliberately NOT set here: 09-DISCOVERY
+# OPT_AUTH_DETAILS_LEVEL=registration → Plan 05 sets it per vault_agent_registration
+# (UC3=false RAR-mandatory; UC1/UC2=true RAR-optional). Never an unconditional
+# profile-wide false.
 ################################################################################
 
-resource "vault_jwt_auth_backend" "ivia" {
-  type         = "jwt"
-  path         = "jwt"
-  jwks_url     = var.ivia_jwks_url
-  jwks_ca_pem  = var.ivia_oidc_ca_pem
-  bound_issuer = var.ivia_issuer
+# Activation gate — the oauth-resource-server feature must be enabled before the
+# profile (and Plan 05's agent registrations) reconcile.
+resource "vault_activation_flags" "oauth_resource_server" {
+  feature = "oauth-resource-server"
+}
+
+resource "vault_oauth_resource_server_config_profile" "ivia" {
+  # 1:1 connection map from the retired IVIA jwt auth backend:
+  #   bound_issuer → issuer_id (immutable)
+  #   jwks_url     → use_jwks + jwks_uri
+  #   jwks_ca_pem  → jwks_ca_pem
+  #   bound_audiences (uc2-jwt=agent-uc2, uc3-jwt=uc3-actor) → audiences
+  # profile_name is REQUIRED by the provider (5.10.1 schema) — names this profile.
+  profile_name         = "ivia"
+  issuer_id            = var.ivia_issuer
+  use_jwks             = true
+  jwks_uri             = var.ivia_jwks_url
+  jwks_ca_pem          = var.ivia_oidc_ca_pem
+  audiences            = ["uc3-actor", "agent-uc2"]
+  supported_algorithms = ["RS256"]
+  user_claim           = "sub"
+
+  depends_on = [vault_activation_flags.oauth_resource_server]
 }
 
 ################################################################################
@@ -437,81 +478,18 @@ resource "vault_kubernetes_auth_backend_role" "uc3" {
 }
 
 ################################################################################
-# JWT auth roles — uc2 and uc3 (IVIA token exchange)
-# uc2-jwt: bound_audiences=["agent-uc2"] — standard OIDC audience claim
-# uc3-jwt: bound_claims includes may_act for delegation assertion
+# JWT auth roles — RETIRED (locked decision (e), full native cutover)
+#
+# The uc2-jwt + uc3-jwt roles were removed along with the IVIA jwt auth backend
+# (both formerly on the retired 'jwt' mount). Their two jobs are re-homed natively:
+#   - actor/delegation (/may_act/sub=uc3-actor) → IVIA now emits act.sub (Plan 04)
+#     + Plan 05's actor alias (external_id=<act.sub value>) on the agent entity;
+#     09-DISCOVERY DELEGATION_ENFORCED=yes proves a wrong actor → 403.
+#   - RAR type (/authorization_details/0/type) → per-request vault:path_access RAR
+#     (Plan 04 emits it; Plan 05's registration makes it mandatory for UC3).
+# No jwt backend is retained as "defense-in-depth" — post-cutover the native
+# X-Vault-Token path never traverses auth/jwt, so a retained backend defends zero
+# live requests (dead code). The kubernetes auth backend + its uc1/uc2/uc2_agent/
+# uc3 roles are UNTOUCHED (UC1 is pure workload; UC2/UC3 human+agent entities are
+# added by Plan 05).
 ################################################################################
-
-resource "vault_jwt_auth_backend_role" "uc2_jwt" {
-  backend        = vault_jwt_auth_backend.ivia.path
-  role_name      = "uc2-jwt"
-  role_type      = "jwt"
-  token_policies = [vault_policy.uc2_personal.name]
-  token_ttl      = 3600
-  token_max_ttl  = 7200
-
-  bound_audiences = ["agent-uc2"]
-
-  user_claim = "sub"
-
-  # Require IVIA-issued tokens only (validated via jwks_url)
-  bound_claims = {}
-
-  # Map user sub claim into Vault entity metadata for audit correlation (OBJ-5)
-  claim_mappings = {
-    "sub"   = "user_sub"
-    "email" = "user_email"
-  }
-}
-
-resource "vault_jwt_auth_backend_role" "uc3_jwt" {
-  backend        = vault_jwt_auth_backend.ivia.path
-  role_name      = "uc3-jwt"
-  role_type      = "jwt"
-  token_policies = [vault_policy.uc3_refund_writer.name]
-  token_ttl      = 3600
-  token_max_ttl  = 7200
-
-  # The RFC 8693 token-exchange output JWT's audience is the client that PERFORMED
-  # the exchange (uc3-actor), not the subject's client (agent-uc3). Bind to the
-  # actor — that is the verified, natural ISVAOP behavior.
-  bound_audiences = ["uc3-actor"]
-
-  user_claim = "sub"
-
-  # Two enforced bindings on the exchanged token, both injected by the
-  # isvaop_pretoken mapping rule and matched here with JSONPointer keys (Vault
-  # cannot match a map- or array-valued claim directly):
-  #   /may_act/sub                  — RFC 8693 delegation (WHO may act). Bound to
-  #     the EXACT actor "uc3-actor"; a missing or different actor is rejected.
-  #   /authorization_details/0/type — RFC 9396 RAR TYPE (WHAT class of action).
-  #     Bound to the EXACT type "refund_approval" stamped on the exchanged token by
-  #     the isvaop_pretoken rule; any other type is rejected at point of use.
-  #     refund_approval is the genuine, allowlisted, only RAR type agent-uc3 can
-  #     request (provider authorization_details_types_supported) — not a placeholder.
-  # NOTE: the RAR AMOUNT/currency is NOT bound here. ISVAOP 25.10 does not expose the
-  # consent-time RAR to any mapping rule at mint/exchange (verified — see
-  # verify_access/README.md "UC3 RAR enforcement model"), and Vault bound_claims are
-  # string/glob matches that cannot numerically enforce an amount regardless. The
-  # amount is consent-bound by three-plane audit correlation on request_id, not a claim.
-  # Values are literals (no wildcards), so glob matching is exact. This is the
-  # OBJ-4 enforcement gate — Vault denies DB write creds unless BOTH match.
-  bound_claims_type = "glob"
-  bound_claims = {
-    "/may_act/sub"                  = "uc3-actor"
-    "/authorization_details/0/type" = "refund_approval"
-  }
-
-  # Audit-only metadata extraction (OBJ-4 / OBJ-5 three-plane correlation).
-  # claim_mappings writes nested JWT claims into auth.metadata (map<string,string>)
-  # at jwt login; it does NOT participate in authorization enforcement (that stays
-  # in bound_claims above — threat T-071-03, disposition accept). JSONPointer keys
-  # are supported identically to bound_claims
-  # [CITED: developer.hashicorp.com/vault/api-docs/auth/jwt#claim_mappings].
-  #   /may_act/sub                  -> auth.metadata.may_act_sub  (the RFC 8693 actor sub)
-  #   /authorization_details/0/type -> auth.metadata.rar_type     (the RAR grant type)
-  claim_mappings = {
-    "/may_act/sub"                  = "may_act_sub"
-    "/authorization_details/0/type" = "rar_type"
-  }
-}

@@ -8,9 +8,9 @@ output "kubernetes_auth_path" {
   value       = vault_auth_backend.kubernetes.path
 }
 
-output "jwt_auth_path" {
-  description = "Mount path of the JWT auth backend (value: 'jwt'). IVIA token exchange flows use this path."
-  value       = vault_jwt_auth_backend.ivia.path
+output "oauth_resource_server_config_id" {
+  description = "Server-assigned config identifier of the IVIA OAuth resource server profile (provider 5.10.1 exposes it as the resource `id`; there is no separate `config_id` attribute). Plan 05 derives the alias mount accessor as oauth-resource-server_root_<this value>."
+  value       = vault_oauth_resource_server_config_profile.ivia.id
 }
 
 output "database_mount_path" {
@@ -41,14 +41,4 @@ output "uc2_db_role_name" {
 output "uc3_role_name" {
   description = "Kubernetes auth role name for Use Case 3 (value: 'uc3'). Vault Agent init container annotation: vault.hashicorp.com/role=uc3."
   value       = vault_kubernetes_auth_backend_role.uc3.role_name
-}
-
-output "uc2_jwt_role_name" {
-  description = "JWT auth role name for Use Case 2 IVIA token exchange (value: 'uc2-jwt')."
-  value       = vault_jwt_auth_backend_role.uc2_jwt.role_name
-}
-
-output "uc3_jwt_role_name" {
-  description = "JWT auth role name for Use Case 3 IVIA delegation token exchange (value: 'uc3-jwt')."
-  value       = vault_jwt_auth_backend_role.uc3_jwt.role_name
 }
