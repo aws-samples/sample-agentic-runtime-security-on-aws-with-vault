@@ -30,8 +30,11 @@ terraform {
 
   required_providers {
     vault = {
-      source  = "hashicorp/vault"
-      version = "~> 4.0"
+      source = "hashicorp/vault"
+      # Must match the module pin — 5.10.1 is the first release exposing
+      # vault_oauth_resource_server_config_profile (09-DISCOVERY PROVIDER_MIN).
+      # Bump both roots together or the apply fails on a provider-version mismatch.
+      version = ">= 5.10.1, < 6.0.0"
     }
     aws = {
       source  = "hashicorp/aws"

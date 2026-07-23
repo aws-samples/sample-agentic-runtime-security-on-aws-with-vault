@@ -25,7 +25,7 @@ variable "ivia_jwks_url" {
 }
 
 variable "ivia_issuer" {
-  description = "IVIA token issuer URL — bound_issuer for the JWT auth backend. Vault rejects tokens whose iss claim doesn't match."
+  description = "IVIA token issuer URL — issuer_id (immutable) on the OAuth resource server profile. Vault rejects tokens whose iss claim doesn't match, and Plan 05's entity aliases bind to this same issuer."
   type        = string
 }
 
