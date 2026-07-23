@@ -56,12 +56,19 @@
 #   --dry-run                Print planned actions without executing
 #   --help                   Show this help message
 #
+# Env vars:
+#   VAULT_ENTERPRISE_LICENSE_PATH  Path to the Vault Enterprise .hclic license file
+#                                  (default: ~/Downloads/vault-ent.hclic). Read fresh
+#                                  and written into infrastructure/services/terraform.tfvars
+#                                  on every tier-2 run — never a committed literal.
+#
 # Prerequisites:
 #   - AWS CLI configured with valid credentials
 #   - kubectl, Vault CLI, terraform >= 1.10 installed
 #   - In ecr mode: Docker or Podman required (for image build+push)
 #   - infrastructure/terraform.tfvars, infrastructure/services/terraform.tfvars,
 #     and infrastructure/workloads/terraform.tfvars populated
+#   - A Vault Enterprise platform-standard license file (see VAULT_ENTERPRISE_LICENSE_PATH)
 #
 # Examples:
 #   ./deploy-workshop.sh                              # full deploy, ghcr mode (default)
@@ -357,18 +364,24 @@ fi
 echo ""
 
 #===============================================================================
-# PREFLIGHT: Resolve the three non-committable inputs (LE email + IVIA secrets)
+# PREFLIGHT: Resolve the non-committable inputs (LE email + IVIA secrets +
+# Vault Enterprise license)
 #
 # These cannot live in the tracked terraform.tfvars.example files — one is an
-# identity (the Let's Encrypt contact email) and two are secrets — so bootstrap
-# seeds them empty. We collect them ONCE here, before any tier apply, and write
-# them into the gitignored terraform.tfvars files Terraform actually reads:
+# identity (the Let's Encrypt contact email), two are typed secrets, and one is
+# a license FILE — so bootstrap seeds them empty. We collect them ONCE here,
+# before any tier apply, and write them into the gitignored terraform.tfvars
+# files Terraform actually reads:
 #   acme_email                   -> tier-1 infrastructure/terraform.tfvars
 #   icr_entitlement_key          -> tier-2 infrastructure/services/terraform.tfvars
 #   ivia_mmfa_push_client_secret -> tier-2 infrastructure/services/terraform.tfvars
+#   vault_enterprise_license     -> tier-2 infrastructure/services/terraform.tfvars
 #
 # Idempotent: a value already present is reused silently (for acme_email a real
 # address — the *@example.com placeholder Let's Encrypt rejects counts as unset).
+# The Vault Enterprise license is the one exception: it is re-read from its
+# source file and overwritten on EVERY run (never appended/duplicated) so a
+# rotated license file always propagates without manual tfvars surgery.
 # Interactive only: when stdin is not a TTY we cannot prompt, so we fail fast
 # with a clear message instead of hanging an automated run.
 #===============================================================================
@@ -377,9 +390,9 @@ echo ""
 # tier-2 IVIA secrets. Matches the tier-gated checks below.
 case "$TIER" in
     1) _pf_inputs="Let's Encrypt email" ;;
-    2) _pf_inputs="IVIA secrets" ;;
+    2) _pf_inputs="IVIA secrets + Vault Enterprise license" ;;
     3) _pf_inputs="none — tier-3 has no non-committable inputs" ;;
-    *) _pf_inputs="Let's Encrypt email + IVIA secrets" ;;
+    *) _pf_inputs="Let's Encrypt email + IVIA secrets + Vault Enterprise license" ;;
 esac
 echo -e "${YELLOW}> Preflight: required inputs (${_pf_inputs})${NC}"
 
@@ -421,7 +434,7 @@ _require_tty() {
 }
 
 if [[ "$DRY_RUN" = true ]]; then
-    print_info "[DRY-RUN] Would ensure each in-scope tier's inputs are set (acme_email for tier-1; icr_entitlement_key + ivia_mmfa_push_client_secret for tier-2), prompting for any that are missing"
+    print_info "[DRY-RUN] Would ensure each in-scope tier's inputs are set (acme_email for tier-1; icr_entitlement_key + ivia_mmfa_push_client_secret + vault_enterprise_license for tier-2), prompting for any that are missing (license is read from a file, never prompted)"
     print_pass "Preflight: required inputs (dry-run)"
 else
     # Only the tiers actually in scope (see --tier) have their inputs checked. A
@@ -490,6 +503,28 @@ else
         else
             print_info "Preflight: ivia_mmfa_push_client_secret already set — reusing"
         fi
+
+        # 4) vault_enterprise_license (tier-2) — required secret, sourced from a
+        # FILE (never typed/echoed, never a committed literal). Unlike the two
+        # secrets above, this is NOT conditional on "already set" — it is
+        # re-read from VAULT_ENTERPRISE_LICENSE_PATH and overwritten on EVERY
+        # run so a rotated/updated license file always propagates. The license
+        # must carry the platform-standard module (NOT pki-only) or Vault
+        # rejects the database/aws/kv/transit mounts every UC depends on.
+        vault_license_path="${VAULT_ENTERPRISE_LICENSE_PATH:-$HOME/Downloads/vault-ent.hclic}"
+        if [[ ! -s "$vault_license_path" ]]; then
+            _die "Preflight: Vault Enterprise license file missing or empty (VAULT_ENTERPRISE_LICENSE_PATH=${vault_license_path})" \
+                 "Set VAULT_ENTERPRISE_LICENSE_PATH to your platform-standard .hclic license file, or place it at ${vault_license_path}, then re-run: bash infrastructure/scripts/deploy-workshop.sh"
+        fi
+        # Strip trailing/embedded newlines — HashiCorp .hclic files are a
+        # single-line blob; the tfvars writer (_tfvars_set) assumes one line.
+        vault_license_content="$(tr -d '\n\r' < "$vault_license_path")"
+        if [[ -z "$vault_license_content" ]]; then
+            _die "Preflight: Vault Enterprise license file is empty after read (VAULT_ENTERPRISE_LICENSE_PATH=${vault_license_path})" \
+                 "Verify the file contains the license blob, then re-run: bash infrastructure/scripts/deploy-workshop.sh"
+        fi
+        _tfvars_set "$SERVICES_TFVARS" vault_enterprise_license "$vault_license_content"
+        print_pass "Preflight: vault_enterprise_license set from ${vault_license_path}"
     fi
 fi
 echo ""
