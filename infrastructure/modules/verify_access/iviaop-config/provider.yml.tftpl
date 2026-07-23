@@ -62,12 +62,19 @@ definition:
     # (NOT the device-flow /oauth2/user_authorization endpoint). Pairs with the
     # client backchannel_user_code_parameter.
     user_code_support: true
-  # Rich Authorization Requests (RAR) — UC3 privileged refund flow. Registers the
-  # custom authorization_details type the uc3-agent sends on CIBA bc-authorize;
-  # without it IVIAOP rejects with "Unknown authorization detail type refund_approval".
+  # Rich Authorization Requests (RAR) — UC3 privileged refund flow + Vault-native
+  # per-request scope. Registers the custom authorization_details types emitted on
+  # the token-exchange output (isvaop_pretoken); without provider registration
+  # IVIAOP rejects with "Unknown authorization detail type <type>".
+  #   - refund_approval : business RAR (audit correlation); sent on CIBA bc-authorize.
+  #   - vault:path_access : Vault-native RAR the isvaop_pretoken rule stamps on the
+  #     UC3 delegated token (path + capabilities) so Vault narrows the token to the
+  #     exact path/capabilities per request.
   # strategy sha512 hashes the entire payload (no assumption about which fields exist).
   authorization_details_types_supported:
     - type: refund_approval
+      strategy: sha512
+    - type: vault:path_access
       strategy: sha512
 jwks:
   signing_keystore: isvaop_keys
