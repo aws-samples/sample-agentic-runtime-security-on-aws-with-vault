@@ -7,10 +7,15 @@ Two-phase Vault authentication pattern for UC3:
     Used for: lookup_transaction (read-only DB creds), Bedrock STS creds
 
   Phase 2 (per-refund delegated auth):
-    Delegated JWT (RFC 8693 subject_token with may_act claim)
-    → Vault jwt auth (role "uc3-jwt")
+    Delegated IVIA OAuth JWT (RFC 8693 subject_token with may_act claim,
+    a jti claim, and a vault:path_access authorization_details RAR)
+    → presented DIRECTLY as the Vault token via the X-Vault-Token header
+      (Vault OAuth resource server validates the JWT and scopes it per the RAR)
     → uc3-refund-writer DB creds (TTL 5m)
-    Used for: process_refund write path only
+    Used for: process_refund write path only.
+    There is NO Vault login round-trip and NO intermediate Vault token — the
+    OAuth JWT IS the credential (Phase 9 native cutover, locked decision (a);
+    no fallback path remains).
 
 This dual-path ensures OBJ-2 (no standing privileges) and OBJ-3 (privileged
 write is gated on user consent via CIBA + token exchange — never just the
@@ -107,49 +112,53 @@ class UC3VaultClient:
             "dbname": os.getenv("DB_NAME", "workshop"),
         }
 
-    def get_refund_credentials(self, delegated_jwt: str, request_id: str) -> dict:
-        """Fetch uc3-refund-writer DB credentials via Vault jwt auth (OBJ-2, OBJ-3).
+    def get_refund_credentials(self, oauth_jwt: str, request_id: str) -> dict:
+        """Fetch uc3-refund-writer DB credentials by presenting the delegated
+        IVIA OAuth JWT directly as the Vault token (OBJ-2, OBJ-3).
 
-        Presents the RFC 8693 delegated JWT (with may_act claim) to Vault's
-        jwt auth method under role "uc3-jwt". Vault validates:
+        Phase 9 native cutover (locked decision (a)): the delegated OAuth JWT
+        IS the Vault credential. It is presented directly via the X-Vault-Token
+        header (hvac sets it from the token= kwarg) — there is NO Vault login
+        round-trip and NO intermediate Vault token. Vault's OAuth resource
+        server validates the JWT and authorizes the request:
           - JWT signature via IVIA JWKS endpoint
-          - may_act claim is present (delegation proof)
-          - bound_claims enforced per vault_config module
+          - jti claim present (schema validation; missing → rejected)
+          - a vault:path_access authorization_details (RAR) entry scoping the
+            request to database/creds/uc3-refund-writer (mandatory for UC3;
+            profile optional_authorization_details=false)
+
+        This is the ONLY credential path for the refund write. On any error the
+        exception SURFACES — there is no fallback to a Vault login or K8s auth
+        (no such path remains). The token is never sent as an Authorization
+        header (that silently resolves to no identity). Runtime assertion of jti
+        on the real token is Plan 08's live done-gate.
 
         TTL is 5 minutes — credential lifetime scoped to a single refund operation.
 
         Args:
-            delegated_jwt: RFC 8693 delegated access token with may_act claim.
+            oauth_jwt: Delegated IVIA OAuth JWT (RFC 8693 access token carrying
+                may_act, jti, and the vault:path_access RAR).
             request_id: UUID threaded through the refund flow for audit correlation.
 
         Returns:
             Dict with keys: username, password, host, port, dbname
         """
-        response = self._client.auth.jwt.jwt_login(
-            role="uc3-jwt",
-            jwt=delegated_jwt,
-            path="jwt",
-        )
-        # Switch to the delegated token for the DB creds fetch
-        delegated_client = hvac.Client(
-            url=self._addr,
-            token=response["auth"]["client_token"],
-        )
+        # Present the OAuth JWT directly as the Vault token (X-Vault-Token).
+        oauth_client = hvac.Client(url=self._addr, token=oauth_jwt)
 
         vault_db_path = "database/creds/uc3-refund-writer"
-        db_response = delegated_client.read(vault_db_path)
+        db_response = oauth_client.read(vault_db_path)
         data = db_response["data"]
 
         logger.info(
             "uc3_refund_writer_creds_issued",
             extra={
                 "vault_db_path": vault_db_path,
-                "vault_role": "uc3-jwt",
                 "lease_id": db_response.get("lease_id", "n/a"),
                 "lease_duration": db_response.get("lease_duration", "unknown"),
                 "username": data.get("username", "n/a"),
                 "request_id": request_id,
-                "auth_method": "jwt",
+                "auth_method": "oauth_resource_server_x_vault_token",
                 "delegation": "rfc8693_may_act",
             },
         )
