@@ -65,3 +65,13 @@ clients:
       - client_credentials
       - urn:ietf:params:oauth:grant-type:token-exchange
     token_endpoint_auth_method: client_secret_basic
+    # RAR allowlist for the token-exchange output. The isvaop_pretoken rule stamps
+    # BOTH refund_approval (business/audit) and vault:path_access (Vault-native
+    # per-request scope) on the exchanged token. Both are listed as a regression-safe
+    # superset: refund_approval works on the exchange today with no block present, so
+    # introducing a block that omitted it could newly un-allowlist the working refund
+    # flow. Must also be registered provider-side in provider.yml
+    # definition.authorization_details_types_supported.
+    authorization_details_types:
+      - refund_approval
+      - vault:path_access
