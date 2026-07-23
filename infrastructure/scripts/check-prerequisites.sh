@@ -13,6 +13,9 @@
 #      AOSS OCU search >= 2)
 #   4. Verifies IAM permissions for the workshop bootstrap (17 actions via
 #      iam:SimulatePrincipalPolicy with self-test fallback)
+#   5. Verifies Vault Enterprise prerequisites (hashicorp/vault provider
+#      >= 5.10.1 and a present, non-empty Enterprise license file at
+#      VAULT_ENTERPRISE_LICENSE_PATH) — Phase 9 native Agent Registry
 #
 # Exit codes:
 #   0 — all checks passed (or --dry-run completed without error)
@@ -453,6 +456,58 @@ fi
 
 echo
 fi  # end if [ "$SKIP_TOOLS" = true ] ... else  (covers Sections 1 + 1.5)
+
+# =============================================================================
+# SECTION 1.6: Vault Enterprise prerequisites (Phase 9 — native Agent Registry)
+#
+# Runs regardless of --skip-tools: the license file requirement is unrelated to
+# CLI tool installation and matters even when aws/terraform/kubectl are
+# pre-baked (Instruqt-style sandboxes).
+#
+#   (a) hashicorp/vault Terraform provider >= VAULT_PROVIDER_MIN_VERSION —
+#       vault_agent_registration + vault_oauth_resource_server_config_profile
+#       live in the 5.x provider line (minimum 5.10.1). Resolved from the
+#       tier-2 vault-config root's lock file so this is a real "what would
+#       actually be used" check, not just the loose `~>` constraint string.
+#   (b) Vault Enterprise license file present + non-empty at
+#       VAULT_ENTERPRISE_LICENSE_PATH (default ~/Downloads/vault-ent.hclic).
+#       Content is NOT parsed/validated here (module gating — platform-standard
+#       vs. pki-only — is a deploy-time live gate, not a static file check).
+# =============================================================================
+echo -e "${BLUE}=== Check Vault Enterprise prerequisites ===${NC}"
+
+VAULT_PROVIDER_MIN_VERSION="5.10.1"
+VAULT_PROVIDER_LOCK_FILE="${SCRIPT_DIR}/../vault-config/.terraform.lock.hcl"
+
+if confirm "Run Vault Enterprise prerequisite checks (provider version + license file)?"; then
+    # (a) hashicorp/vault provider version
+    if [ -f "$VAULT_PROVIDER_LOCK_FILE" ]; then
+        vault_provider_version=$(grep -A2 'provider "registry.terraform.io/hashicorp/vault"' "$VAULT_PROVIDER_LOCK_FILE" 2>/dev/null \
+            | grep 'version' | head -1 | sed -E 's/.*"([0-9.]+)".*/\1/')
+        if [ -n "$vault_provider_version" ] && version_gte "$vault_provider_version" "$VAULT_PROVIDER_MIN_VERSION"; then
+            print_pass "hashicorp/vault provider v${vault_provider_version} (>= ${VAULT_PROVIDER_MIN_VERSION} required for vault_agent_registration + vault_oauth_resource_server_config_profile)"
+        else
+            print_fail "hashicorp/vault provider v${vault_provider_version:-unknown} is below ${VAULT_PROVIDER_MIN_VERSION}" \
+                "Bump the provider pin to >= ${VAULT_PROVIDER_MIN_VERSION} in infrastructure/modules/vault_config/main.tf and infrastructure/vault-config/main.tf, then re-run: terraform -chdir=infrastructure/vault-config init"
+        fi
+    else
+        print_fail "hashicorp/vault provider version unknown — ${VAULT_PROVIDER_LOCK_FILE} not found" \
+            "Run: terraform -chdir=infrastructure/vault-config init — then re-run this check."
+    fi
+
+    # (b) Vault Enterprise license file present + non-empty
+    vault_license_path="${VAULT_ENTERPRISE_LICENSE_PATH:-$HOME/Downloads/vault-ent.hclic}"
+    if [ -s "$vault_license_path" ]; then
+        print_pass "Vault Enterprise license file found at ${vault_license_path}"
+    else
+        print_fail "Vault Enterprise license file missing or empty (VAULT_ENTERPRISE_LICENSE_PATH=${vault_license_path})" \
+            "Set VAULT_ENTERPRISE_LICENSE_PATH to your platform-standard .hclic license file, or place it at ${vault_license_path}. The license MUST carry the platform-standard module (NOT pki-only) — pki-only blocks the database/aws/kv/transit mounts every use case depends on."
+    fi
+else
+    print_warn "Skipped Vault Enterprise prerequisite checks"
+fi
+
+echo
 
 # =============================================================================
 # SECTION 2: Check Bedrock access (PREF-01)
