@@ -228,6 +228,115 @@ _destroy_root() {
 }
 
 #===============================================================================
+# Phase-9 native Vault resource cleanup (Agent Registry + OAuth resource server)
+#
+# Removes the native agent-identity resources the vault-config workspace created
+# so a second workshop run starts clean and no orphans survive a partial teardown
+# that keeps Vault running. A FULL nuke destroys the Vault server (tier-2) anyway,
+# so this is belt-and-suspenders that ALSO covers --keep-eks and re-config loops
+# where Vault survives and a stale entity/registration would collide on the next
+# vault-config apply (threat T-09-07-03).
+#
+# MUST run BEFORE the tier-2 destroy tears down the Vault server — Vault must
+# still be reachable. Best-effort + fully guarded: a missing namespace / token /
+# resource skips cleanly, never errors, and teardown continues regardless.
+#
+# Activation-flag note: sys/activation-flags/oauth-resource-server is ONE-WAY —
+# Vault exposes no deactivate operation, so there is nothing to undo on teardown
+# (a no-op; the flag vanishes with the Vault server on the tier-2 destroy).
+#===============================================================================
+cleanup_vault_native_resources() {
+    step_header "Phase-9 native Vault resources (Agent Registry + OAuth profile + license)"
+
+    if [ "$DRY_RUN" = true ]; then
+        print_info "[DRY-RUN] Would delete agent-registry registrations (uc1-agent, agent-uc2, uc3-actor),"
+        print_info "[DRY-RUN] identity entities+aliases (uc1-agent, agent-uc2, uc3-actor, oscar, jaime),"
+        print_info "[DRY-RUN] oauth-resource-server profile 'ivia', and the vault-ent-license secret"
+        return 0
+    fi
+
+    # License secret is a plain K8s secret — remove it even if Vault is already
+    # gone (idempotent; --ignore-not-found makes an absent secret a clean no-op).
+    if kubectl get namespace vault &>/dev/null 2>&1; then
+        kubectl delete secret vault-ent-license -n vault --ignore-not-found=true &>/dev/null \
+            && print_success "Deleted vault-ent-license secret (or already absent)" \
+            || print_warn "vault-ent-license secret delete skipped"
+    fi
+
+    # The Vault-API cleanup needs a live Vault server + root token. If either is
+    # missing, skip cleanly — the tier-2 destroy removes the Vault server + all its
+    # data (entities, registrations, aliases, activation state) regardless.
+    if ! kubectl get pods -n vault -l app.kubernetes.io/name=vault,component=server \
+         --no-headers 2>/dev/null | grep -q '1/1'; then
+        print_info "Vault server not reachable — skipping Vault-API cleanup (tier-2 destroy removes it)"
+        return 0
+    fi
+
+    local vault_token=""
+    [ -f "${HOME}/vault-init.json" ] \
+        && vault_token=$(jq -r '.root_token // empty' "${HOME}/vault-init.json" 2>/dev/null || true)
+    if [ -z "$vault_token" ]; then
+        print_info "No Vault root token (~/vault-init.json) — skipping Vault-API cleanup"
+        return 0
+    fi
+
+    # Port-forward to Vault, killing any stale :8200 listener first (mirrors
+    # vault-configure.sh's idempotent port-forward pattern).
+    local stale_pf
+    stale_pf=$(lsof -tiTCP:8200 -sTCP:LISTEN 2>/dev/null || true)
+    # shellcheck disable=SC2086
+    [ -n "$stale_pf" ] && { kill $stale_pf 2>/dev/null || true; sleep 1; }
+
+    kubectl port-forward svc/vault 8200:8200 -n vault &>/dev/null &
+    local vault_pf_pid=$!
+    local reachable=false
+    for _ in $(seq 1 15); do
+        if curl -sf "http://127.0.0.1:8200/v1/sys/health?standbyok=true&perfstandbyok=true" &>/dev/null; then
+            reachable=true; break
+        fi
+        sleep 1
+    done
+    if [ "$reachable" != true ]; then
+        print_info "Vault port-forward did not become reachable — skipping Vault-API cleanup"
+        kill "$vault_pf_pid" 2>/dev/null || true
+        return 0
+    fi
+
+    local h="X-Vault-Token: ${vault_token}"
+
+    # 1. Agent registrations (agent-registry/registration/display-name/<name> —
+    #    09-DISCOVERY confirmed path). `curl` without -f returns 0 on a 404, so an
+    #    already-absent registration is a clean no-op; `|| true` guards the rest.
+    local reg
+    for reg in uc1-agent agent-uc2 uc3-actor; do
+        curl -s -X DELETE -H "$h" \
+            "http://127.0.0.1:8200/v1/agent-registry/registration/display-name/${reg}" &>/dev/null || true
+        print_success "Removed agent registration '${reg}' (or already absent)"
+    done
+
+    # 2. Identity entities by name (deleting an entity CASCADES its aliases). Covers
+    #    the 3 agent entities + the 2 human-subject entities (oscar, jaime) so no
+    #    subject/actor alias orphans remain (identity/entity/name/<name>).
+    local ent
+    for ent in uc1-agent agent-uc2 uc3-actor oscar jaime; do
+        curl -s -X DELETE -H "$h" \
+            "http://127.0.0.1:8200/v1/identity/entity/name/${ent}" &>/dev/null || true
+        print_success "Removed identity entity '${ent}' + aliases (or already absent)"
+    done
+
+    # 3. OAuth resource-server config profile 'ivia'. DELETE path inferred from the
+    #    confirmed CREATE path sys/config/oauth-resource-server/<name>; best-effort
+    #    and guarded so a wrong verb/addressing is harmless. The tier-2 destroy is
+    #    the authoritative removal when the Vault server itself is torn down.
+    curl -s -X DELETE -H "$h" \
+        "http://127.0.0.1:8200/v1/sys/config/oauth-resource-server/ivia" &>/dev/null || true
+    print_success "Removed oauth-resource-server profile 'ivia' (best-effort; or already absent)"
+
+    kill "$vault_pf_pid" 2>/dev/null || true
+    print_info "Activation flag oauth-resource-server is one-way (no deactivate) — no-op on teardown"
+}
+
+#===============================================================================
 # K8S CLEANUP
 # Drain LB-controller-managed services (NLB/ALB) so VPC delete doesn't fail with
 # DependencyViolation. Best-effort — silently skipped if cluster unreachable.
@@ -1971,6 +2080,9 @@ elif [ "$KEEP_EKS" = true ]; then
     # full destroy here never touches the infra we are preserving.
     step_header "Terraform destroy (tier 3 + tier 2 — workloads + services)..."
     _destroy_root "Tier 3 (workloads)" "$TIER3_DIR"
+    # Clean Phase-9 native Vault resources while the Vault server (tier 2) is still
+    # up — must precede the tier-2 destroy that tears Vault down.
+    cleanup_vault_native_resources
     _destroy_root "Tier 2 (services)"  "$TIER2_DIR"
 
     # Step 2: K8s drain any residual workshop namespaces so LB controller releases
@@ -2017,6 +2129,9 @@ else
     # and VPC are torn down by the tier-1 destroy.
     step_header "Terraform destroy (3 roots, reverse order: workloads → services → infra)..."
     _destroy_root "Tier 3 (workloads)" "$TIER3_DIR"
+    # Clean Phase-9 native Vault resources while the Vault server (tier 2) is still
+    # up — must precede the tier-2 destroy that tears Vault down.
+    cleanup_vault_native_resources
     _destroy_root "Tier 2 (services)"  "$TIER2_DIR"
     _destroy_root "Tier 1 (infrastructure)" "$TIER1_DIR"
 
