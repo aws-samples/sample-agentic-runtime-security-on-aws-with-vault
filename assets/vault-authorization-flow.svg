@@ -164,7 +164,7 @@
   <text x="130" y="556" fill="#8b949e" font-size="10">UC1 — K8s workload identity only (uc1-retriever-sa); Vault k8s auth validates SA JWT against EKS OIDC; no IVIA involvement; JIT Postgres+Bedrock TTL 15m</text>
 
   <rect x="114" y="563" width="12" height="12" rx="2" fill="#a855f7"/>
-  <text x="130" y="574" fill="#8b949e" font-size="10">UC2 — IVIA issues OAuth PKCE JWT (sub) → Vault OAuth resource server resolves agent-uc2 via act.sub; OBO = human baseline ∩ agent ceiling; per-user DB creds; RLS; TTL 15m</text>
+  <text x="130" y="574" fill="#8b949e" font-size="10">UC2 — IVIA issues OAuth PKCE JWT (sub) → Vault OAuth resource server resolves agent-uc2 via act.sub; OBO = human baseline ∩ agent ceiling (∩ optional per-request RAR); per-user DB creds; RLS; TTL 15m</text>
 
   <rect x="114" y="581" width="12" height="12" rx="2" fill="#3b82f6"/>
   <text x="130" y="592" fill="#8b949e" font-size="10">UC3 — IVIA handles CIBA backchannel approval + token exchange; stamps act.sub (RFC 8693) + authorization_details (RFC 9396 RAR); Vault resolves act.sub via Agent Registry + enforces vault:path_access RAR; uc3-refund-writer TTL 5m; 3-plane audit</text>

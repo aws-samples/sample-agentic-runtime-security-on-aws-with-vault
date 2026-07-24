@@ -79,7 +79,7 @@ sequenceDiagram
     MCP->>Vault: GET /v1/database/creds/uc2-personal-readonly<br/>X-Vault-Token: IVIA JWT (no login round-trip)
     Vault->>OP: Validate JWT signature via JWKS
     OP-->>Vault: Public key confirmation
-    Vault->>Vault: Resolve sub (human) + act.sub=agent-uc2 (Agent Registry)<br/>OBO: uc2-personal ∩ uc2-agent-ceiling
+    Vault->>Vault: Resolve sub (human) + act.sub=agent-uc2 (Agent Registry)<br/>OBO: uc2-personal intersect uc2-agent-ceiling
     Vault->>RDS: CREATE ROLE with 15-min TTL
     Vault-->>MCP: JIT credentials {username, password}
 

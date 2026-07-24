@@ -54,7 +54,7 @@ sequenceDiagram
     Agent->>Vault: Present delegated JWT via X-Vault-Token<br/>(OAuth resource server)
     Vault->>IVIA: Verify JWT signature against JWKS
     IVIA-->>Vault: Signature valid
-    Vault->>Vault: Resolve act.sub=agent-uc2 via Agent Registry<br/>OBO baseline ∩ ceiling
+    Vault->>Vault: Resolve act.sub=agent-uc2 via Agent Registry<br/>OBO baseline intersect ceiling
     end
 
     rect rgba(232, 218, 255, 0.3)
