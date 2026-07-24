@@ -234,6 +234,54 @@ else
 fi
 
 #-------------------------------------------------------------------------------
+# Vault native surface (Phase 9) — Enterprise edition + Agent Registry present
+#
+# Surfaces the two load-bearing platform-health signals for the native
+# agent-identity model as part of the foundation summary: the Vault Enterprise
+# edition (native Agent Registry + OAuth resource server are Enterprise-only) and
+# that agent-registry responds (the uc1-agent registration reads back). The full
+# per-check native assertions live in test-vault-verify.sh; this is the
+# foundation-level health surface. Non-fatal if Vault is not yet deployed at
+# foundation time — a warn, not a hard fail.
+#-------------------------------------------------------------------------------
+echo
+echo -e "${BLUE}===============================================================================${NC}"
+echo -e "${BLUE}  Vault Native Surface (Enterprise + Agent Registry)${NC}"
+echo -e "${BLUE}===============================================================================${NC}"
+
+VAULT_NAMESPACE="${VAULT_NAMESPACE:-vault}"
+VAULT_POD="${VAULT_POD:-vault-0}"
+VAULT_ROOT_TOKEN="${VAULT_ROOT_TOKEN:-}"
+if [ -z "$VAULT_ROOT_TOKEN" ] && [ -f "$HOME/vault-init.json" ]; then
+    VAULT_ROOT_TOKEN=$(jq -r '.root_token // empty' "$HOME/vault-init.json" 2>/dev/null || true)
+fi
+
+if kubectl get pod -n "$VAULT_NAMESPACE" "$VAULT_POD" &>/dev/null; then
+    vault_version=$(kubectl exec -n "$VAULT_NAMESPACE" "$VAULT_POD" -- \
+        vault status -format=json 2>/dev/null | jq -r '.version // empty' 2>/dev/null || echo "")
+    if echo "$vault_version" | grep -qi 'ent'; then
+        print_pass "Vault Enterprise edition (version=${vault_version})"
+    else
+        print_fail "Vault Enterprise edition" \
+            "Vault does not report the '+ent' build (version='${vault_version}'). Native Agent Registry is Enterprise-only — the vault_server image must be hashicorp/vault-enterprise:2.0.3-ent. Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault status"
+        failures=$((failures + 1))
+    fi
+
+    reg_name=$(kubectl exec -n "$VAULT_NAMESPACE" "$VAULT_POD" -- \
+        sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read -format=json agent-registry/registration/display-name/uc1-agent" 2>/dev/null \
+        | jq -r '.data.display_name // empty' 2>/dev/null || echo "")
+    if [ "$reg_name" = "uc1-agent" ]; then
+        print_pass "Agent Registry responds — registration 'uc1-agent' resolvable by display-name"
+    else
+        print_fail "Agent Registry (uc1-agent registration)" \
+            "agent-registry/registration/display-name/uc1-agent did not read back (agentic-iam / platform-standard license may be absent, or vault_config did not reconcile). Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault read agent-registry/registration/display-name/uc1-agent"
+        failures=$((failures + 1))
+    fi
+else
+    print_warn "Vault pod ${VAULT_POD} not found in ${VAULT_NAMESPACE} — native-surface check skipped (Vault deploys after the foundation stack)."
+fi
+
+#-------------------------------------------------------------------------------
 # Region contract — no canonical region literal outside terraform.tfvars
 # Excludes .terraform/ directories (vendored third-party module test files).
 #-------------------------------------------------------------------------------
