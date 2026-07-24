@@ -1,56 +1,93 @@
 ---
-title: 'Vault Bound Claims Enforcement'
+title: 'Vault Enforces the RAR Ceiling'
 weight: 72
 ---
 
-## How Vault Enforces Delegation
+## How Vault Enforces Delegation Natively
 
-The Vault `uc3-jwt` auth role rejects any JWT that does not satisfy **all** of its bound conditions simultaneously: the correct audience (`uc3-actor`), the `may_act` delegation claim (`/may_act/sub` = `uc3-actor`, RFC 8693), **and** the RAR type (`/authorization_details/0/type` = `refund_approval`, RFC 9396). A valid CIBA token without `may_act` is rejected; so is a delegated token carrying any RAR type other than `refund_approval`. Both the delegation claim and the RAR type are stamped onto the exchanged token by the `isvaop_pretoken` mapping rule (covered on the [previous page](../71-ciba-approval-flow/)) and matched here with JSONPointer keys.
+Use Case 3 is an **on-behalf-of** flow: the agent acts for a human who approved a specific refund out-of-band (the CIBA flow on the [previous page](../71-ciba-approval-flow/)). Vault Enterprise's **OAuth resource server** enforces that delegation directly — no hand-rolled auth backend in between.
 
-```hcl
-# vault_config/main.tf — uc3-jwt JWT auth role
-resource "vault_jwt_auth_backend_role" "uc3_jwt" {
-  backend         = vault_jwt_auth_backend.ivia.path
-  role_name       = "uc3-jwt"
-  role_type       = "jwt"
-  token_policies  = ["uc3-refund-writer"]
-  token_ttl       = 3600
-  token_max_ttl   = 7200
-  bound_audiences = ["uc3-actor"]
-  user_claim      = "sub"
+When the delegated IVIA OAuth JWT is presented to Vault via `X-Vault-Token`, Vault validates it against the resource server profile and resolves **two** identities from its claims: the human subject (`sub = jaime`) and the agent actor (`act.sub = uc3-actor`). It then evaluates **three enforcing layers**:
 
-  # TWO enforced bindings on the exchanged token, both injected by the
-  # isvaop_pretoken mapping rule and matched here with JSONPointer keys (Vault
-  # cannot match a map- or array-valued claim directly). Values are literals
-  # (no wildcards), so the glob match is EXACT — Vault denies DB write creds
-  # unless BOTH match. This is the OBJ-4 enforcement gate.
-  #   /may_act/sub                  = uc3-actor       (RFC 8693 — WHO may act)
-  #   /authorization_details/0/type = refund_approval (RFC 9396 RAR — WHAT class)
-  bound_claims_type = "glob"
-  bound_claims = {
-    "/may_act/sub"                  = "uc3-actor"
-    "/authorization_details/0/type" = "refund_approval"
-  }
-
-  # Audit-only metadata extraction (OBJ-4 / OBJ-5 three-plane correlation).
-  # claim_mappings writes these nested JWT claims into auth.metadata at jwt
-  # login so they surface in the Vault audit log. The SAME two claims are
-  # enforced above as bound_claims; here they are ALSO captured for the
-  # forensic audit_correlation row (vault_bound_claim_may_act / rar_type).
-  claim_mappings = {
-    "/may_act/sub"                  = "may_act_sub"
-    "/authorization_details/0/type" = "rar_type"
-  }
-}
+```
+Delegated OAuth JWT (X-Vault-Token)
+   sub = jaime                 (the human who approved)
+   act.sub = uc3-actor         (the agent acting on their behalf)
+   authorization_details = [ { "type": "vault:path_access",
+                               "path": "database/creds/uc3-refund-writer",
+                               "capabilities": ["read"] } ]   (per-request RAR — MANDATORY for UC3)
+  →  Layer 1  human baseline    (uc3-refund-writer policy set — what jaime may do)
+  ∩  Layer 2  agent ceiling     (uc3-actor registration ceiling_policies — the max the agent may EVER hold)
+  ∩  Layer 3  per-request RAR   (vault:path_access — Vault narrows the token to this EXACT path this request)
+  →  allow iff all three permit
 ```
 
-:::alert{header="Why the approved amount is not bound here" type="info"}
-You will notice the role binds the RAR **type** (`refund_approval`) but **not** the approved amount. ISVAOP 25.10 does not expose the consent-time `authorization_details` (with its amount/currency) to any mapping rule at the token-exchange stage, so the amount cannot be stamped as a claim for Vault to validate — and Vault `bound_claims` are string/glob matches that cannot range-check a number regardless. The amount is consent-bound instead by three-plane audit correlation on `request_id` (see the [Three-Plane Audit Correlation](../74-three-plane-audit/) page). `refund_approval` is the genuine, allowlisted, only RAR type `agent-uc3` is permitted to request (provider `authorization_details_types_supported`) — not a placeholder.
+The decisive property: **Vault is the interpreter of the RAR.** A JWT whose `vault:path_access` path matches the requested path is allowed; a JWT whose RAR path is anything else is **denied — even though the human baseline and the agent ceiling both permit the target path.** Enforcement happens at the point of use, inside Vault, per request. (Use Case 3's RAR is mandatory: the `uc3-actor` registration sets `optional_authorization_details = false`, so a delegated token with *no* RAR is rejected.)
+
+:::alert{header="Migration: this replaces hand-rolled jwt bound_claims" type="info"}
+Earlier iterations enforced delegation with a Vault **`jwt` auth backend** role (`uc3-jwt`) carrying `bound_claims` on `/may_act/sub = uc3-actor` (RFC 8693, *who may act*) and `/authorization_details/0/type = refund_approval` (the RAR *type*). That backend has been **removed**. The before/after:
+
+| Concern | Before (removed `uc3-jwt` bound_claims) | After (native OAuth resource server) |
+|---|---|---|
+| Who may act | `bound_claims "/may_act/sub" = "uc3-actor"` on a jwt role | actor resolved from `act.sub = uc3-actor` against the Agent Registry |
+| Max envelope | approximated by the flat `uc3-refund-writer` policy | `ceiling_policies` on the `uc3-actor` registration (true intersection) |
+| Per-request scope | none — IVIA interpreted the RAR, Vault only presence-checked the *type* | `vault:path_access` RAR — **Vault** narrows the token to an exact path/capabilities per request |
+
+The old `bound_claims` appear here only as the *before* of this migration; they are no longer a live control.
+:::
+
+## Step 1 — Point the CLI at Vault
+
+```bash
+pkill -f "kubectl port-forward -n vault svc/vault 8200:8200" 2>/dev/null; kubectl port-forward -n vault svc/vault 8200:8200 >/dev/null 2>&1 & sleep 2 && export VAULT_ADDR=http://localhost:8200 && export VAULT_TOKEN=$(jq -r '.root_token' ~/vault-init.json) && echo "Vault: $VAULT_ADDR"
+```
+
+## Step 2 — Inspect the `uc3-actor` registration and its ceiling
+
+```bash
+vault read agent-registry/agent/uc3-actor
+```
+
+Expected (key fields):
+
+```
+Key                               Value
+---                               -----
+display_name                      uc3-actor
+ceiling_policies                  [uc3-ceiling]
+optional_authorization_details    false
+```
+
+- `display_name` `uc3-actor` — the actor Vault resolves from the delegated token's `act.sub` claim.
+- `ceiling_policies` `[uc3-ceiling]` — the maximum this agent may ever hold; it restricts, never grants.
+- `optional_authorization_details` `false` — **the per-request `vault:path_access` RAR is mandatory** for Use Case 3. A delegated token without it is denied.
+
+Read the ceiling — the envelope the agent is *ever* permitted to touch:
+
+```bash
+vault policy read uc3-ceiling
+```
+
+Expected:
+
+```hcl
+path "database/creds/uc3-refund-writer" { capabilities = ["read"] }
+path "database/creds/uc3-readonly"      { capabilities = ["read"] }
+path "aws/sts/bedrock-reader"           { capabilities = ["read", "update"] }
+path "aws/sts/uc3-logs-writer"          { capabilities = ["read", "update"] }
+path "auth/token/lookup-self"           { capabilities = ["read"] }
+path "sys/leases/renew"                 { capabilities = ["update"] }
+```
+
+The ceiling *permits* `database/creds/uc3-refund-writer` — but the token still only reaches it when the **per-request `vault:path_access` RAR** names that exact path. That is Layer 3 narrowing the ceiling down to a single path for a single request.
+
+:::alert{header="Why the approved amount is not in the RAR" type="info"}
+The `vault:path_access` RAR binds a **path** and **capabilities** — not a dollar amount. ISVAOP 25.10 does not expose the consent-time amount to any mapping rule at the token-exchange stage, and a path/capability grant cannot range-check a number regardless. The amount is consent-bound instead by three-plane audit correlation on `request_id` (see the [Three-Plane Audit Correlation](../74-three-plane-audit/) page): there is exactly one CIBA approval and one `banking.refunds` write under each `request_id`, so the amount written **is** the amount approved.
 :::
 
 ## The DB Role: Time-Boxed Write Privileges
 
-The `uc3-refund-writer` Vault database role issues ephemeral credentials with a default lifetime of 5 minutes (renewable up to a hard ceiling of 10 minutes). The PostgreSQL role created at issuance time has only the minimum grants needed for a refund write:
+The `uc3-refund-writer` Vault database role issues ephemeral credentials with a default lifetime of 5 minutes (renewable to a hard ceiling of 10 minutes). The PostgreSQL role created at issuance time has only the minimum grants needed for a refund write:
 
 ```hcl
 # vault_config/main.tf — uc3-refund-writer DB role
@@ -82,33 +119,31 @@ resource "vault_database_secret_backend_role" "uc3_refund_writer" {
 
 After the credential lease expires the PostgreSQL role is dropped. Any attempt to reuse the credentials after expiry returns `FATAL: role does not exist`.
 
-:::expand{header="Platform Track — Policy that links auth to DB credential issuance"}
-The `uc3-refund-writer` Vault policy (defined inline in `vault_config/main.tf`, attached to the `uc3-jwt` role via `token_policies`) permits the token holder to read the time-boxed write credential — plus the minimal supporting paths the agent needs (read-only DB creds, the Bedrock and CloudWatch STS roles, token self-lookup, and lease renewal):
+:::expand{header="Platform Track — the native primitives that wire the three layers"}
+The `vault_config` Terraform module configures the OAuth resource server, the agent registration + ceiling, and the human/agent identity aliases (provider `hashicorp/vault >= 5.10.1`):
 
 ```hcl
-# vault_config/main.tf — vault_policy.uc3_refund_writer
-path "database/creds/uc3-refund-writer" { capabilities = ["read"] }
-path "database/creds/uc3-readonly"      { capabilities = ["read"] }
-path "aws/sts/bedrock-reader"           { capabilities = ["read", "update"] }
-path "aws/sts/uc3-logs-writer"          { capabilities = ["read", "update"] }
-path "auth/token/lookup-self"           { capabilities = ["read"] }
-path "sys/leases/renew"                 { capabilities = ["update"] }
+resource "vault_activation_flags" "oauth_resource_server" {
+  feature = "oauth-resource-server"
+}
+
+resource "vault_agent_registration" "uc3_actor" {
+  display_name                   = "uc3-actor"
+  ceiling_policies               = [vault_policy.uc3_ceiling.name]
+  optional_authorization_details = false   # RAR MANDATORY for UC3
+}
 ```
 
-The Kubernetes auth role `uc3` (separate from the JWT role) permits the Use Case 3 agent's service account to authenticate and obtain a Vault token for the initial CIBA initiation flow. The JWT role `uc3-jwt` is used for the delegated token exchange result.
+The `uc3-actor` registration is resolved from the delegated token's `act.sub` claim. The human `jaime` has a subject alias keyed on `sub`; the agent has an actor alias keyed on `act.sub = uc3-actor`. On the on-behalf-of request Vault resolves **both** and intersects the human baseline with the agent ceiling, then narrows by the `vault:path_access` RAR. Use Case 3 keeps a separate Kubernetes auth role only for the agent's initial CIBA-initiation calls, before any delegation exists.
 :::
 
-:::expand{header="Agent Dev Track — Using the time-boxed credentials"}
-After Vault login succeeds, the Use Case 3 agent reads DB credentials and uses them for a single database operation:
+:::expand{header="Agent Dev Track — present the delegated JWT via X-Vault-Token"}
+After the CIBA approval produces a delegated JWT, the Use Case 3 agent presents it **directly** to Vault — no login round-trip — and uses the vended credential for a single write:
 
 ```python
-# auth.py — exchange delegated JWT for Vault token, then fetch DB creds
-vault_resp = requests.post(f"{VAULT_ADDR}/v1/auth/jwt/login",
-    json={"role": "uc3-jwt", "jwt": delegated_jwt})
-vault_token = vault_resp.json()["auth"]["client_token"]
-
+# vault_client.py — present the delegated OAuth JWT directly; Vault enforces the RAR
 creds_resp = requests.get(f"{VAULT_ADDR}/v1/database/creds/uc3-refund-writer",
-    headers={"X-Vault-Token": vault_token})
+    headers={"X-Vault-Token": delegated_jwt})     # the JWT IS the token
 db_user = creds_resp.json()["data"]["username"]
 db_pass = creds_resp.json()["data"]["password"]
 
@@ -117,26 +152,23 @@ conn = psycopg2.connect(host=RDS_HOST, dbname="workshop",
     user=db_user, password=db_pass)
 ```
 
-The credentials are never cached; a new pair is fetched for each approved refund request.
+The delegated JWT carries the `vault:path_access` RAR naming `database/creds/uc3-refund-writer`. Vault validates it, resolves `sub`/`act.sub`, intersects baseline ∩ ceiling ∩ RAR, and only then vends. The credentials are never cached; a new pair is fetched for each approved refund.
 :::
 
 ## Verification
 
+Read the registration, the DB role TTL, and (with the root token) prove JIT credential issuance:
+
 ```bash
-# Confirm uc3-jwt role bound_claims
-kubectl exec -n vault vault-0 -- \
-  env VAULT_TOKEN="$(cat ~/vault-init.json | jq -r .root_token)" \
-  vault read auth/jwt/role/uc3-jwt
-
-# Confirm uc3-refund-writer DB role TTL
-kubectl exec -n vault vault-0 -- \
-  env VAULT_TOKEN="$(cat ~/vault-init.json | jq -r .root_token)" \
-  vault read database/roles/uc3-refund-writer
-
-# Manually test JIT credential issuance
-kubectl exec -n vault vault-0 -- \
-  env VAULT_TOKEN="$(cat ~/vault-init.json | jq -r .root_token)" \
-  vault read database/creds/uc3-refund-writer
+kubectl exec -n vault vault-0 -- env VAULT_TOKEN="$(jq -r .root_token ~/vault-init.json)" vault read agent-registry/agent/uc3-actor
 ```
 
-The output will show a dynamic username/password pair with `lease_duration` of 5 minutes. Repeat the command after 5 minutes — the previous credentials will be gone.
+```bash
+kubectl exec -n vault vault-0 -- env VAULT_TOKEN="$(jq -r .root_token ~/vault-init.json)" vault read database/roles/uc3-refund-writer
+```
+
+```bash
+kubectl exec -n vault vault-0 -- env VAULT_TOKEN="$(jq -r .root_token ~/vault-init.json)" vault read database/creds/uc3-refund-writer
+```
+
+The last command shows a dynamic username/password pair with `lease_duration` of 5 minutes. Repeat it after 5 minutes — the previous credentials will be gone. (The root token bypasses the RAR gate for this administrative check; a *delegated* token reaches this path only when its `vault:path_access` RAR names it, as the [next page](../73-bypass-test/) demonstrates.)
