@@ -223,12 +223,15 @@ _present_native_token() {
     printf '%s\x1f%s' "${rc}" "${out}"
 }
 
-# assert_native_deny <label> <jwt> <pass-msg> <remediation> — the token MUST be
-# DENIED. A vended credential (200 + data.username) is a HARD FAIL (the gate did
-# not fire); an infra error is a HARD FAIL (we never observed the gate); a genuine
-# permission-denied is the PASS.
+# assert_native_deny <label> <jwt> <pass-msg> <remediation> [expected-reason-regex]
+# — the token MUST be DENIED. A vended credential (200 + data.username) is a HARD
+# FAIL (the gate did not fire); an infra error is a HARD FAIL (we never observed
+# the gate); a genuine denial is the PASS. When an expected-reason-regex ($5) is
+# supplied, the denial output MUST additionally match it (so a signature-layer
+# check cannot pass on, e.g., a generic RAR denial) — a denial that does NOT match
+# is a HARD FAIL (rejected, but not for the reason under test).
 assert_native_deny() {
-    local label="$1" jwt="$2" pass_msg="$3" remediation="$4"
+    local label="$1" jwt="$2" pass_msg="$3" remediation="$4" expect="${5:-}"
     local res rc out user
     res=$(_present_native_token "${jwt}")
     rc="${res%%$'\x1f'*}"; out="${res#*$'\x1f'}"
@@ -244,12 +247,19 @@ assert_native_deny() {
             "The read failed for an infrastructure reason, so this is NOT evidence the gate denied the token. Output: ${out:0:280}"
         return
     fi
-    if echo "${out}" | grep -qiE 'permission denied|denied|invalid token|error validating|missing|403|1 error occurred'; then
-        print_pass "${pass_msg}"
+    # A recognized denial is required first (fail closed on an unrecognized error).
+    if ! echo "${out}" | grep -qiE 'permission denied|denied|invalid token|error validating|invalid signature|signature|missing|403|1 error occurred'; then
+        print_fail "${label}: read failed, but NOT for a recognized denial reason — cannot confirm the gate fired" \
+            "Expected a denial. Got: ${out:0:280}. ${remediation}"
         return
     fi
-    print_fail "${label}: read failed, but NOT for a recognized denial reason — cannot confirm the gate fired" \
-        "Expected a permission-denied. Got: ${out:0:280}. ${remediation}"
+    # If a specific reason is required, the denial must match it.
+    if [ -n "${expect}" ] && ! echo "${out}" | grep -qiE "${expect}"; then
+        print_fail "${label}: denied, but NOT at the layer under test — cannot confirm this gate fired" \
+            "Expected a denial matching /${expect}/. Got: ${out:0:280}. ${remediation}"
+        return
+    fi
+    print_pass "${pass_msg}"
 }
 
 # assert_native_allow <label> <jwt> <pass-msg> <remediation> — the token MUST be
@@ -331,7 +341,8 @@ print(jwt.encode(payload, 'forged-secret', algorithm='HS256'))
     else
         assert_native_deny "Bypass Check 14" "${FORGED_HS256_JWT}" \
             "Bypass Check 14 PASSED: Vault rejected the self-minted HS256 JWT at the signature layer (trusts only IVIA's RS256 JWKS) — an attacker cannot forge their way in" \
-            "The oauth-resource-server must reject any non-IVIA-signed token. Check the profile's use_jwks + jwks_uri + supported_algorithms=[RS256]."
+            "The oauth-resource-server must reject any non-IVIA-signed token. Check the profile's use_jwks + jwks_uri + supported_algorithms=[RS256]." \
+            'unexpected signature algorithm|error verifying token signature|error validating token signature|signature is invalid|invalid signature|no known key|failed to verify|invalid token'
     fi
 
     echo ""
@@ -390,9 +401,25 @@ print(jwt.encode(payload, 'forged-secret', algorithm='HS256'))
         print_fail "Bypass Check 17: no RAR-mismatch token supplied — the per-request RAR gate was NOT exercised (skip = HARD FAIL)" \
             "Set UC3_RAR_MISMATCH_TOKEN=<a VALIDLY IVIA-signed delegated token: sub=jaime, act.sub=uc3-actor, a unique jti, but a vault:path_access RAR path that is NOT database/creds/uc3-refund-writer (e.g. database/creds/uc3-readonly)>. Only the RAR path differs from UC3_DELEGATED_TOKEN."
     else
-        assert_native_deny "Bypass Check 17 (RAR mismatch)" "${UC3_RAR_MISMATCH_TOKEN}" \
-            "Bypass Check 17 PASSED: a delegated token whose vault:path_access RAR path does NOT match was DENIED the uc3-refund-writer read even though the entity ACL + ceiling permit it — per-request RAR is the confirmed enforcement (Phase-9 money shot)" \
-            "A wrong-RAR token that is ALLOWED means per-request vault:path_access enforcement regressed. Confirm the UC3 registration sets optional_authorization_details=false (RAR MANDATORY) and the RAR path is enforced against the requested path."
+        # Self-defending A/B: confirm the held-CONSTANT claims (sub=jaime, act.sub=
+        # uc3-actor, jti present) and that ONLY the RAR path was varied (present but
+        # != uc3-refund-writer). Otherwise a token that also has a wrong actor/subject
+        # would DENY for the wrong reason and false-pass this RAR gate.
+        m_sub=$(decode_jwt_claim "${UC3_RAR_MISMATCH_TOKEN}" '.sub // empty')
+        m_act=$(decode_jwt_claim "${UC3_RAR_MISMATCH_TOKEN}" '.act.sub // empty')
+        m_jti=$(decode_jwt_claim "${UC3_RAR_MISMATCH_TOKEN}" '.jti // empty')
+        m_rar=$(decode_jwt_claim "${UC3_RAR_MISMATCH_TOKEN}" '[.authorization_details[]? | select(.type=="vault:path_access") | .path] | join(",")')
+        if [ "${m_sub}" != "jaime" ] || [ "${m_act}" != "uc3-actor" ] || [ -z "${m_jti}" ]; then
+            print_fail "Bypass Check 17: the RAR-mismatch token did NOT hold the constants (sub=jaime, act.sub=uc3-actor, jti present) — a deny would not be attributable to the RAR path" \
+                "Got sub='${m_sub}', act.sub='${m_act}', jti='${m_jti:-<absent>}'. Only the vault:path_access RAR path may differ from UC3_DELEGATED_TOKEN; every other claim must be identical."
+        elif echo ",${m_rar}," | grep -q ',database/creds/uc3-refund-writer,'; then
+            print_fail "Bypass Check 17: the RAR-mismatch token's RAR path DOES match database/creds/uc3-refund-writer — nothing was varied, so a deny/allow proves nothing" \
+                "Got RAR path(s)='${m_rar:-<none>}'. The vault:path_access path MUST be something other than database/creds/uc3-refund-writer (e.g. database/creds/uc3-readonly)."
+        else
+            assert_native_deny "Bypass Check 17 (RAR mismatch, path=${m_rar:-<none>})" "${UC3_RAR_MISMATCH_TOKEN}" \
+                "Bypass Check 17 PASSED: a delegated token whose vault:path_access RAR path (${m_rar:-<none>}) does NOT match was DENIED the uc3-refund-writer read even though the entity ACL + ceiling permit it — per-request RAR is the confirmed enforcement (Phase-9 money shot)" \
+                "A wrong-RAR token that is ALLOWED means per-request vault:path_access enforcement regressed. Confirm the UC3 registration sets optional_authorization_details=false (RAR MANDATORY) and the RAR path is enforced against the requested path."
+        fi
     fi
 
     echo ""
@@ -416,9 +443,18 @@ print(jwt.encode(payload, 'forged-secret', algorithm='HS256'))
     else
         w_act=$(decode_jwt_claim "${UC3_WRONG_ACTOR_TOKEN}" '.act.sub // empty')
         w_sub=$(decode_jwt_claim "${UC3_WRONG_ACTOR_TOKEN}" '.sub // empty')
+        w_jti=$(decode_jwt_claim "${UC3_WRONG_ACTOR_TOKEN}" '.jti // empty')
+        w_rar=$(decode_jwt_claim "${UC3_WRONG_ACTOR_TOKEN}" '[.authorization_details[]? | select(.type=="vault:path_access") | .path] | join(",")')
         if [ "${w_act}" = "uc3-actor" ]; then
             print_fail "Bypass Check 18: the supplied wrong-actor token has act.sub=uc3-actor — it is NOT a wrong actor" \
                 "UC3_WRONG_ACTOR_TOKEN must set act.sub to a WRONG actor (not uc3-actor). Got sub='${w_sub}', act.sub='${w_act}'."
+        elif [ "${w_sub}" != "jaime" ] || [ -z "${w_jti}" ] || ! echo ",${w_rar}," | grep -q ',database/creds/uc3-refund-writer,'; then
+            # Self-defending A/B: the deny must hinge on act.sub ALONE, so the other
+            # claims must be held constant (sub=jaime, jti present, RAR path MATCHING).
+            # A token that ALSO has a wrong subject/RAR would DENY for the wrong reason
+            # and false-pass the actor gate.
+            print_fail "Bypass Check 18: the wrong-actor token did NOT hold the constants (sub=jaime, jti present, RAR path=database/creds/uc3-refund-writer) — a deny would not be attributable to act.sub alone" \
+                "Got sub='${w_sub}', jti='${w_jti:-<absent>}', RAR path(s)='${w_rar:-<none>}'. ONLY act.sub may differ from UC3_DELEGATED_TOKEN; the subject, jti presence, and matching RAR path must be identical so the deny hinges on the actor alone."
         else
             assert_native_deny "Bypass Check 18 (wrong actor, act.sub=${w_act:-<absent>})" "${UC3_WRONG_ACTOR_TOKEN}" \
                 "Bypass Check 18 PASSED: a delegated token varying ONLY act.sub to a wrong actor (act.sub=${w_act:-<absent>}, sub=${w_sub}) was DENIED — no actor alias resolves, the OBO agent-ceiling cannot attach; the native actor check is re-homed from the retired jwt bound_claims (decision (e))" \
