@@ -5,6 +5,8 @@ weight: 70
 
 ## What Use Case 3 Adds
 
+![Vault Enterprise native OBO — Agent Registry resolves the agent from act.sub; the effective grant is the human baseline ∩ agent ceiling ∩ per-request vault:path_access RAR](/static/images/agent-registry-flow.png)
+
 Use Case 3 extends the workshop stack with four interlocking controls that work together to authorize, enforce, and audit a privileged refund write:
 
 | Capability | Standard (RFC / Spec) | Enforcement Point |
