@@ -110,7 +110,7 @@ If `agent-registry/` is missing, the Enterprise license does not carry the `agen
 List the three workshop agent registrations Vault knows about — each Use Case agent has a first-class, named identity in the registry:
 
 ```bash
-kubectl exec -n vault vault-0 -- sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault list agent-registry/agent"
+kubectl exec -n vault vault-0 -- sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault list agent-registry/registration/display-name"
 ```
 
 Expected — the three registered agents:

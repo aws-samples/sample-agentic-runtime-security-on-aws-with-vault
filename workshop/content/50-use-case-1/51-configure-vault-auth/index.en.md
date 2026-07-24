@@ -143,7 +143,7 @@ The 15-minute TTL means each Postgres credential issued to the agent is valid fo
 Use Case 1 keeps **Kubernetes auth** — its agent presents a ServiceAccount JWT, not an OAuth token — but it is *also* registered in the Vault **Agent Registry** so the agent carries a first-class, named identity in Vault rather than an anonymous entity. Read the registration:
 
 ```bash
-vault read agent-registry/agent/uc1-agent
+vault read agent-registry/registration/display-name/uc1-agent
 ```
 
 Expected (key fields):

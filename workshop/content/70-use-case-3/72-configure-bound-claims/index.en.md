@@ -45,7 +45,7 @@ pkill -f "kubectl port-forward -n vault svc/vault 8200:8200" 2>/dev/null; kubect
 ## Step 2 — Inspect the `uc3-actor` registration and its ceiling
 
 ```bash
-vault read agent-registry/agent/uc3-actor
+vault read agent-registry/registration/display-name/uc3-actor
 ```
 
 Expected (key fields):
@@ -54,18 +54,18 @@ Expected (key fields):
 Key                               Value
 ---                               -----
 display_name                      uc3-actor
-ceiling_policies                  [uc3-ceiling]
+ceiling_policies                  [uc3-agent-ceiling]
 optional_authorization_details    false
 ```
 
 - `display_name` `uc3-actor` — the actor Vault resolves from the delegated token's `act.sub` claim.
-- `ceiling_policies` `[uc3-ceiling]` — the maximum this agent may ever hold; it restricts, never grants.
+- `ceiling_policies` `[uc3-agent-ceiling]` — the maximum this agent may ever hold; it restricts, never grants.
 - `optional_authorization_details` `false` — **the per-request `vault:path_access` RAR is mandatory** for Use Case 3. A delegated token without it is denied.
 
 Read the ceiling — the envelope the agent is *ever* permitted to touch:
 
 ```bash
-vault policy read uc3-ceiling
+vault policy read uc3-agent-ceiling
 ```
 
 Expected:
@@ -160,7 +160,7 @@ The delegated JWT carries the `vault:path_access` RAR naming `database/creds/uc3
 Read the registration, the DB role TTL, and (with the root token) prove JIT credential issuance:
 
 ```bash
-kubectl exec -n vault vault-0 -- env VAULT_TOKEN="$(jq -r .root_token ~/vault-init.json)" vault read agent-registry/agent/uc3-actor
+kubectl exec -n vault vault-0 -- env VAULT_TOKEN="$(jq -r .root_token ~/vault-init.json)" vault read agent-registry/registration/display-name/uc3-actor
 ```
 
 ```bash

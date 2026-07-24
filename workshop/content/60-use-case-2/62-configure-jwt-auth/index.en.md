@@ -75,7 +75,7 @@ Expected — `agent-registry/`, `aws/`, and `database/` are all present.
 Read the Agent Registry registration that represents the Use Case 2 agent. Its `ceiling_policies` are the restrict-only envelope Vault intersects on every on-behalf-of request:
 
 ```bash
-vault read agent-registry/agent/agent-uc2
+vault read agent-registry/registration/display-name/agent-uc2
 ```
 
 Expected (key fields):
@@ -84,18 +84,18 @@ Expected (key fields):
 Key                               Value
 ---                               -----
 display_name                      agent-uc2
-ceiling_policies                  [uc2-ceiling]
+ceiling_policies                  [uc2-agent-ceiling]
 optional_authorization_details    true
 ```
 
 - `display_name` `agent-uc2` — the actor identity Vault resolves from the JWT's `act.sub` claim.
-- `ceiling_policies` `[uc2-ceiling]` — the maximum this agent may ever hold. It **restricts**; it never grants. The effective grant is the *intersection* of the human's baseline and this ceiling.
+- `ceiling_policies` `[uc2-agent-ceiling]` — the maximum this agent may ever hold. It **restricts**; it never grants. The effective grant is the *intersection* of the human's baseline and this ceiling.
 - `optional_authorization_details` `true` — a per-request `vault:path_access` RAR is *optional* for Use Case 2 (mandatory for Use Case 3). When absent, enforcement is human baseline ∩ ceiling.
 
-Read the `uc2-ceiling` policy — the paths the agent is *ever* permitted to touch:
+Read the `uc2-agent-ceiling` policy — the paths the agent is *ever* permitted to touch:
 
 ```bash
-vault policy read uc2-ceiling
+vault policy read uc2-agent-ceiling
 ```
 
 Expected — the read-only envelope for the personal-data agent:
@@ -127,7 +127,7 @@ path "auth/token/lookup-self"               { capabilities = ["read"] }
 path "sys/leases/renew"                     { capabilities = ["update"] }
 ```
 
-The effective grant Vault applies is **`uc2-personal` (human baseline) ∩ `uc2-ceiling` (agent ceiling)**. Both must permit a path for the request to succeed. This is ENFC-02 at the Vault layer, expressed as an intersection rather than a single flat policy.
+The effective grant Vault applies is **`uc2-personal` (human baseline) ∩ `uc2-agent-ceiling` (agent ceiling)**. Both must permit a path for the request to succeed. This is ENFC-02 at the Vault layer, expressed as an intersection rather than a single flat policy.
 
 ## Step 4 — Verify the database credentials role
 
@@ -181,7 +181,7 @@ password           <ephemeral>
 username           v-token-<user>-uc2-pers-<random>-<timestamp>
 ```
 
-There is no `vault write auth/jwt/login` in that sequence. Vault validated the OAuth JWT against the resource server profile, resolved `sub` (the human) and `act.sub = agent-uc2` (the agent actor), applied `uc2-personal ∩ uc2-ceiling`, and vended the credential — all in the one `database/creds` read. The `username` binds the credential to the resolved identity for the Vault audit trail. The MCP Server uses exactly this credential for the user's session.
+There is no `vault write auth/jwt/login` in that sequence. Vault validated the OAuth JWT against the resource server profile, resolved `sub` (the human) and `act.sub = agent-uc2` (the agent actor), applied `uc2-personal ∩ uc2-agent-ceiling`, and vended the credential — all in the one `database/creds` read. The `username` binds the credential to the resolved identity for the Vault audit trail. The MCP Server uses exactly this credential for the user's session.
 
 :::expand{header="Platform Track — OAuth resource server profile, registration, and ceiling (Terraform)"}
 
@@ -259,7 +259,7 @@ HTTP request → Authorization: Bearer <OAuth JWT>
                Vault database/creds/uc2-personal-readonly
                      → Vault validates JWT (resource server profile)
                      → resolves sub = "oscar" (human) + act.sub = agent-uc2 (actor)
-                     → applies uc2-personal ∩ uc2-ceiling
+                     → applies uc2-personal ∩ uc2-agent-ceiling
                      → returns username, password, lease_id
                      ↓
                psql SET app.current_user_sub = 'oscar'   ← RLS filters to Oscar's rows
@@ -272,6 +272,6 @@ HTTP request → Authorization: Bearer <OAuth JWT>
 
 **Without the agent registration (identity failure):** If `agent-uc2` were not registered, Vault could not resolve the actor from `act.sub` and the on-behalf-of request would fail closed — no credential is issued. The registry is the authority on *which* agent is acting.
 
-**With a widened ceiling (least-privilege failure):** If `uc2-ceiling` included `database/creds/uc3-refund-writer`, the personal-data agent could reach a write-capable role. The ceiling is the hard cap: it can only be *narrowed* by a per-request RAR, never widened at request time.
+**With a widened ceiling (least-privilege failure):** If `uc2-agent-ceiling` included `database/creds/uc3-refund-writer`, the personal-data agent could reach a write-capable role. The ceiling is the hard cap: it can only be *narrowed* by a per-request RAR, never widened at request time.
 
 **Without per-request auditing (OBJ-5 failure):** Because the OAuth JWT is presented per request, each `database/creds` issuance carries the exact resolved `sub` and actor. Without that, a specific SELECT could not be attributed to a specific human identity — the access event becomes unattributable.
