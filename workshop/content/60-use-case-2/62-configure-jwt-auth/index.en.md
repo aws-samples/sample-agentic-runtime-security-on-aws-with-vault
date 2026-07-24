@@ -1,117 +1,138 @@
 ---
-title: 'Vault JWT Authentication'
+title: 'Configure the OAuth Resource Server'
 weight: 62
 ---
 
 ## Overview
 
-In this module you inspect the Vault `jwt` auth backend configuration that was applied by the `vault_config` Terraform module. You trace the path from a user's IVIA-issued JWT through Vault JWT validation to the issuance of per-user-scoped Postgres credentials.
+In this module you inspect the Vault **OAuth resource server** — the native mechanism that authorizes Use Case 2's data access — and trace how a user's IVIA-issued OAuth JWT flows into per-user-scoped Postgres credentials **without any intermediate Vault login**.
 
-## The Token Exchange Pattern
+This is the native cutover: Vault Enterprise treats IVIA's OAuth JWT as a first-class credential. The MCP Server presents that JWT **directly** to Vault in the `X-Vault-Token` header — there is no `POST /v1/auth/jwt/login` round-trip and no separately-issued Vault token. Vault validates the JWT against the OAuth resource server profile, resolves the human subject and the agent actor from the token's claims, and evaluates policy at the moment of the request.
 
-Use Case 2 uses Vault's `jwt` auth method as the token exchange mechanism:
+## The Native OAuth Resource Server Model
+
+Use Case 2 authorizes each request on behalf of a human:
 
 ```
-User JWT (issued by IVIA)
-  →  Vault POST /v1/auth/jwt/login  (jwt auth role: uc2-jwt)
-  →  Vault validates JWT signature against IVIA JWKS
-  →  Vault evaluates bound_audiences claim
-  →  Vault issues a short-lived token bound to uc2-personal policy
-  →  MCP Server calls GET /v1/database/creds/uc2-personal-readonly
-  →  Vault generates per-user JIT Postgres credential
+User OAuth JWT (issued by IVIA — authorization-code grant)
+   sub = oscar | jaime         (the human subject)
+   aud = agent-uc2             (the OAuth client — the Banking agent)
+   act.sub = agent-uc2         (the actor — the agent acting on behalf of the human)
+  →  MCP Server presents the JWT to Vault via  X-Vault-Token: <jwt>
+  →  Vault validates the JWT against the OAuth resource server profile (IVIA issuer + JWKS)
+  →  Vault resolves the human subject entity (from sub) AND the agent actor entity (from act.sub = agent-uc2)
+  →  Vault evaluates: human baseline ∩ agent-uc2 ceiling  (∩ optional per-request RAR)
+  →  Vault vends a per-user JIT Postgres credential scoped to exactly what that human may read
 ```
 
-This is not RFC 8693 Token Exchange — Vault's `jwt` auth method is the token exchange for this architecture. The user JWT is the proof of identity; Vault translates it into a database credential scoped to exactly what the user is authorized to access.
+Every successful request resolves **three enforcing controls** for Use Case 2: the human's baseline policy (what this user is permitted), the `agent-uc2` registration's `ceiling_policies` (the maximum the agent may *ever* hold — restrict-only), and an optional per-request authorization-details (RAR) scope. For Use Case 2 the RAR is optional, so when absent the effective grant is **human baseline ∩ agent-uc2 ceiling**.
 
-## Step 1 — Inspect the jwt auth backend configuration
+:::alert{header="Migration: this replaces a hand-rolled jwt auth backend" type="info"}
+Earlier iterations of this workshop used a Vault **`jwt` auth backend**: the MCP Server called `POST /v1/auth/jwt/login` with role `uc2-jwt`, Vault matched hand-rolled `bound_claims` / `bound_audiences`, and returned a *separate* Vault token that the server then used to read credentials. That `jwt` auth backend has been **removed**. The before/after:
 
-The inspection commands in Steps 1–4 read privileged Vault paths, so load the root token first (written to `~/vault-init.json` during deploy). It is passed into the pod on each `kubectl exec`:
-
-```bash
-export VAULT_ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)
-```
-
-```bash
-kubectl exec -n vault vault-0 -- sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read auth/jwt/config"
-```
-
-Key fields:
-
-| Field | Value | Meaning |
+| | Before (removed) | After (native) |
 |---|---|---|
-| `jwks_url` | IVIA's JWKS endpoint URL | Vault is given the JWKS URL directly rather than an OIDC discovery URL. This is necessary because OIDC discovery validation fails against IVIA's cluster-internal certificate (the iviaop pod's TLS is a cluster-issued cert from IVIA's PKI, not the public Let's Encrypt cert that fronts the ALB); providing the JWKS URL directly (paired with `jwks_ca_pem`) bypasses that step. |
-| `bound_issuer` | External WRP ALB issuer URL (e.g., `https://<ivia-ingress-hostname>`) | JWT `iss` claim must match this external WRP ALB hostname. The issuer is the public-facing ALB URL, not an in-cluster address. |
-| `default_role` | _(empty)_ | Role must be specified explicitly on each login call. |
+| Auth path | `POST auth/jwt/login` → Vault token, then read creds | Present the OAuth JWT directly via `X-Vault-Token` — one call |
+| Who-may-act check | hand-rolled `bound_claims` on the `uc2-jwt` role | agent actor resolved from `act.sub = agent-uc2` against the registry |
+| Max-permission envelope | approximated by `bound_*` role fields | `ceiling_policies` on the `agent-uc2` registration (true intersection) |
 
-Vault uses the `jwks_url` to fetch IVIA's public signing keys and cache them for JWT signature validation.
+The old `bound_claims` are shown here only as the *before* of that migration — they are no longer a live control.
+:::
 
-## Step 2 — Inspect the uc2-jwt role
+## Step 1 — Confirm the jwt backend is gone and the resource server is active
 
-```bash
-kubectl exec -n vault vault-0 -- sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read auth/jwt/role/uc2-jwt"
-```
-
-Expected output (key fields):
-
-```
-Key                   Value
----                   -----
-bound_audiences       [agent-uc2]
-token_policies        [uc2-personal]
-token_ttl             1h
-token_max_ttl         2h
-user_claim            sub
-role_type             jwt
-```
-
-Explanation of each field:
-
-| Field | Value | Why It Matters |
-|---|---|---|
-| `bound_audiences` | `[agent-uc2]` | The JWT `aud` claim must contain `agent-uc2` (the IVIA OAuth client ID). Prevents tokens issued for other clients from being used here. |
-| `user_claim` | `sub` | Vault extracts the `sub` claim from the JWT and maps it to a Vault entity. This is how per-user identity flows into policy evaluation. |
-| `token_policies` | `[uc2-personal]` | Every successful jwt login receives a Vault token bound to this policy. |
-| `token_ttl` | `1h` | The Vault token issued after jwt login lives for 1 hour. The downstream DB credential has its own (shorter) TTL. |
-
-## Step 3 — Inspect the uc2-personal policy
+Point the `vault` CLI at Vault with the root token so the reads below are permitted. One paste — kills any prior port-forward, opens a fresh one, and exports `VAULT_ADDR` + `VAULT_TOKEN`:
 
 ```bash
-kubectl exec -n vault vault-0 -- sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault policy read uc2-personal"
+pkill -f "kubectl port-forward -n vault svc/vault 8200:8200" 2>/dev/null; kubectl port-forward -n vault svc/vault 8200:8200 >/dev/null 2>&1 & sleep 2 && export VAULT_ADDR=http://localhost:8200 && export VAULT_TOKEN=$(jq -r '.root_token' ~/vault-init.json) && echo "Vault: $VAULT_ADDR"
+```
+
+Confirm there is **no** `jwt/` auth mount — the retired backend is gone:
+
+```bash
+vault auth list
+```
+
+Expected — `kubernetes/` and `token/` only; **no** `jwt/` row:
+
+```
+Path           Type          Description
+----           ----          -----------
+kubernetes/    kubernetes    n/a
+token/         token         token based credentials
+```
+
+Confirm the Agent Registry secrets engine is mounted (the OAuth resource server profile and the agent registrations live under Enterprise identity):
+
+```bash
+vault secrets list | grep -E 'agent-registry|database|aws'
+```
+
+Expected — `agent-registry/`, `aws/`, and `database/` are all present.
+
+## Step 2 — Inspect the `agent-uc2` registration and its ceiling
+
+Read the Agent Registry registration that represents the Use Case 2 agent. Its `ceiling_policies` are the restrict-only envelope Vault intersects on every on-behalf-of request:
+
+```bash
+vault read agent-registry/agent/agent-uc2
+```
+
+Expected (key fields):
+
+```
+Key                               Value
+---                               -----
+display_name                      agent-uc2
+ceiling_policies                  [uc2-ceiling]
+optional_authorization_details    true
+```
+
+- `display_name` `agent-uc2` — the actor identity Vault resolves from the JWT's `act.sub` claim.
+- `ceiling_policies` `[uc2-ceiling]` — the maximum this agent may ever hold. It **restricts**; it never grants. The effective grant is the *intersection* of the human's baseline and this ceiling.
+- `optional_authorization_details` `true` — a per-request `vault:path_access` RAR is *optional* for Use Case 2 (mandatory for Use Case 3). When absent, enforcement is human baseline ∩ ceiling.
+
+Read the `uc2-ceiling` policy — the paths the agent is *ever* permitted to touch:
+
+```bash
+vault policy read uc2-ceiling
+```
+
+Expected — the read-only envelope for the personal-data agent:
+
+```hcl
+path "database/creds/uc2-personal-readonly" { capabilities = ["read"] }
+path "aws/sts/bedrock-reader"               { capabilities = ["read", "update"] }
+path "auth/token/lookup-self"               { capabilities = ["read"] }
+path "sys/leases/renew"                     { capabilities = ["update"] }
+```
+
+Notice what is **absent**: no `database/creds/uc3-refund-writer` and no write-capable credential role. The ceiling cannot be widened at request time — a per-request RAR can only *narrow* it further.
+
+## Step 3 — Inspect the human baseline policy
+
+The human subject (`oscar` or `jaime`) contributes the *baseline* — what this specific user is permitted. Read it:
+
+```bash
+vault policy read uc2-personal
 ```
 
 Expected output:
 
 ```hcl
-# UC2: Personal-data agent policy (ENFC-02)
-# Allows: kubernetes + jwt auth login, database creds (R/O), AWS (Bedrock) STS creds
-# database/creds/uc2-personal-readonly only — no write DB roles accessible
-path "database/creds/uc2-personal-readonly" {
-  capabilities = ["read"]
-}
-path "aws/sts/bedrock-reader" {
-  capabilities = ["read", "update"]
-}
-path "auth/token/lookup-self" {
-  capabilities = ["read"]
-}
-path "sys/leases/renew" {
-  capabilities = ["update"]
-}
+# UC2: Personal-data human baseline (ENFC-02)
+path "database/creds/uc2-personal-readonly" { capabilities = ["read"] }
+path "aws/sts/bedrock-reader"               { capabilities = ["read", "update"] }
+path "auth/token/lookup-self"               { capabilities = ["read"] }
+path "sys/leases/renew"                     { capabilities = ["update"] }
 ```
 
-What each path grants:
-
-- `database/creds/uc2-personal-readonly` — fetch per-user JIT Postgres credentials (the core UC2 capability).
-- `aws/sts/bedrock-reader` — fetch Vault-vended AWS STS credentials so the agent can call Amazon Bedrock without a standing IAM identity (OBJ-2).
-- `auth/token/lookup-self` — let the agent inspect its own Vault token (TTL, policies) — standard hygiene for observability.
-- `sys/leases/renew` — extend an in-flight DB credential lease before it expires.
-
-Note what is absent: no path for `database/creds/uc3-refund-writer` or any write-capable credential role. This policy isolation is ENFC-02 at the Vault layer.
+The effective grant Vault applies is **`uc2-personal` (human baseline) ∩ `uc2-ceiling` (agent ceiling)**. Both must permit a path for the request to succeed. This is ENFC-02 at the Vault layer, expressed as an intersection rather than a single flat policy.
 
 ## Step 4 — Verify the database credentials role
 
 ```bash
-kubectl exec -n vault vault-0 -- sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read database/roles/uc2-personal-readonly"
+vault read database/roles/uc2-personal-readonly
 ```
 
 Expected output (key fields):
@@ -129,55 +150,26 @@ creation_statements    ["CREATE ROLE \"{{name}}\" WITH LOGIN PASSWORD '{{passwor
                         "ALTER DEFAULT PRIVILEGES IN SCHEMA banking GRANT SELECT ON TABLES TO \"{{name}}\";"]
 ```
 
-Each ephemeral role is created with login credentials scoped to the banking schema. The `search_path` pin, `GRANT USAGE`, and `GRANT SELECT` statements together restrict the role to read-only access on the banking schema. There is no permanent Postgres role involved — grants are applied directly to the ephemeral role. No INSERT, UPDATE, or DELETE access is granted.
+Each ephemeral role is created with login credentials scoped to the banking schema, read-only, with a 15-minute TTL. There is no permanent Postgres role — grants are applied directly to the ephemeral role, and no INSERT/UPDATE/DELETE is granted.
 
-## Step 5 — Perform a live jwt login (demo)
+## Step 5 — Present the OAuth JWT directly to Vault (demo)
 
-To confirm the jwt auth backend is working, perform a login using a pre-obtained JWT.
+To confirm the native path, present a real user JWT to Vault via `X-Vault-Token` and watch Vault vend a credential in a **single** call — no login step.
 
-The Banking UI is a SvelteKit app that keeps the user's IVIA-issued JWT in an HttpOnly cookie named `id_token` (server-side proxy at `/api/chat` injects the `Authorization: Bearer <jwt>` header into upstream calls to the Banking Agent — that header is never visible in the browser's Network tab).
-
-To grab the JWT yourself:
+The Banking UI keeps the user's IVIA-issued JWT in an HttpOnly cookie named `id_token`. To grab it:
 
 1. Sign in to the Banking UI as `oscar` or `jaime`.
 2. Open Chrome DevTools (F12) → **Application** tab.
 3. Storage → Cookies → click the workshop hostname.
 4. Find the row `id_token` and copy the **Value** column.
 
-Then run:
+Then present it as the Vault token — the JWT **is** the credential:
 
 ```bash
-JWT_TOKEN="<paste-token-here>"
-
-kubectl exec -n vault vault-0 -- \
-  vault write auth/jwt/login role=uc2-jwt jwt="${JWT_TOKEN}"
+JWT_TOKEN="<paste-the-id_token-value>"; kubectl exec -n vault vault-0 -- sh -c "VAULT_TOKEN='${JWT_TOKEN}' vault read database/creds/uc2-personal-readonly"
 ```
 
-Expected output:
-
-```
-Key                    Value
----                    -----
-token                  hvs.CAES...
-token_accessor         <opaque>
-token_duration         1h
-token_renewable        true
-token_policies         [default uc2-personal]
-identity_policies      []
-policies               [default uc2-personal]
-token_meta_role        uc2-jwt
-token_meta_user_sub    oscar      # (or `jaime` — whichever user you grabbed)
-```
-
-The `token_meta_user_sub` field confirms Vault extracted the `sub` claim from the JWT and exposed it as metadata (the `user_sub` key name comes from the `claim_mappings` you saw on the `uc2-jwt` role in Step 2). Now use that Vault token to fetch DB credentials:
-
-```bash
-VAULT_TOKEN="hvs.CAES..."   # paste the token value from the previous output
-kubectl exec -n vault vault-0 -- sh -c \
-  "VAULT_TOKEN=${VAULT_TOKEN} vault read database/creds/uc2-personal-readonly"
-```
-
-Expected output:
+Expected output — a per-user JIT Postgres credential, issued directly against the presented OAuth JWT:
 
 ```
 Key                Value
@@ -186,40 +178,45 @@ lease_id           database/creds/uc2-personal-readonly/<opaque>
 lease_duration     15m
 lease_renewable    true
 password           <ephemeral>
-username           v-jwt-<user>-uc2-pers-<random>-<timestamp>
+username           v-token-<user>-uc2-pers-<random>-<timestamp>
 ```
 
-You see a Postgres username and password with a 15-minute TTL. The username is the proof that Vault bound this credential to your identity: `v-jwt-` (issued via jwt auth) + the first chars of your IVIA `sub` claim + `uc2-pers` (the role name) + a unique suffix. The MCP Server uses exactly this credential for your session.
+There is no `vault write auth/jwt/login` in that sequence. Vault validated the OAuth JWT against the resource server profile, resolved `sub` (the human) and `act.sub = agent-uc2` (the agent actor), applied `uc2-personal ∩ uc2-ceiling`, and vended the credential — all in the one `database/creds` read. The `username` binds the credential to the resolved identity for the Vault audit trail. The MCP Server uses exactly this credential for the user's session.
 
-:::expand{header="Platform Track — Vault jwt auth role configuration and IVIA OIDC wiring"}
+:::expand{header="Platform Track — OAuth resource server profile, registration, and ceiling (Terraform)"}
 
-The `uc2-jwt` Vault role is created by the `vault_config` Terraform module:
+The native model is configured by the `vault_config` Terraform module using Vault Enterprise identity primitives (provider `hashicorp/vault >= 5.10.1`):
 
 ```hcl
-resource "vault_jwt_auth_backend_role" "uc2_jwt" {
-  backend         = vault_jwt_auth_backend.ivia.path
-  role_name       = "uc2-jwt"
-  role_type       = "jwt"
-  bound_audiences = ["agent-uc2"]
-  user_claim      = "sub"
-  token_policies  = ["uc2-personal"]
-  token_ttl       = 3600
-  token_max_ttl   = 14400
+# Activate the Enterprise feature (idempotent)
+resource "vault_activation_flags" "oauth_resource_server" {
+  feature = "oauth-resource-server"
+}
+
+# One OAuth resource server profile — IVIA issuer + JWKS. user_claim = sub for all OAuth Use Cases.
+resource "vault_oauth_resource_server_config_profile" "ivia" {
+  # issuer_id / jwks_url resolved from IVIA's OAuth provider
+  # user_claim = "sub"
+}
+
+# The agent's registry identity + its max-permission ceiling (restrict-only)
+resource "vault_agent_registration" "agent_uc2" {
+  display_name                   = "agent-uc2"
+  ceiling_policies               = [vault_policy.uc2_ceiling.name]
+  optional_authorization_details = true   # RAR optional for UC2
 }
 ```
 
-The `bound_audiences` check is the critical guard: Vault rejects any JWT whose `aud` claim does not include `agent-uc2`. This means tokens issued for IVIA's other OAuth clients (e.g., the Use Case 3 CIBA client) cannot be used to obtain `uc2-personal` credentials.
+The OAuth JWT is presented in the **`X-Vault-Token`** header (`VAULT_TOKEN=<jwt>`), not through a login endpoint. Vault synthesizes a mount accessor of the form `oauth-resource-server_root_<config_id>` for the profile; the identity aliases bind on the profile `issuer`, not on that accessor.
 
-IVIA JWKS validation happens at the `jwt` auth backend level, not at the role level. Vault fetches IVIA's JWKS from the `jwks_url` and caches the signing keys. Each incoming JWT is verified against these cached keys before the role's `bound_audiences` check runs.
+Each human persona (`oscar`, `jaime`) has its own identity entity with a subject alias keyed on its `sub` value; the agent has an actor alias keyed on `act.sub = agent-uc2`. On an on-behalf-of request Vault resolves **both** — a bare, unregistered human subject never resolves and fails closed. This is why every persona that drives Use Case 2 must be registered.
 
-The `jwks_ca_pem` field on the Vault jwt auth backend supplies IVIA's CA certificate PEM, allowing Vault to trust the IVIA JWKS endpoint's cluster-internal TLS certificate (issued by IVIA's internal PKI for the in-cluster `iviaop.verify-access.svc.cluster.local` service — distinct from the publicly trusted Let's Encrypt cert on the workshop ALB). This is used instead of `insecure_tls` — Vault is given the CA bundle explicitly rather than disabling TLS verification. In production, replace this with a certificate from a CA Vault already trusts.
-
-Key design decision: **Vault validates the JWT signature; the MCP Server does not.** This keeps the MCP Server code simple and puts the cryptographic validation responsibility on Vault, which has battle-tested JWT validation logic.
+Key design decision: **Vault validates the JWT signature and resolves identity; the MCP Server does neither.** The MCP Server forwards the token; Vault owns the cryptographic validation and the policy intersection.
 :::
 
-:::expand{header="Agent Developer Track — MCP server vault-client.ts code walkthrough"}
+:::expand{header="Agent Developer Track — MCP server presents X-Vault-Token directly"}
 
-The MCP Server's `vault-client.ts` handles both the jwt login and the credential issuance in sequence:
+With the native cutover, the MCP Server's `vault-client.ts` no longer performs a login. It presents the user's OAuth JWT as the Vault token and reads credentials in a single request:
 
 ```typescript
 export class VaultClient {
@@ -229,62 +226,52 @@ export class VaultClient {
     this.vaultAddr = process.env.VAULT_ADDR ?? 'http://vault.vault.svc.cluster.local:8200';
   }
 
-  // Called once per request with the user's JWT from the Authorization header
+  // Called once per request with the user's OAuth JWT from the Authorization header
   async getDbCredsForUser(userJwt: string): Promise<{ username: string; password: string; leaseId: string }> {
-    // Step 1: Exchange user JWT for a Vault token via jwt auth
-    const loginResp = await fetch(`${this.vaultAddr}/v1/auth/jwt/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ role: 'uc2-jwt', jwt: userJwt }),
-    });
-    if (!loginResp.ok) {
-      const err = await loginResp.json();
-      throw new Error(`Vault jwt login failed: ${err.errors?.join(', ')}`);
-    }
-    const loginData = await loginResp.json();
-    const vaultToken = loginData.auth.client_token;
-    const userSub = loginData.auth.metadata?.sub;
-
-    // Step 2: Use the Vault token to fetch dynamic DB credentials
+    // Present the OAuth JWT DIRECTLY via X-Vault-Token — no auth/jwt/login round-trip
     const credsResp = await fetch(
       `${this.vaultAddr}/v1/database/creds/uc2-personal-readonly`,
-      { headers: { 'X-Vault-Token': vaultToken } },
+      { headers: { 'X-Vault-Token': userJwt } },
     );
     if (!credsResp.ok) {
       const err = await credsResp.json();
       throw new Error(`Vault DB creds failed: ${err.errors?.join(', ')}`);
     }
     const credsData = await credsResp.json();
-
     return {
       username: credsData.data.username,
       password: credsData.data.password,
       leaseId: credsData.lease_id,
-      userSub,   // propagated to Postgres SET app.current_user_sub
     };
   }
 }
 ```
 
-Why is jwt login called on every request instead of caching the Vault token? Caching the token would couple the credential lifetime to the token TTL (1 hour) rather than the request boundary. Per-request login ensures each tool invocation creates a distinct audit trail entry in the Vault log — linking the specific `sub` claim to the specific `database/creds` issuance. This is OBJ-5 at the request level.
+Removing the login round-trip removes a whole failure mode (a stale or mis-scoped intermediate Vault token) and makes the audit trail exact: the OAuth JWT the user presented is the identity Vault recorded for the `database/creds` issuance.
 
-Per-user identity flows from JWT `sub` claim through to DB connection:
+Per-user identity flows from the JWT straight to the DB connection:
 
 ```
-HTTP request → Authorization: Bearer <JWT>
+HTTP request → Authorization: Bearer <OAuth JWT>
                      ↓
-               MCP Server extracts JWT
-                     ↓
-               Vault jwt login (role=uc2-jwt, jwt=<JWT>)
-                     → Vault extracts sub = "oscar"
-                     → Vault issues token + metadata.sub
+               MCP Server forwards it as X-Vault-Token
                      ↓
                Vault database/creds/uc2-personal-readonly
+                     → Vault validates JWT (resource server profile)
+                     → resolves sub = "oscar" (human) + act.sub = agent-uc2 (actor)
+                     → applies uc2-personal ∩ uc2-ceiling
                      → returns username, password, lease_id
                      ↓
-               psql SET app.current_user_sub = 'oscar'
-               psql SELECT * FROM banking.accounts   ← RLS filters to Oscar's rows
+               psql SET app.current_user_sub = 'oscar'   ← RLS filters to Oscar's rows
 ```
-
-The `userSub` value returned from `getDbCredsForUser` is stored in the MCP Server's request context and passed to every `SET app.current_user_sub` call before a Postgres query.
 :::
+
+---
+
+### What Would Have Failed
+
+**Without the agent registration (identity failure):** If `agent-uc2` were not registered, Vault could not resolve the actor from `act.sub` and the on-behalf-of request would fail closed — no credential is issued. The registry is the authority on *which* agent is acting.
+
+**With a widened ceiling (least-privilege failure):** If `uc2-ceiling` included `database/creds/uc3-refund-writer`, the personal-data agent could reach a write-capable role. The ceiling is the hard cap: it can only be *narrowed* by a per-request RAR, never widened at request time.
+
+**Without per-request auditing (OBJ-5 failure):** Because the OAuth JWT is presented per request, each `database/creds` issuance carries the exact resolved `sub` and actor. Without that, a specific SELECT could not be attributed to a specific human identity — the access event becomes unattributable.

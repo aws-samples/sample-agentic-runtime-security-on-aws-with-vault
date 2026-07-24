@@ -138,6 +138,29 @@ revocation_statements    ["REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public 
 
 The 15-minute TTL means each Postgres credential issued to the agent is valid for exactly 15 minutes. After expiry, Vault executes the `revocation_statements` to drop the dynamically created role from Postgres automatically.
 
+## Step 5 — Registry identity: the `uc1-agent` registration
+
+Use Case 1 keeps **Kubernetes auth** — its agent presents a ServiceAccount JWT, not an OAuth token — but it is *also* registered in the Vault **Agent Registry** so the agent carries a first-class, named identity in Vault rather than an anonymous entity. Read the registration:
+
+```bash
+vault read agent-registry/agent/uc1-agent
+```
+
+Expected (key fields):
+
+```
+Key                               Value
+---                               -----
+display_name                      uc1-agent
+ceiling_policies                  [uc1-ceiling]
+optional_authorization_details    true
+```
+
+Two things distinguish Use Case 1 from Use Cases 2 and 3:
+
+- **The registration gives Use Case 1 a verifiable identity, not an extra enforcement layer.** Because Use Case 1 authenticates with Kubernetes auth — it presents no OAuth `act.sub` actor claim — the registration's `ceiling_policies` are **inert for enforcement**. A registered agent's own ceiling does not self-restrict without an actor resolving it on-behalf-of a human. Use Case 1's one enforcing layer is the `uc1-readonly` Kubernetes-auth policy you inspected in Steps 1–2.
+- **Enforcement layers for Use Case 1 = one** (the `uc1-readonly` policy floor). Use Cases 2 and 3 authenticate on behalf of a human through the OAuth resource server and layer **three** enforcing controls (human baseline ∩ agent ceiling ∩ per-request scope); Use Case 1 does not, and does not need to — it is a workload reading its own least-privilege data.
+
 :::expand{header="Agent Developer Track — hvac login flow and token vs credential TTL"}
 
 When the agent calls `VaultClient.login()` at pod startup, the following exchange occurs:
