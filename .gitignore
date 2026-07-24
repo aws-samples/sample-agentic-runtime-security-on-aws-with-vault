@@ -60,9 +60,3 @@ workshop/tmp/
 # config.yml.tmpl + instruqt/scripts/render-config.sh; the rendered
 # config.yml carries region literals and MUST NOT be committed.
 instruqt/track/config.yml
-
-# Vault Enterprise license — sensitive entitlement, NEVER commit.
-# Read at deploy time via VAULT_ENTERPRISE_LICENSE_PATH (deploy-workshop.sh);
-# for attendee distribution source it from AWS Secrets Manager / SSM, not a file.
-*.hclic
-vault-ent.hclic
