@@ -57,10 +57,14 @@
 #   --help                   Show this help message
 #
 # Env vars:
-#   VAULT_ENTERPRISE_LICENSE_PATH  Path to the Vault Enterprise .hclic license file
-#                                  (default: ~/Downloads/vault-ent.hclic). Read fresh
-#                                  and written into infrastructure/services/terraform.tfvars
-#                                  on every tier-2 run — never a committed literal.
+#   VAULT_ENTERPRISE_LICENSE_PATH  Path to the Vault Enterprise .hclic license file.
+#                                  Defaults to the shared workshop license committed at
+#                                  infrastructure/modules/vault_server/vault-ent.hclic so
+#                                  attendees can provision without sourcing their own
+#                                  (a Vault Enterprise license cannot be self-served from
+#                                  hashicorp.com). Read fresh and written into
+#                                  infrastructure/services/terraform.tfvars on every
+#                                  tier-2 run. Override the env var to use a different license.
 #
 # Prerequisites:
 #   - AWS CLI configured with valid credentials
@@ -505,13 +509,15 @@ else
         fi
 
         # 4) vault_enterprise_license (tier-2) — required secret, sourced from a
-        # FILE (never typed/echoed, never a committed literal). Unlike the two
+        # FILE. Defaults to the shared workshop license committed in-repo so
+        # attendees provision without sourcing their own (Vault Enterprise
+        # licenses cannot be self-served from hashicorp.com). Unlike the two
         # secrets above, this is NOT conditional on "already set" — it is
         # re-read from VAULT_ENTERPRISE_LICENSE_PATH and overwritten on EVERY
         # run so a rotated/updated license file always propagates. The license
         # must carry the platform-standard module (NOT pki-only) or Vault
         # rejects the database/aws/kv/transit mounts every UC depends on.
-        vault_license_path="${VAULT_ENTERPRISE_LICENSE_PATH:-$HOME/Downloads/vault-ent.hclic}"
+        vault_license_path="${VAULT_ENTERPRISE_LICENSE_PATH:-${INFRA_DIR}/modules/vault_server/vault-ent.hclic}"
         if [[ ! -s "$vault_license_path" ]]; then
             _die "Preflight: Vault Enterprise license file missing or empty (VAULT_ENTERPRISE_LICENSE_PATH=${vault_license_path})" \
                  "Set VAULT_ENTERPRISE_LICENSE_PATH to your platform-standard .hclic license file, or place it at ${vault_license_path}, then re-run: bash infrastructure/scripts/deploy-workshop.sh"
