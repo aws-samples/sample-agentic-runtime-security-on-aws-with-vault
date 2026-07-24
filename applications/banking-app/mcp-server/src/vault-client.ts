@@ -1,16 +1,23 @@
 /**
- * vault-client.ts — Vault JWT auth + dynamic database credential vending.
+ * vault-client.ts — dynamic database credential vending via the Vault OAuth
+ * resource server (Phase 9 native cutover, locked decision (b)).
  *
  * Security-critical path for UC2 personalized banking:
  *
- *   1. loginJwt(jwt)        — POST /v1/auth/jwt/login with user IVIA JWT
- *                              Returns a per-user-scoped Vault token.
- *   2. getDbCreds(token)    — GET  /v1/database/creds/uc2-personal-readonly
- *                              Returns ephemeral { username, password } for pg client.
+ *   getDbCreds(jwt) — GET /v1/database/creds/uc2-personal-readonly presenting the
+ *                     user IVIA OAuth JWT DIRECTLY as the X-Vault-Token header.
+ *                     Vault's OAuth resource server validates the JWT (signature
+ *                     via IVIA JWKS + jti) and returns ephemeral
+ *                     { username, password } for the pg client.
  *
- * The MCP server (not the agent) holds Vault tokens — the agent only ever
- * sees user JWTs. This satisfies OBJ-2: no standing DB credentials anywhere
- * in the request path.
+ * There is NO Vault login round-trip and NO intermediate Vault token — the user
+ * OAuth JWT IS the credential. A jti claim is required (schema-validated by the
+ * OAuth resource server); a vault:path_access RAR is NOT required (UC2 RAR is
+ * optional per the locked decision). The token is presented only via the
+ * X-Vault-Token header, never via an HTTP auth-scheme header (which silently
+ * resolves to no identity). The credential fetch stays per-user request-scoped
+ * — no shared token — satisfying OBJ-2: no standing DB credentials anywhere in
+ * the request path.
  */
 
 import fetch from 'node-fetch';
@@ -25,59 +32,28 @@ export interface DbCredentials {
 }
 
 /**
- * Authenticate to Vault using an IVIA-issued user JWT.
+ * Fetch per-user dynamic database credentials from the Vault database secrets engine
+ * by presenting the user OAuth JWT directly as the Vault token.
  *
- * Vault jwt auth validates the JWT signature against the IVIA JWKS endpoint
- * and resolves the bound policy associated with the uc2-jwt role.
+ * The user IVIA OAuth JWT is set as the `X-Vault-Token` header; Vault's OAuth
+ * resource server validates it (signature via the IVIA JWKS endpoint + jti) and
+ * authorizes the `database/creds/<role>` read per the user's identity. The dynamic
+ * credentials are scoped by the Vault policy resolved from the JWT. PostgreSQL RLS
+ * will further restrict rows to the calling user's sub claim.
  *
- * @param jwt   - IVIA-issued access token (Bearer payload, not "Bearer <token>")
- * @param role  - Vault jwt auth role (default: uc2-jwt)
- * @returns Vault client token scoped to the user's identity
- */
-export async function loginJwt(jwt: string, role: string = 'uc2-jwt'): Promise<string> {
-  const url = `${VAULT_ADDR}/v1/auth/jwt/login`;
-
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jwt, role }),
-  });
-
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Vault JWT auth failed [${res.status}]: ${body}`);
-  }
-
-  const data = (await res.json()) as { auth?: { client_token?: string } };
-
-  const token = data?.auth?.client_token;
-  if (!token) {
-    throw new Error('Vault JWT auth response missing auth.client_token');
-  }
-
-  return token;
-}
-
-/**
- * Fetch per-user dynamic database credentials from the Vault database secrets engine.
- *
- * The dynamic credentials are scoped by the Vault policy resolved during
- * loginJwt() — only paths that the user's JWT claims authorize are accessible.
- * PostgreSQL RLS will further restrict rows to the calling user's sub claim.
- *
- * @param vaultToken  - Client token returned from loginJwt()
- * @param role        - Vault database role (default: uc2-personal-readonly)
+ * @param oauthJwt - User IVIA-issued OAuth JWT (raw JWT string, not a prefixed header value)
+ * @param role     - Vault database role (default: uc2-personal-readonly)
  * @returns Ephemeral { username, password } valid for one connection, plus lease metadata
  */
 export async function getDbCreds(
-  vaultToken: string,
+  oauthJwt: string,
   role: string = 'uc2-personal-readonly'
 ): Promise<DbCredentials> {
   const url = `${VAULT_ADDR}/v1/database/creds/${role}`;
 
   const res = await fetch(url, {
     method: 'GET',
-    headers: { 'X-Vault-Token': vaultToken },
+    headers: { 'X-Vault-Token': oauthJwt },
   });
 
   if (!res.ok) {

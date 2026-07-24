@@ -3,21 +3,21 @@
  *
  * Each tool follows this security-critical sequence:
  *   1. Extract sub claim from the user JWT (base64-decode payload segment).
- *   2. Call loginJwt(jwt) to get a per-user-scoped Vault token.
- *   3. Call getDbCreds(token) to get ephemeral PostgreSQL credentials.
- *   4. Create a pg.Client with Vault-vended credentials.
- *   5. Issue SET app.current_user_sub = '<sub>' on the connection.
+ *   2. Call getDbCreds(jwt) — presents the user OAuth JWT directly as the
+ *      X-Vault-Token to fetch ephemeral PostgreSQL credentials (no login round-trip).
+ *   3. Create a pg.Client with Vault-vended credentials.
+ *   4. Issue SET app.current_user_sub = '<sub>' on the connection.
  *      CRITICAL: This activates PostgreSQL RLS policies. Without it,
  *      current_setting('app.current_user_sub', true) returns NULL and RLS
  *      filters out ALL rows — queries return empty results.
- *   6. Run the SELECT query.
- *   7. Return results + credential metadata for OBJ-5 audit correlation.
+ *   5. Run the SELECT query.
+ *   6. Return results + credential metadata for OBJ-5 audit correlation.
  *
  * The agent never sees DB credentials. Only JWTs cross the agent→MCP boundary.
  */
 
 import { Client as PgClient } from 'pg';
-import { loginJwt, getDbCreds, type DbCredentials } from './vault-client.js';
+import { getDbCreds, type DbCredentials } from './vault-client.js';
 
 const DB_HOST = process.env.RDS_ADDRESS ?? process.env.DB_HOST ?? 'localhost';
 const DB_PORT = parseInt(process.env.RDS_PORT ?? process.env.DB_PORT ?? '5432', 10);
@@ -26,8 +26,9 @@ const DB_NAME = process.env.RDS_DB_NAME ?? process.env.DB_NAME ?? 'workshop';
 /**
  * Extract the sub claim from a JWT without verifying its signature.
  *
- * Vault already validated the JWT during loginJwt() — we only need the
- * sub claim to set the PostgreSQL session variable for RLS enforcement.
+ * Vault validates the JWT when it is presented as the X-Vault-Token on the
+ * getDbCreds() call — we only need the sub claim here to set the PostgreSQL
+ * session variable for RLS enforcement.
  *
  * @param jwt - Raw JWT string (header.payload.signature)
  * @returns sub claim value
@@ -67,13 +68,11 @@ function extractSubFromJwt(jwt: string): string {
 async function buildRlsClient(jwt: string): Promise<{ client: PgClient; creds: DbCredentials; sub: string }> {
   const sub = extractSubFromJwt(jwt);
 
-  // Step 1: Exchange user JWT for per-user Vault token
-  const vaultToken = await loginJwt(jwt);
+  // Step 1: Get ephemeral DB credentials from Vault by presenting the user
+  // OAuth JWT directly as the X-Vault-Token (no login round-trip).
+  const creds = await getDbCreds(jwt);
 
-  // Step 2: Get ephemeral DB credentials from Vault
-  const creds = await getDbCreds(vaultToken);
-
-  // Step 3: Create pg client with Vault-vended credentials
+  // Step 2: Create pg client with Vault-vended credentials
   const client = new PgClient({
     host: DB_HOST,
     port: DB_PORT,
@@ -85,7 +84,7 @@ async function buildRlsClient(jwt: string): Promise<{ client: PgClient; creds: D
 
   await client.connect();
 
-  // Step 4: CRITICAL — activate PostgreSQL Row-Level Security.
+  // Step 3: CRITICAL — activate PostgreSQL Row-Level Security.
   // RLS policies use current_setting('app.current_user_sub', true) to filter rows.
   // Without this SET, current_setting() returns NULL and all rows are filtered out.
   await client.query(`SELECT set_config('app.current_user_sub', $1, false)`, [sub]);
