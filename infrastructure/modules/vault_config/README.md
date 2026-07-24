@@ -18,13 +18,82 @@ Terraform module that provisions all Vault configuration required by the three a
 | K8s role: uc1 | `kubernetes/role/uc1` | CONF-01 |
 | K8s role: uc2 | `kubernetes/role/uc2` | CONF-01 |
 | K8s role: uc3 | `kubernetes/role/uc3` | CONF-01 |
+| Agent Registry: entity + registration `uc1-agent` (inert ceiling) | `identity/entity` + `agent-registry/registration/display-name/uc1-agent` | VNAI-03 |
+| Agent Registry: entity + registration `agent-uc2` (UC2 ceiling; RAR optional) | `agent-registry/registration/display-name/agent-uc2` | VNAI-03 |
+| Agent Registry: entity + registration `uc3-actor` (UC3 ceiling; RAR mandatory) | `agent-registry/registration/display-name/uc3-actor` | VNAI-03 |
+| Human subject entities `{oscar, jaime}` + OAuth subject/actor aliases | `identity/entity` + `identity/entity-alias` | VNAI-03 |
+| Ceiling policies `uc1-ceiling`, `uc2-agent-ceiling`, `uc3-agent-ceiling` | — | VNAI-04 |
+| Human baselines `uc2-human-baseline`, `uc3-human-baseline` | — | VNAI-04 |
+| Floor policy `uc1-readonly` (k8s, one-layer) | — | VNAI-04 |
 
 > **Native cutover (Phase 9, decision (e)):** the former `jwt/` auth backend and its
-> `uc2-jwt`/`uc3-jwt` roles are RETIRED. IVIA's OAuth JWT now authorizes Vault
-> directly via `X-Vault-Token` against the OAuth resource server profile — no
-> `jwt_login` round-trip. The delegation/actor check the roles' `bound_claims`
-> performed is re-homed natively to the RFC 8693 `act.sub` claim + Plan 05's actor
-> alias; per-request scope moves to `vault:path_access` RAR.
+> `uc2-jwt`/`uc3-jwt` roles are RETIRED — no dead code, no false defense-in-depth.
+> IVIA's OAuth JWT now authorizes Vault directly via `X-Vault-Token` against the
+> OAuth resource server profile — no `jwt_login` round-trip, no intermediate Vault
+> token. The delegation/actor check the roles' `bound_claims` performed is re-homed
+> natively to the RFC 8693 `act.sub` claim + the actor alias (below); per-request
+> scope moves to a `vault:path_access` RAR that Vault itself enforces. Vault is now
+> the SOLE enforcement point; IVIA stays the issuer / token-exchange / CIBA-consent
+> authority.
+
+## Agent Registry + three-layer policy model (Phase 9)
+
+Vault Enterprise `2.0.3-ent` exposes the native Agent Registry + OAuth resource
+server primitives (license module `platform-standard` → `agentic-iam`; see the
+[`vault_server`](../vault_server/README.md) README). This module registers every
+agent as a first-class identity and layers policy natively instead of the retired
+flat per-UC `vault_policy` model.
+
+### Identities (5 entities, 3 registrations)
+
+| Entity | Registration (`display_name`) | Kind | Ceiling | RAR |
+|---|---|---|---|---|
+| `uc1-agent` | `uc1-agent` | agent (k8s workload) | `uc1-ceiling` — **INERT** | n/a (no OAuth token) |
+| `agent-uc2` | `agent-uc2` | agent (OBO actor) | `uc2-agent-ceiling` | optional (`optional_authorization_details=true`) |
+| `uc3-actor` | `uc3-actor` | agent (OBO actor) | `uc3-agent-ceiling` | **mandatory** (`optional_authorization_details=false`) |
+| `oscar` | — (human SUBJECT, not registered) | human | — | — |
+| `jaime` | — (human SUBJECT, not registered) | human | — | — |
+
+Humans are **subjects, not agents** — they get an entity + OAuth subject alias but
+NO registration. Registrations carry `no_default_ceiling_policy = true` and an
+`owner` set to the operating SERVICE principal (e.g. `banking-app-service`), never a
+human persona — one OBO agent serves multiple humans, so it cannot be owned by one.
+
+Inspect a registration:
+
+```bash
+vault read agent-registry/registration/display-name/uc3-actor
+```
+
+### Aliases (how a JWT claim resolves to an entity)
+
+- **UC1** — one provider-native `vault_identity_entity_alias` on the `kubernetes`
+  mount (`name = "uc1/uc1-retriever-sa"`, no issuer) binding the SA login to the
+  `uc1-agent` entity.
+- **UC2/UC3 (OBO)** — OAuth aliases written via `vault_generic_endpoint` to
+  `identity/entity-alias` because the provider `vault_identity_entity_alias` resource
+  has no `issuer` field (required by the OAuth resource server). Two kinds:
+  - **subject** aliases: human `sub` (`oscar`, `jaime`) → the human entity;
+  - **actor** aliases: agent `act.sub` (`agent-uc2`, `uc3-actor`) → the agent entity.
+  Each carries `mount_accessor = oauth-resource-server_root_<profile config_id>`
+  (the synthetic accessor — never appears in `sys/mounts`) and `issuer =
+  var.ivia_issuer`. A bare, UNregistered human subject never resolves (probe:
+  registered `sub=jaime`+`act.sub=uc3-actor` → 200; unregistered `sub=bob` → 403), so
+  every human persona that drives an OBO use case MUST have an entity + subject alias.
+
+### Enforcement layers (probe-confirmed on the live 2.0.3-ent binary)
+
+| Use case | Layers | Composition |
+|---|---|---|
+| **UC1** | ONE | k8s `uc1-readonly` floor bound to the `uc1` role. The `uc1-ceiling` is INERT — k8s tokens carry no `act.sub`, so the ceiling never self-applies. |
+| **UC2** | THREE | human baseline (`uc2-human-baseline`, resolved from `sub`) ∩ agent ceiling (`uc2-agent-ceiling`, resolved from `act.sub`) ∩ per-request `vault:path_access` RAR (optional for UC2). |
+| **UC3** | THREE | human baseline (`uc3-human-baseline`, `sub=jaime`) ∩ agent ceiling (`uc3-agent-ceiling`, `act.sub=uc3-actor`) ∩ per-request `vault:path_access` RAR (**mandatory**). |
+
+The ceiling is **restrict-only** — it can only shrink the human baseline, never grant
+beyond it (a path in the ceiling but absent from the baseline is still denied). The
+per-request RAR narrows further still: a JWT whose `vault:path_access` path matches
+is ALLOWED; a JWT whose RAR path differs is DENIED **even when the entity ACL permits
+the path**. This is what makes Vault the per-request decision point.
 
 ## RDS password handling
 

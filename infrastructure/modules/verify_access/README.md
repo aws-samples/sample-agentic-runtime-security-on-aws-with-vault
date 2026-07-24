@@ -137,6 +137,29 @@ UC3's privileged refund chains RFC 8693 token-exchange with RFC 9396 Rich Author
 Requests (RAR). The honest, verified security model — recorded here because it shapes any
 future decision to switch CIBA providers:
 
+> **Phase 9 — dual RAR emission (`vault:path_access` alongside `refund_approval`).**
+> The `isvaop_pretoken` mapping rule (`iviaop-config/rules.yaml`) now stamps **two**
+> `authorization_details` entries on the token-exchange output:
+> ```json
+> "authorization_details": [
+>   { "type": "refund_approval" },
+>   { "type": "vault:path_access", "path": "database/creds/uc3-refund-writer", "capabilities": ["read"] }
+> ]
+> ```
+> `refund_approval` stays for the business/audit-correlation story (unchanged);
+> `vault:path_access` is the **Vault-native per-request RAR** that Vault Enterprise's
+> OAuth resource server reads to scope the token to exactly that path + capability for
+> that one request. Both types are allowlisted on the ISVAOP client
+> (`clients.yml.tftpl` `authorization_details` → `[refund_approval, vault:path_access]`)
+> and registered in `provider.yml.tftpl`
+> `definition.authorization_details_types_supported`. The rule also stamps a unique
+> `jti` (Vault schema-validates it) and `act`/`may_act` = `uc3-actor`. UC2 emits NO
+> `vault:path_access` RAR (its registration is `optional_authorization_details=true`).
+> With the native cutover, Vault — not IVIA — is the per-request path/action decision
+> point; the retired `uc3-jwt` `bound_claims` gate (below) is superseded by the
+> agent-registry ceiling ∩ `vault:path_access` model in
+> `infrastructure/modules/vault_config/README.md`.
+
 **Vault cryptographically enforces** (the `uc3-jwt` role's `bound_claims` on the exchanged
 JWT, in `vault_config`):
 - identity — `sub=jaime`, the human who approved via CIBA;
