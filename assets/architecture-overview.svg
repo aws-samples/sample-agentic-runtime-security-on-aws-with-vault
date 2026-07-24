@@ -112,14 +112,14 @@
   <text x="514" y="512" fill="#c084fc" font-size="10" font-weight="bold" text-anchor="middle">Use Case 2</text>
   <text x="514" y="528" fill="#e9d5ff" font-size="9" text-anchor="middle">Banking Agent + MCP</text>
   <text x="514" y="544" fill="#8b949e" font-size="9" text-anchor="middle">OAuth personalized R/O</text>
-  <text x="514" y="560" fill="#8b949e" font-size="9" text-anchor="middle">JWT auth → per-user</text>
+  <text x="514" y="560" fill="#8b949e" font-size="9" text-anchor="middle">OBO → per-user creds</text>
 
   <!-- UC3 box (blue) -->
   <rect x="591" y="490" width="132" height="80" rx="8" fill="#0a1a3f" stroke="#3b82f6" stroke-width="1.5"/>
   <text x="657" y="512" fill="#60a5fa" font-size="10" font-weight="bold" text-anchor="middle">Use Case 3</text>
   <text x="657" y="528" fill="#bfdbfe" font-size="9" text-anchor="middle">uc3-privileged-sa</text>
   <text x="657" y="544" fill="#8b949e" font-size="9" text-anchor="middle">CIBA privileged write</text>
-  <text x="657" y="560" fill="#8b949e" font-size="9" text-anchor="middle">bound_claims enforce</text>
+  <text x="657" y="560" fill="#8b949e" font-size="9" text-anchor="middle">vault:path_access @ Vault</text>
 
   <!-- NetworkPolicy label -->
   <rect x="305" y="580" width="418" height="30" rx="6" fill="#2a0e0e" stroke="#ef4444" stroke-width="1"/>
@@ -139,7 +139,7 @@
   <text x="787" y="386" fill="#8b949e" font-size="9">(OIDC Provider 25.10 + WRP + AAC Runtime)</text>
   <text x="757" y="410" fill="#fdba74" font-size="8.5">OAuth ROPC / PKCE</text>
   <text x="872" y="410" fill="#fdba74" font-size="8.5">CIBA (OIDC)</text>
-  <text x="958" y="410" fill="#fdba74" font-size="8.5">may_act (8693)</text>
+  <text x="958" y="410" fill="#fdba74" font-size="8.5">act.sub (8693)</text>
   <text x="757" y="424" fill="#fdba74" font-size="8.5">JWKS endpoint</text>
   <text x="872" y="424" fill="#fdba74" font-size="8.5">RAR (RFC 9396)</text>
   <text x="958" y="424" fill="#fdba74" font-size="8.5">auth_details</text>
@@ -166,7 +166,7 @@
   <text x="837" y="556" fill="#60a5fa" font-size="12" font-weight="bold">HashiCorp Vault</text>
   <text x="837" y="571" fill="#8b949e" font-size="9">(3-node Raft HA, KMS auto-unseal)</text>
   <text x="837" y="592" fill="#bfdbfe" font-size="9">K8s auth (SA JWT)</text>
-  <text x="837" y="606" fill="#bfdbfe" font-size="9">JWT auth (IVIA id_token)</text>
+  <text x="837" y="606" fill="#bfdbfe" font-size="9">OAuth resource srv (IVIA JWT)</text>
   <text x="837" y="620" fill="#bfdbfe" font-size="9">Dynamic Postgres + AWS secrets</text>
   <text x="755" y="644" fill="#f59e0b" font-size="9" font-weight="bold">No standing privileges — TTL 5-15m (OBJ-2)</text>
 

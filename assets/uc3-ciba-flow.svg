@@ -45,7 +45,7 @@
   <path d="M 128.7 619.3 C 403.0 624.6, 767.0 617.8, 1040.3 619.7 M 128.9 618.9 C 403.0 623.8, 767.0 616.2, 1041.6 621.4" fill="none" stroke="#2f9e44" stroke-width="2" stroke-linecap="round"/>
   <path d="M 1039.2 620.6 C 1036.0 620.9, 1031.2 623.3, 1027.3 624.5 M 1040.6 620.4 C 1036.0 620.7, 1031.3 623.2, 1027.2 623.6 M 1040.9 619.2 C 1036.4 618.2, 1030.8 617.3, 1027.6 615.9 M 1040.6 621.1 C 1036.4 618.1, 1030.9 617.0, 1028.0 614.6" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="round"/>
   <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="18" fill="#000000" text-anchor="middle">
-    <text x="590.0" y="35.3">UC3: Privileged action — CIBA out-of-band approval + RAR + may_act</text>
+    <text x="590.0" y="35.3">UC3: Privileged action — CIBA out-of-band approval + RAR + act.sub</text>
   </g>
   <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="12" fill="#000000" text-anchor="middle">
     <text x="130.0" y="102.7">agent uc3</text>
@@ -80,7 +80,7 @@
     <text x="340.0" y="275.4">3. APPROVE</text>
   </g>
   <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="11" fill="#e67700" text-anchor="middle">
-    <text x="185.0" y="323.4">4. JWT  may_act.sub=service-account:agent-uc3</text>
+    <text x="185.0" y="323.4">4. JWT  act.sub=uc3-actor (registered agent)</text>
     <text x="185.0" y="337.1">authorization_details=[{type:refund,amount:1200,order:42}]</text>
   </g>
   <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="11" fill="#1971c2" text-anchor="middle">
@@ -99,6 +99,6 @@
     <text x="585.0" y="615.4">9. AssumeRole + DB events  request_id correlated</text>
   </g>
   <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="13" fill="#000000" text-anchor="middle">
-    <text x="630.0" y="776.0">bypass test: forged may_act → Vault rejects (bound_claims mismatch); forged RAR → audit trail shows divergence at IVIA</text>
+    <text x="630.0" y="776.0">bypass test: forged act.sub (unregistered agent) → Vault fails closed (no agent resolves); wrong vault:path_access RAR → Vault denies though baseline ∩ ceiling permit</text>
   </g>
 </svg>

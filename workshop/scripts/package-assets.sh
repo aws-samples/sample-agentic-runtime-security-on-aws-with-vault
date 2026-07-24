@@ -28,7 +28,7 @@ if ! command -v rsvg-convert >/dev/null 2>&1; then
     exit 1
 fi
 rm -f "$DST_DIR"/*.svg   # drop any stale synced SVGs; Workshop Studio serves the PNGs below
-for svg in architecture-overview uc1-flow uc2-oauth-flow uc3-ciba-flow audit-correlation verify-vault-split vault-authorization-flow ivia-stack; do
+for svg in architecture-overview uc1-flow uc2-oauth-flow uc3-ciba-flow audit-correlation verify-vault-split vault-authorization-flow ivia-stack agent-registry-flow; do
     if [ -f "$SRC_DIR/$svg.svg" ]; then
         rsvg-convert -z 2 -b '#0d1117' -o "$DST_DIR/$svg.png" "$SRC_DIR/$svg.svg"
         echo "  rasterized $svg.svg -> workshop/static/images/$svg.png"

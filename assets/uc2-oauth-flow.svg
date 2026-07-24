@@ -59,7 +59,7 @@
   </g>
   <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="12" fill="#000000" text-anchor="middle">
     <text x="810.0" y="95.2">Vault</text>
-    <text x="810.0" y="110.2">jwt auth</text>
+    <text x="810.0" y="110.2">OAuth resource srv</text>
   </g>
   <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="12" fill="#000000" text-anchor="middle">
     <text x="1030.0" y="95.2">RDS Postgres</text>
@@ -87,7 +87,7 @@
     <text x="390.0" y="455.4">7. user JWT (sub=alice, scope=read:own)</text>
   </g>
   <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="11" fill="#1971c2" text-anchor="middle">
-    <text x="610.0" y="505.4">8. Vault login: jwt auth  bound_audiences=[agent-uc2]</text>
+    <text x="610.0" y="505.4">8. X-Vault-Token → OAuth resource server (act.sub=agent-uc2)</text>
   </g>
   <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="11" fill="#2f9e44" text-anchor="middle">
     <text x="610.0" y="555.4">9. user/pwd scoped to alice  request_id</text>
