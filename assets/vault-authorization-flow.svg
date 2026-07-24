@@ -103,7 +103,7 @@
   <!-- UC3 box -->
   <rect x="518" y="348" width="300" height="68" rx="8" fill="#0a1a3f" stroke="#3b82f6" stroke-width="1.8"/>
   <text x="536" y="369" fill="#60a5fa" font-size="10" font-weight="bold">UC3 — CIBA Privileged Write</text>
-  <text x="536" y="384" fill="#bfdbfe" font-size="11">IVIA RAR JWT → Vault vault:path_access</text>
+  <text x="536" y="384" fill="#bfdbfe" font-size="11">IVIA RAR JWT → Vault via vault:path_access</text>
   <text x="536" y="398" fill="#6b7280" font-size="10">act.sub (RFC 8693) · auth_details (RFC 9396) · TTL 5m</text>
 
   <!-- No standing privs box -->
@@ -122,7 +122,7 @@
   <polygon points="982,292 960,330 1004,330" fill="white" opacity="0.9"/>
   <rect x="973" y="302" width="18" height="12" fill="#0d1117"/>
   <text x="982" y="354" fill="white" font-size="12" text-anchor="middle" font-weight="bold">Vault</text>
-  <text x="982" y="366" fill="#8b949e" font-size="8.5" text-anchor="middle">UC1:1 · UC2/3:3 layer</text>
+  <text x="982" y="366" fill="#8b949e" font-size="8.5" text-anchor="middle">UC1: 1 · UC2/3: 3 layers</text>
 
   <!-- Vault → action boxes -->
   <line x1="1050" y1="298" x2="1096" y2="190" stroke="#14b8a6" stroke-width="1.5" marker-end="url(#at)"/>
