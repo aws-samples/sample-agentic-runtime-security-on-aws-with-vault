@@ -38,7 +38,7 @@ sequenceDiagram
     participant IVIA as IVIA OIDC Provider
     participant LDAP as OpenLDAP
     participant Agent as Agent Workload
-    participant Vault as Vault jwt auth
+    participant Vault as Vault OAuth resource server
 
     rect rgba(208, 226, 255, 0.3)
     Note over Oscar,LDAP: User authentication via LDAP
@@ -51,10 +51,10 @@ sequenceDiagram
 
     rect rgba(186, 230, 255, 0.3)
     Note over Agent,Vault: OIDC seam — JWT becomes Vault credential (OBJ-3)
-    Agent->>Vault: POST /v1/auth/jwt/login<br/>{jwt: IVIA token, role: "uc2-jwt"}
+    Agent->>Vault: Present delegated JWT via X-Vault-Token<br/>(OAuth resource server)
     Vault->>IVIA: Verify JWT signature against JWKS
     IVIA-->>Vault: Signature valid
-    Vault->>Vault: Check bound_claims: {aud=agent-uc2}<br/>Evaluate uc2-personal policy
+    Vault->>Vault: Resolve act.sub=agent-uc2 via Agent Registry<br/>OBO baseline ∩ ceiling
     end
 
     rect rgba(232, 218, 255, 0.3)
@@ -105,22 +105,24 @@ database/     database     Dynamic PostgreSQL credentials
 sys/          system       system endpoints used for control, policy and debugging
 ```
 
-## Step 3 — Confirm JWT auth points to IVIA
+## Step 3 — Confirm the OAuth resource server trusts IVIA
+
+Vault Enterprise validates the IVIA-issued OAuth JWT directly through its **OAuth resource server** profile (`ivia`) — there is no `jwt` auth backend to configure. Read the profile:
 
 ```bash
 kubectl exec -n vault vault-0 -- \
-  sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read auth/jwt/config"
+  sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read sys/config/oauth-resource-server/ivia" | grep -E 'issuer_id|enabled|audiences'
 ```
 
-Expected — `jwks_url` is cluster-internal Service DNS (stable across rebuilds); `bound_issuer` matches the `iss` claim IVIA stamps on its tokens (the public WRP host = the nip.io FQDN from `infrastructure/.acme-state`):
+Expected — `enabled` is `true`; `issuer_id` matches the `iss` claim IVIA stamps on its tokens (the public WRP host = the nip.io FQDN from `infrastructure/.acme-state`); `audiences` lists the registered agent actors:
 
 ```
-jwks_url              https://iviaop.verify-access.svc.cluster.local:8436/oauth2/jwks
-bound_issuer          https://<NIP_FQDN_WRP from infrastructure/.acme-state>
-oidc_discovery_url    n/a
+audiences    [uc3-actor agent-uc2]
+enabled      true
+issuer_id    https://<NIP_FQDN_WRP from infrastructure/.acme-state>
 ```
 
-Vault validates IVIA-issued JWTs via `jwks_url` (cluster-internal Service DNS — stable across rebuilds). `bound_issuer` matches the `iss` claim IVIA stamps on its tokens (the WRP host attendees navigate to in their browser — `NIP_FQDN_WRP` in `infrastructure/.acme-state`). The exact value is per-deploy and is not captured live in this doc; resolve it locally with `grep NIP_FQDN_WRP infrastructure/.acme-state`.
+Vault validates IVIA-issued JWTs against the IVIA JWKS (the signing CA is pinned in the profile's `jwks_ca_pem`). `issuer_id` matches the `iss` claim IVIA stamps on its tokens (the WRP host attendees navigate to in their browser — `NIP_FQDN_WRP` in `infrastructure/.acme-state`). The exact value is per-deploy and is not captured live in this doc; resolve it locally with `grep NIP_FQDN_WRP infrastructure/.acme-state`.
 
 ## Step 4 — Confirm database connection
 

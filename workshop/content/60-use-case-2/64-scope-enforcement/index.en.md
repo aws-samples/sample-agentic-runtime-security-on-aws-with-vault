@@ -25,7 +25,7 @@ Expected output:
 
 ```hcl
 # UC2: Personal-data agent policy (ENFC-02)
-# Allows: kubernetes + jwt auth login, database creds (R/O), AWS (Bedrock) STS creds
+# Allows: kubernetes auth + OAuth resource server (X-Vault-Token), database creds (R/O), AWS (Bedrock) STS creds
 # database/creds/uc2-personal-readonly only — no write DB roles accessible
 path "database/creds/uc2-personal-readonly" {
   capabilities = ["read"]

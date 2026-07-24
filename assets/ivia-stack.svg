@@ -38,7 +38,7 @@
   <text x="107" y="599" fill="#fde68a" font-size="9.5" text-anchor="middle">machine-to-machine</text>
   <text x="107" y="615" fill="#8b949e" font-size="9">CIBA bc-authorize ·</text>
   <text x="107" y="628" fill="#8b949e" font-size="9">token exchange · ROPC</text>
-  <text x="107" y="641" fill="#8b949e" font-size="9">Vault JWT auth (issuer)</text>
+  <text x="107" y="641" fill="#8b949e" font-size="9">Vault OAuth res srv (issuer)</text>
 
   <!-- Internet -> ALB -->
   <line x1="107" y1="182" x2="107" y2="212" stroke="#3b82f6" stroke-width="1.6" marker-end="url(#m-blue)"/>
@@ -139,7 +139,7 @@
   <text x="52" y="697" fill="#8b949e" font-size="10.5" font-weight="bold">HOW IT FITS TOGETHER</text>
 
   <text x="52" y="716" fill="#8b949e" font-size="10">• Browser flows enter via the ALB → WRP, which junctions only <tspan fill="#fb923c">/isvaop</tspan> to the OIDC Provider. There is no /mga junction — the AAC Runtime is not WRP-fronted.</text>
-  <text x="52" y="732" fill="#8b949e" font-size="10">• Machine-to-machine flows (CIBA bc-authorize, token exchange, ROPC) and Vault JWT-auth issuer validation hit <tspan fill="#fdba74">iviaop ClusterIP :8436</tspan> directly, bypassing the WRP.</text>
+  <text x="52" y="732" fill="#8b949e" font-size="10">• Machine-to-machine flows (CIBA bc-authorize, token exchange, ROPC) and Vault OAuth resource server issuer validation hit <tspan fill="#fdba74">iviaop ClusterIP :8436</tspan> directly, bypassing the WRP.</text>
   <text x="52" y="748" fill="#8b949e" font-size="10">• <tspan fill="#c084fc">iviaconfig (LMI)</tspan> is the single source of truth — every pod pulls its published snapshot. The directory (<tspan fill="#4ade80">OpenLDAP</tspan>) and HVDB (<tspan fill="#2dd4bf">PostgreSQL</tspan>) are in-cluster pods — no AWS Simple AD, no shared RDS.</text>
 
 </svg>

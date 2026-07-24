@@ -179,14 +179,13 @@ athena_query() {
 }
 ```
 
-Find the most recent issuance events for `uc2-personal-readonly`, including the `user_sub` and `role` from the JWT auth claim mappings (the `substr(timestamp, 1, 19)` trims nanoseconds for readable display — second precision is plenty for audit correlation):
+Find the most recent issuance events for `uc2-personal-readonly`. Under the native OAuth resource server model there are no hand-mapped `user_sub` / `role` claim-mappings — Vault resolves the requester to a Vault **entity** from the presented JWT's `sub` claim (`user_claim = sub`). `auth.display_name` and `auth.entity_id` carry that resolved identity (the `substr(timestamp, 1, 19)` trims nanoseconds for readable display — second precision is plenty for audit correlation):
 
 ```bash
 athena_query "SELECT
   substr(timestamp, 1, 19) AS time,
-  auth.metadata['user_sub'] AS user_sub,
-  auth.metadata['role'] AS jwt_role,
-  auth.display_name
+  auth.display_name AS identity,
+  auth.entity_id AS entity_id
 FROM workshop_logs.vault_audit
 WHERE type = 'response'
   AND request.path = 'database/creds/uc2-personal-readonly'
@@ -197,17 +196,17 @@ LIMIT 10;"
 Expected output — one row per recent issuance:
 
 ```
-time                 user_sub  jwt_role  display_name
-2026-05-28T20:37:37  -         -         root
-2026-05-28T20:27:29  -         -         root
-2026-05-28T19:24:22  jaime     uc2-jwt   jwt-jaime
+time                 identity  entity_id
+2026-07-24T19:57:26  root      -
+2026-07-24T19:55:18  root      -
+2026-07-24T18:03:59  root      -
 ...
 ```
 
 Two row patterns appear:
 
-- **`display_name=root`** — the credential was issued via the Vault root token (the inspection commands on the previous pages, including your Step 1 above). `user_sub` and `jwt_role` show as `-` (the helper renders empty fields as `-`) because root-token issuance carries no user identity.
-- **`display_name=jwt-<sub>`** — the credential was issued via `auth/jwt/login` from a real user JWT. `user_sub` and `jwt_role` come from the JWT's `sub` claim (mapped by the `claim_mappings` you saw on the `uc2-jwt` role in [page 62](../62-configure-jwt-auth/)). This is the OBJ-5 audit evidence: every JWT-issued credential carries the originating user's identity into the audit trail.
+- **`identity=root`, `entity_id=-`** — the credential was issued via the Vault root token (the inspection commands on the previous pages, including your Step 1 above, and the `verify-uc2.sh` checks). Root-token issuance resolves no Vault entity, so `entity_id` is empty (the helper renders empty fields as `-`).
+- **`identity=<sub>` (e.g. `oscar` / `jaime`), with a populated `entity_id`** — the credential was issued by presenting a real user's IVIA OAuth JWT directly as the `X-Vault-Token` on the `database/creds` read. Vault's OAuth resource server resolved the human `sub` to a Vault entity (`user_claim = sub`); that resolved entity is the OBJ-5 audit evidence tying the credential to the originating user. **These rows appear after you sign in through the Banking UI and run a banking query** (the browser flow in [OAuth Login Flow](../61-oauth-pkce-flow/)) — one fresh row per tool call. The exact `identity` / `entity_id` values are recorded live at that moment; if you have not yet driven a signed-in query, only the `root` rows are present.
 
 ## Step 7 — Find the revocation event for the lease you revoked
 
@@ -238,7 +237,7 @@ What this proves:
 - **`time`** — the moment Vault executed the revocation; on a real incident response timeline this is the "session terminated" anchor.
 - **`revoked_by=root`** — in this demo you invoked the API as the root token. In a production flow this would be the service-account-bound Vault token the MCP server uses (`display_name=token-uc2-mcp-server-sa` or similar) — exactly identifying the workload that ended the session.
 
-**The audit-trail story is now closed:** Step 6 ties the original credential to a user identity (`user_sub`); Step 7 ties the revocation to the same `lease_id`. Anyone analysing the audit log can reconstruct "Oscar logged in at 19:24, got `lease_id` X, the MCP server revoked X at 20:19" — start-to-end attribution for a single session.
+**The audit-trail story is now closed:** Step 6 ties the original credential to a user identity (the resolved `sub` entity); Step 7 ties the revocation to the same `lease_id`. Anyone analysing the audit log can reconstruct "Oscar logged in at 19:24, got `lease_id` X, the MCP server revoked X at 20:19" — start-to-end attribution for a single session.
 
 :::expand{header="Platform Track — Vault lease lifecycle: explicit revoke vs TTL expiry"}
 

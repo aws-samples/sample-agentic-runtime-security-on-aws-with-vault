@@ -18,7 +18,7 @@ This use case adds **Objective 3 — actions tied to user intent** on top of the
 | Actions tied to user intent | OBJ-3 | The user's IVIA-issued JWT carries the `sub` claim (user identity); the MCP Server presents that JWT to Vault's `jwt` auth method; Vault maps the sub claim to per-user-scoped DB credentials; the database enforces Row-Level Security so each user sees only their own rows |
 | Enforcement at the point of use | ENFC-02 | The Vault policy for `uc2-personal` grants only `database/creds/uc2-personal-readonly`; Postgres GRANTs exclude INSERT — so even if the Vault policy were widened, the DB GRANT layer still rejects writes |
 | Enforcement at the point of use | ENFC-03 | Kubernetes NetworkPolicy restricts MCP Server egress to Vault, RDS, and DNS only — external HTTP calls are blocked at the network layer |
-| Audit trail ties credential issuance to user identity | OBJ-5 | The Vault audit log records both the jwt auth login (with the user's `sub` claim) and the subsequent database/creds issuance — providing a correlated audit trail from user identity to data access |
+| Audit trail ties credential issuance to user identity | OBJ-5 | The Vault audit log records both the OAuth resource server authorization (with the user's `sub` claim) and the subsequent database/creds issuance — providing a correlated audit trail from user identity to data access |
 
 ## Services Deployed
 
@@ -26,7 +26,7 @@ This use case adds **Objective 3 — actions tied to user intent** on top of the
 |---|---|---|---|
 | Banking UI | SvelteKit (Node 22) | 5173 | Browser OAuth flow, JWT custody, Agent API calls |
 | Banking Agent | Python / Strands SDK | 3002 | LLM orchestration, tool routing via MCP |
-| MCP Server | Node.js / Express | 3001 | Vault JWT auth, JIT DB credentials, query execution |
+| MCP Server | Node.js / Express | 3001 | Vault OAuth resource server (X-Vault-Token), JIT DB credentials, query execution |
 
 All three pods run in the `banking-app` namespace. Separate ALB Ingress exposes the Banking UI externally. Agent and MCP Server are ClusterIP-only — no external exposure.
 
@@ -46,7 +46,7 @@ All three pods run in the `banking-app` namespace. Separate ALB Ingress exposes 
 You must have completed the **Deploy Foundation** module before starting here. Specifically:
 
 - `vault` — Vault HA cluster running and initialized
-- `vault_config` — Kubernetes auth backend, jwt auth backend (pointing to IVIA OIDC discovery), `uc2-personal` policy, `uc2` Kubernetes auth role, `uc2-jwt` JWT auth role, and `uc2-personal-readonly` database credentials role configured
+- `vault_config` — Kubernetes auth backend, OAuth resource server profile `ivia` (pointing to IVIA OIDC discovery), `uc2-personal` policy + `uc2-agent-ceiling`, `uc2` Kubernetes auth role, `agent-uc2` Agent Registry registration, and `uc2-personal-readonly` database credentials role configured
 - `verify_access` — IVIA OIDC provider deployed with `agent-uc2` OAuth client (PKCE required, authorization_code grant) configured declaratively via config.yaml
 - `uc2_app` — Banking UI, Banking Agent, and MCP Server deployed via local Terraform (`terraform -chdir=infrastructure apply`)
 - `seed-banking-db.sh` — Banking schema, RLS policies, and test data seeded into RDS (run post-deploy)

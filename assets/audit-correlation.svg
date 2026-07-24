@@ -44,7 +44,7 @@
   <!-- Vault -->
   <rect x="825" y="120" width="130" height="50" rx="8" fill="#0d1117" stroke="#3b82f6" stroke-width="1.5"/>
   <text x="890" y="148" fill="#60a5fa" font-size="13" font-weight="bold" text-anchor="middle">Vault</text>
-  <text x="890" y="163" fill="#8b949e" font-size="9" text-anchor="middle">JWT auth</text>
+  <text x="890" y="163" fill="#8b949e" font-size="9" text-anchor="middle">OAuth res srv</text>
 
   <!-- RDS -->
   <rect x="1085" y="120" width="130" height="50" rx="8" fill="#0d1117" stroke="#14b8a6" stroke-width="1.5"/>
@@ -120,12 +120,12 @@
   <text x="130" y="593" fill="#8b949e" font-size="10">authn · RAR · CIBA approval</text>
   <text x="130" y="626" fill="#fde68a" font-size="12" font-weight="bold">request_id</text>
   <text x="130" y="650" fill="#c9d1d9" font-size="12">user_approved_sub</text>
-  <text x="130" y="674" fill="#c9d1d9" font-size="12">may_act · rar_type</text>
+  <text x="130" y="674" fill="#c9d1d9" font-size="12">act.sub · rar_type</text>
 
   <!-- Vault audit log -->
   <rect x="550" y="545" width="360" height="165" rx="10" fill="#0a1626" stroke="#3b82f6" stroke-width="1.5"/>
   <text x="570" y="575" fill="#60a5fa" font-size="14" font-weight="bold">Vault audit log</text>
-  <text x="570" y="593" fill="#8b949e" font-size="10">JWT login · dynamic lease</text>
+  <text x="570" y="593" fill="#8b949e" font-size="10">X-Vault-Token · dynamic lease</text>
   <text x="570" y="626" fill="#fde68a" font-size="12" font-weight="bold">request_id</text>
   <text x="570" y="650" fill="#c9d1d9" font-size="12">vault_principal · path</text>
   <text x="570" y="674" fill="#c9d1d9" font-size="12">credential_ttl (300s)</text>

@@ -34,7 +34,7 @@
   <!-- IVIA row 5 — JWT signing key issuance -->
   <rect x="70" y="700" width="620" height="110" rx="8" fill="#161b22" stroke="#3b82f6" stroke-width="1.5"/>
   <text x="380" y="735" text-anchor="middle" font-size="17" font-weight="600" fill="#e6edf3">JWT signing key issuance</text>
-  <text x="380" y="770" text-anchor="middle" font-size="13" fill="#8b949e">OIDC discovery URL, JWKS endpoint, may_act delegation</text>
+  <text x="380" y="770" text-anchor="middle" font-size="13" fill="#8b949e">OIDC discovery URL, JWKS endpoint, act.sub delegation</text>
 
   <!-- ============================== RIGHT COLUMN — HashiCorp Vault ============================== -->
   <rect x="820" y="100" width="680" height="770" rx="12" fill="#1f1608" stroke="#f59e0b" stroke-width="2"/>
@@ -46,10 +46,10 @@
   <text x="1160" y="235" text-anchor="middle" font-size="17" font-weight="600" fill="#e6edf3">workload Kubernetes auth</text>
   <text x="1160" y="270" text-anchor="middle" font-size="13" fill="#8b949e">ServiceAccount JWT projected, role binds SA → Vault role</text>
 
-  <!-- Vault row 2 — jwt auth (bound to Verify OIDC) -->
+  <!-- Vault row 2 — OAuth resource server (bound to Verify OIDC) -->
   <rect x="850" y="325" width="620" height="110" rx="8" fill="#161b22" stroke="#f59e0b" stroke-width="1.5"/>
-  <text x="1160" y="360" text-anchor="middle" font-size="17" font-weight="600" fill="#e6edf3">jwt auth (bound to Verify OIDC)</text>
-  <text x="1160" y="395" text-anchor="middle" font-size="13" fill="#8b949e">discovery_url, bound_audiences, bound_claims (may_act.sub)</text>
+  <text x="1160" y="360" text-anchor="middle" font-size="17" font-weight="600" fill="#e6edf3">OAuth resource server (Verify OIDC)</text>
+  <text x="1160" y="395" text-anchor="middle" font-size="13" fill="#8b949e">jwks_url, act.sub via Agent Registry, vault:path_access RAR</text>
 
   <!-- Vault row 3 — Postgres database secrets engine -->
   <rect x="850" y="450" width="620" height="110" rx="8" fill="#161b22" stroke="#f59e0b" stroke-width="1.5"/>

@@ -369,7 +369,7 @@ resource "vault_policy" "uc2_personal" {
 
   policy = <<-EOT
     # UC2: Personal-data agent policy (ENFC-02)
-    # Allows: kubernetes + jwt auth login, database creds (R/O), AWS (Bedrock) STS creds
+    # Allows: kubernetes auth + OAuth resource server (X-Vault-Token), database creds (R/O), AWS (Bedrock) STS creds
     # database/creds/uc2-personal-readonly only — no write DB roles accessible
     path "database/creds/uc2-personal-readonly" {
       capabilities = ["read"]
@@ -391,7 +391,7 @@ resource "vault_policy" "uc3_refund_writer" {
 
   policy = <<-EOT
     # UC3: Refund-writer agent policy
-    # Allows: kubernetes + jwt auth login, database write creds, read-only creds,
+    # Allows: kubernetes auth + OAuth resource server (X-Vault-Token), database write creds, read-only creds,
     # AWS (Bedrock) STS creds, AWS (CloudWatch logs) STS creds for the
     # ivia_decisions anchor emission (OBJ-5)
     path "database/creds/uc3-refund-writer" {
