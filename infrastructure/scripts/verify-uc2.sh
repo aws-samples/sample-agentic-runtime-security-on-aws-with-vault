@@ -8,7 +8,13 @@
 #   3.  MCP Server pod Running (app=banking-mcp-server)
 #   4.  ServiceAccount uc2-mcp-server-sa exists in banking-app namespace
 #   5.  Vault k8s auth role uc2 bound to uc2-mcp-server-sa
-#   6.  Vault jwt auth role uc2-jwt exists with bound_audiences containing agent-uc2
+#   6.  UC2 native OBO surface: agent-uc2 registration + uc2-agent-ceiling policy
+#       (the retired uc2-jwt jwt-auth role is GONE — decisions (b)/(e))
+#   6b. REAL UC2 token: jti present AND act.sub=agent-uc2 (OBO cutover gate; needs
+#       UC2_VERIFY_TOKEN — fails loud on missing jti/act.sub; unset = warn-skip in
+#       default mode, HARD FAIL under --gate, the authoritative UC2 cutover gate)
+#   6c. UC2 refreshed token FAILS CLOSED at Vault (needs UC2_VERIFY_REFRESHED_TOKEN)
+#   6d. OAuth alias binding: profile config_id==accessor .id + OBO allow (real token)
 #   7.  JIT DB creds issuance: database/creds/uc2-personal-readonly succeeds
 #   8.  DB read works: SELECT from banking.accounts returns rows (proves RLS is active)
 #   9.  ENFC-02 — INSERT rejected: uc2-personal-readonly creds cannot INSERT
@@ -22,7 +28,7 @@
 #       WebSEAL login form and cannot be tested headlessly here)
 #
 # Usage:
-#   ./verify-uc2.sh [--help]
+#   ./verify-uc2.sh [--gate] [--help]   (--gate: Checks 6b/6c/6d skip = HARD FAIL)
 #
 # Env-var overrides:
 #   BANKING_NAMESPACE     (default: banking-app)
@@ -47,7 +53,15 @@ if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
 verify-uc2.sh — ${SCRIPT_DESCRIPTION}
 
 Usage:
-  ./verify-uc2.sh [--help]
+  ./verify-uc2.sh [--gate] [--help]
+
+Modes:
+  (default)   Routine deploy verify. Checks 6b/6c/6d warn-SKIP when their tokens
+              are unset (a browser-captured OAuth token cannot be minted headlessly).
+  --gate      UC2 cutover done-gate. Checks 6b/6c/6d HARD FAIL (not skip) when their
+              tokens are unset, so the OBO cutover (jti + act.sub=agent-uc2 + the
+              refreshed-token fail-closed edge) is provably exercised. This is the
+              AUTHORITATIVE UC2 gate the Part B live run must invoke.
 
 Checks (14 total):
   1.  Banking UI pod Running (app=banking-ui in banking-app namespace)
@@ -55,7 +69,10 @@ Checks (14 total):
   3.  MCP Server pod Running (app=banking-mcp-server)
   4.  ServiceAccount uc2-mcp-server-sa exists in banking-app namespace
   5.  Vault k8s auth role uc2 bound to uc2-mcp-server-sa
-  6.  Vault jwt auth role uc2-jwt exists with bound_audiences containing agent-uc2
+  6.  UC2 native OBO surface: agent-uc2 registration + uc2-agent-ceiling policy
+  6b. REAL UC2 token: jti + act.sub=agent-uc2 (needs UC2_VERIFY_TOKEN)
+  6c. UC2 refreshed token FAILS CLOSED (needs UC2_VERIFY_REFRESHED_TOKEN)
+  6d. OAuth alias binding: profile config_id==accessor .id + OBO allow
   7.  JIT DB creds issuance (database/creds/uc2-personal-readonly)
   8.  DB read: SELECT from banking.accounts succeeds with Vault-vended creds
   9.  ENFC-02: INSERT rejected with uc2-personal-readonly creds
@@ -66,12 +83,25 @@ Checks (14 total):
   14. OAuth discovery: IVIA /.well-known/openid-configuration returns valid JSON
 
 Env-var overrides:
-  BANKING_NAMESPACE   (default: banking-app)
-  VAULT_NAMESPACE     (default: vault)
-  VAULT_POD           (default: vault-0)
-  VAULT_ROOT_TOKEN    (optional — used for lease listing)
+  BANKING_NAMESPACE            (default: banking-app)
+  VAULT_NAMESPACE              (default: vault)
+  VAULT_POD                    (default: vault-0)
+  VAULT_ROOT_TOKEN             (optional — used for lease listing)
+  UC2_VERIFY_TOKEN             (optional — real banking OAuth JWT captured from the
+                                browser sign-in; enables Checks 6b/6d real-token
+                                jti + act.sub=agent-uc2 + OBO-allow assertions)
+  UC2_VERIFY_REFRESHED_TOKEN   (optional — a refresh_token-grant token (no act/jti);
+                                enables Check 6c fail-closed assertion)
 USAGE
     exit 0
+fi
+
+# --gate: promote the token-dependent UC2 cutover checks (6b/6c/6d) from warn-SKIP
+# to HARD FAIL when their tokens are absent, so a run cannot report all-PASS without
+# actually exercising the OBO cutover. Mirrors verify-uc3.sh --bypass (skip=HARD FAIL).
+UC2_CUTOVER_GATE=false
+if [ "${1:-}" = "--gate" ]; then
+    UC2_CUTOVER_GATE=true
 fi
 
 #-------------------------------------------------------------------------------
@@ -93,6 +123,21 @@ if [ -z "${VAULT_ROOT_TOKEN:-}" ]; then
 fi
 
 VAULT_EXEC="VAULT_TOKEN='${VAULT_ROOT_TOKEN:-}'"
+
+# decode_jwt_claim <jwt> <jq-filter> — base64url-decode the JWT payload (2nd
+# segment) and extract a claim via jq. Echoes the value, or empty on any failure.
+# Portable across macOS/BusyBox base64 (both accept `-d`). Pads base64url to a
+# multiple of 4 and maps the url-safe alphabet (-_ → +/) before decoding.
+decode_jwt_claim() {
+    local jwt="$1" filter="$2" payload
+    payload=$(printf '%s' "$jwt" | cut -d. -f2)
+    case $(( ${#payload} % 4 )) in
+        2) payload="${payload}==" ;;
+        3) payload="${payload}=" ;;
+    esac
+    printf '%s' "$payload" | tr '_-' '/+' | base64 -d 2>/dev/null \
+        | jq -r "$filter" 2>/dev/null || echo ""
+}
 
 print_info "${SCRIPT_DESCRIPTION}"
 echo ""
@@ -157,16 +202,173 @@ else
 fi
 
 #-------------------------------------------------------------------------------
-# Check 6 — Vault jwt auth role uc2-jwt exists with bound_audiences=[agent-uc2]
+# Check 6 — UC2 native OBO surface: agent-uc2 registration + agent ceiling
+#
+# Phase 9 cutover (locked decisions (b)/(e)): the uc2-jwt jwt-auth role is RETIRED
+# (the jwt/ backend is GONE — asserted in test-vault-verify.sh). UC2 is now OBO:
+# the human `sub` + the agent `act.sub=agent-uc2` resolve via the
+# oauth-resource-server profile. Assert the two native surfaces exist:
+#   (a) the agent-uc2 registration reads back by display-name, and
+#   (b) the uc2-agent-ceiling policy is present (the OBO agent-ceiling layer;
+#       its live enforcement is exercised end-to-end by the OBO-allow in Check 6d
+#       and mirrored by verify-uc3's wrong-actor / RAR deny suite).
 #-------------------------------------------------------------------------------
-jwt_audiences=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
-    sh -c "${VAULT_EXEC} vault read auth/jwt/role/uc2-jwt -format=json" 2>/dev/null \
-    | jq -r '.data.bound_audiences[]' 2>/dev/null | tr '\n' ',' | sed 's/,$//' || echo "")
-if echo "${jwt_audiences}" | grep -q "agent-uc2"; then
-    print_pass "Vault jwt auth role uc2-jwt exists (bound_audiences contains agent-uc2)"
+uc2_reg_name=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
+    sh -c "${VAULT_EXEC} vault read -format=json agent-registry/registration/display-name/agent-uc2" 2>/dev/null \
+    | jq -r '.data.display_name // empty' 2>/dev/null || echo "")
+if [ "${uc2_reg_name}" = "agent-uc2" ]; then
+    print_pass "UC2 Agent Registry: registration 'agent-uc2' resolvable by display-name (OBO actor)"
 else
-    print_fail "Vault jwt auth role uc2-jwt" \
-        "Vault jwt role uc2-jwt not found or bound_audiences does not contain agent-uc2 (got '${jwt_audiences}') — reapply vault_config. Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault read auth/jwt/role/uc2-jwt"
+    print_fail "UC2 Agent Registry registration (agent-uc2)" \
+        "agent-registry/registration/display-name/agent-uc2 did not read back (got '${uc2_reg_name}') — reapply vault_config (vault_agent_registration.agent_uc2). Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault read agent-registry/registration/display-name/agent-uc2"
+fi
+
+uc2_ceiling=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
+    sh -c "${VAULT_EXEC} vault policy read uc2-agent-ceiling" 2>/dev/null || echo "")
+if [ -n "${uc2_ceiling}" ] && echo "${uc2_ceiling}" | grep -q 'path'; then
+    print_pass "UC2 agent ceiling policy 'uc2-agent-ceiling' present (OBO agent-ceiling layer)"
+else
+    print_fail "UC2 agent ceiling policy (uc2-agent-ceiling)" \
+        "Vault policy uc2-agent-ceiling not found or empty — reapply vault_config (vault_policy.uc2_agent_ceiling). Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault policy read uc2-agent-ceiling"
+fi
+
+#-------------------------------------------------------------------------------
+# Check 6b — REAL UC2 token: jti present AND act.sub=agent-uc2 (OBO cutover gate)
+#
+# UNCONDITIONAL native assertion (no UC2_ENDSTATE / jwt_login branch — the cutover
+# is LOCKED, decision (b)). UC2 is OBO: AGENT_IDENTITY_CLAIM_UC2=act.sub. Decode the
+# ACTUAL banking OAuth JWT the MCP server forwards to Vault and assert:
+#   - a non-empty `jti` claim (JTI_MANDATORY — a jti-less token 403s at Vault), and
+#   - `act.sub` == agent-uc2 (the OBO actor binding).
+# A missing jti OR a missing/wrong act.sub FAILS LOUD; the fix is Plan 04's UC2
+# jti + act.sub emission, NEVER a jwt_login fallback.
+#
+# Token source: there is no headless mint (agent-uc2 is authorization_code + PKCE,
+# client_secret_basic), so the operator/live-gate supplies UC2_VERIFY_TOKEN — a real
+# banking user OAuth JWT captured from the browser sign-in (workshop UC2 flow). When
+# unset the assertion is SKIPPED with a warn (never a fake pass); the Part B live
+# gate provides it.
+#-------------------------------------------------------------------------------
+if [ -n "${UC2_VERIFY_TOKEN:-}" ]; then
+    uc2_jti=$(decode_jwt_claim "${UC2_VERIFY_TOKEN}" '.jti // empty')
+    uc2_actsub=$(decode_jwt_claim "${UC2_VERIFY_TOKEN}" '.act.sub // empty')
+
+    if [ -n "${uc2_jti}" ]; then
+        print_pass "UC2 real token carries a jti claim (jti=${uc2_jti})"
+    else
+        print_fail "UC2 real-token jti MISSING" \
+            "The forwarded UC2 OAuth token has NO jti claim — Vault (JTI_MANDATORY) rejects it and UC2 (no fallback) breaks. Fix = Plan 04's UC2 jti emission on the aud=agent-uc2 authcode grant, NEVER a jwt_login fallback. Decode: echo <jwt> | cut -d. -f2 | base64 -d"
+    fi
+
+    if [ "${uc2_actsub}" = "agent-uc2" ]; then
+        print_pass "UC2 real token carries act.sub=agent-uc2 (OBO actor binding — AGENT_IDENTITY_CLAIM_UC2=act.sub)"
+    else
+        print_fail "UC2 real-token act.sub != agent-uc2" \
+            "The forwarded UC2 token's act.sub is '${uc2_actsub:-<absent>}' (expected agent-uc2) — native OBO cannot resolve the agent actor and UC2 fails closed. Fix = Plan 04's ACTOR_CLAIM_UC2=agent-uc2 emission, NEVER a jwt_login fallback."
+    fi
+else
+    if [ "${UC2_CUTOVER_GATE}" = "true" ]; then
+        print_fail "UC2 real-token jti + act.sub gate NOT exercised — no UC2_VERIFY_TOKEN supplied (--gate: skip = HARD FAIL)" \
+            "Set UC2_VERIFY_TOKEN=<real banking OAuth JWT captured from the browser sign-in: sub=<human>, act.sub=agent-uc2, a unique jti>. No headless mint exists (agent-uc2 is authcode+PKCE), so the Part B live gate captures it from the browser flow and re-invokes: UC2_VERIFY_TOKEN=... ./verify-uc2.sh --gate."
+    else
+        print_warn "UC2 real-token jti + act.sub checks SKIPPED — set UC2_VERIFY_TOKEN=<real banking OAuth JWT captured from the browser sign-in> to exercise the phase-done gate. No headless mint exists (agent-uc2 is authcode+PKCE). The Part B live gate supplies it via --gate — this is NOT a pass."
+    fi
+fi
+
+#-------------------------------------------------------------------------------
+# Check 6c — UC2 REFRESHED token FAILS CLOSED (folded-in live-validation check)
+#
+# A refreshed UC2 token carries NO act claim and NO jti (the refresh_token grant
+# does not re-run the authcode claim stamping). If the MCP server ever forwards a
+# refreshed token to Vault it MUST fail closed: no jti → schema reject; no act.sub
+# → OBO cannot resolve the agent → deny. This proves the fail-closed edge live so
+# it does not surprise an attendee mid-session.
+#
+# Token source: operator/live-gate supplies UC2_VERIFY_REFRESHED_TOKEN (a token
+# obtained via a refresh_token grant). When unset the check is SKIPPED with a warn.
+#-------------------------------------------------------------------------------
+if [ -n "${UC2_VERIFY_REFRESHED_TOKEN:-}" ]; then
+    ref_jti=$(decode_jwt_claim "${UC2_VERIFY_REFRESHED_TOKEN}" '.jti // empty')
+    ref_act=$(decode_jwt_claim "${UC2_VERIFY_REFRESHED_TOKEN}" '.act.sub // empty')
+    ref_out=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
+        sh -c "VAULT_TOKEN='${UC2_VERIFY_REFRESHED_TOKEN}' vault read database/creds/uc2-personal-readonly" 2>&1)
+    ref_rc=$?
+    if [ "${ref_rc}" -ne 0 ] \
+        && echo "${ref_out}" | grep -qiE 'permission denied|invalid token|missing|denied|403|error validating'; then
+        print_pass "UC2 refreshed token (jti='${ref_jti:-none}', act.sub='${ref_act:-none}') FAILS CLOSED at Vault — no silent credential vend on a refreshed token"
+    else
+        print_fail "UC2 refreshed-token fail-closed" \
+            "A refreshed UC2 token was ACCEPTED by Vault (rc=${ref_rc}) — it lacks act/jti and MUST be rejected. The MCP server must never forward a refreshed token, and Vault must fail closed. Output: ${ref_out:0:200}"
+    fi
+else
+    if [ "${UC2_CUTOVER_GATE}" = "true" ]; then
+        print_fail "UC2 refreshed-token fail-closed edge NOT exercised — no UC2_VERIFY_REFRESHED_TOKEN supplied (--gate: skip = HARD FAIL)" \
+            "Set UC2_VERIFY_REFRESHED_TOKEN=<a refresh_token-grant token for agent-uc2 (has NO act/jti claims)> so the gate proves Vault DENIES it (fail closed). The Part B live gate mints it via the refresh_token grant and re-invokes with --gate."
+    else
+        print_warn "UC2 refreshed-token fail-closed check SKIPPED — set UC2_VERIFY_REFRESHED_TOKEN=<a refresh_token-grant token (no act/jti)> to prove Vault rejects it. The Part B live gate supplies it via --gate."
+    fi
+fi
+
+#-------------------------------------------------------------------------------
+# Check 6d — OAuth alias binding: profile config_id == the accessor's, OBO allow
+#            (folded-in CONFIG_ID vs .id check)
+#
+# Plan 05 builds the actor/subject alias mount_accessor as the synthetic string
+# `oauth-resource-server_root_${profile.id}` (09-DISCOVERY MOUNT_ACCESSOR_FORM).
+# This confirms the profile resource `.id` equals the actual config_id Vault
+# materialized in the synthetic accessor — if they diverged, the actor alias would
+# point at a non-existent accessor and OBO would fail closed. Two signals:
+#   (1) Structural: the agent-uc2 entity alias's mount_accessor has the
+#       oauth-resource-server_root_<config_id> form and its suffix matches the
+#       profile id (best-effort; warns if the alias/field is not enumerable).
+#   (2) Load-bearing: present the REAL UC2 token (sub=human + act.sub=agent-uc2 +
+#       jti) via X-Vault-Token to database/creds/uc2-personal-readonly and expect
+#       ALLOW — the end-to-end proof that the alias binds and OBO resolves.
+#-------------------------------------------------------------------------------
+# (1) Structural cross-check — resolve the profile id and the actor alias accessor.
+profile_id=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
+    sh -c "${VAULT_EXEC} vault read -format=json sys/config/oauth-resource-server/ivia" 2>/dev/null \
+    | jq -r '.data.config_id // .data.id // .config_id // empty' 2>/dev/null || echo "")
+actor_accessor=""
+for _aid in $(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
+    sh -c "${VAULT_EXEC} vault list -format=json identity/entity-alias/id" 2>/dev/null \
+    | jq -r '.[]?' 2>/dev/null); do
+    _a=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
+        sh -c "${VAULT_EXEC} vault read -format=json identity/entity-alias/id/${_aid}" 2>/dev/null || echo "{}")
+    if [ "$(echo "${_a}" | jq -r '.data.name // empty' 2>/dev/null)" = "agent-uc2" ]; then
+        actor_accessor=$(echo "${_a}" | jq -r '.data.mount_accessor // empty' 2>/dev/null || echo "")
+        break
+    fi
+done
+if echo "${actor_accessor}" | grep -q '^oauth-resource-server_root_'; then
+    accessor_cfg="${actor_accessor#oauth-resource-server_root_}"
+    if [ -n "${profile_id}" ] && [ "${accessor_cfg}" = "${profile_id}" ]; then
+        print_pass "UC2 alias accessor '${actor_accessor}' matches oauth profile config_id (.id=${profile_id}) — alias binding intact"
+    else
+        print_warn "UC2 alias accessor is '${actor_accessor}' (form OK); profile config_id ('${profile_id:-unresolved}') not field-matched — the load-bearing OBO-allow below is authoritative"
+    fi
+else
+    print_warn "UC2 actor alias mount_accessor not enumerable (got '${actor_accessor:-none}') — the load-bearing OBO-allow below is authoritative for the binding"
+fi
+
+# (2) Load-bearing OBO allow — the real token must resolve and be authorized.
+if [ -n "${UC2_VERIFY_TOKEN:-}" ]; then
+    obo_user=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
+        sh -c "VAULT_TOKEN='${UC2_VERIFY_TOKEN}' vault read -format=json database/creds/uc2-personal-readonly" 2>/dev/null \
+        | jq -r '.data.username // empty' 2>/dev/null || echo "")
+    if [ -n "${obo_user}" ]; then
+        print_pass "UC2 OBO allow: real token (sub + act.sub=agent-uc2) authorized database/creds/uc2-personal-readonly (username=${obo_user}) — alias binds, config_id/.id correct"
+    else
+        print_fail "UC2 OBO allow (alias binding)" \
+            "The real UC2 token was NOT authorized for database/creds/uc2-personal-readonly — the oauth alias may not bind (config_id/.id mismatch in oauth-resource-server_root_<id>), the agent ceiling denies it, or jti/act.sub is malformed. Check: present the token via X-Vault-Token to \$VAULT_ADDR/v1/database/creds/uc2-personal-readonly and inspect the Vault response."
+    fi
+else
+    if [ "${UC2_CUTOVER_GATE}" = "true" ]; then
+        print_fail "UC2 OBO-allow (alias binding) NOT exercised — no UC2_VERIFY_TOKEN supplied (--gate: skip = HARD FAIL)" \
+            "The load-bearing config_id/.id accessor binding is proven by presenting UC2_VERIFY_TOKEN to database/creds/uc2-personal-readonly (OBO allow). Set UC2_VERIFY_TOKEN (see Check 6b) and re-invoke with --gate."
+    else
+        print_warn "UC2 OBO-allow (alias binding) check SKIPPED — needs UC2_VERIFY_TOKEN (see Check 6b). The Part B live gate supplies it via --gate."
+    fi
 fi
 
 #-------------------------------------------------------------------------------
