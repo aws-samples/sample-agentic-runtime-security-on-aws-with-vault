@@ -263,6 +263,22 @@ cleanup_vault_native_resources() {
             || print_warn "vault-ent-license secret delete skipped"
     fi
 
+    # Reset the vault-config terraform state — UNCONDITIONAL local file op (must
+    # run even when Vault is already unreachable, so it precedes the reachability
+    # guard below). Every resource this state tracks is a vault_* object living
+    # INSIDE the Vault server that the tier-2 destroy tears down, so once Vault is
+    # gone the state is 100% stale. Leaving it makes the NEXT vault-configure apply
+    # refresh dead resource IDs (agent-registry/registration/id/<uuid>) and abort
+    # with "Unable to Read Resource from Vault" before it can recreate anything.
+    # The API deletes above only clean the LIVE Vault; this closes the state half
+    # of threat T-09-07-03. A `terraform destroy` here would hit the same dead-read
+    # errors, so removing the state (resources already die with Vault) is correct.
+    local vc_state_dir="${REPO_ROOT}/infrastructure/vault-config"
+    if [ -f "${vc_state_dir}/terraform.tfstate" ]; then
+        rm -f "${vc_state_dir}/terraform.tfstate" "${vc_state_dir}/terraform.tfstate.backup"
+        print_success "Reset vault-config terraform state (stale once Vault is destroyed)"
+    fi
+
     # The Vault-API cleanup needs a live Vault server + root token. If either is
     # missing, skip cleanly — the tier-2 destroy removes the Vault server + all its
     # data (entities, registrations, aliases, activation state) regardless.
@@ -373,9 +389,17 @@ phase_k8s_cleanup() {
     RDS_ADMIN=$(cd "${INFRA_DIR}" && terraform output -raw rds_master_username 2>/dev/null || echo "")
     RDS_SECRET_ARN=$(cd "${INFRA_DIR}" && terraform output -raw rds_master_user_secret_arn 2>/dev/null || echo "")
     if [ -n "${RDS_ENDPOINT}" ] && [ -n "${RDS_ADMIN}" ] && [ -n "${RDS_SECRET_ARN}" ]; then
+        # Robust against an empty/absent SecretString: json.load on empty stdin
+        # raises JSONDecodeError and exits non-zero, which under `set -e` would
+        # abort the ENTIRE teardown mid-flight (before the tier-1 destroy + sweep
+        # + verify). Guard the parse on non-empty input and `|| echo ""` the whole
+        # substitution so a missing password degrades to the skip branch below,
+        # never a script abort.
         RDS_PWD=$(aws secretsmanager get-secret-value --secret-id "${RDS_SECRET_ARN}" \
             --query SecretString --output text 2>/dev/null \
-            | python3 -c 'import sys,json; print(json.load(sys.stdin).get("password",""))')
+            | python3 -c 'import sys,json
+s=sys.stdin.read().strip()
+print(json.loads(s).get("password","") if s else "")' 2>/dev/null || echo "")
         if [ -n "${RDS_PWD}" ]; then
             PGPASSWORD="${RDS_PWD}" psql -h "${RDS_ENDPOINT%:*}" -U "${RDS_ADMIN}" -d postgres \
                 -c 'DROP SCHEMA IF EXISTS ivia_hvdb CASCADE; DROP ROLE IF EXISTS ivia_hvdb;' \
