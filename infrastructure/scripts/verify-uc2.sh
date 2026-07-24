@@ -11,7 +11,8 @@
 #   6.  UC2 native OBO surface: agent-uc2 registration + uc2-agent-ceiling policy
 #       (the retired uc2-jwt jwt-auth role is GONE — decisions (b)/(e))
 #   6b. REAL UC2 token: jti present AND act.sub=agent-uc2 (OBO cutover gate; needs
-#       UC2_VERIFY_TOKEN — fails loud on missing jti/act.sub, warn-skip if unset)
+#       UC2_VERIFY_TOKEN — fails loud on missing jti/act.sub; unset = warn-skip in
+#       default mode, HARD FAIL under --gate, the authoritative UC2 cutover gate)
 #   6c. UC2 refreshed token FAILS CLOSED at Vault (needs UC2_VERIFY_REFRESHED_TOKEN)
 #   6d. OAuth alias binding: profile config_id==accessor .id + OBO allow (real token)
 #   7.  JIT DB creds issuance: database/creds/uc2-personal-readonly succeeds
@@ -27,7 +28,7 @@
 #       WebSEAL login form and cannot be tested headlessly here)
 #
 # Usage:
-#   ./verify-uc2.sh [--help]
+#   ./verify-uc2.sh [--gate] [--help]   (--gate: Checks 6b/6c/6d skip = HARD FAIL)
 #
 # Env-var overrides:
 #   BANKING_NAMESPACE     (default: banking-app)
@@ -52,7 +53,15 @@ if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
 verify-uc2.sh — ${SCRIPT_DESCRIPTION}
 
 Usage:
-  ./verify-uc2.sh [--help]
+  ./verify-uc2.sh [--gate] [--help]
+
+Modes:
+  (default)   Routine deploy verify. Checks 6b/6c/6d warn-SKIP when their tokens
+              are unset (a browser-captured OAuth token cannot be minted headlessly).
+  --gate      UC2 cutover done-gate. Checks 6b/6c/6d HARD FAIL (not skip) when their
+              tokens are unset, so the OBO cutover (jti + act.sub=agent-uc2 + the
+              refreshed-token fail-closed edge) is provably exercised. This is the
+              AUTHORITATIVE UC2 gate the Part B live run must invoke.
 
 Checks (14 total):
   1.  Banking UI pod Running (app=banking-ui in banking-app namespace)
@@ -85,6 +94,14 @@ Env-var overrides:
                                 enables Check 6c fail-closed assertion)
 USAGE
     exit 0
+fi
+
+# --gate: promote the token-dependent UC2 cutover checks (6b/6c/6d) from warn-SKIP
+# to HARD FAIL when their tokens are absent, so a run cannot report all-PASS without
+# actually exercising the OBO cutover. Mirrors verify-uc3.sh --bypass (skip=HARD FAIL).
+UC2_CUTOVER_GATE=false
+if [ "${1:-}" = "--gate" ]; then
+    UC2_CUTOVER_GATE=true
 fi
 
 #-------------------------------------------------------------------------------
@@ -250,7 +267,12 @@ if [ -n "${UC2_VERIFY_TOKEN:-}" ]; then
             "The forwarded UC2 token's act.sub is '${uc2_actsub:-<absent>}' (expected agent-uc2) — native OBO cannot resolve the agent actor and UC2 fails closed. Fix = Plan 04's ACTOR_CLAIM_UC2=agent-uc2 emission, NEVER a jwt_login fallback."
     fi
 else
-    print_warn "UC2 real-token jti + act.sub checks SKIPPED — set UC2_VERIFY_TOKEN=<real banking OAuth JWT captured from the browser sign-in> to exercise the phase-done gate. No headless mint exists (agent-uc2 is authcode+PKCE). The Part B live gate supplies it — this is NOT a pass."
+    if [ "${UC2_CUTOVER_GATE}" = "true" ]; then
+        print_fail "UC2 real-token jti + act.sub gate NOT exercised — no UC2_VERIFY_TOKEN supplied (--gate: skip = HARD FAIL)" \
+            "Set UC2_VERIFY_TOKEN=<real banking OAuth JWT captured from the browser sign-in: sub=<human>, act.sub=agent-uc2, a unique jti>. No headless mint exists (agent-uc2 is authcode+PKCE), so the Part B live gate captures it from the browser flow and re-invokes: UC2_VERIFY_TOKEN=... ./verify-uc2.sh --gate."
+    else
+        print_warn "UC2 real-token jti + act.sub checks SKIPPED — set UC2_VERIFY_TOKEN=<real banking OAuth JWT captured from the browser sign-in> to exercise the phase-done gate. No headless mint exists (agent-uc2 is authcode+PKCE). The Part B live gate supplies it via --gate — this is NOT a pass."
+    fi
 fi
 
 #-------------------------------------------------------------------------------
@@ -279,7 +301,12 @@ if [ -n "${UC2_VERIFY_REFRESHED_TOKEN:-}" ]; then
             "A refreshed UC2 token was ACCEPTED by Vault (rc=${ref_rc}) — it lacks act/jti and MUST be rejected. The MCP server must never forward a refreshed token, and Vault must fail closed. Output: ${ref_out:0:200}"
     fi
 else
-    print_warn "UC2 refreshed-token fail-closed check SKIPPED — set UC2_VERIFY_REFRESHED_TOKEN=<a refresh_token-grant token (no act/jti)> to prove Vault rejects it. The Part B live gate supplies it."
+    if [ "${UC2_CUTOVER_GATE}" = "true" ]; then
+        print_fail "UC2 refreshed-token fail-closed edge NOT exercised — no UC2_VERIFY_REFRESHED_TOKEN supplied (--gate: skip = HARD FAIL)" \
+            "Set UC2_VERIFY_REFRESHED_TOKEN=<a refresh_token-grant token for agent-uc2 (has NO act/jti claims)> so the gate proves Vault DENIES it (fail closed). The Part B live gate mints it via the refresh_token grant and re-invokes with --gate."
+    else
+        print_warn "UC2 refreshed-token fail-closed check SKIPPED — set UC2_VERIFY_REFRESHED_TOKEN=<a refresh_token-grant token (no act/jti)> to prove Vault rejects it. The Part B live gate supplies it via --gate."
+    fi
 fi
 
 #-------------------------------------------------------------------------------
@@ -336,7 +363,12 @@ if [ -n "${UC2_VERIFY_TOKEN:-}" ]; then
             "The real UC2 token was NOT authorized for database/creds/uc2-personal-readonly — the oauth alias may not bind (config_id/.id mismatch in oauth-resource-server_root_<id>), the agent ceiling denies it, or jti/act.sub is malformed. Check: present the token via X-Vault-Token to \$VAULT_ADDR/v1/database/creds/uc2-personal-readonly and inspect the Vault response."
     fi
 else
-    print_warn "UC2 OBO-allow (alias binding) check SKIPPED — needs UC2_VERIFY_TOKEN (see Check 6b). The Part B live gate supplies it."
+    if [ "${UC2_CUTOVER_GATE}" = "true" ]; then
+        print_fail "UC2 OBO-allow (alias binding) NOT exercised — no UC2_VERIFY_TOKEN supplied (--gate: skip = HARD FAIL)" \
+            "The load-bearing config_id/.id accessor binding is proven by presenting UC2_VERIFY_TOKEN to database/creds/uc2-personal-readonly (OBO allow). Set UC2_VERIFY_TOKEN (see Check 6b) and re-invoke with --gate."
+    else
+        print_warn "UC2 OBO-allow (alias binding) check SKIPPED — needs UC2_VERIFY_TOKEN (see Check 6b). The Part B live gate supplies it via --gate."
+    fi
 fi
 
 #-------------------------------------------------------------------------------
