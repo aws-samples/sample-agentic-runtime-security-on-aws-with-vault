@@ -408,10 +408,10 @@ Progressive maturity on Vault + IBM Verify — the workshop drops you at **Integ
 
 </div>
 
-Vault's native AI agent support (2026) makes the patterns wired by hand here — agent registry, layered policy intersection, on-behalf-of delegation, ephemeral authorization — first-class.
+Vault Enterprise 2.0.3's native AI agent support is what you deployed here — the **Agent Registry** (first-class agent identity), **ceiling-policy intersection**, on-behalf-of delegation, and Vault-side per-request **`vault:path_access`** authorization are the enforcement model, not a hand-rolled approximation.
 
 Note:
-The patterns in this deck — verifiable agent identity, JIT short-lived scoped credentials, delegated authority, and cross-plane correlation — are the same primitives Vault's native agent-identity features formalize. Today you wire them; tomorrow they're built in. The reference you deployed is the on-ramp.
+This deck's patterns — verifiable agent identity, JIT short-lived scoped credentials, delegated authority, and cross-plane correlation — are Vault's native agent-identity primitives, and you deployed them running. Every agent is registered (`uc1-agent`, `agent-uc2`, `uc3-actor`); the IVIA OAuth JWT authorizes Vault directly via `X-Vault-Token` (the legacy `jwt` backend is retired); and Vault is the sole enforcement point. The layer count is honest per use case: Use Case 1 enforces one layer (the `uc1-readonly` Kubernetes floor; its ceiling is inert with no OAuth actor), while Use Case 2 and Use Case 3 enforce three — the human `sub` baseline ∩ the agent ceiling (`uc2-agent-ceiling` / `uc3-agent-ceiling`) ∩ the per-request `vault:path_access` RAR (mandatory for Use Case 3, optional for Use Case 2). The reference you deployed is the model, not the on-ramp to it.
 
 ---
 
