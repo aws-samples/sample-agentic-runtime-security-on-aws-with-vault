@@ -29,7 +29,16 @@ weight: 90
 - [Agentic Runtime Security Blog](https://www.hashicorp.com/en/blog/agentic-runtime-security-solving-agentic-ai-identity-and-access-gaps) — five implementation imperatives
 - [Zero Trust for Agentic Systems Blog](https://www.hashicorp.com/en/blog/zero-trust-for-agentic-systems-managing-non-human-identities-at-scale) — ten exploit categories
 - [SPIFFE for Agentic AI Blog](https://www.hashicorp.com/en/blog/spiffe-securing-the-identity-of-agentic-ai-and-non-human-actors)
-- [Native AI Agent Support in Vault (May 2026)](https://www.hashicorp.com/en/blog/announcing-native-ai-agent-support-in-hashicorp-vault) — agent registry, 4-layer policy intersection, OBO delegation, ephemeral authorization
+- [Native AI Agent Support in Vault (May 2026)](https://www.hashicorp.com/en/blog/announcing-native-ai-agent-support-in-hashicorp-vault) — Agent Registry, ceiling-policy intersection, OBO delegation, ephemeral authorization
+
+### Native Agent Identity (deployed in this workshop — Enterprise 2.0.3)
+
+- [Vault Agent Registry — Concept](https://developer.hashicorp.com/vault/docs/concepts/agent-registry) — register each agent as a first-class identity (`agent-registry/registration/display-name/<name>`) with `ceiling_policies`, distinct from human users and traditional NHIs
+- [Vault OAuth Resource Server — Concept](https://developer.hashicorp.com/vault/docs/concepts/oauth-resource-server) — authorize a Vault request directly with an external OAuth JWT via `X-Vault-Token`; no `jwt_login`, no intermediate token
+- [Vault OAuth Resource Server — API](https://developer.hashicorp.com/vault/api-docs/system/oauth-resource-server) — profile config (issuer, JWKS, audiences, `user_claim`, `optional_authorization_details`) and per-request `authorization_details` of `type: vault:path_access`
+- [Secure Agent Permissions with Vault (Tutorial)](https://developer.hashicorp.com/vault/tutorials/enterprise/secure-agent-permissions-with-vault) — entities/aliases, ceiling intersection, and `vault:path_access` RAR enforcement end-to-end
+- [`vault_oauth_resource_server_config_profile` (Terraform)](https://registry.terraform.io/providers/hashicorp/vault/latest/docs/resources/oauth_resource_server_config_profile) — declares the `ivia` resource-server profile
+- [`vault_agent_registration` (Terraform)](https://registry.terraform.io/providers/hashicorp/vault/latest/docs/resources/agent_registration) — registers `uc1-agent` / `agent-uc2` / `uc3-actor` with their ceiling policies
 
 ## Bring Your Own GHCR Registry
 

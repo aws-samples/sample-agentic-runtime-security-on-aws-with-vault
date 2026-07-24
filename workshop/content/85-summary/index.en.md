@@ -3,35 +3,37 @@ title: 'Summary'
 weight: 85
 ---
 
-## What You Built — and Where the Industry Is Heading
+## What You Built — Vault's Native Agent Identity Model
 
-This workshop deployed **HashiCorp Vault 2.0** on EKS and wired it, by hand, to enforce the five control objectives for agentic systems. That hands-on approach was deliberate: you now understand the security primitives — Kubernetes auth, `jwt` auth with `bound_claims`, dynamic secrets with TTL ceilings, RFC 9396 Rich Authorization Requests (RAR), and three-plane audit correlation — at the layer where enforcement actually happens.
+This workshop deployed **HashiCorp Vault Enterprise 2.0.3** on EKS and wired it to enforce the five control objectives for agentic systems using Vault's **native AI agent primitives** — the first-class agent identity model HashiCorp ships in the product today. You configured the security primitives — Kubernetes auth, the OAuth resource server, the Agent Registry, ceiling-policy intersection, and Vault-side per-request Rich Authorization Requests (RAR) — at the layer where enforcement actually happens.
 
-### Vault's Native AI Agent Support (May 2026)
+### Vault's Native AI Agent Support Is Deployed Here
 
-In May 2026 HashiCorp [announced native AI agent support in Vault](https://www.hashicorp.com/en/blog/announcing-native-ai-agent-support-in-hashicorp-vault), introducing first-class primitives for exactly the patterns you implemented in this workshop. The new capabilities — currently in early access with public beta planned for summer 2026 — formalize what you built manually into a unified authorization model.
+HashiCorp's [native AI agent support in Vault](https://www.hashicorp.com/en/blog/announcing-native-ai-agent-support-in-hashicorp-vault) is a released Enterprise capability, and this workshop runs it. Three native primitives carry the authorization model:
 
-The table below maps our workshop's use cases to Vault's new native agent features:
+- **Agent Registry** — each agent is registered as a first-class identity (`uc1-agent`, `agent-uc2`, `uc3-actor`), distinct from human users and traditional non-human identities, with a `ceiling_policies` envelope on the registration.
+- **OAuth resource server** — the IVIA-issued OAuth JWT authorizes the Vault request **directly** via the `X-Vault-Token` header. There is no `jwt_login`, no intermediate Vault token, and the legacy `jwt` auth backend has been **retired** entirely.
+- **Vault-side per-request RAR** — `authorization_details` of `type: vault:path_access` narrow a token to the exact path and capabilities of a single request. **Vault itself** is the interpreter and the decision point.
 
-| What you built in this workshop | Vault native agent equivalent |
+The table below maps each workshop use case to the native Vault capability it deploys:
+
+| What you deployed in this workshop | Vault native agent capability |
 |---|---|
-| **Use Case 1** — Vault K8s auth binds agent SA to `uc1-readonly` role with JIT credentials (TTL 15m) | **Agent Registry** — register and manage agent identities separately from human and traditional NHI identities, with baseline access policies |
-| **Use Case 2** — IVIA OAuth + PKCE → Vault `jwt` auth vends per-user-scoped credentials | **On-Behalf-Of (OBO) delegation** — agents act with human user authority; delegation and consent explicitly tracked in the agent registry |
-| **Use Case 3** — `may_act` (RFC 8693) + `authorization_details` (RFC 9396 RAR) enforced by Vault `bound_claims`; TTL 5m R/W ceiling | **4-layer policy intersection** — human policies, baseline access, ceiling policies (absolute blast radius), and per-request `authorization_details` embedded in the JWT |
-| **Use Case 3** — three-plane audit correlation (IVIA + Vault + RDS pgaudit joined by `request_id`) | **End-to-end tracing and attribution** — per-agent action tracking with clear attribution for actions performed on behalf of users |
-| All use cases — no standing privileges; credentials expire with the token lifecycle | **Ephemeral per-request authorization** — permissions bound to the token's lifecycle; when the token expires, the agent cannot take further action |
+| **Use Case 1** — Vault Kubernetes auth binds the agent ServiceAccount to the `uc1-readonly` policy with JIT credentials (TTL 15m); the agent is registered as `uc1-agent` | **Agent Registry** — the agent holds a first-class registry identity. Because Use Case 1 presents no OAuth actor, its `uc1-ceiling` is inert (informational only); the `uc1-readonly` Kubernetes policy is the enforcement floor |
+| **Use Case 2** — IVIA OAuth Authorization Code + PKCE → the user's OAuth JWT authorizes Vault directly via `X-Vault-Token` against the `ivia` resource-server profile | **OAuth resource server + On-Behalf-Of (OBO) delegation** — the human `sub` contributes the human baseline, the `act.sub`=`agent-uc2` actor contributes the `uc2-agent-ceiling`, tracked in the Agent Registry |
+| **Use Case 3** — the delegated CIBA JWT carries `act.sub`=`uc3-actor` and `authorization_details` of `type: vault:path_access`, enforced by Vault per request | **Ceiling intersection + mandatory per-request RAR** — Vault narrows the token to the exact path/capability for that one refund and denies any request whose RAR path differs |
+| **Use Case 3** — three-plane audit correlation (IVIA + Vault + RDS pgaudit joined by `request_id`) | **End-to-end tracing and attribution** — audit events carry the agent-registry identity; correlation reads "agent X acting for human Y" |
+| All use cases — no standing privileges; credentials expire with the token lifecycle | **Ephemeral per-request authorization** — permissions bind to the token's lifecycle; when the token expires, the agent cannot take further action |
 
-### The Five Control Objectives Map to Vault's Four-Layer Model
+### How the Native Layers Map to the Five Control Objectives
 
-Vault's native agent authorization uses a **policy intersection model** — an action is only permitted if it falls within the overlap of all four policy layers:
+Vault's native model enforces a **policy intersection** — a request is permitted only if it falls within the overlap of every layer that applies to that use case. **The number of enforcing layers differs by use case**, because the identity each agent presents to Vault differs:
 
-1. **Human policies** — does the delegating human have access? → *Objective 3: actions tied to user intent*
-2. **Baseline access policies** — does the agent itself have base access? → *Objective 1: verifiable identity*
-3. **Ceiling policies** — is the action within the maximum blast radius? → *Objective 2: no standing privileges*
-4. **Authorization details** — is the per-request context satisfied? → *Objective 4: enforcement at point of use*
+- **Use Case 1 — one enforcing layer.** The agent authenticates with its ServiceAccount JWT through the Kubernetes auth method and resolves to the `uc1-readonly` policy. It carries a registry identity (`uc1-agent`), but with no OAuth actor its `uc1-ceiling` does not self-apply — so the Kubernetes policy floor is the single enforcing layer. → *Objective 1: verifiable identity; Objective 2: no standing privileges.*
+- **Use Case 2 and Use Case 3 — three enforcing layers.** Both are On-Behalf-Of flows. Vault intersects **(a)** the human owner's baseline (resolved from the OAuth `sub` entity → *Objective 3: actions tied to user intent*), **(b)** the agent's `ceiling_policies` (`uc2-agent-ceiling` / `uc3-agent-ceiling`, resolved from the `act.sub` actor → *Objective 2: no standing privileges*), and **(c)** the per-request `vault:path_access` RAR (→ *Objective 4: enforcement at the point of use*). A request succeeds only if all three permit; the ceiling can only *restrict*, never grant. Use Case 3 makes the RAR **mandatory** (`optional_authorization_details=false`); Use Case 2 makes it optional.
 
-Objective 5 (correlated audit evidence) maps to Vault's new end-to-end tracing capability.
+Objective 5 (correlated audit evidence) maps to Vault's native end-to-end tracing: audit events carry the agent-registry identity and join the IVIA and RDS pgaudit planes on `request_id`.
 
 ### Key Takeaway
 
-What you configured manually through Vault `jwt` auth roles, `bound_claims`, dynamic secret TTLs, and Athena audit queries will become a single, integrated authorization model in Vault. The security primitives and the control objectives stay the same — the operational surface shrinks. When Vault's native agent support reaches GA, teams adopting it will be implementing the same patterns you practiced today, with less wiring.
+Agent identity, the ceiling envelope, and per-request scoping are **native Vault capabilities you configured and enforced today** — not hand-rolled approximations and not a roadmap item. Vault is the sole enforcement point: IVIA remains the issuer, delegation, and CIBA-consent authority, and every authorization decision is made natively by Vault against the registered agent's ceiling and the request's `vault:path_access` RAR. Teams adopting this model implement exactly the pattern you deployed here.
