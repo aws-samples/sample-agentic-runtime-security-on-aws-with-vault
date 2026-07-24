@@ -423,10 +423,21 @@ resource "tls_self_signed_cert" "iviaop" {
   validity_period_hours = 87600 # 10 years
   early_renewal_hours   = 720
 
+  # IsCA=true: this self-signed cert is consumed as a trust anchor by Vault
+  # (jwks_ca_pem on the oauth-resource-server profile) and by the uc2/uc3 agents
+  # (their CA bundle). Vault Enterprise's oauth-resource-server validates that
+  # every jwks_ca_pem entry has BasicConstraints CA:TRUE — the retired jwt auth
+  # backend accepted the same cert as a leaf, but the native profile is stricter.
+  # Marking it a CA corrects the BasicConstraints to match the role it already
+  # plays; it stays a self-signed anchor that also serves TLS on :8436.
+  is_ca_certificate = true
+
   allowed_uses = [
     "key_encipherment",
     "digital_signature",
     "server_auth",
+    "cert_signing",
+    "crl_signing",
   ]
 
   dns_names = [
