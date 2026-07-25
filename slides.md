@@ -312,20 +312,22 @@ IVIA's `isvaop_pretoken` mapping rule stamps the delegated JWT **server-side**:
 
 ```jsonc
 {
-  "sub": "jaime",                                   // the human who approved
-  "act": { "sub": "uc3-actor" },                    // RFC 8693 — WHO is acting
-  "authorization_details": [{                       // RFC 9396 RAR — WHICH Vault path
-    "type": "vault:path_access",
-    "path": "database/creds/uc3-refund-writer",
-    "capabilities": ["read"]
-  }]
+  "sub": "jaime",                                   // the human who approved (CIBA)
+  "act":     { "sub": "uc3-actor" },                // RFC 8693 — the claim Vault RESOLVES the agent from
+  "may_act": { "sub": "uc3-actor" },                // retained for RFC 8693 audit semantics (Vault ignores it)
+  "authorization_details": [
+    { "type": "refund_approval" },                  // RFC 9396 business RAR — the audit story (no amount claim)
+    { "type": "vault:path_access",                  // RFC 9396 Vault-native RAR — the ENFORCED path
+      "path": "database/creds/uc3-refund-writer",
+      "capabilities": ["read"] }
+  ]
 }
 ```
 
-<p class="uc-footer">delegation + RAR type are injected by IVIA, not asserted by the agent — the agent cannot forge its own authority</p>
+<p class="uc-footer">delegation + RAR are injected by IVIA, not asserted by the agent — the agent cannot forge its own authority</p>
 
 Note:
-The key technical point an expert will probe: the agent does not send an `actor_token` and does not set its own `may_act`. It authenticates the exchange as a separate OAuth client (`uc3-actor`) and presents only the user's subject_token; IVIA refuses a client exchanging its own token (FBTAQ5207E). The `act` (RFC 8693 — not `may_act`) and `authorization_details` (a `vault:path_access` RAR naming the exact Vault path) claims are injected by the `isvaop_pretoken` mapping rule on the token-exchange grant. So the proof of "who may act" is minted by the identity provider, not claimed by the workload — which is exactly what makes it trustworthy at the Vault gate.
+The key technical point an expert will probe: the agent authenticates the exchange as a separate OAuth client (`uc3-actor`) and presents only the user's subject_token — no `actor_token`, and it stamps none of these claims itself; IVIA refuses a client exchanging its own token (FBTAQ5207E). IVIA's `isvaop_pretoken` mapping rule injects them server-side: `act.sub` is the load-bearing claim Vault's native OBO resolves the agent from (proven in 09-DISCOVERY — `act.sub`→resolves/allow, `may_act.sub`→ignored/deny); `may_act` is retained purely for RFC 8693 audit semantics; and two `authorization_details` entries ride along — the business `refund_approval` (the audit story) and the `vault:path_access` RAR (the path Vault actually enforces). So the proof of who may act is minted by the identity provider, not claimed by the workload — which is what makes it trustworthy at the Vault gate.
 
 ---
 
