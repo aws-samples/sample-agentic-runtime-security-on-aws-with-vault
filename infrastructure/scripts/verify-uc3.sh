@@ -45,8 +45,9 @@
 #   17. Per-request RAR → DENY: the SAME valid token presented to a path NOT in its
 #       RAR (uc3-readonly) is denied with RAR_NO_MATCH even though the ACL+ceiling
 #       permit it — proves vault:path_access is the request-scoped enforcing layer.
-#   18. Delegation MANDATORY → DENY: the bare subject token (no act) is denied at
-#       identity resolution — a human session token alone can never vend refund creds.
+#   18. Cross-UC ceiling isolation → DENY: the agent-uc2 UC2 token (act.sub=agent-uc2)
+#       is denied the UC3 refund read — agent-uc2's ceiling omits it even though the
+#       human baseline allows it (the agent ceiling isolates use cases).
 #   19. (optional) TRUE wrong-actor → DENY (UC3_WRONG_ACTOR_TOKEN). Production IVIA
 #       only signs act.sub=uc3-actor, so a validly-signed wrong-actor token is
 #       operator-supplied; ABSENT = documented SKIP (WARN), not required for green.
@@ -124,7 +125,7 @@ no manual browser capture needed:
   16. RAR MATCH → ALLOW: delegated token authorized for uc3-refund-writer (self-minted)
   17. Per-request RAR → DENY: valid token to a path NOT in its RAR (uc3-readonly)
       is denied with RAR_NO_MATCH even though ACL+ceiling permit it (self-minted)
-  18. Delegation MANDATORY → DENY: bare subject token (no act) denied at resolution
+  18. Cross-UC ceiling isolation → DENY: agent-uc2 token (act.sub=agent-uc2) denied UC3 refund
   19. (optional) TRUE wrong-actor → DENY (UC3_WRONG_ACTOR_TOKEN) — production IVIA
       only signs act.sub=uc3-actor, so this is operator-supplied; absent = SKIP (WARN)
       A self-mint failure is a HARD FAIL (skip = not-proven != pass), never silent.
@@ -398,7 +399,7 @@ if [ "${BYPASS_MODE}" = true ]; then
     #   15. REAL delegated token jti (phase-done gate) + act.sub=uc3-actor.
     #   16. RAR MATCH → ALLOW (RAR path == database/creds/uc3-refund-writer).
     #   17. Per-request RAR → DENY (valid token to a path OUTSIDE its RAR).
-    #   18. Delegation MANDATORY → DENY (bare subject token, no act).
+    #   18. Cross-UC ceiling isolation → DENY (agent-uc2 token denied UC3 refund).
     #   19. (optional) TRUE wrong-actor → DENY (operator-supplied; absent = SKIP).
     # A self-mint failure is a HARD FAIL (skip = not-proven != pass).
     #===========================================================================
@@ -553,37 +554,39 @@ print(jwt.encode(payload, 'forged-secret', algorithm='HS256'))
     echo ""
 
     #---------------------------------------------------------------------------
-    # Bypass Check 18 — delegation is MANDATORY → DENY (OBO actor claim load-bearing)
+    # Bypass Check 18 — cross-UC AGENT-CEILING isolation → DENY
     #
-    # Present the underlying SUBJECT token (sub=<persona>, NO act claim — a bare
-    # human) to the refund path. Native OBO cannot resolve the acting agent without
-    # act.sub, so the human is an unresolved bare subject and Vault DENIES at the
-    # IDENTITY-RESOLUTION layer (NOT RAR_NO_MATCH — the subject token has no RAR to
-    # evaluate). This proves the OBO delegation (act.sub) is load-bearing: a human
-    # session token alone can never vend refund creds. It is a DIFFERENT enforcement
-    # layer than Check 17 (resolution vs per-request RAR), hence the must-NOT-match
-    # RAR_NO_MATCH guard.
-    #
-    # NOTE: this proves delegation is REQUIRED (missing actor), not that a specific
-    # WRONG actor is rejected — production IVIA only ever signs act.sub=uc3-actor, so
-    # a validly-signed WRONG-actor token cannot be minted here (Check 19).
+    # The underlying subject token here is the agent-uc2 UC2 login token: it carries
+    # sub=<persona> AND act.sub=agent-uc2 (the UC2 OBO stamp — see the UC2 pretoken
+    # rule; a UC2 login IS a valid OBO delegation, just for a DIFFERENT agent).
+    # Present it to the UC3 refund path. Native OBO resolves BOTH the human (sub) and
+    # the acting agent (act.sub=agent-uc2). The human baseline for <persona> INCLUDES
+    # uc3-refund-writer (uc3-human-baseline — both personas are refund-capable via the
+    # human floor), BUT agent-uc2's ceiling (uc2-agent-ceiling) does NOT. The 3-layer
+    # OBO intersection (human baseline ∩ agent ceiling ∩ RAR) therefore DENIES: a UC2
+    # agent cannot reach UC3's privileged path even when the human it acts for could.
+    # This proves the agent ceiling ISOLATES use cases — a STRONGER property than the
+    # old "bare human, no act" premise, which is void now that UC2 correctly stamps
+    # act.sub=agent-uc2 on its login token. The deny is at the ACL/ceiling layer
+    # (permission denied), NOT per-request RAR (agent-uc2's RAR is optional), hence
+    # the must-NOT-match RAR_NO_MATCH guard.
     #---------------------------------------------------------------------------
-    print_info "Bypass Check 18: bare SUBJECT token (no act claim) must be DENIED at identity resolution (OBO delegation is mandatory)"
+    print_info "Bypass Check 18: a validly-delegated WRONG-AGENT token (agent-uc2 UC2 login, act.sub=agent-uc2) must be DENIED the UC3 refund read — the agent ceiling isolates use cases even when the human baseline allows it"
 
     if [ -z "${MINTED_SUBJECT_TOKEN}" ]; then
-        print_fail "Bypass Check 18: no subject token available (mint failed) — the delegation-required gate was NOT exercised (skip = HARD FAIL)" \
+        print_fail "Bypass Check 18: no subject token available (mint failed) — the cross-UC ceiling-isolation gate was NOT exercised (skip = HARD FAIL)" \
             "Fix the self-mint (see the Self-mint failure above)."
     else
         s_sub=$(decode_jwt_claim "${MINTED_SUBJECT_TOKEN}" '.sub // empty')
         s_act=$(decode_jwt_claim "${MINTED_SUBJECT_TOKEN}" '.act.sub // empty')
-        if [ -n "${s_act}" ]; then
-            print_fail "Bypass Check 18: the subject token unexpectedly carries act.sub=${s_act} — it is NOT a bare human, cannot prove delegation is mandatory" \
-                "The login (authorization_code) token must have NO act claim. Got sub='${s_sub}', act.sub='${s_act}'. If the UC2 pretoken branch is stamping act on the login token, this check's premise is void."
+        if [ "${s_act}" != "agent-uc2" ]; then
+            print_fail "Bypass Check 18: the UC2 login token's act.sub is '${s_act:-<absent>}' (expected agent-uc2) — cannot exercise cross-UC ceiling isolation" \
+                "The agent-uc2 authorization_code login token must carry act.sub=agent-uc2 (UC2 OBO stamp). Got sub='${s_sub}', act.sub='${s_act:-<absent>}'. If it is absent, the UC2 pretoken client gate regressed; if it is uc3-actor, the wrong token was captured."
         else
-            assert_native_deny "Bypass Check 18 (bare subject, sub=${s_sub}, no act)" "${MINTED_SUBJECT_TOKEN}" \
-                "Bypass Check 18 PASSED: the bare subject token (sub=${s_sub}, no act) was DENIED the refund read at identity resolution — without act.sub native OBO resolves no acting agent, so a human session token alone can never vend refund creds (delegation is mandatory)" \
-                "A bare human token that vends refund creds means the OBO delegation requirement is lost. Confirm the human subject is NOT a registered agent and only resolves via OBO (human sub + registered-agent act.sub)." \
-                'permission denied|no alias found|error looking up entity|denied' \
+            assert_native_deny "Bypass Check 18 (wrong-agent, sub=${s_sub}, act.sub=agent-uc2)" "${MINTED_SUBJECT_TOKEN}" \
+                "Bypass Check 18 PASSED: the agent-uc2 UC2 token (sub=${s_sub}, act.sub=agent-uc2) was DENIED reading database/creds/uc3-refund-writer — agent-uc2's ceiling (uc2-agent-ceiling) omits the refund path, so even though ${s_sub}'s human baseline (uc3-human-baseline) permits it, the 3-layer OBO intersection (human baseline ∩ agent ceiling) blocks a UC2 agent from reaching UC3's privileged path (cross-UC ceiling isolation)" \
+                "A UC2 agent token that vends UC3 refund creds means the agent ceiling no longer isolates use cases. Confirm uc2-agent-ceiling lacks database/creds/uc3-refund-writer and native OBO enforces human baseline ∩ agent ceiling." \
+                'permission denied|denied' \
                 'database/creds/uc3-refund-writer' \
                 'RAR_NO_MATCH'
         fi
