@@ -21,7 +21,8 @@ weight: 90
 ## HashiCorp Vault
 
 - [Vault 2.0 Release Notes](https://developer.hashicorp.com/vault/docs/updates/release-notes)
-- [Vault JWT/OIDC Auth Method](https://developer.hashicorp.com/vault/docs/auth/jwt) — `bound_claims`, `bound_audiences`, JWKS discovery
+- [Vault OAuth Resource Server](https://developer.hashicorp.com/vault/docs/concepts/oauth-resource-server) — validates the IVIA OAuth JWT directly via `X-Vault-Token` (JWKS discovery); the native replacement for the retired JWT/OIDC auth method + `bound_claims`
+- [Vault Agent Registry](https://developer.hashicorp.com/vault/docs/concepts/agent-registry) — first-class agent identities with `ceiling_policies`, resolved from the token's `act.sub`
 - [Vault SPIFFE Secrets Engine](https://developer.hashicorp.com/vault/api-docs/secret/spiffe) — JWT-SVID minting for agent identity (Vault 2.0, Enterprise)
 - [Vault SPIFFE Auth Method](https://developer.hashicorp.com/vault/docs/auth/spiffe) — workload authentication via SPIFFE SVIDs
 - [Secure AI Agent Communication with A2A + Vault](https://developer.hashicorp.com/vault/tutorials/auth-methods/secure-ai-agent-communication-a2a-vault-kubernetes)
