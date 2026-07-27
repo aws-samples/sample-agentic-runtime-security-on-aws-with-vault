@@ -22,8 +22,8 @@ Terraform module that deploys the **UC3 CIBA-privileged action agent** into the 
 
 - **OBJ-1 Workload identity**: `uc3-privileged-actor-sa` is the Vault Kubernetes auth role subject. No static credentials.
 - **OBJ-2 No standing privileges**: The agent fetches a short-TTL `uc3-refund-writer` Vault token per privileged action; the token expires after the TTL configured in `vault_config`.
-- **OBJ-3 User intent enforcement**: Vault JWT policy validates `may_act` and RAR claims on the IVIA CIBA actor token before issuing DB credentials.
-- **OBJ-5 Audit correlation**: W3C `traceparent` propagated in every Vault and IVIA call; pgaudit captures the resulting SQL write with the same trace ID.
+- **OBJ-3 User intent enforcement**: Vault's native OAuth resource server resolves the agent from the token's `act.sub` against the Agent Registry (applying the `uc3-agent-ceiling`) and enforces the per-request `vault:path_access` RAR before issuing DB credentials — the `may_act` claim IVIA also stamps is ignored by native OBO.
+- **OBJ-5 Audit correlation**: the CIBA `request_id` (the approval's `binding_message`) is threaded into the DB write as a `uc3_request_id` SQL comment that pgaudit captures verbatim; the `audit_correlation` Athena VIEW joins IVIA↔pgaudit on `request_id` and bridges the Vault audit plane by credential path + time-proximity (native Vault audit logs neither `request_id` nor the human sub).
 - **No Ingress / ALB**: The UC3 agent is reached in-cluster from `banking-agent-svc` or via `kubectl port-forward` for workshop demos.
 
 ## Inputs

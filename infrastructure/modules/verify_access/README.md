@@ -160,20 +160,20 @@ future decision to switch CIBA providers:
 > agent-registry ceiling ∩ `vault:path_access` model in
 > `infrastructure/modules/vault_config/README.md`.
 
-**Vault cryptographically enforces** (the `uc3-jwt` role's `bound_claims` on the exchanged
-JWT, in `vault_config`):
-- identity — `sub=jaime`, the human who approved via CIBA;
-- delegation — `/may_act/sub=uc3-actor` (RFC 8693: WHO may act);
-- RAR **type** — `/authorization_details/0/type=refund_approval` (WHAT class of action).
+**Vault cryptographically enforces** (natively, via the OAuth resource server + Agent
+Registry — the retired `uc3-jwt` `bound_claims` role is gone):
+- identity — `sub=jaime`, the human who approved via CIBA, resolved to the human entity baseline (`user_claim=sub`);
+- delegation — `act.sub=uc3-actor`, resolved against the Agent Registry to apply the `uc3-agent-ceiling` (RFC 8693: WHO may act; the `may_act` claim IVIA also stamps is ignored by native OBO);
+- RAR **path** — the per-request `vault:path_access` on `database/creds/uc3-refund-writer` (WHERE the token is scoped), mandatory (`optional_authorization_details=false`).
 
 **Audit correlation proves the amount.** Restating the architecture plainly: Vault
-cryptographically enforces identity (`sub=jaime`), delegation (`may_act=uc3-actor`), and
-RAR type (`refund_approval`). The amount/currency is consent-bound by three-plane audit
-correlation on `request_id` — the green 12-column / 0-blank `audit_correlation` row is the
-proof that the amount the user approved (e.g. $88.30) is the same amount that hit Vault and
-the DB. Vault couldn't numerically enforce an amount anyway (`bound_claims` are string/glob
-matches, not range checks), so amount-by-correlation is the correct control, not a
-consolation prize.
+cryptographically enforces identity (`sub=jaime`), delegation (`act.sub=uc3-actor` via the
+Agent Registry), and the per-request `vault:path_access` RAR path. The amount/currency is
+consent-bound by the 1:1 `request_id` correlation between the CIBA approval and the single
+`banking.refunds` write — the 11-column `audit_correlation` row is the proof that the amount
+the user approved (e.g. $88.30) is the same amount that hit the DB. Vault couldn't
+numerically enforce an amount anyway (RAR path scoping is not a range check), so
+amount-by-correlation is the correct control, not a consolation prize.
 
 **Why the amount is not a token claim (verified ISVAOP 25.10, 2026-05-29).** The
 consent-time RAR is not exposed to any mapping rule at the CIBA token mint or the
