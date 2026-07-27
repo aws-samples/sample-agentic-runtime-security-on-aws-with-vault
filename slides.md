@@ -349,7 +349,7 @@ Effective grant = ① baseline ∩ ② ceiling ∩ ③ RAR. Miss any one → den
 <p class="uc-footer">amount is NOT a claim — ISVAOP can't expose consent-time RAR to a mapping rule; it's consent-bound via audit correlation</p>
 
 Note:
-Vault denies the write credential unless the signature validates against IVIA's JWKS (RS256) AND all three layers intersect: the `sub` resolves to jaime's entity (baseline), the `act.sub` resolves the `uc3-actor` agent in the Agent Registry and applies its `uc3-agent-ceiling`, and the per-request `vault:path_access` RAR path matches the creds path being read. The RAR is mandatory here — the `uc3-actor` registration sets `optional_authorization_details=false`, so a token with no RAR (or the wrong path) is denied. Two honesty points for a sharp audience: (1) the role is NOT `BYPASSRLS`, so RLS still applies to the write as defense-in-depth; (2) the approved amount is deliberately not a JWT claim — ISVAOP 25.10 doesn't expose the consent-time `authorization_details` to any mapping rule at mint or exchange, and a glob bound_claim couldn't enforce a number anyway. The amount is bound by three-plane audit correlation on request_id, which is the next major slide. Credential lives 5 minutes.
+Vault denies the write credential unless the signature validates against IVIA's JWKS (RS256) AND all three layers intersect: the `sub` resolves to jaime's entity (baseline), the `act.sub` resolves the `uc3-actor` agent in the Agent Registry and applies its `uc3-agent-ceiling`, and the per-request `vault:path_access` RAR path matches the creds path being read. The RAR is mandatory here — the `uc3-actor` registration sets `optional_authorization_details=false`, so a token with no RAR (or the wrong path) is denied. Two honesty points for a sharp audience: (1) the role is NOT `BYPASSRLS`, so RLS still applies to the write as defense-in-depth; (2) the approved amount is deliberately not a JWT claim — ISVAOP 25.10 doesn't expose the consent-time `authorization_details` to any mapping rule at mint or exchange, and a glob bound_claim couldn't enforce a number anyway. The amount is bound by the 1:1 `request_id` correlation between the CIBA approval and the single `banking.refunds` write — surfaced on the three-plane audit slide next. Credential lives 5 minutes.
 
 ---
 
@@ -372,14 +372,14 @@ Check 14 closes the obvious door — you can't forge with a symmetric key becaus
 
 ---
 
-## One request_id, three planes
+## One refund — three planes, one row
 
 <img src="assets/audit-correlation.svg" style="max-height: 460px;" />
 
-A single Athena view **`audit_correlation`** (12 cols) stitches **IVIA decision · Vault audit · RDS pgaudit**. `request_id` anchors IVIA↔pgaudit; Vault is bridged by **principal + path + ±30s**.
+A single Athena view **`audit_correlation`** (11 cols) stitches **IVIA decision · Vault audit · RDS pgaudit**. `request_id` anchors IVIA↔pgaudit; Vault is bridged by **path + response event + ±30s** (nearest match).
 
 Note:
-The pedagogical money shot — and here's the honest mechanism an expert will want. IVIA emits a decision record carrying the agent's `request_id` (it was the CIBA `binding_message`). The agent embeds that same UUID as a `/* uc3_request_id=… */` SQL comment, which pgaudit logs verbatim and the view regex-extracts — so IVIA and Postgres correlate directly on request_id. Vault's native audit `request.id` is a different value, so the view bridges Vault by composite key: principal `<sub>` (the native OAuth resource server resolves the human entity from `user_claim=sub`, so the audited principal is the bare sub — not the retired `jwt-<sub>`), path `database/creds/uc3-refund-writer`, response event, within a ±30s window. The `vault_agent_registry_id` column comes from the IVIA decision plane (`client_id` — the `uc3-actor` OAuth exchange client), and `vault_rar_path` is the exact `database/creds/…` path the per-request `vault:path_access` RAR scoped the token to — since Phase 9 retired the jwt claim-mappings that once stamped those into Vault metadata. Three CloudWatch log groups → Firehose (decompress + extract) → S3 → Glue → one Athena view. The correlated row is on the next slide.
+The pedagogical money shot — and here's the honest mechanism an expert will want. IVIA emits a decision record carrying the agent's `request_id` (it was the CIBA `binding_message`). The agent embeds that same UUID as a `/* uc3_request_id=… */` SQL comment, which pgaudit logs verbatim and the view regex-extracts — so IVIA and Postgres correlate directly on request_id. Vault's native audit carries neither the `request_id` nor the human sub — `auth.display_name` is the delegated token's JTI (`JWT Token with JTI: …`), not a name — so the view bridges Vault by what it *does* share with the approval: the creds path `database/creds/uc3-refund-writer`, a response event, within a ±30s window, keeping the vault response nearest in time to each approval (deterministic when refunds cluster). The `vault_agent_registry_id` and the agent half of `vault_principal` come from Vault's own `auth.metadata['actor_entity_name']` (`uc3-actor` — the Agent Registry actor Vault resolved from `act.sub`), NOT the IVIA `client_id` (`agent-uc3`, the CIBA exchange client that never authenticates to Vault); `vault_rar_path` is the exact `database/creds/…` path the per-request `vault:path_access` RAR scoped the token to. Three CloudWatch log groups → Firehose (decompress + extract) → S3 → Glue → one Athena view. The correlated row is on the next slide.
 
 ---
 
@@ -396,7 +396,7 @@ db_credential_ttl  300
 One row answers: **who approved, when, what claims Vault bound them to, what write landed, and the credential's TTL.**
 
 Note:
-This single row is the auditor's answer. The TTL column comes from the value the agent observed in the Vault creds response and threaded into its IVIA anchor — because the `database/creds` read response doesn't log a numeric duration. Read it left-to-right across the three planes: IVIA says jaime approved at 15:20:47; Vault says principal `uc3-actor (on behalf of jaime)` was vended `database/creds/uc3-refund-writer` — the agent (`vault_agent_registry_id=uc3-actor`) scoped by the per-request `vault:path_access` RAR to that exact path — at a 300-second TTL; RDS pgaudit says an INSERT write landed on `banking.refunds` at the same instant — all keyed by the one `request_id`.
+This single row is the auditor's answer. The TTL column comes from the value the agent observed in the Vault creds response and threaded into its IVIA anchor — because the `database/creds` read response doesn't log a numeric duration. Read it left-to-right across the three planes: IVIA says jaime approved at 15:20:47; Vault says principal `uc3-actor (on behalf of jaime)` was vended `database/creds/uc3-refund-writer` — the agent (`vault_agent_registry_id=uc3-actor`) scoped by the per-request `vault:path_access` RAR to that exact path — at a 300-second TTL; RDS pgaudit says an INSERT write landed on `banking.refunds` at the same instant — correlated into one row: `request_id` keys IVIA↔the write, and Vault is bridged in by its creds path and same-instant timing.
 
 ---
 

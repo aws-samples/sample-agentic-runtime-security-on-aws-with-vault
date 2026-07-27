@@ -149,7 +149,7 @@
   <rect x="1096" y="348" width="310" height="68" rx="8" fill="#0a1a3f" stroke="#3b82f6" stroke-width="1.8"/>
   <text x="1114" y="369" fill="#60a5fa" font-size="10" font-weight="bold">UC3 — Time-boxed Write Creds</text>
   <text x="1114" y="384" fill="#bfdbfe" font-size="11">uc3-refund-writer · SELECT+INSERT+UPDATE</text>
-  <text x="1114" y="398" fill="#6b7280" font-size="10">TTL 5m · 3-plane audit (request_id JOIN)</text>
+  <text x="1114" y="398" fill="#6b7280" font-size="10">TTL 5m · 3-plane audit (request_id + path/time)</text>
 
   <!-- Ephemeral action -->
   <rect x="1096" y="430" width="310" height="48" rx="8" fill="#1a1200" stroke="#b45309" stroke-width="1.8"/>
