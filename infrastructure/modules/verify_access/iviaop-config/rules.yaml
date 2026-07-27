@@ -108,17 +108,19 @@ rules:
         //           UC3_RAR_CAPS) and set from IVIA's authorization context, NEVER
         //           from an agent-supplied value (T-09-04-01 path-injection).
         //   (4) jti  — Vault schema-MANDATORY (a jti-less token -> 403 "claim jti/uti
-        //       is missing", proven live). IVIA stamps none today (IVIA_JTI_UC3=absent),
-        //       so a UNIQUE per-token jti is minted here from java.util.UUID (never a
-        //       static literal — replay guard T-09-04-04). UC3 is a FULL native cutover
-        //       with NO jwt_login fallback (locked decision (a)): a jti-less real token
-        //       is fixed HERE, never worked around.
+        //       is missing"). ISVAOP mints a native UNIQUE UUID jti on every at+jwt
+        //       access token (verified live: distinct UUID jti on both the authcode and
+        //       token-exchange outputs), satisfying Vault + the T-09-04-04 replay guard.
+        //       The rule stamps NO jti: the former java.util.UUID mint used the Rhino
+        //       `Packages` Java bridge, absent in the ISVAOP V8 engine — it threw
+        //       "ReferenceError: Packages is not defined" and failed the whole mint.
         //
         // UC2 (authorization_code grant, gated on the agent-uc2 CLIENT): UC2 is OBO
         // (09-DISCOVERY CORRECTED: agent = agent-uc2). Stamp act = { sub: agent-uc2 }
         // (the actor claim Vault's OBO resolves the UC2 agent from — same mechanism as
-        // UC3's act.sub) + a unique jti (IVIA_JTI_UC2=absent; cutover locked, decision
-        // (b)). The gate is on the CLIENT (agent-uc2), not grant_type alone, so
+        // UC3's act.sub); the native ISVAOP jti covers the replay-guard need. The gate
+        // is on the CLIENT (agent-uc2) via oauth_client.getClientId(), not grant_type
+        // alone, so
         // unrelated authorization_code tokens are never given the UC2 agent identity
         // (T-09-04-08 spoofing). UC2's human sub (oscar/jaime) already rides the login
         // token — untouched. UC2 emits NO vault:path_access RAR: 09-DISCOVERY pins no
@@ -141,6 +143,13 @@ rules:
         importClass(Packages.com.tivoli.am.fim.trustserver.sts.utilities.IDMappingExtUtils);
         var ctxAttrs = stsuu.getContextAttributes();
         var gt = ctxAttrs.getAttributeValueByName("grant_type");
+        // TEMP DIAG (remove after UC2 gate pinned) — log grant_type + client accessor
+        // on every mint so we can see why the UC2 authcode branch is skipped.
+        try {
+          var _doc = (typeof oauth_client !== "undefined" && oauth_client) ? ("" + oauth_client.getClientId()) : "NO_OAUTH_CLIENT";
+          var _dctx = "" + ctxAttrs.getAttributeValueByName("client_id");
+          IDMappingExtUtils.traceString("PRETOKEN-DIAG gt=[" + gt + "] oauth_client.getClientId=[" + _doc + "] ctxAttrs.client_id=[" + _dctx + "]");
+        } catch (e) { IDMappingExtUtils.traceString("PRETOKEN-DIAG client-read error: " + e); }
         if (gt == "urn:ietf:params:oauth:grant-type:token-exchange") {
           // UC3 delegated (OBO) token — act.sub is what Vault's native OBO resolves.
           tokenData["act"]     = { "sub": "uc3-actor" };
@@ -149,15 +158,21 @@ rules:
             { "type": "refund_approval" },
             { "type": "vault:path_access", "path": "database/creds/uc3-refund-writer", "capabilities": ["read"] }
           ];
-          tokenData["jti"] = "" + Packages.java.util.UUID.randomUUID();
-          IDMappingExtUtils.traceString("UC3 pretoken stamped act+may_act=uc3-actor + authorization_details[refund_approval, vault:path_access=database/creds/uc3-refund-writer] + unique jti on token-exchange output");
+          // jti: ISVAOP mints a native unique UUID jti on every at+jwt access token
+          // (Vault schema-satisfied) — the rule stamps none. The former
+          // Packages.java.util.UUID call is absent in the ISVAOP V8 engine and threw
+          // "ReferenceError: Packages is not defined", failing the whole token mint.
+          IDMappingExtUtils.traceString("UC3 pretoken stamped act+may_act=uc3-actor + authorization_details[refund_approval, vault:path_access=database/creds/uc3-refund-writer] on token-exchange output (native jti)");
         } else if (gt == "authorization_code") {
           // UC2 OBO — stamp the agent actor ONLY on the agent-uc2 client's token, so
           // no unrelated authorization_code client can spoof the UC2 agent identity.
-          var cid = ctxAttrs.getAttributeValueByName("client_id");
+          // The requesting client is read from the oauth_client object (IBM-documented
+          // pre_token accessor) — NOT stsuu context attributes, which do not carry
+          // client_id at pre-token time (that gate silently returned null, so act was
+          // never stamped and Vault 403'd UC2). grant_type still comes from ctxAttrs.
+          var cid = oauth_client.getClientId();
           if (cid == "agent-uc2") {
             tokenData["act"] = { "sub": "agent-uc2" };
-            tokenData["jti"] = "" + Packages.java.util.UUID.randomUUID();
-            IDMappingExtUtils.traceString("UC2 pretoken stamped act=agent-uc2 + unique jti on agent-uc2 authorization_code output");
+            IDMappingExtUtils.traceString("UC2 pretoken stamped act=agent-uc2 on agent-uc2 authorization_code output (native jti)");
           }
         }
