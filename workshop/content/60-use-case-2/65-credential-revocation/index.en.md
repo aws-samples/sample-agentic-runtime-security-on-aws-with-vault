@@ -161,6 +161,12 @@ Firehose buffers audit records for up to 60 seconds before writing them to S3. I
 Define a small helper to submit a query, wait for completion, and pretty-print the result as an aligned table (empty fields render as `-`):
 
 ```bash
+# The Glue catalog + Athena 'workshop' workgroup were provisioned in YOUR deploy
+# region (resolved from Terraform state — never a hardcoded literal, per the region
+# contract). Point the CLI at that region so the workgroup and the workshop_logs
+# database resolve regardless of your shell's default region.
+export AWS_REGION="$(terraform -chdir=infrastructure output -raw region)"
+
 athena_query() {
   local Q="$1"
   local QID=$(aws athena start-query-execution --work-group workshop \

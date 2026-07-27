@@ -24,6 +24,12 @@ Use Case 3 culminates in a single Athena query that answers all five workshop ob
 The `workshop` Athena workgroup ships with a preconfigured query-result location, so you do **not** need to resolve an S3 bucket. Define a base helper that runs a query and waits for it, plus three thin wrappers — `athena_query` (aligned multi-row table), `athena_record` (a single row printed vertically, `field → value`, ideal for the wide correlation row), and `athena_scalar` (just the first value, for capturing into a variable):
 
 ```bash
+# The Glue catalog + Athena 'workshop' workgroup were provisioned in YOUR deploy
+# region (resolved from Terraform state — never a hardcoded literal, per the region
+# contract). Point the CLI at that region so the workgroup and the workshop_logs
+# database resolve regardless of your shell's default region.
+export AWS_REGION="$(terraform -chdir=infrastructure output -raw region)"
+
 # Run a query in the 'workshop' workgroup, wait for it, echo the execution id
 athena_run() {
   local QID=$(aws athena start-query-execution --work-group workshop \
