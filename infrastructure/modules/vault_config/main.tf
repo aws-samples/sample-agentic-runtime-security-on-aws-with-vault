@@ -677,12 +677,15 @@ locals {
   # through the same oauth mount in both UCs, so exactly one entity + one alias).
   obo_human_subs = toset(concat(var.uc2_human_subs, [var.uc3_human_sub]))
 
-  # Per-human baseline policy attachment = the human's MAX across the UCs they
-  # drive. oscar (UC2 only) -> uc2 baseline; jaime (UC2 + UC3) -> both baselines.
+  # Per-human baseline policy attachment. BOTH personas are refund-capable: the
+  # retired uc3-jwt role gated the refund grant on the AGENT delegation
+  # (may_act.sub=uc3-actor), NOT the human sub, so every human the UC3 agent acts
+  # for gets the refund baseline. Native OBO makes the human baseline a floor, so
+  # both carry uc3-human-baseline; per-user RLS still isolates each persona's rows.
   obo_human_policies = {
     for h in local.obo_human_subs : h => compact([
       contains(var.uc2_human_subs, h) ? vault_policy.uc2_human_baseline.name : "",
-      h == var.uc3_human_sub ? vault_policy.uc3_human_baseline.name : "",
+      vault_policy.uc3_human_baseline.name,
     ])
   }
 }
@@ -806,7 +809,12 @@ resource "vault_generic_endpoint" "oauth_alias" {
   write_fields         = ["id"]
 
   data_json = jsonencode({
-    name           = each.key # the OAuth claim value (= external_id)
+    name         = each.key # human-readable alias name
+    external_id  = each.key # the OAuth claim value (sub / act.sub) native OBO
+    # resolves the entity BY. Vault matches the JWT sub/act.sub against the
+    # alias external_id (scoped by issuer), NOT by name — a name-only alias
+    # resolves via identity/lookup/entity but fails native OBO with "no alias
+    # found". external_id is LOAD-BEARING for the OAuth-resource-server profile.
     canonical_id   = each.value
     mount_accessor = local.oauth_mount_accessor
     issuer         = var.ivia_issuer # = profile issuer_id; REQUIRED for JWT auth
