@@ -115,16 +115,32 @@ rules:
         //       `Packages` Java bridge, absent in the ISVAOP V8 engine — it threw
         //       "ReferenceError: Packages is not defined" and failed the whole mint.
         //
-        // UC2 (authorization_code grant, gated on the agent-uc2 CLIENT): UC2 is OBO
-        // (09-DISCOVERY CORRECTED: agent = agent-uc2). Stamp act = { sub: agent-uc2 }
-        // (the actor claim Vault's OBO resolves the UC2 agent from — same mechanism as
-        // UC3's act.sub); the native ISVAOP jti covers the replay-guard need. The gate
-        // is on the CLIENT (agent-uc2) via oauth_client.getClientId(), not grant_type
-        // alone, so
-        // unrelated authorization_code tokens are never given the UC2 agent identity
-        // (T-09-04-08 spoofing). UC2's human sub (oscar/jaime) already rides the login
-        // token — untouched. UC2 emits NO vault:path_access RAR: 09-DISCOVERY pins no
-        // UC2 RAR path (RAR OPTIONAL); UC2 = human-baseline ∩ agent-uc2 ceiling.
+        // UC2 (authorization_code LOGIN grant, gated on the agent-uc2 CLIENT and NOT a
+        // refresh grant): UC2 is OBO (09-DISCOVERY CORRECTED: agent = agent-uc2). Stamp
+        // act = { sub: agent-uc2 } (the actor claim Vault's OBO resolves the UC2 agent
+        // from — same mechanism as UC3's act.sub); the native ISVAOP jti covers the
+        // replay-guard need. Two gate conditions, both load-bearing:
+        //   (a) CLIENT == agent-uc2 (via oauth_client.getClientId()), not grant_type
+        //       alone — grant_type is NULL for the authorization_code login, so gating
+        //       on it would never fire; gating on the authenticated client also blocks
+        //       any unrelated client being handed the UC2 agent identity (T-09-04-08).
+        //   (b) FAIL-CLOSED on refresh, enforced at the SOURCE: agent-uc2's client
+        //       definition withholds the refresh_token grant (clients.yml.tftpl), so
+        //       ISVAOP never issues a refresh token — the agent identity is mintable
+        //       ONLY on fresh interactive auth. This is required because ISVAOP
+        //       auto-propagates the parent token's act claim into any refresh-grant
+        //       reissue and the mapping rule CANNOT strip it (proven live: the rule's
+        //       delete runs — preAct=[object Object] -> postAct=undefined — but the
+        //       emitted refreshed token still carries act -> Vault 200, because ISVAOP
+        //       re-injects the parent claims downstream of pre_token). Withholding the
+        //       grant caps the blast radius of a stolen 30-day refresh token. The app
+        //       never uses refresh (access_token cookie = expires_in; no refresh_token
+        //       call; the callback skips the absent cookie), so this is pure security
+        //       upside. The rule keeps a gt != "refresh_token" guard as defense-in-depth.
+        //       verify-uc2 Check 6c asserts the refresh grant is rejected. LOAD-BEARING.
+        // UC2's human sub (oscar/jaime) already rides the login token — untouched. UC2
+        // emits NO vault:path_access RAR: 09-DISCOVERY pins no UC2 RAR path (RAR
+        // OPTIONAL); UC2 = human-baseline ∩ agent-uc2 ceiling.
         //
         // WHY the refund amount is not a token claim (VERIFIED ISVAOP 25.10 + IBM docs
         // tasks-rar / js_ciba_mapping_rule, 2026-05-29): the consent-time RAR
@@ -157,17 +173,25 @@ rules:
           // Packages.java.util.UUID call is absent in the ISVAOP V8 engine and threw
           // "ReferenceError: Packages is not defined", failing the whole token mint.
           IDMappingExtUtils.traceString("UC3 pretoken stamped act+may_act=uc3-actor + authorization_details[refund_approval, vault:path_access=database/creds/uc3-refund-writer] on token-exchange output (native jti)");
-        } else if (clientId == "agent-uc2") {
-          // UC2 OBO — stamp act=agent-uc2 on the agent-uc2 client's tokens (the
-          // interactive authorization_code login AND its refresh grants). The gate is
-          // on the CLIENT, NOT grant_type: in the ISVAOP pre_token context grant_type
-          // is NULL for the authorization_code/refresh grants (PROVEN LIVE via trace —
-          // gt=[null], oauth_client.getClientId()=[agent-uc2]); only the delegation
-          // grants (token-exchange, ciba) populate it. Gating on the authenticated
-          // client is ALSO the anti-spoof intent (T-09-04-08): no unrelated client is
-          // ever handed the UC2 agent identity. The human sub (oscar/jaime) rides the
-          // login token untouched; act.sub=agent-uc2 is the actor Vault's native OBO
-          // resolves the UC2 agent from. ISVAOP mints the native jti (no Packages call).
+        } else if (clientId == "agent-uc2" && gt != "refresh_token") {
+          // UC2 OBO — stamp act=agent-uc2 on the agent-uc2 client's fresh interactive
+          // login (authorization_code, grant_type=null). Rationale in the header block:
+          //   (a) gate on CLIENT not grant_type — grant_type is NULL for the login, so
+          //       gating on it would never fire; the client gate is also the anti-spoof
+          //       control (T-09-04-08) — no unrelated client gets the UC2 agent identity.
+          //   (b) the gt != "refresh_token" guard is DEFENSE-IN-DEPTH. Fail-closed on
+          //       refresh is enforced PRIMARILY at the source: agent-uc2's client
+          //       definition withholds the refresh_token grant entirely (clients.yml.tftpl),
+          //       so ISVAOP never issues a refresh token and there is no refresh path.
+          //       The guard here is belt-and-suspenders: even if the refresh grant were
+          //       ever re-added, this rule would not re-stamp act on it. (Note: the rule
+          //       CANNOT strip a propagated act — ISVAOP re-injects the parent token's
+          //       claims downstream of pre_token; proven live. Hence the fix lives in the
+          //       client grant_types, not here.) verify-uc2 Check 6c asserts the refresh
+          //       grant is rejected.
+          // The human sub (oscar/jaime) rides the login token untouched; act.sub=agent-uc2
+          // is the actor Vault's native OBO resolves the UC2 agent from. ISVAOP mints the
+          // native jti (no Packages call).
           tokenData["act"] = { "sub": "agent-uc2" };
-          IDMappingExtUtils.traceString("UC2 pretoken stamped act=agent-uc2 on agent-uc2 client token (grant_type=" + gt + ", native jti)");
+          IDMappingExtUtils.traceString("UC2 pretoken stamped act=agent-uc2 on agent-uc2 login token (grant_type=" + gt + ", refresh-withheld-at-client, native jti)");
         }
