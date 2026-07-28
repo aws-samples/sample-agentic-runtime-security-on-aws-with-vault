@@ -58,11 +58,9 @@
 #
 # Env vars:
 #   VAULT_ENTERPRISE_LICENSE_PATH  Path to the Vault Enterprise .hclic license file.
-#                                  Defaults to the shared workshop license committed at
-#                                  infrastructure/modules/vault_server/vault-ent.hclic so
-#                                  attendees can provision without sourcing their own
-#                                  (a Vault Enterprise license cannot be self-served from
-#                                  hashicorp.com). Read fresh and written into
+#                                  Defaults to ~/Downloads/vault-ent.hclic. Attendees supply
+#                                  their own platform-standard Vault Enterprise license file
+#                                  (never committed to the repo). Read fresh and written into
 #                                  infrastructure/services/terraform.tfvars on every
 #                                  tier-2 run. Override the env var to use a different license.
 #
@@ -476,9 +474,18 @@ else
                  "Seed the roots first: bash infrastructure/scripts/bootstrap.sh"
         fi
 
-        # 2) icr_entitlement_key (tier-2) — required secret, hidden input
+        # 2) icr_entitlement_key (tier-2) — required secret. Precedence:
+        #    already-in-tfvars -> ICR_ENTITLEMENT_KEY env var -> hidden prompt.
+        #    The env var lets attendees paste an organizer-provided value (or run
+        #    non-interactively) without hand-editing tfvars; when it is unset we
+        #    fall through to the interactive hidden prompt exactly as before.
         icr_key="$(_tfvars_get "$SERVICES_TFVARS" icr_entitlement_key)"
         if [[ -z "$icr_key" || "$icr_key" == \<*\> ]]; then
+            if [[ -n "${ICR_ENTITLEMENT_KEY:-}" ]]; then
+                icr_key="$ICR_ENTITLEMENT_KEY"
+                _tfvars_set "$SERVICES_TFVARS" icr_entitlement_key "$icr_key"
+                print_pass "Preflight: icr_entitlement_key set from ICR_ENTITLEMENT_KEY (hidden)"
+            else
             _require_tty "icr_entitlement_key" "$SERVICES_TFVARS"
             while :; do
                 read -r -s -p "  $(echo -e "${YELLOW}?${NC}") IBM Container Registry entitlement key (input hidden): " icr_key < /dev/tty
@@ -488,13 +495,23 @@ else
             done
             _tfvars_set "$SERVICES_TFVARS" icr_entitlement_key "$icr_key"
             print_pass "Preflight: icr_entitlement_key set (hidden)"
+            fi
         else
             print_info "Preflight: icr_entitlement_key already set — reusing"
         fi
 
-        # 3) ivia_mmfa_push_client_secret (tier-2) — required secret, hidden input
+        # 3) ivia_mmfa_push_client_secret (tier-2) — required secret. Precedence:
+        #    already-in-tfvars -> IVIA_MMFA_PUSH_CLIENT_SECRET env var -> hidden
+        #    prompt. The env var lets attendees paste an organizer-provided value
+        #    (or run non-interactively) without hand-editing tfvars; when it is
+        #    unset we fall through to the interactive hidden prompt as before.
         mmfa_secret="$(_tfvars_get "$SERVICES_TFVARS" ivia_mmfa_push_client_secret)"
         if [[ -z "$mmfa_secret" ]]; then
+            if [[ -n "${IVIA_MMFA_PUSH_CLIENT_SECRET:-}" ]]; then
+                mmfa_secret="$IVIA_MMFA_PUSH_CLIENT_SECRET"
+                _tfvars_set "$SERVICES_TFVARS" ivia_mmfa_push_client_secret "$mmfa_secret"
+                print_pass "Preflight: ivia_mmfa_push_client_secret set from IVIA_MMFA_PUSH_CLIENT_SECRET (hidden)"
+            else
             _require_tty "ivia_mmfa_push_client_secret" "$SERVICES_TFVARS"
             while :; do
                 read -r -s -p "  $(echo -e "${YELLOW}?${NC}") IBM Verify MMFA push client secret (input hidden): " mmfa_secret < /dev/tty
@@ -504,20 +521,21 @@ else
             done
             _tfvars_set "$SERVICES_TFVARS" ivia_mmfa_push_client_secret "$mmfa_secret"
             print_pass "Preflight: ivia_mmfa_push_client_secret set (hidden)"
+            fi
         else
             print_info "Preflight: ivia_mmfa_push_client_secret already set — reusing"
         fi
 
         # 4) vault_enterprise_license (tier-2) — required secret, sourced from a
-        # FILE. Defaults to the shared workshop license committed in-repo so
-        # attendees provision without sourcing their own (Vault Enterprise
-        # licenses cannot be self-served from hashicorp.com). Unlike the two
+        # FILE. Defaults to ~/Downloads/vault-ent.hclic; attendees provide their
+        # own platform-standard Vault Enterprise license file (licenses are
+        # supplied per-deploy, never committed to the repo). Unlike the two
         # secrets above, this is NOT conditional on "already set" — it is
         # re-read from VAULT_ENTERPRISE_LICENSE_PATH and overwritten on EVERY
         # run so a rotated/updated license file always propagates. The license
         # must carry the platform-standard module (NOT pki-only) or Vault
         # rejects the database/aws/kv/transit mounts every UC depends on.
-        vault_license_path="${VAULT_ENTERPRISE_LICENSE_PATH:-${INFRA_DIR}/modules/vault_server/vault-ent.hclic}"
+        vault_license_path="${VAULT_ENTERPRISE_LICENSE_PATH:-$HOME/Downloads/vault-ent.hclic}"
         if [[ ! -s "$vault_license_path" ]]; then
             _die "Preflight: Vault Enterprise license file missing or empty (VAULT_ENTERPRISE_LICENSE_PATH=${vault_license_path})" \
                  "Set VAULT_ENTERPRISE_LICENSE_PATH to your platform-standard .hclic license file, or place it at ${vault_license_path}, then re-run: bash infrastructure/scripts/deploy-workshop.sh"

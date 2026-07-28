@@ -9,10 +9,11 @@
 # from tier-1 state via terraform_remote_state — the ONLY inputs here are the
 # secrets below (sensitive, never in tier-1 state).
 #
-# Leave all empty: deploy-workshop.sh resolves them (prompting for the two IVIA
-# secrets, reading the license from a file for vault_enterprise_license) on
-# every run and writes them into the gitignored terraform.tfvars — secrets
-# never get committed to the repo.
+# Leave all empty: deploy-workshop.sh resolves them on every run and writes them
+# into the gitignored terraform.tfvars — secrets never get committed to the repo.
+# The two IVIA secrets come from the ICR_ENTITLEMENT_KEY /
+# IVIA_MMFA_PUSH_CLIENT_SECRET env vars when set, otherwise a hidden prompt;
+# vault_enterprise_license is always read from a file (VAULT_ENTERPRISE_LICENSE_PATH).
 ################################################################################
 
 # IBM Container Registry entitlement key for pulling IVIA images

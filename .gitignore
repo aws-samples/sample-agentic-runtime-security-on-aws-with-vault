@@ -1,6 +1,10 @@
 # Terraform
 .terraform/
 .terraform-build/
+
+# Vault Enterprise license — supplied per-deploy (VAULT_ENTERPRISE_LICENSE_PATH),
+# never committed. Real .hclic files are commercial secrets.
+*.hclic
 *.tfstate
 *.tfstate.*
 *.tfplan
