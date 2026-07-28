@@ -43,6 +43,8 @@ path "sys/leases/renew" {
 
 Note: there is no path for any Use Case 3 write-capable role (e.g., `database/creds/uc3-refund-writer`). The policy grants `read` on exactly **one** database credential path — `uc2-personal-readonly`. The other three paths give the agent its Vault-vended Bedrock STS credentials (`aws/sts/bedrock-reader`), let it inspect its own Vault token (`auth/token/lookup-self`), and let it extend an in-flight DB credential lease (`sys/leases/renew`). None of these grant write access to banking data.
 
+This `uc2-personal` policy is the MCP server's own **workload** policy — the token its `uc2-mcp-server-sa` Kubernetes identity receives. It is distinct from `uc2-human-baseline`, the per-user policy Vault intersects with the agent ceiling in the OBO path shown on the previous pages (that one has no Bedrock path). Both correctly lack any Use Case 3 write path — which is exactly what the next step proves.
+
 ### Step 1.2 — Attempt to read a write-capable credential role
 
 Obtain a Vault token using the `uc2-personal` policy and attempt to read a Use Case 3 credential:

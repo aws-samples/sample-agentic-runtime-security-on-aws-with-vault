@@ -123,20 +123,25 @@ Notice what is **absent**: no `database/creds/uc3-refund-writer` and no write-ca
 The human subject (`oscar` or `jaime`) contributes the *baseline* — what this specific user is permitted. Read it:
 
 ```bash
-vault policy read uc2-personal
+vault policy read uc2-human-baseline
 ```
 
-Expected output:
+Expected output — note this is a **read-only envelope with no Bedrock path**; the human never needs the agent's model access:
 
 ```hcl
-# UC2: Personal-data human baseline (ENFC-02)
-path "database/creds/uc2-personal-readonly" { capabilities = ["read"] }
-path "aws/sts/bedrock-reader"               { capabilities = ["read", "update"] }
-path "auth/token/lookup-self"               { capabilities = ["read"] }
-path "sys/leases/renew"                     { capabilities = ["update"] }
+# UC2 human baseline (sub in {oscar, jaime}) — personal-data read envelope.
+path "database/creds/uc2-personal-readonly" {
+  capabilities = ["read"]
+}
+path "auth/token/lookup-self" {
+  capabilities = ["read"]
+}
+path "sys/leases/renew" {
+  capabilities = ["update"]
+}
 ```
 
-The effective grant Vault applies is **`uc2-personal` (human baseline) ∩ `uc2-agent-ceiling` (agent ceiling)**. Both must permit a path for the request to succeed. This is ENFC-02 at the Vault layer, expressed as an intersection rather than a single flat policy.
+The effective grant Vault applies is **`uc2-human-baseline` (human baseline) ∩ `uc2-agent-ceiling` (agent ceiling)**. Both must permit a path for the request to succeed. This is ENFC-02 at the Vault layer, expressed as an intersection rather than a single flat policy.
 
 ## Step 4 — Verify the database credentials role
 
@@ -190,7 +195,7 @@ password           <ephemeral>
 username           v-JWT Toke-uc2-pers-<random>-<timestamp>
 ```
 
-There is no `vault write auth/jwt/login` in that sequence. Vault validated the OAuth JWT against the resource server profile, resolved `sub` (the human) and `act.sub = agent-uc2` (the agent actor), applied `uc2-personal ∩ uc2-agent-ceiling`, and vended the credential — all in the one `database/creds` read. The `username` is derived from the presented token's Vault display name (`JWT Token with JTI:…`, truncated to 8 chars) — it identifies the token/agent, never the human `sub`; human attribution is recovered by correlating the lease with the IVIA OAuth plane. The MCP Server uses exactly this credential for the user's session.
+There is no `vault write auth/jwt/login` in that sequence. Vault validated the OAuth JWT against the resource server profile, resolved `sub` (the human) and `act.sub = agent-uc2` (the agent actor), applied `uc2-human-baseline ∩ uc2-agent-ceiling`, and vended the credential — all in the one `database/creds` read. The `username` is derived from the presented token's Vault display name (`JWT Token with JTI:…`, truncated to 8 chars) — it identifies the token/agent, never the human `sub`; human attribution is recovered by correlating the lease with the IVIA OAuth plane. The MCP Server uses exactly this credential for the user's session.
 
 :::expand{header="Platform Track — OAuth resource server profile, registration, and ceiling (Terraform)"}
 
@@ -268,7 +273,7 @@ HTTP request → Authorization: Bearer <OAuth JWT>
                Vault database/creds/uc2-personal-readonly
                      → Vault validates JWT (resource server profile)
                      → resolves sub = "oscar" (human) + act.sub = agent-uc2 (actor)
-                     → applies uc2-personal ∩ uc2-agent-ceiling
+                     → applies uc2-human-baseline ∩ uc2-agent-ceiling
                      → returns username, password, lease_id
                      ↓
                psql SET app.current_user_sub = 'oscar'   ← RLS filters to Oscar's rows
