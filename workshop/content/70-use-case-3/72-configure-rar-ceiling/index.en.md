@@ -100,7 +100,7 @@ resource "vault_database_secret_backend_role" "uc3_refund_writer" {
   max_ttl     = 600 # 10 minutes — renewals permitted up to this ceiling
 
   creation_statements = [
-    "CREATE ROLE \"{{name}}\" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}' BYPASSRLS;",
+    "CREATE ROLE \"{{name}}\" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}';",
     "GRANT USAGE ON SCHEMA banking TO \"{{name}}\";",
     "GRANT SELECT ON banking.accounts TO \"{{name}}\";",
     "GRANT SELECT ON banking.transactions TO \"{{name}}\";",
