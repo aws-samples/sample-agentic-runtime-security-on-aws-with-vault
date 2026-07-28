@@ -173,17 +173,19 @@ fi
 # an ecr deploy. Resolution order:
 #   1. WORKSHOP_IMAGE_SOURCE env var (operator override)
 #   2. image_source line in infrastructure/terraform.tfvars (persisted by bootstrap)
-#   3. Hard default: ghcr
-# NOTE: a bare ${WORKSHOP_IMAGE_SOURCE:-ghcr} default is INTENTIONALLY avoided —
-# an env default would silently no-op the ECR sweep after an ecr deploy if the
-# env var is unset in a fresh shell, orphaning ECR repos (T-0709-09 mitigation).
+#   3. Hard default: ecr (matches the workshop default; the guarded ECR sweep is
+#      a harmless no-op when no repos exist, so defaulting to ecr never orphans them)
+# NOTE: a bare ${WORKSHOP_IMAGE_SOURCE:-...} env default is INTENTIONALLY avoided —
+# an env default would let a stale/unset env var override the persisted tfvar, which
+# is the deterministic source of truth for what a deploy actually provisioned
+# (T-0709-09 mitigation). The tfvar wins; the hard default is only the no-tfvar case.
 #-------------------------------------------------------------------------------
 IMAGE_SOURCE="${WORKSHOP_IMAGE_SOURCE:-}"
 if [ -z "$IMAGE_SOURCE" ] && [ -f "$TF_VARS" ]; then
     IMAGE_SOURCE=$(grep -E '^image_source' "$TF_VARS" \
         | sed -E 's/.*=[[:space:]]*"?([a-z]+)"?.*/\1/' | head -1 || true)
 fi
-IMAGE_SOURCE="${IMAGE_SOURCE:-ghcr}"
+IMAGE_SOURCE="${IMAGE_SOURCE:-ecr}"
 
 CW_LOG_PREFIXES=("/workshop/" "/aws/eks/${DEFAULT_CLUSTER}/" "/aws/rds/instance/${DEFAULT_CLUSTER}-pg")
 S3_BUCKET_PREFIXES+=("${DEFAULT_CLUSTER}-workshop-logs")
@@ -653,11 +655,11 @@ sweep_launch_templates() {
 #----- ECR repositories (workshop container images) ----------------------------
 ECR_REPO_NAMES=("workshop/uc1-agent" "workshop/uc3-agent" "workshop-banking-app")
 sweep_ecr_repos() {
-    # In ghcr mode (default) ECR repos were never provisioned — early-return so
+    # In the ghcr opt-out ECR repos were never provisioned — early-return so
     # the sweep is a clean no-op. ECR_REPO_NAMES stays bound (set -u safe) and
     # the two _check loops below remain safe; they simply find nothing in ghcr mode.
-    if [ "${IMAGE_SOURCE:-ghcr}" != "ecr" ]; then
-        print_info "No ECR repos to sweep (${IMAGE_SOURCE:-ghcr} mode)"
+    if [ "${IMAGE_SOURCE:-ecr}" != "ecr" ]; then
+        print_info "No ECR repos to sweep (${IMAGE_SOURCE:-ecr} mode)"
         return 0
     fi
     local count=0

@@ -43,7 +43,7 @@ weight: 90
 
 ## Bring Your Own GHCR Registry
 
-A power-user/fork reference for hosting the five workshop images in your own GHCR namespace. This is **not** a step in the main deploy flow — the default `deploy-workshop.sh` pulls images from `ghcr.io/sharepointoscar` anonymously. Use this reference only if you want to repoint the GHCR base to your own account.
+A power-user/fork reference for hosting the five workshop images in your own GHCR namespace. This is **not** a step in the main deploy flow — the default `deploy-workshop.sh` builds the images into your own account ECR, and the `--image-source ghcr` opt-out pulls pre-built images from `ghcr.io/sharepointoscar` anonymously. Use this reference only if you want to repoint that GHCR base to your own account.
 
 ### 1. Prerequisites
 
@@ -55,7 +55,7 @@ You need:
 gh auth refresh -h github.com -s write:packages
 ```
 
-- A running container runtime (Docker or Podman) — publishing builds the images locally before pushing. See [Self-paced: build images locally](../20-prerequisites/23-pre-flight-checks/#self-paced-build-images-locally---image-source-ecr) for setup instructions.
+- A running container runtime (Docker or Podman) — publishing builds the images locally before pushing. See [Self-paced: container runtime](../20-prerequisites/23-pre-flight-checks/#self-paced-container-runtime---image-source-ecr) for setup instructions.
 
 ### 2. Publish to your namespace
 

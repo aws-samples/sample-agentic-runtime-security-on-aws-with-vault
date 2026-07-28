@@ -17,7 +17,7 @@ Install the following tools before running any workshop scripts. The workshop's 
 | Terraform | 1.10+ | `terraform -version` — 1.10 is required for the workshop's deploy scripts |
 | kubectl | 1.34+ | `kubectl version --client` |
 | Helm | 3.12+ | `helm version` |
-| Docker or Podman | Any recent | Required only if building images locally (`--image-source ecr`); not needed for the default GHCR path |
+| Docker or Podman | Any recent | Required for the default self-paced deploy (builds the images into your account ECR); not needed only if you opt out with `--image-source ghcr` |
 | jq | 1.6+ | `jq --version` |
 
 Run the pre-flight checker to install and verify all tools in one shot:

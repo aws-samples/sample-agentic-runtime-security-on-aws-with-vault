@@ -58,11 +58,9 @@ Once every check is green, continue to [Deploy Foundation](../../30-deploy-found
 
 ---
 
-## Self-paced: build images locally (`--image-source ecr`)
+## Self-paced: container runtime (`--image-source ecr`)
 
-The default workshop deploy pulls pre-built public images from GHCR — **no container runtime required.** The steps below apply only if you choose the self-paced opt-in that builds the Use Case images locally and pushes them to your own ECR.
-
-Pass `--image-source ecr` to `deploy-workshop.sh` to enable this path. When you do, a container runtime is required and must be running before you deploy.
+The default self-paced deploy **builds the five Use Case images and pushes them to your own account's private ECR**, so a running container runtime (Docker or Podman) is **required** — install and start it before you deploy. (Prefer to skip the build? Pass `--image-source ghcr` to pull pre-built public images from GHCR instead — see [Pull pre-built images from GHCR](../../30-deploy-foundation/31-deploy-self-paced/#pull-pre-built-images-from-ghcr---image-source-ghcr); that path needs no container runtime.)
 
 **A container runtime is the one exception you install *and start* yourself — Docker *or* Podman.** The deploy builds and pushes the Use Case agent container images with whichever one you have; the pre-flight script auto-detects it but does not install it. Installing it is not enough — the engine must be **running** before you deploy (the pre-flight check fails with a clear "installed but not running" message otherwise). Set up **one** of:
 
@@ -89,7 +87,7 @@ podman machine stop && podman machine start
 Docker Desktop uses Rosetta automatically — this note is Podman-only. Native `amd64` Linux hosts are unaffected (no emulation).
 :::
 
-Confirm your container runtime is ready before running `deploy-workshop.sh --image-source ecr`:
+Confirm your container runtime is ready before running `deploy-workshop.sh`:
 
 ```bash
 docker info --format '{{.ServerVersion}}' 2>/dev/null || podman info --format '{{.Version.Version}}'

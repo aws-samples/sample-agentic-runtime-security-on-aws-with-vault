@@ -69,10 +69,10 @@ SKIP_QUOTAS=false
 # real test is the subsequent terraform apply. Set true by --skip-iam-sim.
 SKIP_IAM_SIM=false
 # Image source mode — controls whether the container-runtime gate fires.
-# ghcr (default): pre-built public GHCR images, no build required, no runtime needed.
-# ecr: local build + push to ECR — container runtime (Docker or Podman) required.
+# ecr (default): local build + push to ECR — container runtime (Docker or Podman) required.
+# ghcr: pre-built public GHCR images, no build required, no runtime needed.
 # Set via env var or --image-source=<mode> flag.
-IMAGE_SOURCE="${WORKSHOP_IMAGE_SOURCE:-ghcr}"
+IMAGE_SOURCE="${WORKSHOP_IMAGE_SOURCE:-ecr}"
 
 # Argument parsing — keep simple, no shift loops with positional args
 for arg in "$@"; do
@@ -94,10 +94,10 @@ Modes:
   (no flags)        Default: auto-install missing CLIs (no per-tool prompts),
                     then run Bedrock + quotas + IAM checks straight through.
                     Failures accumulate into a consolidated summary at the end.
-  --image-source=ghcr  Default: pre-built public GHCR images — no container
-                    runtime required (Docker/Podman check skipped).
-  --image-source=ecr   Local build + push to ECR — container runtime
+  --image-source=ecr   Default: local build + push to ECR — container runtime
                     (Docker or Podman) is required and checked.
+  --image-source=ghcr  Pre-built public GHCR images — no container runtime
+                    required (Docker/Podman check skipped).
                     Env fallback: WORKSHOP_IMAGE_SOURCE.
   --interactive     Prompt before each install AND before each check section
                     ("Install kubectl? [y/N]", "Run Bedrock check? [y/N]", ...).
@@ -443,15 +443,15 @@ else
 fi
 
 # Container runtime (Podman OR Docker) — required by build-images.sh (deploy
-# Step 3) to build + push the agent images in ecr mode. In ghcr mode (default)
-# no build is performed — pre-built public images are pulled from GHCR — so no
-# container runtime is needed and the check is skipped. detect_container_runtime
+# Step 3) to build + push the agent images in ecr mode (default). In the ghcr
+# opt-out no build is performed — pre-built public images are pulled from GHCR —
+# so no container runtime is needed and the check is skipped. detect_container_runtime
 # validates the runtime and prints its own pass/fail line. NO `|| exit 1` here —
 # this script is continue-on-failure; failures accumulate into the final summary.
-if [ "${IMAGE_SOURCE:-ghcr}" = "ecr" ]; then
+if [ "${IMAGE_SOURCE:-ecr}" = "ecr" ]; then
     detect_container_runtime
 else
-    print_pass "Container runtime: not required (${IMAGE_SOURCE:-ghcr} mode — pre-built public images from GHCR)"
+    print_pass "Container runtime: not required (${IMAGE_SOURCE:-ecr} mode — pre-built public images from GHCR)"
 fi
 
 echo

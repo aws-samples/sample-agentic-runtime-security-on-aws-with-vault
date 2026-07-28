@@ -40,11 +40,11 @@
 #                            tier 3 = steps 10-14 (workloads + ALB assert + seed + KB ingest)
 #                            Required for the Instruqt distribution (one tier per challenge);
 #                            bare invocation is the Workshop Studio path (all 14 steps).
-#   --image-source <ghcr|ecr>     Image source mode (default: ghcr). ghcr pulls pre-built
-#                                 public images from GHCR — no container runtime required,
-#                                 no ECR repos provisioned. ecr uses the local-build + push
-#                                 flow (today's path). Invalid value fails loud.
-#                                 Env fallback: WORKSHOP_IMAGE_SOURCE.
+#   --image-source <ghcr|ecr>     Image source mode (default: ecr). ecr builds the five
+#                                 images locally and pushes them to the account's private
+#                                 ECR (container runtime required). ghcr pulls pre-built
+#                                 public images from GHCR — no build, no runtime. Invalid
+#                                 value fails loud. Env fallback: WORKSHOP_IMAGE_SOURCE.
 #   --ghcr-registry-base <base>   GHCR registry base for pre-built images (default:
 #                                 ghcr.io/sharepointoscar). Only meaningful in ghcr mode;
 #                                 repoints the consume base for a fork.
@@ -75,8 +75,8 @@
 #   - A Vault Enterprise platform-standard license file (see VAULT_ENTERPRISE_LICENSE_PATH)
 #
 # Examples:
-#   ./deploy-workshop.sh                              # full deploy, ghcr mode (default)
-#   ./deploy-workshop.sh --image-source ecr          # full deploy, build+push to ECR
+#   ./deploy-workshop.sh                              # full deploy, ecr mode (default) — build+push to ECR
+#   ./deploy-workshop.sh --image-source ghcr         # full deploy, pull pre-built GHCR images (no build)
 #   ./deploy-workshop.sh --tier 1                    # only steps 1-4 (Instruqt tier-1 challenge)
 #   ./deploy-workshop.sh --tier 2                    # only steps 5-9 (Instruqt tier-2 challenge)
 #   ./deploy-workshop.sh --tier 3                    # only steps 10-14 (Instruqt tier-3 challenge)
@@ -108,7 +108,7 @@ source "${SCRIPT_DIR}/common-checks.sh"
 #   1. --image-source / --ghcr-registry-base flag (explicit CLI)
 #   2. WORKSHOP_IMAGE_SOURCE / WORKSHOP_GHCR_REGISTRY_BASE env var
 #   3. image_source from the persisted tier-1 terraform.tfvars (after parsing)
-#   4. Hard default: ghcr / ghcr.io/sharepointoscar
+#   4. Hard default: ecr (GHCR base ghcr.io/sharepointoscar applies only in the ghcr opt-out)
 # Steps 3-4 happen after arg-parse (needs TFVARS path) and before step functions.
 # ghcr.io/sharepointoscar is an image-source URI base, NOT an identity/auth value.
 #-------------------------------------------------------------------------------
@@ -216,11 +216,11 @@ fi
 #-------------------------------------------------------------------------------
 # Resolve IMAGE_SOURCE: flag (already set) → env (already set above) →
 # persisted tier-1 tfvar (so --tier 3 partial re-runs hold the mode set at
-# full-run time, even without repeating the flag) → hard default ghcr.
+# full-run time, even without repeating the flag) → hard default ecr.
 #-------------------------------------------------------------------------------
 if [[ -z "$IMAGE_SOURCE" ]]; then
     _tfvar_mode=$(_resolve_tfvar "image_source")
-    IMAGE_SOURCE="${_tfvar_mode:-ghcr}"
+    IMAGE_SOURCE="${_tfvar_mode:-ecr}"
 fi
 case "$IMAGE_SOURCE" in
     ghcr|ecr) : ;;
