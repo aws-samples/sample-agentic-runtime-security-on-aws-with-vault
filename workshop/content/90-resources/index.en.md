@@ -10,7 +10,7 @@ weight: 90
 
 ## IBM Verify Identity Access (IVIA)
 
-- [IVIA Trial Certificate](https://isva-trial.verify.ibm.com/) — obtain a 90-day trial certificate to activate Config container modules (wga, mga, federation)
+- **IVIA Trial Certificate** — the signed trial certificate that activates the Config container modules (wga, mga, federation) ships bundled with the workshop at `infrastructure/modules/verify_access/base_layer/ISAM-Trial-HashiCorp.cer`; Terraform reads it automatically, so there is nothing to obtain or upload
 - [IVIA OIDC Provider — Kubernetes Deployment](https://docs.verify.ibm.com/ibm-security-verify-access/docs/deployment-k8s) — full K8s manifest examples, RBAC, probes
 - [IVIA OIDC Provider — YAML Configuration Reference](https://docs.verify.ibm.com/ibm-security-verify-access/docs/yaml_config) — all config sections, special types (`secret:`, `ks:`, `B64:`, `@`)
 - [IVIA OIDC Provider — Server Settings](https://docs.verify.ibm.com/ibm-security-verify-access/docs/yaml_provider-https_server) — `server.activation_code`, SSL, ports

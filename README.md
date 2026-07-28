@@ -54,12 +54,12 @@ All scripts are idempotent. `workshop-e2e.sh --help` lists every flag (`--start-
 
 ## Required licenses (must obtain before deploy)
 
-IVIA does not deploy without two artifacts from IBM:
+IVIA deploy requires **two artifacts from IBM**. You supply one; the other ships with the workshop:
 
 1. **IBM Container Registry entitlement key** — lets the cluster pull `icr.io/ibm-vassd/verify-access:11.0.2` images. From IBM Cloud → Container Software Library.
-2. **IVIA 90-day trial activation certificate** — unlocks the IVIA server at runtime.
+2. **IVIA 90-day trial activation certificate** — unlocks the IVIA server at runtime. Ships bundled with the workshop at `infrastructure/modules/verify_access/base_layer/ISAM-Trial-HashiCorp.cer`; Terraform reads it automatically, so there is nothing to obtain or upload.
 
-Both go into `infrastructure/terraform.tfvars`. Full procurement steps: [`workshop/content/20-prerequisites/22-ivia-licensing/`](workshop/content/20-prerequisites/22-ivia-licensing/index.en.md).
+You supply the entitlement key in `infrastructure/terraform.tfvars`. Full details: [`workshop/content/20-prerequisites/22-ivia-licensing/`](workshop/content/20-prerequisites/22-ivia-licensing/index.en.md).
 
 Bedrock access required: enable `us.amazon.nova-pro-v1:0` (Nova Pro via CRIS) in `us-west-2` and `amazon.nova-2-multimodal-embeddings-v1:0` in `us-east-1` for the Knowledge Base.
 
