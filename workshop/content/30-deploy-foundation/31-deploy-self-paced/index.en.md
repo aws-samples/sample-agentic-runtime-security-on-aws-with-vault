@@ -39,6 +39,13 @@ On your **first run** the script prompts for three values it cannot store in the
 
 The script writes them into the gitignored `terraform.tfvars` files, so subsequent tiers and re-runs reuse them silently.
 
+The two IBM secrets can also be supplied via environment variables instead of the prompts — useful for non-interactive or scripted runs. When set, the preflight uses them and skips the prompt:
+
+```bash
+export ICR_ENTITLEMENT_KEY="<entitlement key>"
+export IVIA_MMFA_PUSH_CLIENT_SECRET=[REDACTED_PASSWORD] secret>"
+```
+
 ::::alert{header="Tier 1 timing" type="info"}
 ~25–35 min on first run — EKS ~12 min, RDS ~10 min (incl. pgaudit reboot), Bedrock KB ~3 min, add-ons ~5 min, image build + ECR push ~3–5 min. Timing tracks AWS API response.
 ::::

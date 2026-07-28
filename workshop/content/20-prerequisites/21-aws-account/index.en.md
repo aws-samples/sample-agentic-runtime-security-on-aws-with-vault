@@ -91,8 +91,8 @@ The deploy script collects three values on its first run. Have them ready:
 | Input | Where to obtain |
 |-------|----------------|
 | **Let's Encrypt contact email** (`acme_email`) | A real, deliverable email address for TLS certificate issuance and renewal notices. The placeholder `example.com` is rejected by Let's Encrypt. |
-| **IBM Container Registry entitlement key** | From [Obtain IVIA Licenses](../22-ivia-licensing/) — the key to pull the IVIA container image from `icr.io`. Input is hidden when pasted. |
-| **IBM Verify MMFA push client secret** | From [Obtain IVIA Licenses](../22-ivia-licensing/) — required by Use Case 3 (CIBA mobile push). Input is hidden when pasted. |
+| **IBM Container Registry entitlement key** | From [Obtain IVIA Licenses](../22-ivia-licensing/) — the key to pull the IVIA container image from `icr.io`. Input is hidden when pasted, or set `ICR_ENTITLEMENT_KEY` to skip the prompt. |
+| **IBM Verify MMFA push client secret** | From [Obtain IVIA Licenses](../22-ivia-licensing/) — required by Use Case 3 (CIBA mobile push). Input is hidden when pasted, or set `IVIA_MMFA_PUSH_CLIENT_SECRET` to skip the prompt. |
 
 The script writes all three into the gitignored `terraform.tfvars` files; subsequent tiers and re-runs reuse them silently.
 
