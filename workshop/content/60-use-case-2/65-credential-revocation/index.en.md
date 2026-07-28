@@ -165,10 +165,11 @@ Define a small helper to submit a query, wait for completion, and pretty-print t
 
 ```bash
 # The Glue catalog + Athena 'workshop' workgroup were provisioned in YOUR deploy
-# region (resolved from Terraform state — never a hardcoded literal, per the region
-# contract). Point the CLI at that region so the workgroup and the workshop_logs
-# database resolve regardless of your shell's default region.
-export AWS_REGION="$(terraform -chdir=infrastructure output -raw region)"
+# region. Resolve it from the RDS endpoint (kubectl-sourced, so it works regardless
+# of your shell's default region or working directory) — never a hardcoded literal,
+# per the region contract.
+RDS_HOST=$(kubectl get configmap banking-mcp-config -n banking-app -o jsonpath='{.data.RDS_ADDRESS}')
+export AWS_REGION=$(echo "${RDS_HOST}" | sed -E 's/.*\.([a-z0-9-]+)\.rds\.amazonaws\.com$/\1/')
 
 athena_query() {
   local Q="$1"
@@ -246,7 +247,7 @@ What this proves:
 - **`time`** — the moment Vault executed the revocation; on a real incident response timeline this is the "session terminated" anchor.
 - **`revoked_by=root`** — in this demo you invoked the API as the root token. In a production flow this would be the service-account-bound Vault token the MCP server uses (`display_name=token-uc2-mcp-server-sa` or similar) — exactly identifying the workload that ended the session.
 
-**The audit-trail story is now closed:** Step 6 ties the original credential to a user identity (the resolved `sub` entity); Step 7 ties the revocation to the same `lease_id`. Anyone analysing the audit log can reconstruct "Oscar logged in at 19:24, got `lease_id` X, the MCP server revoked X at 20:19" — start-to-end attribution for a single session.
+**The audit-trail story is now closed:** Step 6 shows the ephemeral credential was issued to the resolved *agent* identity (`agent-uc2`), authenticated by its token JTI — the Vault plane deliberately records the agent, never the human `sub`. Step 7 ties the revocation to the same `lease_id`. To attribute the session to a person, correlate the Vault lease timeline with the IVIA OAuth plane (which holds the authenticated `sub`) by credential path and time-proximity. Together they reconstruct "agent-uc2 obtained `lease_id` X at 19:24 on behalf of the user who authenticated moments earlier; the MCP server revoked X at 20:19" — start-to-end attribution for a single session.
 
 :::expand{header="Platform Track — Vault lease lifecycle: explicit revoke vs TTL expiry"}
 
