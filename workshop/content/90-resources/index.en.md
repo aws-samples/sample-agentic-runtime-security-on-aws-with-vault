@@ -106,7 +106,7 @@ When you change one app's source, republish **only that image** at the next vers
 bash infrastructure/scripts/publish-images.sh --image banking-ui --version v2 --registry-base ghcr.io/<your-github-username>
 ```
 
-**6.2** Bump the matching pin in `infrastructure/workloads/main.tf` (the `ghcr_*` locals) from the old tag to the new one — e.g. `workshop-banking-app-ui:v1` → `:v2`. Leave the other four locals untouched.
+**6.2** Bump the matching pin in `infrastructure/workloads/main.tf` (the `ghcr_*` locals) from its current tag to the next one (use whatever the current and next tags are — e.g. `…banking-app-ui:v1` → `:v2`). Leave the other four locals untouched.
 
 **6.3** Re-deploy Tier 3. The new tag makes Terraform roll the Deployment and the pod pull the new image (`IfNotPresent` would never re-pull an unchanged tag):
 
