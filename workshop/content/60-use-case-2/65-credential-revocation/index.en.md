@@ -53,6 +53,7 @@ SECRET_JSON=$(aws secretsmanager get-secret-value --region "${REGION}" \
 MASTER_USER=$(echo "${SECRET_JSON}" | jq -r '.username')
 MASTER_PASS=$(echo "${SECRET_JSON}" | jq -r '.password')
 
+kubectl delete pod pg-role-before -n banking-app --ignore-not-found --now >/dev/null 2>&1
 kubectl run pg-role-before --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${MASTER_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${MASTER_USER}" -d workshop \
@@ -92,6 +93,7 @@ Vault has queued the revocation. Internally Vault now runs the `revocation_state
 Re-run the role check. The lease's ephemeral Postgres role should be gone:
 
 ```bash
+kubectl delete pod pg-role-after -n banking-app --ignore-not-found --now >/dev/null 2>&1
 kubectl run pg-role-after --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${MASTER_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${MASTER_USER}" -d workshop \

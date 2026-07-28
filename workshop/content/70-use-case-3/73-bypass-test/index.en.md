@@ -106,6 +106,7 @@ The value RLS filters on is the IVIA `sub` claim, seeded as the plain strings `o
 Spawn **one** transient `postgres:16-alpine` pod. In a single `psql` session, set the `app.current_user_sub` GUC to each user in turn and count their transactions. RLS returns only the rows owned by whichever `sub` is currently active:
 
 ```bash
+kubectl delete pod pg-rls-test -n banking-app --ignore-not-found --now >/dev/null 2>&1
 kubectl run pg-rls-test --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${PG_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop -c "
@@ -148,6 +149,7 @@ The `uc3-readonly` role carries `GRANT SELECT` only. The same credential used in
 The `INSERT` below names **only real `banking.refunds` columns** (`account_id, transaction_id, amount, approved_by, request_id` — see `seed.sql`), so it is schema-valid. That matters: Postgres checks table privileges *before* it evaluates column names, NOT NULL/foreign-key constraints, or RLS — so the **only** reason this can fail is the missing `INSERT` privilege. (A typo'd column would instead fail with a schema error and prove nothing.)
 
 ```bash
+kubectl delete pod pg-insert-uc3 -n banking-app --ignore-not-found --now >/dev/null 2>&1
 kubectl run pg-insert-uc3 --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${PG_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop \
@@ -177,6 +179,7 @@ Refunds are **created by you** during the CIBA approval flow (page 71) — they 
 A refund is visible only to its owner (RLS), so list refunds under each persona you ran a refund as:
 
 ```bash
+kubectl delete pod pg-find-refund -n banking-app --ignore-not-found --now >/dev/null 2>&1
 kubectl run pg-find-refund --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${PG_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop -c "
@@ -213,6 +216,7 @@ export ATTACKER=<the other persona>
 Run the exact owner-predicate JOIN `check_refund_status` executes — first as the **other** persona (the hostile reader), then as the **owner**:
 
 ```bash
+kubectl delete pod pg-owner-test -n banking-app --ignore-not-found --now >/dev/null 2>&1
 kubectl run pg-owner-test --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${PG_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop -c "

@@ -37,6 +37,7 @@ The credential issued above lives for **15 minutes** (`default_ttl`). If you tak
 Now spawn a transient `postgres:16-alpine` pod, run the SELECT as Oscar, and let it auto-delete (no psql binary lives in any workshop pod — this is the cluster-side equivalent of the MCP server's per-request connect → SET → SELECT pattern):
 
 ```bash
+kubectl delete pod pg-client-oscar -n banking-app --ignore-not-found --now >/dev/null 2>&1
 kubectl run pg-client-oscar --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${PG_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop \
@@ -67,6 +68,7 @@ Open a **new Incognito / Private browser window**, go to the Banking UI URL, and
 Run the same manual query with `app.current_user_sub = 'jaime'` (you can reuse the same Vault-vended credential — RLS isolation is driven entirely by the session variable, not by the Postgres user):
 
 ```bash
+kubectl delete pod pg-client-jaime -n banking-app --ignore-not-found --now >/dev/null 2>&1
 kubectl run pg-client-jaime --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${PG_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop \
@@ -99,6 +101,7 @@ SECRET_JSON=$(aws secretsmanager get-secret-value --region "${REGION}" \
 MASTER_USER=$(echo "${SECRET_JSON}" | jq -r '.username')
 MASTER_PASS=$(echo "${SECRET_JSON}" | jq -r '.password')
 
+kubectl delete pod pg-client-policy -n banking-app --ignore-not-found --now >/dev/null 2>&1
 kubectl run pg-client-policy --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${MASTER_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${MASTER_USER}" -d workshop \
