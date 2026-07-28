@@ -179,8 +179,8 @@ Expected output — one `vault_root=arwdDxtm/vault_root` line followed by one ro
  Schema  |   Name   | Type  |                         Access privileges                          | Column privileges |                                    Policies
 ---------+----------+-------+--------------------------------------------------------------------+-------------------+---------------------------------------------------------------------------------
  banking | accounts | table | vault_root=arwdDxtm/vault_root                                    +|                   | user_accounts (r):                                                             +
-         |          |       | "v-jwt-osca-uc2-pers-<random>-<timestamp>"=r/vault_root           +|                   |   (u): ((user_sub)::text = current_setting('app.current_user_sub'::text, true))
-         |          |       | "v-jwt-jaim-uc2-pers-<random>-<timestamp>"=r/vault_root           +|                   |
+         |          |       | "v-root-uc2-pers-<random>-<timestamp>"=r/vault_root               +|                   |   (u): ((user_sub)::text = current_setting('app.current_user_sub'::text, true))
+         |          |       | "v-root-uc2-pers-<random>-<timestamp>"=r/vault_root               +|                   |
          |          |       | "v-root-uc2-pers-<random>-<timestamp>"=r/vault_root                |                   |
 (1 row)
 

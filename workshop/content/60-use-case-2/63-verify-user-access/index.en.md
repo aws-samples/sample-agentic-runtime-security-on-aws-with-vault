@@ -153,7 +153,7 @@ The script checks all Use Case 2 success criteria:
 | Active lease exists | At least one active lease for `uc2-personal-readonly` |
 | OAuth discovery | IVIA OIDC Provider `/.well-known/openid-configuration` reachable via the WRP ALB |
 
-Expected summary output (counts in parentheses — leases, keys — vary per run):
+Expected summary output — a clean deploy self-mints the OBO token, so every check PASSes (values in parentheses — `jti`, `config_id`, lease/key counts, and the `v-…` random+timestamp suffixes — vary per run):
 
 ```
   ℹ INFO Use Case 2 — OAuth Personalized Read-Only verification
@@ -165,10 +165,11 @@ Expected summary output (counts in parentheses — leases, keys — vary per run
   ✓ PASS Vault k8s auth role uc2 bound to uc2-mcp-server-sa
   ✓ PASS UC2 Agent Registry: registration 'agent-uc2' resolvable by display-name (OBO actor)
   ✓ PASS UC2 agent ceiling policy 'uc2-agent-ceiling' present (OBO agent-ceiling layer)
-  ⚠ WARN UC2 real-token jti + act.sub checks SKIPPED — set UC2_VERIFY_TOKEN=<real banking OAuth JWT captured from the browser sign-in> to exercise the phase-done gate. No headless mint exists (agent-uc2 is authcode+PKCE). The Part B live gate supplies it via --gate — this is NOT a pass.
-  ⚠ WARN UC2 refreshed-token fail-closed check SKIPPED — set UC2_VERIFY_REFRESHED_TOKEN=<a refresh_token-grant token (no act/jti)> to prove Vault rejects it. The Part B live gate supplies it via --gate.
+  ✓ PASS UC2 real token carries a jti claim (jti=<uuid>)
+  ✓ PASS UC2 real token carries act.sub=agent-uc2 (OBO actor binding — AGENT_IDENTITY_CLAIM_UC2=act.sub)
+  ✓ PASS UC2 refresh grant FAILS CLOSED at the source — agent-uc2 refresh_token grant rejected (HTTP 400; refresh_token issued at login=no)
   ✓ PASS UC2 alias accessor 'oauth-resource-server_root_<config_id>' matches oauth profile config_id — alias binding intact
-  ⚠ WARN UC2 OBO-allow (alias binding) check SKIPPED — needs UC2_VERIFY_TOKEN (see Check 6b). The Part B live gate supplies it via --gate.
+  ✓ PASS UC2 OBO allow: real token (sub + act.sub=agent-uc2) authorized database/creds/uc2-personal-readonly (username=v-JWT Toke-uc2-pers-<random>-<timestamp>)
   ✓ PASS JIT DB creds issuance: username=v-root-uc2-pers-<random>-<timestamp>
   ✓ PASS DB read: SELECT from banking.accounts returned 2 row(s) for user 'oscar' (>= 2 expected)
   ✓ PASS ENFC-02: INSERT rejected by PostgreSQL (permission denied for table)
@@ -179,11 +180,11 @@ Expected summary output (counts in parentheses — leases, keys — vary per run
   ✓ PASS OAuth discovery: IVIA OIDC Provider reachable (issuer=https://<wrp-alb-host>)
 
 ===============================================================================
- ✓ 16 check(s) passed
+ ✓ 20 check(s) passed
 ===============================================================================
 ```
 
-The three `⚠ WARN` lines are expected on a normal run: the real-token checks (`jti` / `act.sub` / OBO-allow) require a browser-captured OAuth JWT — `agent-uc2` is Authorization Code + PKCE, so there is no headless mint. The live gate supplies `UC2_VERIFY_TOKEN` from your browser sign-in; without it these three are skipped, not failed.
+`verify-uc2.sh` self-mints a real `agent-uc2` OBO token headlessly via the **production PKCE login path** (WebSEAL authorization-code login, then the token endpoint with `client=agent-uc2`), so on a healthy cluster the `jti`, `act.sub`, refresh-fail-closed, and OBO-allow checks all PASS. If the `uc3-agent` pod is not Running or IVIA is unreachable, the self-mint fails and those four checks WARN-skip instead — set `UC2_VERIFY_TOKEN` to a browser-captured JWT to exercise them, or re-run with `--gate` to turn a skip into a hard failure.
 
 :::expand{header="Platform Track — RLS policy SQL and session variable pattern"}
 

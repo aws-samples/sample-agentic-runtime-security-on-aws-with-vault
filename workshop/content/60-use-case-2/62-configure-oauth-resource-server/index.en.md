@@ -56,10 +56,10 @@ vault auth list
 Expected — `kubernetes/` and `token/` only; **no** `jwt/` row:
 
 ```
-Path           Type          Description
-----           ----          -----------
-kubernetes/    kubernetes    n/a
-token/         token         token based credentials
+Path           Type          Accessor                    Description                Version
+----           ----          --------                    -----------                -------
+kubernetes/    kubernetes    auth_kubernetes_<id>        n/a                        n/a
+token/         token         auth_token_<id>             token based credentials    n/a
 ```
 
 Confirm the Agent Registry secrets engine is mounted (the OAuth resource server profile and the agent registrations live under Enterprise identity):
@@ -101,10 +101,19 @@ vault policy read uc2-agent-ceiling
 Expected — the read-only envelope for the personal-data agent:
 
 ```hcl
-path "database/creds/uc2-personal-readonly" { capabilities = ["read"] }
-path "aws/sts/bedrock-reader"               { capabilities = ["read", "update"] }
-path "auth/token/lookup-self"               { capabilities = ["read"] }
-path "sys/leases/renew"                     { capabilities = ["update"] }
+# UC2 agent ceiling (act.sub = agent-uc2) — restrict-only max envelope.
+path "database/creds/uc2-personal-readonly" {
+  capabilities = ["read"]
+}
+path "aws/sts/bedrock-reader" {
+  capabilities = ["read", "update"]
+}
+path "auth/token/lookup-self" {
+  capabilities = ["read"]
+}
+path "sys/leases/renew" {
+  capabilities = ["update"]
+}
 ```
 
 Notice what is **absent**: no `database/creds/uc3-refund-writer` and no write-capable credential role. The ceiling cannot be widened at request time — a per-request RAR can only *narrow* it further.
@@ -178,10 +187,10 @@ lease_id           database/creds/uc2-personal-readonly/<opaque>
 lease_duration     15m
 lease_renewable    true
 password           <ephemeral>
-username           v-token-<user>-uc2-pers-<random>-<timestamp>
+username           v-JWT Toke-uc2-pers-<random>-<timestamp>
 ```
 
-There is no `vault write auth/jwt/login` in that sequence. Vault validated the OAuth JWT against the resource server profile, resolved `sub` (the human) and `act.sub = agent-uc2` (the agent actor), applied `uc2-personal ∩ uc2-agent-ceiling`, and vended the credential — all in the one `database/creds` read. The `username` binds the credential to the resolved identity for the Vault audit trail. The MCP Server uses exactly this credential for the user's session.
+There is no `vault write auth/jwt/login` in that sequence. Vault validated the OAuth JWT against the resource server profile, resolved `sub` (the human) and `act.sub = agent-uc2` (the agent actor), applied `uc2-personal ∩ uc2-agent-ceiling`, and vended the credential — all in the one `database/creds` read. The `username` is derived from the presented token's Vault display name (`JWT Token with JTI:…`, truncated to 8 chars) — it identifies the token/agent, never the human `sub`; human attribution is recovered by correlating the lease with the IVIA OAuth plane. The MCP Server uses exactly this credential for the user's session.
 
 :::expand{header="Platform Track — OAuth resource server profile, registration, and ceiling (Terraform)"}
 
