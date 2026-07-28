@@ -155,13 +155,14 @@ The Postgres GRANT layer rejected the INSERT independently of Vault policy. Even
 The grant snapshot lives in the Postgres system catalog `pg_class.relacl`; `\dp banking.accounts` is `psql`'s pretty-printer for it. Reading it requires admin access (the ephemeral `uc2-personal-readonly` role cannot read `pg_class`), so pull the RDS master credentials from AWS Secrets Manager and run a transient `postgres:16-alpine` pod as the master:
 
 ```bash
-SECRET_ID=$(aws secretsmanager list-secrets \
-  --query 'SecretList[?contains(Name,`rds!db`)].Name | [0]' --output text)
-MASTER_USER=$(aws secretsmanager get-secret-value --secret-id "${SECRET_ID}" \
-  --query SecretString --output text | jq -r '.username')
-MASTER_PASS=$(aws secretsmanager get-secret-value --secret-id "${SECRET_ID}" \
-  --query SecretString --output text | jq -r '.password')
 RDS_HOST=$(kubectl get configmap banking-mcp-config -n banking-app -o jsonpath='{.data.RDS_ADDRESS}')
+REGION=$(echo "${RDS_HOST}" | sed -E 's/.*\.([a-z0-9-]+)\.rds\.amazonaws\.com$/\1/')
+SECRET_ARN=$(aws rds describe-db-instances --region "${REGION}" \
+  --query 'DBInstances[0].MasterUserSecret.SecretArn' --output text)
+SECRET_JSON=$(aws secretsmanager get-secret-value --region "${REGION}" \
+  --secret-id "${SECRET_ARN}" --query SecretString --output text)
+MASTER_USER=$(echo "${SECRET_JSON}" | jq -r '.username')
+MASTER_PASS=$(echo "${SECRET_JSON}" | jq -r '.password')
 
 kubectl run pg-grants --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${MASTER_PASS}" \
