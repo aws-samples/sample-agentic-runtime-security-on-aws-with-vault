@@ -635,7 +635,7 @@ fi
 #-------------------------------------------------------------------------------
 # Check 12 — IVIA JWKS endpoint reachable (OAuth pre-check)
 #
-# Vault jwt auth validates user JWTs against IVIA's JWKS endpoint.
+# Vault's OAuth resource server validates user JWTs against IVIA's JWKS endpoint.
 # Verify the JWKS URL is reachable from within the cluster (via vault-0 proxy check).
 # This is a prerequisite for the full OAuth flow, not a full OAuth test.
 #-------------------------------------------------------------------------------
@@ -646,7 +646,7 @@ jwks_result=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
 if [ "${jwks_result:-0}" -ge 1 ] 2>/dev/null; then
     print_pass "IVIA JWKS endpoint reachable (${jwks_result} key(s) returned) — OAuth pre-check passed"
 else
-    print_warn "IVIA JWKS endpoint not reachable at ${ivia_jwks_url} — IVIA may still be initializing or JWT auth URL differs. Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault read auth/jwt/config"
+    print_warn "IVIA JWKS endpoint not reachable at ${ivia_jwks_url} — IVIA may still be initializing or the JWKS URL differs. Check IVIA pods: kubectl get pods -n verify-access"
 fi
 
 #-------------------------------------------------------------------------------
