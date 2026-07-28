@@ -188,13 +188,13 @@ athena_query() {
 }
 ```
 
-Find the most recent issuance events for `uc2-personal-readonly`. Under the native OAuth resource server model there are no hand-mapped `user_sub` / `role` claim-mappings — Vault resolves the requester to a Vault **entity** from the presented JWT's `sub` claim (`user_claim = sub`). `auth.display_name` and `auth.entity_id` carry that resolved identity (the `substr(timestamp, 1, 19)` trims nanoseconds for readable display — second precision is plenty for audit correlation):
+Find the most recent issuance events for `uc2-personal-readonly`. Under the native OAuth resource server model there are no hand-mapped `user_sub` / `role` claim-mappings. Vault's audit device records the delegated OAuth token by its unique **JTI** in `auth.display_name`, and the **Agent Registry** identity it resolved from that token in `auth.metadata['actor_entity_name']` (the `substr(timestamp, 1, 19)` trims nanoseconds for readable display — second precision is plenty for audit correlation):
 
 ```bash
 athena_query "SELECT
   substr(timestamp, 1, 19) AS time,
   auth.display_name AS identity,
-  auth.entity_id AS entity_id
+  auth.metadata['actor_entity_name'] AS agent
 FROM workshop_logs.vault_audit
 WHERE type = 'response'
   AND request.path = 'database/creds/uc2-personal-readonly'
@@ -205,17 +205,17 @@ LIMIT 10;"
 Expected output — one row per recent issuance:
 
 ```
-time                 identity  entity_id
-2026-07-24T19:57:26  root      -
-2026-07-24T19:55:18  root      -
-2026-07-24T18:03:59  root      -
+time                 identity                                                  agent
+2026-07-28T03:20:48  root                                                      -
+2026-07-28T02:53:25  JWT Token with JTI: f77a2c34-61f5-406b-8669-8fb4ecb9c40c  agent-uc2
+2026-07-28T02:47:12  JWT Token with JTI: da65bce9-4846-4da0-8a24-9dc45e8654d1  agent-uc2
 ...
 ```
 
 Two row patterns appear:
 
-- **`identity=root`, `entity_id=-`** — the credential was issued via the Vault root token (the inspection commands on the previous pages, including your Step 1 above, and the `verify-uc2.sh` checks). Root-token issuance resolves no Vault entity, so `entity_id` is empty (the helper renders empty fields as `-`).
-- **`identity=<sub>` (e.g. `oscar` / `jaime`), with a populated `entity_id`** — the credential was issued by presenting a real user's IVIA OAuth JWT directly as the `X-Vault-Token` on the `database/creds` read. Vault's OAuth resource server resolved the human `sub` to a Vault entity (`user_claim = sub`); that resolved entity is the OBJ-5 audit evidence tying the credential to the originating user. **These rows appear after you sign in through the Banking UI and run a banking query** (the browser flow in [OAuth Login Flow](../61-oauth-pkce-flow/)) — one fresh row per tool call. The exact `identity` / `entity_id` values are recorded live at that moment; if you have not yet driven a signed-in query, only the `root` rows are present.
+- **`identity=root`, `agent=-`** — the credential was issued via the Vault root token (the inspection commands on the previous pages, including your Step 1 above, and the `verify-uc2.sh` checks). Root-token issuance resolves no Agent Registry identity, so the `agent` column is empty (the helper renders empty fields as `-`).
+- **`identity=JWT Token with JTI: <jti>`, `agent=agent-uc2`** — the credential was issued by presenting a real user's IVIA OAuth JWT directly as the `X-Vault-Token` on the `database/creds` read. Vault's OAuth resource server validated the JWT and resolved it to the `agent-uc2` Agent Registry identity; the audit device records the token by its unique **JTI**, never the human `sub`. **These rows appear after you sign in through the Banking UI and run a banking query** (the browser flow in [OAuth Login Flow](../61-oauth-pkce-flow/)) — one fresh row per tool call. The human user behind the token is tied back through the IVIA decision plane (the `request_id` correlation shown on the [three-plane audit](../../70-use-case-3/74-three-plane-audit/) page), not a Vault entity id — native Vault audit records the token JTI + resolved agent, not the human sub. If you have not yet driven a signed-in query, only the `root` rows are present.
 
 ## Step 7 — Find the revocation event for the lease you revoked
 
