@@ -54,6 +54,15 @@ The **first** time you run `deploy-workshop.sh`, a preflight check prompts for t
 - **IBM Container Registry entitlement key** — from [Obtain IVIA Licenses](../../20-prerequisites/22-ivia-licensing/).
 - **IBM Verify MMFA push client secret** — required by Use Case 3.
 
+Your event organizer provides these two values. Paste them at the prompts, **or** export them before running for a hands-off deploy — the preflight uses the environment variables when set and skips the prompts:
+
+```bash
+export ICR_ENTITLEMENT_KEY="<value from your organizer>"
+export IVIA_MMFA_PUSH_CLIENT_SECRET="<value from your organizer>"
+```
+
+Either way, the values are written only into the gitignored `terraform.tfvars` — never committed.
+
 It does **not** ask for a Let's Encrypt email — that was set when CodeBuild provisioned Tier 1, and you pulled it in Step 3.
 
 ```bash
