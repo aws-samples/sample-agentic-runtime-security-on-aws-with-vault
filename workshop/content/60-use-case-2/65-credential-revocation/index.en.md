@@ -44,14 +44,16 @@ You now hold the credential's full `lease_id` and the ephemeral Postgres role na
 The Vault dynamic secrets engine just created `${PG_USER}` as a real Postgres role. Pull the RDS master credentials from AWS Secrets Manager and run a transient `postgres:16-alpine` pod to confirm:
 
 ```bash
-SECRET_ID=$(aws secretsmanager list-secrets \
-  --query 'SecretList[?contains(Name,`rds!db`)].Name | [0]' --output text)
-MASTER_USER=$(aws secretsmanager get-secret-value --secret-id "${SECRET_ID}" \
-  --query SecretString --output text | jq -r '.username')
-MASTER_PASS=$(aws secretsmanager get-secret-value --secret-id "${SECRET_ID}" \
-  --query SecretString --output text | jq -r '.password')
 RDS_HOST=$(kubectl get configmap banking-mcp-config -n banking-app -o jsonpath='{.data.RDS_ADDRESS}')
+REGION=$(echo "${RDS_HOST}" | sed -E 's/.*\.([a-z0-9-]+)\.rds\.amazonaws\.com$/\1/')
+SECRET_ARN=$(aws rds describe-db-instances --region "${REGION}" \
+  --query 'DBInstances[0].MasterUserSecret.SecretArn' --output text)
+SECRET_JSON=$(aws secretsmanager get-secret-value --region "${REGION}" \
+  --secret-id "${SECRET_ARN}" --query SecretString --output text)
+MASTER_USER=$(echo "${SECRET_JSON}" | jq -r '.username')
+MASTER_PASS=$(echo "${SECRET_JSON}" | jq -r '.password')
 
+kubectl delete pod pg-role-before -n banking-app --ignore-not-found --now >/dev/null 2>&1
 kubectl run pg-role-before --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${MASTER_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${MASTER_USER}" -d workshop \
@@ -91,6 +93,7 @@ Vault has queued the revocation. Internally Vault now runs the `revocation_state
 Re-run the role check. The lease's ephemeral Postgres role should be gone:
 
 ```bash
+kubectl delete pod pg-role-after -n banking-app --ignore-not-found --now >/dev/null 2>&1
 kubectl run pg-role-after --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${MASTER_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${MASTER_USER}" -d workshop \
@@ -161,6 +164,13 @@ Firehose buffers audit records for up to 60 seconds before writing them to S3. I
 Define a small helper to submit a query, wait for completion, and pretty-print the result as an aligned table (empty fields render as `-`):
 
 ```bash
+# The Glue catalog + Athena 'workshop' workgroup were provisioned in YOUR deploy
+# region. Resolve it from the RDS endpoint (kubectl-sourced, so it works regardless
+# of your shell's default region or working directory) — never a hardcoded literal,
+# per the region contract.
+RDS_HOST=$(kubectl get configmap banking-mcp-config -n banking-app -o jsonpath='{.data.RDS_ADDRESS}')
+export AWS_REGION=$(echo "${RDS_HOST}" | sed -E 's/.*\.([a-z0-9-]+)\.rds\.amazonaws\.com$/\1/')
+
 athena_query() {
   local Q="$1"
   local QID=$(aws athena start-query-execution --work-group workshop \
@@ -179,14 +189,13 @@ athena_query() {
 }
 ```
 
-Find the most recent issuance events for `uc2-personal-readonly`, including the `user_sub` and `role` from the JWT auth claim mappings (the `substr(timestamp, 1, 19)` trims nanoseconds for readable display — second precision is plenty for audit correlation):
+Find the most recent issuance events for `uc2-personal-readonly`. Under the native OAuth resource server model there are no hand-mapped `user_sub` / `role` claim-mappings. Vault's audit device records the delegated OAuth token by its unique **JTI** in `auth.display_name`, and the **Agent Registry** identity it resolved from that token in `auth.metadata['actor_entity_name']` (the `substr(timestamp, 1, 19)` trims nanoseconds for readable display — second precision is plenty for audit correlation):
 
 ```bash
 athena_query "SELECT
   substr(timestamp, 1, 19) AS time,
-  auth.metadata['user_sub'] AS user_sub,
-  auth.metadata['role'] AS jwt_role,
-  auth.display_name
+  auth.display_name AS identity,
+  auth.metadata['actor_entity_name'] AS agent
 FROM workshop_logs.vault_audit
 WHERE type = 'response'
   AND request.path = 'database/creds/uc2-personal-readonly'
@@ -197,17 +206,17 @@ LIMIT 10;"
 Expected output — one row per recent issuance:
 
 ```
-time                 user_sub  jwt_role  display_name
-2026-05-28T20:37:37  -         -         root
-2026-05-28T20:27:29  -         -         root
-2026-05-28T19:24:22  jaime     uc2-jwt   jwt-jaime
+time                 identity                                                  agent
+2026-07-28T03:20:48  root                                                      -
+2026-07-28T02:53:25  JWT Token with JTI: f77a2c34-61f5-406b-8669-8fb4ecb9c40c  agent-uc2
+2026-07-28T02:47:12  JWT Token with JTI: da65bce9-4846-4da0-8a24-9dc45e8654d1  agent-uc2
 ...
 ```
 
 Two row patterns appear:
 
-- **`display_name=root`** — the credential was issued via the Vault root token (the inspection commands on the previous pages, including your Step 1 above). `user_sub` and `jwt_role` show as `-` (the helper renders empty fields as `-`) because root-token issuance carries no user identity.
-- **`display_name=jwt-<sub>`** — the credential was issued via `auth/jwt/login` from a real user JWT. `user_sub` and `jwt_role` come from the JWT's `sub` claim (mapped by the `claim_mappings` you saw on the `uc2-jwt` role in [page 62](../62-configure-jwt-auth/)). This is the OBJ-5 audit evidence: every JWT-issued credential carries the originating user's identity into the audit trail.
+- **`identity=root`, `agent=-`** — the credential was issued via the Vault root token (the inspection commands on the previous pages, including your Step 1 above, and the `verify-uc2.sh` checks). Root-token issuance resolves no Agent Registry identity, so the `agent` column is empty (the helper renders empty fields as `-`).
+- **`identity=JWT Token with JTI: <jti>`, `agent=agent-uc2`** — the credential was issued by presenting a real user's IVIA OAuth JWT directly as the `X-Vault-Token` on the `database/creds` read. Vault's OAuth resource server validated the JWT and resolved it to the `agent-uc2` Agent Registry identity; the audit device records the token by its unique **JTI**, never the human `sub`. **These rows appear after you sign in through the Banking UI and run a banking query** (the browser flow in [OAuth Login Flow](../61-oauth-pkce-flow/)) — one fresh row per tool call. The human user behind the token is tied back through the IVIA decision plane (the `request_id` correlation shown on the [three-plane audit](../../70-use-case-3/74-three-plane-audit/) page), not a Vault entity id — native Vault audit records the token JTI + resolved agent, not the human sub. If you have not yet driven a signed-in query, only the `root` rows are present.
 
 ## Step 7 — Find the revocation event for the lease you revoked
 
@@ -238,7 +247,7 @@ What this proves:
 - **`time`** — the moment Vault executed the revocation; on a real incident response timeline this is the "session terminated" anchor.
 - **`revoked_by=root`** — in this demo you invoked the API as the root token. In a production flow this would be the service-account-bound Vault token the MCP server uses (`display_name=token-uc2-mcp-server-sa` or similar) — exactly identifying the workload that ended the session.
 
-**The audit-trail story is now closed:** Step 6 ties the original credential to a user identity (`user_sub`); Step 7 ties the revocation to the same `lease_id`. Anyone analysing the audit log can reconstruct "Oscar logged in at 19:24, got `lease_id` X, the MCP server revoked X at 20:19" — start-to-end attribution for a single session.
+**The audit-trail story is now closed:** Step 6 shows the ephemeral credential was issued to the resolved *agent* identity (`agent-uc2`), authenticated by its token JTI — the Vault plane deliberately records the agent, never the human `sub`. Step 7 ties the revocation to the same `lease_id`. To attribute the session to a person, correlate the Vault lease timeline with the IVIA OAuth plane (which holds the authenticated `sub`) by credential path and time-proximity. Together they reconstruct "agent-uc2 obtained `lease_id` X at 19:24 on behalf of the user who authenticated moments earlier; the MCP server revoked X at 20:19" — start-to-end attribution for a single session.
 
 :::expand{header="Platform Track — Vault lease lifecycle: explicit revoke vs TTL expiry"}
 

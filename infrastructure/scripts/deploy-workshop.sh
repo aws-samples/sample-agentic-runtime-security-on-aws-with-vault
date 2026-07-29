@@ -40,11 +40,11 @@
 #                            tier 3 = steps 10-14 (workloads + ALB assert + seed + KB ingest)
 #                            Required for the Instruqt distribution (one tier per challenge);
 #                            bare invocation is the Workshop Studio path (all 14 steps).
-#   --image-source <ghcr|ecr>     Image source mode (default: ghcr). ghcr pulls pre-built
-#                                 public images from GHCR — no container runtime required,
-#                                 no ECR repos provisioned. ecr uses the local-build + push
-#                                 flow (today's path). Invalid value fails loud.
-#                                 Env fallback: WORKSHOP_IMAGE_SOURCE.
+#   --image-source <ghcr|ecr>     Image source mode (default: ecr). ecr builds the five
+#                                 images locally and pushes them to the account's private
+#                                 ECR (container runtime required). ghcr pulls pre-built
+#                                 public images from GHCR — no build, no runtime. Invalid
+#                                 value fails loud. Env fallback: WORKSHOP_IMAGE_SOURCE.
 #   --ghcr-registry-base <base>   GHCR registry base for pre-built images (default:
 #                                 ghcr.io/sharepointoscar). Only meaningful in ghcr mode;
 #                                 repoints the consume base for a fork.
@@ -56,16 +56,25 @@
 #   --dry-run                Print planned actions without executing
 #   --help                   Show this help message
 #
+# Env vars:
+#   VAULT_ENTERPRISE_LICENSE_PATH  Path to the Vault Enterprise .hclic license file.
+#                                  Defaults to ~/Downloads/vault-ent.hclic. Attendees supply
+#                                  their own platform-standard Vault Enterprise license file
+#                                  (never committed to the repo). Read fresh and written into
+#                                  infrastructure/services/terraform.tfvars on every
+#                                  tier-2 run. Override the env var to use a different license.
+#
 # Prerequisites:
 #   - AWS CLI configured with valid credentials
 #   - kubectl, Vault CLI, terraform >= 1.10 installed
 #   - In ecr mode: Docker or Podman required (for image build+push)
 #   - infrastructure/terraform.tfvars, infrastructure/services/terraform.tfvars,
 #     and infrastructure/workloads/terraform.tfvars populated
+#   - A Vault Enterprise platform-standard license file (see VAULT_ENTERPRISE_LICENSE_PATH)
 #
 # Examples:
-#   ./deploy-workshop.sh                              # full deploy, ghcr mode (default)
-#   ./deploy-workshop.sh --image-source ecr          # full deploy, build+push to ECR
+#   ./deploy-workshop.sh                              # full deploy, ecr mode (default) — build+push to ECR
+#   ./deploy-workshop.sh --image-source ghcr         # full deploy, pull pre-built GHCR images (no build)
 #   ./deploy-workshop.sh --tier 1                    # only steps 1-4 (Instruqt tier-1 challenge)
 #   ./deploy-workshop.sh --tier 2                    # only steps 5-9 (Instruqt tier-2 challenge)
 #   ./deploy-workshop.sh --tier 3                    # only steps 10-14 (Instruqt tier-3 challenge)
@@ -97,7 +106,7 @@ source "${SCRIPT_DIR}/common-checks.sh"
 #   1. --image-source / --ghcr-registry-base flag (explicit CLI)
 #   2. WORKSHOP_IMAGE_SOURCE / WORKSHOP_GHCR_REGISTRY_BASE env var
 #   3. image_source from the persisted tier-1 terraform.tfvars (after parsing)
-#   4. Hard default: ghcr / ghcr.io/sharepointoscar
+#   4. Hard default: ecr (GHCR base ghcr.io/sharepointoscar applies only in the ghcr opt-out)
 # Steps 3-4 happen after arg-parse (needs TFVARS path) and before step functions.
 # ghcr.io/sharepointoscar is an image-source URI base, NOT an identity/auth value.
 #-------------------------------------------------------------------------------
@@ -205,11 +214,11 @@ fi
 #-------------------------------------------------------------------------------
 # Resolve IMAGE_SOURCE: flag (already set) → env (already set above) →
 # persisted tier-1 tfvar (so --tier 3 partial re-runs hold the mode set at
-# full-run time, even without repeating the flag) → hard default ghcr.
+# full-run time, even without repeating the flag) → hard default ecr.
 #-------------------------------------------------------------------------------
 if [[ -z "$IMAGE_SOURCE" ]]; then
     _tfvar_mode=$(_resolve_tfvar "image_source")
-    IMAGE_SOURCE="${_tfvar_mode:-ghcr}"
+    IMAGE_SOURCE="${_tfvar_mode:-ecr}"
 fi
 case "$IMAGE_SOURCE" in
     ghcr|ecr) : ;;
@@ -357,18 +366,24 @@ fi
 echo ""
 
 #===============================================================================
-# PREFLIGHT: Resolve the three non-committable inputs (LE email + IVIA secrets)
+# PREFLIGHT: Resolve the non-committable inputs (LE email + IVIA secrets +
+# Vault Enterprise license)
 #
 # These cannot live in the tracked terraform.tfvars.example files — one is an
-# identity (the Let's Encrypt contact email) and two are secrets — so bootstrap
-# seeds them empty. We collect them ONCE here, before any tier apply, and write
-# them into the gitignored terraform.tfvars files Terraform actually reads:
+# identity (the Let's Encrypt contact email), two are typed secrets, and one is
+# a license FILE — so bootstrap seeds them empty. We collect them ONCE here,
+# before any tier apply, and write them into the gitignored terraform.tfvars
+# files Terraform actually reads:
 #   acme_email                   -> tier-1 infrastructure/terraform.tfvars
 #   icr_entitlement_key          -> tier-2 infrastructure/services/terraform.tfvars
 #   ivia_mmfa_push_client_secret -> tier-2 infrastructure/services/terraform.tfvars
+#   vault_enterprise_license     -> tier-2 infrastructure/services/terraform.tfvars
 #
 # Idempotent: a value already present is reused silently (for acme_email a real
 # address — the *@example.com placeholder Let's Encrypt rejects counts as unset).
+# The Vault Enterprise license is the one exception: it is re-read from its
+# source file and overwritten on EVERY run (never appended/duplicated) so a
+# rotated license file always propagates without manual tfvars surgery.
 # Interactive only: when stdin is not a TTY we cannot prompt, so we fail fast
 # with a clear message instead of hanging an automated run.
 #===============================================================================
@@ -377,9 +392,9 @@ echo ""
 # tier-2 IVIA secrets. Matches the tier-gated checks below.
 case "$TIER" in
     1) _pf_inputs="Let's Encrypt email" ;;
-    2) _pf_inputs="IVIA secrets" ;;
+    2) _pf_inputs="IVIA secrets + Vault Enterprise license" ;;
     3) _pf_inputs="none — tier-3 has no non-committable inputs" ;;
-    *) _pf_inputs="Let's Encrypt email + IVIA secrets" ;;
+    *) _pf_inputs="Let's Encrypt email + IVIA secrets + Vault Enterprise license" ;;
 esac
 echo -e "${YELLOW}> Preflight: required inputs (${_pf_inputs})${NC}"
 
@@ -421,7 +436,7 @@ _require_tty() {
 }
 
 if [[ "$DRY_RUN" = true ]]; then
-    print_info "[DRY-RUN] Would ensure each in-scope tier's inputs are set (acme_email for tier-1; icr_entitlement_key + ivia_mmfa_push_client_secret for tier-2), prompting for any that are missing"
+    print_info "[DRY-RUN] Would ensure each in-scope tier's inputs are set (acme_email for tier-1; icr_entitlement_key + ivia_mmfa_push_client_secret + vault_enterprise_license for tier-2), prompting for any that are missing (license is read from a file, never prompted)"
     print_pass "Preflight: required inputs (dry-run)"
 else
     # Only the tiers actually in scope (see --tier) have their inputs checked. A
@@ -459,9 +474,18 @@ else
                  "Seed the roots first: bash infrastructure/scripts/bootstrap.sh"
         fi
 
-        # 2) icr_entitlement_key (tier-2) — required secret, hidden input
+        # 2) icr_entitlement_key (tier-2) — required secret. Precedence:
+        #    already-in-tfvars -> ICR_ENTITLEMENT_KEY env var -> hidden prompt.
+        #    The env var lets attendees paste an organizer-provided value (or run
+        #    non-interactively) without hand-editing tfvars; when it is unset we
+        #    fall through to the interactive hidden prompt exactly as before.
         icr_key="$(_tfvars_get "$SERVICES_TFVARS" icr_entitlement_key)"
         if [[ -z "$icr_key" || "$icr_key" == \<*\> ]]; then
+            if [[ -n "${ICR_ENTITLEMENT_KEY:-}" ]]; then
+                icr_key="$ICR_ENTITLEMENT_KEY"
+                _tfvars_set "$SERVICES_TFVARS" icr_entitlement_key "$icr_key"
+                print_pass "Preflight: icr_entitlement_key set from ICR_ENTITLEMENT_KEY (hidden)"
+            else
             _require_tty "icr_entitlement_key" "$SERVICES_TFVARS"
             while :; do
                 read -r -s -p "  $(echo -e "${YELLOW}?${NC}") IBM Container Registry entitlement key (input hidden): " icr_key < /dev/tty
@@ -471,13 +495,23 @@ else
             done
             _tfvars_set "$SERVICES_TFVARS" icr_entitlement_key "$icr_key"
             print_pass "Preflight: icr_entitlement_key set (hidden)"
+            fi
         else
             print_info "Preflight: icr_entitlement_key already set — reusing"
         fi
 
-        # 3) ivia_mmfa_push_client_secret (tier-2) — required secret, hidden input
+        # 3) ivia_mmfa_push_client_secret (tier-2) — required secret. Precedence:
+        #    already-in-tfvars -> IVIA_MMFA_PUSH_CLIENT_SECRET env var -> hidden
+        #    prompt. The env var lets attendees paste an organizer-provided value
+        #    (or run non-interactively) without hand-editing tfvars; when it is
+        #    unset we fall through to the interactive hidden prompt as before.
         mmfa_secret="$(_tfvars_get "$SERVICES_TFVARS" ivia_mmfa_push_client_secret)"
         if [[ -z "$mmfa_secret" ]]; then
+            if [[ -n "${IVIA_MMFA_PUSH_CLIENT_SECRET:-}" ]]; then
+                mmfa_secret="$IVIA_MMFA_PUSH_CLIENT_SECRET"
+                _tfvars_set "$SERVICES_TFVARS" ivia_mmfa_push_client_secret "$mmfa_secret"
+                print_pass "Preflight: ivia_mmfa_push_client_secret set from IVIA_MMFA_PUSH_CLIENT_SECRET (hidden)"
+            else
             _require_tty "ivia_mmfa_push_client_secret" "$SERVICES_TFVARS"
             while :; do
                 read -r -s -p "  $(echo -e "${YELLOW}?${NC}") IBM Verify MMFA push client secret (input hidden): " mmfa_secret < /dev/tty
@@ -487,9 +521,34 @@ else
             done
             _tfvars_set "$SERVICES_TFVARS" ivia_mmfa_push_client_secret "$mmfa_secret"
             print_pass "Preflight: ivia_mmfa_push_client_secret set (hidden)"
+            fi
         else
             print_info "Preflight: ivia_mmfa_push_client_secret already set — reusing"
         fi
+
+        # 4) vault_enterprise_license (tier-2) — required secret, sourced from a
+        # FILE. Defaults to ~/Downloads/vault-ent.hclic; attendees provide their
+        # own platform-standard Vault Enterprise license file (licenses are
+        # supplied per-deploy, never committed to the repo). Unlike the two
+        # secrets above, this is NOT conditional on "already set" — it is
+        # re-read from VAULT_ENTERPRISE_LICENSE_PATH and overwritten on EVERY
+        # run so a rotated/updated license file always propagates. The license
+        # must carry the platform-standard module (NOT pki-only) or Vault
+        # rejects the database/aws/kv/transit mounts every UC depends on.
+        vault_license_path="${VAULT_ENTERPRISE_LICENSE_PATH:-$HOME/Downloads/vault-ent.hclic}"
+        if [[ ! -s "$vault_license_path" ]]; then
+            _die "Preflight: Vault Enterprise license file missing or empty (VAULT_ENTERPRISE_LICENSE_PATH=${vault_license_path})" \
+                 "Set VAULT_ENTERPRISE_LICENSE_PATH to your platform-standard .hclic license file, or place it at ${vault_license_path}, then re-run: bash infrastructure/scripts/deploy-workshop.sh"
+        fi
+        # Strip trailing/embedded newlines — HashiCorp .hclic files are a
+        # single-line blob; the tfvars writer (_tfvars_set) assumes one line.
+        vault_license_content="$(tr -d '\n\r' < "$vault_license_path")"
+        if [[ -z "$vault_license_content" ]]; then
+            _die "Preflight: Vault Enterprise license file is empty after read (VAULT_ENTERPRISE_LICENSE_PATH=${vault_license_path})" \
+                 "Verify the file contains the license blob, then re-run: bash infrastructure/scripts/deploy-workshop.sh"
+        fi
+        _tfvars_set "$SERVICES_TFVARS" vault_enterprise_license "$vault_license_content"
+        print_pass "Preflight: vault_enterprise_license set from ${vault_license_path}"
     fi
 fi
 echo ""

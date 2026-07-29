@@ -3,58 +3,52 @@ title: 'The Bypass Test'
 weight: 73
 ---
 
-## What Would Happen Without `may_act` Enforcement?
+## Where Enforcement Now Lives: at Vault, per request
 
-If Vault's `uc3-jwt` role had no `bound_claims` on `may_act`, any agent that could obtain a CIBA-issued user token could independently perform a refund write — without the user knowing which agent acted. The delegation proof would be meaningless.
+Vault Enterprise's OAuth resource server enforces the delegation itself. When the delegated JWT is presented via `X-Vault-Token`, Vault resolves the agent actor from `act.sub` and narrows the token per request from the `vault:path_access` RAR. Two forged-token attacks fail **at Vault** — before any credential is issued:
 
-The bypass test proves enforcement is working by attempting to present forged tokens and confirming Vault rejects them at the auth layer — before any credential is issued.
+- **Wrong actor** — a token whose `act.sub` names an agent Vault does not have registered fails closed: no agent entity resolves, so the on-behalf-of authorization is denied.
+- **Wrong RAR path** — a token whose `vault:path_access` RAR names a path *other than* the one being requested is denied **even though the human baseline and the agent ceiling both permit the target path**. The per-request RAR is a hard, in-Vault narrowing.
 
 ## Run the Bypass Test
 
 ```bash
-cd infrastructure/scripts
-./verify-uc3.sh --bypass
+cd infrastructure/scripts && ./verify-uc3.sh --bypass
 ```
 
-The script runs **two genuine negative tests**, each classified by the *reason* Vault rejected the login — so the test can never silently pass on an infrastructure error:
+The script runs **genuine negative tests**, each classified by the *reason* Vault rejected the request — so the test can never silently pass on an infrastructure error:
 
-- **Check 14 (signature control):** forges an HS256 JWT (PyJWT, in a temporary pod) and presents it. Vault trusts only IVIA's RS256 JWKS, so it dies at the signature layer.
-- **Check 15 (bound-claim teeth):** mints a **genuine, IVIA-signed** `uc3-actor` `client_credentials` token. It sails past the RS256 signature and `aud=uc3-actor` checks, but a plain `client_credentials` grant has **no** `may_act` claim (that is injected only during token-exchange), so Vault rejects it at the `/may_act/sub` bound_claim. This proves the `bound_claims` actually gate access — not merely the signature.
+- **Untrusted-signer control:** forges an HS256 JWT (PyJWT, in a temporary pod) and presents it. Vault trusts only IVIA's RS256 JWKS via the resource server profile, so the token dies at the signature layer.
+- **Wrong-actor control:** presents a genuine IVIA-signed delegated token whose `act.sub` names an unregistered agent (`evil-actor`). The signature and issuer pass, but no agent entity resolves for `evil-actor`, so Vault denies the on-behalf-of authorization.
+- **Wrong-RAR-path control (the money shot):** presents a genuine delegated token that resolves `sub = jaime` and `act.sub = uc3-actor` correctly, but carries a `vault:path_access` RAR pointing at the **wrong path**. Vault denies the request even though baseline ∩ ceiling permit `database/creds/uc3-refund-writer` — the RAR did not name it, so Vault narrowed the token away from it.
 
-**Expected output** (captured from a live run):
+**Representative output** — each control is a `403 permission denied` at Vault, classified by why:
 
 ```
   ℹ INFO Use Case 3 — CIBA Privileged verification — BYPASS TEST MODE
 
-  ℹ INFO Bypass Check 14: Untrusted-signer control — HS256 self-forged JWT must be rejected at the signature layer
-  ✓ PASS Bypass Check 14 PASSED: Vault rejected the HS256 self-forged JWT at the signature layer (trusts only IVIA's RS256 JWKS) — an attacker cannot forge their way in
-
-  ℹ INFO Bypass Check 15: Bound-claim enforcement — real IVIA-signed uc3-actor token (no may_act) must be rejected at /may_act/sub
-  ✓ PASS Bypass Check 15 PASSED: Vault accepted the token's RS256 signature + aud=uc3-actor but REJECTED it at the /may_act/sub bound_claim (no may_act delegation present) — bound_claims are enforced, not just the signature
+  ✓ PASS Untrusted-signer control: Vault rejected the HS256 self-forged JWT at the signature layer (trusts only IVIA's RS256 JWKS) — an attacker cannot forge their way in
+  ✓ PASS Wrong-actor control: real IVIA-signed token with act.sub=evil-actor DENIED — no registered agent entity resolves, on-behalf-of authorization fails closed
+  ✓ PASS Wrong-RAR-path control: real delegated token (sub=jaime, act.sub=uc3-actor) DENIED — its vault:path_access RAR named a different path, so Vault narrowed the token away from database/creds/uc3-refund-writer even though baseline ∩ ceiling permit it
 
 ===============================================================================
- ✓ 2 check(s) passed
+ ✓ checks passed
 ===============================================================================
 ```
 
-## Two Layers of Rejection
-
-The two tests prove rejection at two independent layers, either of which is sufficient on its own:
+## Three Independent Denials, Each Sufficient On Its Own
 
 | Layer | Mechanism | What It Enforces |
 |---|---|---|
-| JWT signature | JWKS validation against IVIA's RS256 public keys | Only IVIA-signed tokens are accepted — HS256 self-signed tokens are always rejected (Check 14) |
-| `bound_claims` | `/may_act/sub = "uc3-actor"` AND `/authorization_details/0/type = "refund_approval"` (both EXACT, glob type, no wildcards) | Evaluated **only after** the signature passes: the token's claims must match exactly — `may_act.sub = uc3-actor` (delegation) AND `authorization_details[0].type = refund_approval` (RAR type). A genuine IVIA-signed token that lacks `may_act` — or carries a different RAR type — is rejected here even though its signature is valid (Check 15) |
+| JWT signature | JWKS validation against IVIA's RS256 public keys (resource server profile) | Only IVIA-signed tokens are accepted — HS256 self-signed tokens are always rejected |
+| Agent actor | `act.sub` resolved against the Agent Registry | Only a token naming a **registered** agent (`uc3-actor`) authorizes on-behalf-of; an unknown actor fails closed |
+| Per-request RAR | `vault:path_access` path must match the requested path | Evaluated in Vault at the point of use: a delegated token whose RAR names a different path is denied **even though baseline ∩ ceiling permit the target** |
 
-Both layers are enforced. Check 14 proves you cannot forge your way past the signature; Check 15 proves the `bound_claims` have teeth — a real IVIA-signed token is still rejected when it lacks the required `may_act` delegation. A delegated token carrying any RAR `type` other than `refund_approval` is rejected the same way.
-
-:::alert{header="Why there is no negative test for a wrong RAR type" type="info"}
-The `/authorization_details/0/type` binding is enforced (you can see it on the live `uc3-jwt` role and in `vault_config/main.tf`), but the bypass script does not include a standalone negative test for it. To exercise it you would need a genuine IVIA-signed token that has `may_act` present **but** a different RAR type — and the only way to obtain a `may_act` claim is the token-exchange grant, which the `isvaop_pretoken` rule always stamps with `type=refund_approval`. There is no documented path in ISVAOP 25.10 to mint a token with `may_act` present and a forged type, so a faithful negative test is not feasible without compromising IVIA's signing key. The binding is real; the absence of a forge-based test is a property of the platform, not a gap in enforcement.
-:::
+The RAR-path control is the one that proves enforcement moved *into* Vault: the human baseline and the agent ceiling both allow `database/creds/uc3-refund-writer`, yet Vault still denies the request when the per-request `vault:path_access` RAR does not name that exact path. Vault — not IVIA, not the agent — is the interpreter of the RAR.
 
 ### Threat Model
 
-**What this protects against:** A rogue agent pod that obtains a user's CIBA access token (via network interception or a compromised secret) cannot use it to issue a refund. A raw CIBA access token has no `may_act` object, so the `/may_act/sub` bound_claim check fails (Check 15) — and a self-forged token is rejected even earlier, at JWKS signature validation, because Vault trusts only tokens signed by IVIA's RS256 key pair (Check 14). No DB credentials are ever issued.
+**What this protects against:** A rogue agent pod that obtains a user's delegated token cannot repurpose it. If its `act.sub` names an unregistered agent, no agent entity resolves and Vault fails closed; if it carries a `vault:path_access` RAR for a different path, Vault narrows the token away from the refund-writer credential. A self-forged token is rejected even earlier, at RS256 signature validation. No DB credentials are ever issued.
 
 **What this does NOT protect against:** A compromised agent-uc3 pod with its service account JWT intact could initiate a CIBA flow and present the resulting delegated token to Vault. Mitigations for pod compromise (e.g., falco runtime rules, IRSA session policy restrictions) are out of scope for this workshop but represent the next layer of defense.
 
@@ -112,6 +106,7 @@ The value RLS filters on is the IVIA `sub` claim, seeded as the plain strings `o
 Spawn **one** transient `postgres:16-alpine` pod. In a single `psql` session, set the `app.current_user_sub` GUC to each user in turn and count their transactions. RLS returns only the rows owned by whichever `sub` is currently active:
 
 ```bash
+kubectl delete pod pg-rls-test -n banking-app --ignore-not-found --now >/dev/null 2>&1
 kubectl run pg-rls-test --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${PG_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop -c "
@@ -154,6 +149,7 @@ The `uc3-readonly` role carries `GRANT SELECT` only. The same credential used in
 The `INSERT` below names **only real `banking.refunds` columns** (`account_id, transaction_id, amount, approved_by, request_id` — see `seed.sql`), so it is schema-valid. That matters: Postgres checks table privileges *before* it evaluates column names, NOT NULL/foreign-key constraints, or RLS — so the **only** reason this can fail is the missing `INSERT` privilege. (A typo'd column would instead fail with a schema error and prove nothing.)
 
 ```bash
+kubectl delete pod pg-insert-uc3 -n banking-app --ignore-not-found --now >/dev/null 2>&1
 kubectl run pg-insert-uc3 --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${PG_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop \
@@ -183,6 +179,7 @@ Refunds are **created by you** during the CIBA approval flow (page 71) — they 
 A refund is visible only to its owner (RLS), so list refunds under each persona you ran a refund as:
 
 ```bash
+kubectl delete pod pg-find-refund -n banking-app --ignore-not-found --now >/dev/null 2>&1
 kubectl run pg-find-refund --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${PG_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop -c "
@@ -219,6 +216,7 @@ export ATTACKER=<the other persona>
 Run the exact owner-predicate JOIN `check_refund_status` executes — first as the **other** persona (the hostile reader), then as the **owner**:
 
 ```bash
+kubectl delete pod pg-owner-test -n banking-app --ignore-not-found --now >/dev/null 2>&1
 kubectl run pg-owner-test --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${PG_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop -c "

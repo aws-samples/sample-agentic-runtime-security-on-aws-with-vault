@@ -30,8 +30,11 @@ terraform {
 
   required_providers {
     vault = {
-      source  = "hashicorp/vault"
-      version = "~> 4.0"
+      source = "hashicorp/vault"
+      # Must match the module pin — 5.10.1 is the first release exposing
+      # vault_oauth_resource_server_config_profile (09-DISCOVERY PROVIDER_MIN).
+      # Bump both roots together or the apply fails on a provider-version mismatch.
+      version = ">= 5.10.1, < 6.0.0"
     }
     aws = {
       source  = "hashicorp/aws"
@@ -85,11 +88,21 @@ module "vault_config" {
   ivia_jwks_url                      = var.ivia_jwks_url
   ivia_issuer                        = local.services.ivia_issuer
   ivia_oidc_ca_pem                   = local.services.ivia_oidc_ca_pem
-  rds_endpoint                       = local.root.rds_endpoint
-  rds_master_username                = local.root.rds_master_username
-  rds_master_user_secret_arn         = local.root.rds_master_user_secret_arn
-  rds_db_name                        = var.rds_db_name
-  bedrock_role_arn                   = local.root.bedrock_role_arn
-  uc3_logs_role_arn                  = local.root.uc3_logs_role_arn
-  tags                               = var.tags
+
+  # OBO identity constants (Plan 05, BLOCKER 1) — the act.sub actor + human sub
+  # values IVIA emits, sourced from tier-2 services (authoritative in the
+  # verify_access module) so the Vault entity aliases bind to exactly those
+  # values. Same channel as ivia_issuer.
+  uc2_agent_identity = local.services.uc2_agent_identity
+  uc3_agent_identity = local.services.uc3_agent_identity
+  uc3_human_sub      = local.services.uc3_human_sub
+  uc2_human_subs     = local.services.uc2_human_subs
+
+  rds_endpoint               = local.root.rds_endpoint
+  rds_master_username        = local.root.rds_master_username
+  rds_master_user_secret_arn = local.root.rds_master_user_secret_arn
+  rds_db_name                = var.rds_db_name
+  bedrock_role_arn           = local.root.bedrock_role_arn
+  uc3_logs_role_arn          = local.root.uc3_logs_role_arn
+  tags                       = var.tags
 }

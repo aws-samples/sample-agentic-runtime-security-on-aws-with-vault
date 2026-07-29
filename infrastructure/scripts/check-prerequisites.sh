@@ -13,6 +13,9 @@
 #      AOSS OCU search >= 2)
 #   4. Verifies IAM permissions for the workshop bootstrap (17 actions via
 #      iam:SimulatePrincipalPolicy with self-test fallback)
+#   5. Verifies Vault Enterprise prerequisites (hashicorp/vault provider
+#      >= 5.10.1 and a present, non-empty Enterprise license file at
+#      VAULT_ENTERPRISE_LICENSE_PATH) — Phase 9 native Agent Registry
 #
 # Exit codes:
 #   0 — all checks passed (or --dry-run completed without error)
@@ -66,10 +69,10 @@ SKIP_QUOTAS=false
 # real test is the subsequent terraform apply. Set true by --skip-iam-sim.
 SKIP_IAM_SIM=false
 # Image source mode — controls whether the container-runtime gate fires.
-# ghcr (default): pre-built public GHCR images, no build required, no runtime needed.
-# ecr: local build + push to ECR — container runtime (Docker or Podman) required.
+# ecr (default): local build + push to ECR — container runtime (Docker or Podman) required.
+# ghcr: pre-built public GHCR images, no build required, no runtime needed.
 # Set via env var or --image-source=<mode> flag.
-IMAGE_SOURCE="${WORKSHOP_IMAGE_SOURCE:-ghcr}"
+IMAGE_SOURCE="${WORKSHOP_IMAGE_SOURCE:-ecr}"
 
 # Argument parsing — keep simple, no shift loops with positional args
 for arg in "$@"; do
@@ -91,10 +94,10 @@ Modes:
   (no flags)        Default: auto-install missing CLIs (no per-tool prompts),
                     then run Bedrock + quotas + IAM checks straight through.
                     Failures accumulate into a consolidated summary at the end.
-  --image-source=ghcr  Default: pre-built public GHCR images — no container
-                    runtime required (Docker/Podman check skipped).
-  --image-source=ecr   Local build + push to ECR — container runtime
+  --image-source=ecr   Default: local build + push to ECR — container runtime
                     (Docker or Podman) is required and checked.
+  --image-source=ghcr  Pre-built public GHCR images — no container runtime
+                    required (Docker/Podman check skipped).
                     Env fallback: WORKSHOP_IMAGE_SOURCE.
   --interactive     Prompt before each install AND before each check section
                     ("Install kubectl? [y/N]", "Run Bedrock check? [y/N]", ...).
@@ -440,19 +443,71 @@ else
 fi
 
 # Container runtime (Podman OR Docker) — required by build-images.sh (deploy
-# Step 3) to build + push the agent images in ecr mode. In ghcr mode (default)
-# no build is performed — pre-built public images are pulled from GHCR — so no
-# container runtime is needed and the check is skipped. detect_container_runtime
+# Step 3) to build + push the agent images in ecr mode (default). In the ghcr
+# opt-out no build is performed — pre-built public images are pulled from GHCR —
+# so no container runtime is needed and the check is skipped. detect_container_runtime
 # validates the runtime and prints its own pass/fail line. NO `|| exit 1` here —
 # this script is continue-on-failure; failures accumulate into the final summary.
-if [ "${IMAGE_SOURCE:-ghcr}" = "ecr" ]; then
+if [ "${IMAGE_SOURCE:-ecr}" = "ecr" ]; then
     detect_container_runtime
 else
-    print_pass "Container runtime: not required (${IMAGE_SOURCE:-ghcr} mode — pre-built public images from GHCR)"
+    print_pass "Container runtime: not required (${IMAGE_SOURCE:-ecr} mode — pre-built public images from GHCR)"
 fi
 
 echo
 fi  # end if [ "$SKIP_TOOLS" = true ] ... else  (covers Sections 1 + 1.5)
+
+# =============================================================================
+# SECTION 1.6: Vault Enterprise prerequisites (Phase 9 — native Agent Registry)
+#
+# Runs regardless of --skip-tools: the license file requirement is unrelated to
+# CLI tool installation and matters even when aws/terraform/kubectl are
+# pre-baked (Instruqt-style sandboxes).
+#
+#   (a) hashicorp/vault Terraform provider >= VAULT_PROVIDER_MIN_VERSION —
+#       vault_agent_registration + vault_oauth_resource_server_config_profile
+#       live in the 5.x provider line (minimum 5.10.1). Resolved from the
+#       tier-2 vault-config root's lock file so this is a real "what would
+#       actually be used" check, not just the loose `~>` constraint string.
+#   (b) Vault Enterprise license file present + non-empty at
+#       VAULT_ENTERPRISE_LICENSE_PATH (default ~/Downloads/vault-ent.hclic).
+#       Content is NOT parsed/validated here (module gating — platform-standard
+#       vs. pki-only — is a deploy-time live gate, not a static file check).
+# =============================================================================
+echo -e "${BLUE}=== Check Vault Enterprise prerequisites ===${NC}"
+
+VAULT_PROVIDER_MIN_VERSION="5.10.1"
+VAULT_PROVIDER_LOCK_FILE="${SCRIPT_DIR}/../vault-config/.terraform.lock.hcl"
+
+if confirm "Run Vault Enterprise prerequisite checks (provider version + license file)?"; then
+    # (a) hashicorp/vault provider version
+    if [ -f "$VAULT_PROVIDER_LOCK_FILE" ]; then
+        vault_provider_version=$(grep -A2 'provider "registry.terraform.io/hashicorp/vault"' "$VAULT_PROVIDER_LOCK_FILE" 2>/dev/null \
+            | grep 'version' | head -1 | sed -E 's/.*"([0-9.]+)".*/\1/')
+        if [ -n "$vault_provider_version" ] && version_gte "$vault_provider_version" "$VAULT_PROVIDER_MIN_VERSION"; then
+            print_pass "hashicorp/vault provider v${vault_provider_version} (>= ${VAULT_PROVIDER_MIN_VERSION} required for vault_agent_registration + vault_oauth_resource_server_config_profile)"
+        else
+            print_fail "hashicorp/vault provider v${vault_provider_version:-unknown} is below ${VAULT_PROVIDER_MIN_VERSION}" \
+                "Bump the provider pin to >= ${VAULT_PROVIDER_MIN_VERSION} in infrastructure/modules/vault_config/main.tf and infrastructure/vault-config/main.tf, then re-run: terraform -chdir=infrastructure/vault-config init"
+        fi
+    else
+        print_fail "hashicorp/vault provider version unknown — ${VAULT_PROVIDER_LOCK_FILE} not found" \
+            "Run: terraform -chdir=infrastructure/vault-config init — then re-run this check."
+    fi
+
+    # (b) Vault Enterprise license file present + non-empty
+    vault_license_path="${VAULT_ENTERPRISE_LICENSE_PATH:-$HOME/Downloads/vault-ent.hclic}"
+    if [ -s "$vault_license_path" ]; then
+        print_pass "Vault Enterprise license file found at ${vault_license_path}"
+    else
+        print_fail "Vault Enterprise license file missing or empty (VAULT_ENTERPRISE_LICENSE_PATH=${vault_license_path})" \
+            "Set VAULT_ENTERPRISE_LICENSE_PATH to your platform-standard .hclic license file, or place it at ${vault_license_path}. The license MUST carry the platform-standard module (NOT pki-only) — pki-only blocks the database/aws/kv/transit mounts every use case depends on."
+    fi
+else
+    print_warn "Skipped Vault Enterprise prerequisite checks"
+fi
+
+echo
 
 # =============================================================================
 # SECTION 2: Check Bedrock access (PREF-01)

@@ -17,3 +17,9 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "vault_enterprise_license" {
+  description = "Vault Enterprise license (.hclic contents) autoloaded via a K8s secret + Helm server.enterpriseLicense. Sourced by deploy-workshop.sh from the attendee-supplied license file (VAULT_ENTERPRISE_LICENSE_PATH, default ~/Downloads/vault-ent.hclic) — the license is NEVER committed to the repo. The Terraform variable itself has NO default — the value is always passed in from the file at provisioning time."
+  type        = string
+  sensitive   = true
+}

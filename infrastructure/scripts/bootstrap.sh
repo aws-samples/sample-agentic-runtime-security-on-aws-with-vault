@@ -18,9 +18,9 @@
 #   --dry-run                Show what would be done without executing
 #   --skip-prereq-gate       Skip the "Have you run check-prerequisites.sh?" prompt
 #   --image-source <ghcr|ecr>
-#                            Image source mode (default: ghcr). ghcr: no ECR image
-#                            URI stamping — GHCR defaults stand. ecr: stamps the five
-#                            ECR image URIs into tier-3 tfvars (today's flow).
+#                            Image source mode (default: ecr). ecr: builds the five
+#                            images and stamps their account ECR URIs into tier-3
+#                            tfvars. ghcr: no build — pull pre-built public images.
 #                            Env fallback: WORKSHOP_IMAGE_SOURCE.
 #   --ghcr-registry-base <base>
 #                            GHCR registry base (default: ghcr.io/sharepointoscar).
@@ -52,13 +52,14 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 # IMAGE_SOURCE resolution order (set -e safe — always bound):
 #   1. --image-source flag
 #   2. WORKSHOP_IMAGE_SOURCE env var
-#   3. Hard default: ghcr
+#   3. Hard default: ecr
 # GHCR_REGISTRY_BASE: --ghcr-registry-base flag → WORKSHOP_GHCR_REGISTRY_BASE env → default
 # ghcr.io/sharepointoscar is an image-source URI base, NOT an identity/auth value.
+# (Only consulted in the ghcr opt-out; ecr builds into the attendee's own account.)
 #-------------------------------------------------------------------------------
 DRY_RUN=false
 SKIP_PREREQ_GATE=false
-IMAGE_SOURCE="${WORKSHOP_IMAGE_SOURCE:-ghcr}"
+IMAGE_SOURCE="${WORKSHOP_IMAGE_SOURCE:-ecr}"
 GHCR_REGISTRY_BASE="${WORKSHOP_GHCR_REGISTRY_BASE:-ghcr.io/sharepointoscar}"
 
 usage() {
@@ -71,7 +72,7 @@ Bootstrap the Agentic Runtime Security workshop environment.
 Options:
   --dry-run                Show what would be done without executing
   --skip-prereq-gate       Skip the "Have you run check-prerequisites.sh?" prompt
-  --image-source <ghcr|ecr>  Image source mode (default: ghcr)
+  --image-source <ghcr|ecr>  Image source mode (default: ecr)
   --ghcr-registry-base <base> GHCR registry base (default: ghcr.io/sharepointoscar)
   --help                   Show this help message
 

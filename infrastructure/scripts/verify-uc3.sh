@@ -16,7 +16,9 @@
 #   1.  UC3 agent pod Running in banking-app namespace (app=uc3-agent)
 #   2.  ServiceAccount uc3-privileged-actor-sa exists in banking-app namespace
 #   3.  Vault k8s auth role uc3 bound to uc3-privileged-actor-sa
-#   4.  Vault jwt auth role uc3-jwt exists with bound_audiences=[uc3-actor]
+#   4.  UC3 native OBO surface: uc3-actor registration + uc3-agent-ceiling policy +
+#       OAuth alias binding (profile config_id == accessor .id). The retired uc3-jwt
+#       jwt-auth role is GONE (decisions (a)/(e)).
 #   5.  Vault DB role uc3-refund-writer generates credentials (JIT)
 #   6.  banking.refunds table exists in RDS
 #   7.  JIT credential fetch: vault read database/creds/uc3-refund-writer
@@ -32,14 +34,25 @@
 #       check is SKIPPED with a print_warn — never a fake pass.
 #   13. UC3 agent /chat multi-turn session — same UC3_VERIFY_CHAT_TOKEN gate.
 #
-# Bypass mode (--bypass) — two GENUINE negative tests, classified by reason:
-#   14. Untrusted-signer control: an HS256 self-forged JWT must be rejected at
-#       Vault's signature layer (Vault trusts only IVIA's RS256 JWKS).
-#   15. Bound-claim enforcement: a REAL IVIA-signed uc3-actor client_credentials
-#       token (valid RS256 + aud=uc3-actor, but NO may_act delegation) must be
-#       rejected at the /may_act/sub bound_claim — proving bound_claims actually
-#       gate access, not just the signature. A skip or infra error is a HARD FAIL,
-#       never a silent pass.
+# Bypass mode (--bypass) — the native enforcement done-gate (jwt/ backend GONE).
+# SELF-MINTING: the suite headlessly mints a REAL IVIA-issued delegated token via
+# the production path (PKCE login + RFC 8693 token-exchange) for a workshop persona,
+# so Checks 15-18 run WITHOUT an operator hand-capturing a browser token:
+#   14. Untrusted-signer control: a self-minted HS256 JWT must be rejected at
+#       Vault's signature layer (Vault trusts only IVIA's RS256 JWKS). Self-generated.
+#   15. REAL delegated token jti (phase-done gate) + act.sub=uc3-actor (self-minted).
+#   16. RAR MATCH → ALLOW: the delegated token (RAR path=uc3-refund-writer) is authorized.
+#   17. Per-request RAR → DENY: the SAME valid token presented to a path NOT in its
+#       RAR (uc3-readonly) is denied with RAR_NO_MATCH even though the ACL+ceiling
+#       permit it — proves vault:path_access is the request-scoped enforcing layer.
+#   18. Cross-UC ceiling isolation → DENY: the agent-uc2 UC2 token (act.sub=agent-uc2)
+#       is denied the UC3 refund read — agent-uc2's ceiling omits it even though the
+#       human baseline allows it (the agent ceiling isolates use cases).
+#   19. (optional) TRUE wrong-actor → DENY (UC3_WRONG_ACTOR_TOKEN). Production IVIA
+#       only signs act.sub=uc3-actor, so a validly-signed wrong-actor token is
+#       operator-supplied; ABSENT = documented SKIP (WARN), not required for green.
+#   Checks 15-18 self-mint (no manual token); a mint failure is a HARD FAIL.
+#   UC3_DELEGATED_TOKEN (if set) overrides the minted token for the Part B live gate.
 #
 # Usage:
 #   ./verify-uc3.sh [--bypass] [--help]
@@ -87,7 +100,8 @@ Normal mode checks (19 total):
   1.  UC3 agent pod Running (app=uc3-agent in banking-app namespace)
   2.  ServiceAccount uc3-privileged-actor-sa exists
   3.  Vault k8s auth role uc3 bound to uc3-privileged-actor-sa
-  4.  Vault jwt auth role uc3-jwt exists (bound_audiences=uc3-actor)
+  4.  UC3 native OBO surface: uc3-actor registration + uc3-agent-ceiling +
+      OAuth alias binding (profile config_id == accessor .id)
   5.  Vault DB role uc3-refund-writer accessible
   6.  banking.refunds table exists in RDS
   7.  JIT credential fetch: database/creds/uc3-refund-writer
@@ -103,10 +117,18 @@ Normal mode checks (19 total):
        surface. Capture a real bearer from the browser flow:
        workshop/content/70-use-case-3/70-test-refund/.
 
-Bypass mode (--bypass) adds two genuine negative tests:
-  14. Untrusted-signer control — HS256 self-forged JWT rejected at signature layer
-  15. Bound-claim enforcement — real IVIA-signed uc3-actor token (no may_act)
-      rejected at the /may_act/sub bound_claim (skip/infra error = HARD FAIL)
+Bypass mode (--bypass) runs the native enforcement done-gate. Checks 15-18
+SELF-MINT a real IVIA-issued delegated token (PKCE login + RFC 8693 exchange) —
+no manual browser capture needed:
+  14. Untrusted-signer control — self-minted HS256 JWT rejected at signature layer
+  15. REAL delegated token jti (phase-done gate) + act.sub=uc3-actor (self-minted)
+  16. RAR MATCH → ALLOW: delegated token authorized for uc3-refund-writer (self-minted)
+  17. Per-request RAR → DENY: valid token to a path NOT in its RAR (uc3-readonly)
+      is denied with RAR_NO_MATCH even though ACL+ceiling permit it (self-minted)
+  18. Cross-UC ceiling isolation → DENY: agent-uc2 token (act.sub=agent-uc2) denied UC3 refund
+  19. (optional) TRUE wrong-actor → DENY (UC3_WRONG_ACTOR_TOKEN) — production IVIA
+      only signs act.sub=uc3-actor, so this is operator-supplied; absent = SKIP (WARN)
+      A self-mint failure is a HARD FAIL (skip = not-proven != pass), never silent.
 
 Env-var overrides:
   BANKING_NAMESPACE       (default: banking-app)
@@ -116,8 +138,17 @@ Env-var overrides:
   VAULT_ROOT_TOKEN        (optional)
   IVIA_ISSUER             (default: https://iviaop.verify-access.svc.cluster.local:8436/oauth2)
   AWS_REGION              (default: resolved from terraform.tfvars)
+  UC3_PERSONA             (--bypass — workshop persona to self-mint the delegated
+                           token for; default: oscar. Any user in base_layer.yaml.tftpl)
   UC3_VERIFY_CHAT_TOKEN   (optional — bearer captured from a real browser sign-in;
                            enables Checks 12 and 13 against the live /chat endpoint)
+  UC3_DELEGATED_TOKEN     (--bypass — OPTIONAL override: a REAL IVIA-issued delegated
+                           token (sub=<persona>, act.sub=uc3-actor, jti, RAR path=
+                           database/creds/uc3-refund-writer) to use INSTEAD of the
+                           self-minted token — e.g. the Part B live CIBA-path token)
+  UC3_WRONG_ACTOR_TOKEN   (--bypass — OPTIONAL: a validly IVIA-signed token identical
+                           to the delegated token but with act.sub=a WRONG, unregistered
+                           actor. Enables Bypass Check 19; absent = documented SKIP)
 USAGE
     exit 0
 fi
@@ -169,135 +200,433 @@ else
 fi
 echo ""
 
-# classify_forged_login — turn a `vault write auth/jwt/login` attempt into a
-# PASS/FAIL verdict by REASON, so the bypass test can never silently pass on an
-# infrastructure error or an unexpected failure. Four outcomes:
-#   1. rc==0 or a client_token came back  → Vault ACCEPTED the token = HARD FAIL
-#      (the gate we are testing did not fire).
-#   2. output matches the EXPECTED rejection reason ($5) → genuine rejection = PASS.
-#   3. output matches a known infra failure (couldn't reach/exec Vault) → HARD FAIL
-#      (NOT proof of rejection — we never observed the gate).
-#   4. rejected, but for an unrecognized reason → HARD FAIL (cannot confirm the
-#      signature/bound_claim gate fired; surface the raw output for triage).
-# Args: $1 label  $2 vault-output  $3 rc  $4 pass-msg  $5 expected-reason-regex
-classify_forged_login() {
-    local label="$1" out="$2" rc="$3" pass_msg="$4" expect="$5"
+# --- Native-model helpers (Phase 9 cutover — the jwt/ auth backend is GONE) ---
+#
+# UC3 now presents the IVIA-issued delegated JWT DIRECTLY as the Vault token
+# (X-Vault-Token / VAULT_TOKEN=<jwt>) against the oauth-resource-server profile.
+# Vault natively validates the signature (IVIA JWKS, RS256), the jti, the OBO
+# subject+actor aliases (sub=jaime + act.sub=uc3-actor), the agent ceiling, and
+# the per-request vault:path_access RAR. These helpers present a token to the
+# uc3-refund-writer creds path and classify the result by REASON, so a negative
+# test can never silently pass on an infra error.
 
-    if [ "${rc}" -eq 0 ] || echo "${out}" | grep -q '"client_token"'; then
-        print_fail "${label}: Vault ACCEPTED a token it must reject" \
-            "A token that should have been denied logged in successfully — the uc3-jwt role's signature validation or bound_claims are not enforcing. Output: ${out:0:300}. Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault read auth/jwt/role/uc3-jwt"
+# decode_jwt_claim <jwt> <jq-filter> — base64url-decode the JWT payload (2nd
+# segment) and extract a claim via jq. Echoes the value, or empty on failure.
+decode_jwt_claim() {
+    local jwt="$1" filter="$2" payload
+    payload=$(printf '%s' "$jwt" | cut -d. -f2)
+    case $(( ${#payload} % 4 )) in
+        2) payload="${payload}==" ;;
+        3) payload="${payload}=" ;;
+    esac
+    printf '%s' "$payload" | tr '_-' '/+' | base64 -d 2>/dev/null \
+        | jq -r "$filter" 2>/dev/null || echo ""
+}
+
+# _present_native_token <jwt> [vault-path] — present the JWT as VAULT_TOKEN to a
+# Vault creds path (default database/creds/uc3-refund-writer). Echoes
+# "<rc>\x1f<output>". The optional path lets a check present a VALID token to a
+# DIFFERENT path than its RAR authorizes (Check 17 — per-request RAR enforcement).
+_present_native_token() {
+    local jwt="$1" path="${2:-database/creds/uc3-refund-writer}" out rc
+    out=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
+        sh -c "VAULT_TOKEN='${jwt}' vault read -format=json ${path}" 2>&1)
+    rc=$?
+    printf '%s\x1f%s' "${rc}" "${out}"
+}
+
+# assert_native_deny <label> <jwt> <pass-msg> <remediation> [expected-reason-regex]
+# — the token MUST be DENIED. A vended credential (200 + data.username) is a HARD
+# FAIL (the gate did not fire); an infra error is a HARD FAIL (we never observed
+# the gate); a genuine denial is the PASS. When an expected-reason-regex ($5) is
+# supplied, the denial output MUST additionally match it (so a signature-layer
+# check cannot pass on, e.g., a generic RAR denial) — a denial that does NOT match
+# is a HARD FAIL (rejected, but not for the reason under test).
+assert_native_deny() {
+    local label="$1" jwt="$2" pass_msg="$3" remediation="$4" expect="${5:-}"
+    local path="${6:-database/creds/uc3-refund-writer}" must_not="${7:-}"
+    local res rc out user
+    res=$(_present_native_token "${jwt}" "${path}")
+    rc="${res%%$'\x1f'*}"; out="${res#*$'\x1f'}"
+    user=$(echo "${out}" | jq -r '.data.username // empty' 2>/dev/null || echo "")
+
+    if [ "${rc}" -eq 0 ] && [ -n "${user}" ]; then
+        print_fail "${label}: Vault ALLOWED a token it must DENY" \
+            "The enforcement gate did NOT fire — Vault vended creds (username=${user}). ${remediation}"
         return
     fi
-
-    if echo "${out}" | grep -qiE "${expect}"; then
-        print_pass "${pass_msg}"
+    if echo "${out}" | grep -qiE 'unable to connect|unable to upgrade connection|connection refused|i/o timeout|no such host|dial tcp|error executing|no such file|container not found|could not find'; then
+        print_fail "${label}: could not reach Vault (infra error, NOT proof of denial)" \
+            "The read failed for an infrastructure reason, so this is NOT evidence the gate denied the token. Output: ${out:0:280}"
         return
     fi
-
-    if echo "${out}" | grep -qiE 'unable to connect|unable to upgrade connection|connection refused|i/o timeout|no such host|dial tcp|error executing command|no such file|container not found|couldn'\''t find|could not find|the server doesn'\''t have a resource'; then
-        print_fail "${label}: could not reach Vault to run the test (infra error, NOT proof of rejection)" \
-            "The login command failed for an infrastructure reason, so this is NOT evidence the gate rejected the token. Output: ${out:0:300}"
+    # A recognized denial is required first (fail closed on an unrecognized error).
+    if ! echo "${out}" | grep -qiE 'permission denied|denied|invalid token|error validating|invalid signature|signature|missing|403|1 error occurred|RAR_NO_MATCH|no alias found|error looking up entity'; then
+        print_fail "${label}: read failed, but NOT for a recognized denial reason — cannot confirm the gate fired" \
+            "Expected a denial. Got: ${out:0:280}. ${remediation}"
         return
     fi
+    # If a specific reason is required, the denial must match it.
+    if [ -n "${expect}" ] && ! echo "${out}" | grep -qiE "${expect}"; then
+        print_fail "${label}: denied, but NOT at the layer under test — cannot confirm this gate fired" \
+            "Expected a denial matching /${expect}/. Got: ${out:0:280}. ${remediation}"
+        return
+    fi
+    # If a reason must be ABSENT (keeps two negatives provably distinct — e.g. a
+    # delegation-required deny must NOT be a RAR_NO_MATCH), enforce it.
+    if [ -n "${must_not}" ] && echo "${out}" | grep -qiE "${must_not}"; then
+        print_fail "${label}: denied, but for the WRONG layer — matched /${must_not}/ which this check must NOT hinge on" \
+            "This deny collides with a different check's layer. Got: ${out:0:280}. ${remediation}"
+        return
+    fi
+    print_pass "${pass_msg}"
+}
 
-    print_fail "${label}: login was rejected, but NOT for the expected reason — cannot confirm the gate fired" \
-        "Expected a rejection matching /${expect}/. Got: ${out:0:300}. Verify the uc3-jwt role config (signature algs + bound_claims)."
+# assert_native_allow <label> <jwt> <pass-msg> <remediation> — the token MUST be
+# ALLOWED (creds vended). Anything else is a HARD FAIL.
+assert_native_allow() {
+    local label="$1" jwt="$2" pass_msg="$3" remediation="$4"
+    local res rc out user
+    res=$(_present_native_token "${jwt}")
+    rc="${res%%$'\x1f'*}"; out="${res#*$'\x1f'}"
+    user=$(echo "${out}" | jq -r '.data.username // empty' 2>/dev/null || echo "")
+
+    if [ "${rc}" -eq 0 ] && [ -n "${user}" ]; then
+        print_pass "${pass_msg} (username=${user})"
+    else
+        print_fail "${label}: Vault DENIED a token it must ALLOW" \
+            "The native OBO chain did not authorize a valid delegated token. ${remediation} Output: ${out:0:280}"
+    fi
+}
+
+# _mint_uc3_tokens <user> — headlessly mint a REAL IVIA-issued delegated OBO token
+# (and its underlying subject token) for <user>, exercising the EXACT production
+# path the UC3 agent uses: PKCE authorization_code login at WebSEAL, then an
+# RFC 8693 token-exchange (uc3-actor client). Populates two globals:
+#   MINTED_SUBJECT_TOKEN   — sub=<user>, NO act claim (a bare human subject).
+#   MINTED_DELEGATED_TOKEN — sub=<user>, act.sub=uc3-actor, a native jti, and a
+#                            vault:path_access RAR = database/creds/uc3-refund-writer.
+# Returns 0 on success, 1 on any failure (so a check HARD-FAILs, never silent-passes).
+#
+# Every secret/host is sourced at RUNTIME (never hardcoded — global no-hardcoded-
+# identity/auth rule): WRP host ← infrastructure/.acme-state; redirect_uri + client
+# ids ← banking-app config maps; client secret ← uc3-agent-config; persona password
+# ← base_layer.yaml.tftpl (its single source of truth). The mint runs INSIDE the
+# uc3-agent pod (has httpx + in-cluster iviaop DNS + egress to the public WRP ALB);
+# the tokens are presented to Vault separately via _present_native_token.
+_mint_uc3_tokens() {
+    local user="$1"
+    MINTED_SUBJECT_TOKEN=""; MINTED_DELEGATED_TOKEN=""; MINT_ERR=""
+
+    local acme_state="${SCRIPT_DIR}/../.acme-state"
+    local base_layer="${SCRIPT_DIR}/../modules/verify_access/base_layer/base_layer.yaml.tftpl"
+    local wrp ru secret agent_client actor_client persona_pw pod mint_out
+
+    wrp=$(grep -E '^NIP_FQDN_WRP=' "${acme_state}" 2>/dev/null | cut -d= -f2)
+    ru=$(kubectl get configmap -n "${BANKING_NAMESPACE}" banking-ui-config -o jsonpath='{.data.REDIRECT_URI}' 2>/dev/null)
+    secret=$(kubectl get configmap -n "${BANKING_NAMESPACE}" uc3-agent-config -o jsonpath='{.data.IVIA_CLIENT_SECRET}' 2>/dev/null)
+    agent_client=$(kubectl get configmap -n "${BANKING_NAMESPACE}" banking-ui-config -o jsonpath='{.data.IVIA_CLIENT_ID}' 2>/dev/null)
+    actor_client=$(kubectl get configmap -n "${BANKING_NAMESPACE}" uc3-agent-config -o jsonpath='{.data.IVIA_ACTOR_CLIENT_ID}' 2>/dev/null)
+    persona_pw=$(grep -oE 'password:[[:space:]]*"[^"]+"' "${base_layer}" 2>/dev/null | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+    pod=$(kubectl get pod -n "${BANKING_NAMESPACE}" -l app=uc3-agent -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+
+    if [ -z "${wrp}" ] || [ -z "${ru}" ] || [ -z "${secret}" ] || [ -z "${persona_pw}" ] || [ -z "${pod}" ]; then
+        MINT_ERR="could not source mint inputs (wrp='${wrp}' ru='${ru}' secret=$([ -n "${secret}" ] && echo set || echo MISSING) pw=$([ -n "${persona_pw}" ] && echo set || echo MISSING) pod='${pod}')"
+        return 1
+    fi
+
+    mint_out=$(kubectl exec -i -n "${BANKING_NAMESPACE}" "${pod}" -- python3 - \
+        "${user}" "${wrp}" "${ru}" "${agent_client}" "${actor_client}" "${secret}" "${persona_pw}" <<'PYEOF' 2>/dev/null
+import base64,hashlib,os,re,sys,urllib.parse
+try:
+    import httpx
+except Exception as e:
+    print("MINT_ERR import httpx: %s" % e); sys.exit(1)
+user,wrp,ru,agent_client,actor_client,secret,pw = sys.argv[1:8]
+if not wrp.startswith("http"): wrp = "https://" + wrp
+op = "https://iviaop.verify-access.svc.cluster.local:8436"
+def b64u(b): return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+try:
+    cv = b64u(os.urandom(48)); cc = b64u(hashlib.sha256(cv.encode()).digest()); st = b64u(os.urandom(12))
+    c = httpx.Client(verify=False, follow_redirects=False, timeout=30.0)
+    az = (wrp + "/isvaop/oauth2/authorize?response_type=code&client_id=" + agent_client
+          + "&redirect_uri=" + urllib.parse.quote(ru, safe='') + "&code_challenge=" + cc
+          + "&code_challenge_method=S256&state=" + st + "&scope=openid+profile+email")
+    c.get(az)
+    c.post(wrp + "/pkmslogin.form",
+           data={"username": user, "password": pw, "login-form-type": "pwd", "login-response-type": "original_url"})
+    loc = c.get(az).headers.get("location", "")
+    m = re.search(r"[?&]code=([^&]+)", loc)
+    if not m:
+        print("MINT_ERR no auth code returned (WebSEAL login failed for user=%s)" % user); sys.exit(1)
+    code = urllib.parse.unquote(m.group(1))
+    r = c.post(op + "/oauth2/token", auth=(agent_client, secret),
+               data={"grant_type": "authorization_code", "code": code, "redirect_uri": ru, "code_verifier": cv})
+    if r.status_code != 200:
+        print("MINT_ERR authcode exchange %d %s" % (r.status_code, r.text[:200])); sys.exit(1)
+    subj = r.json()["access_token"]
+    r = c.post(op + "/oauth2/token", auth=(actor_client, secret),
+               data={"grant_type": "urn:ietf:params:oauth:grant-type:token-exchange", "subject_token": subj,
+                     "subject_token_type": "urn:ietf:params:oauth:token-type:access_token",
+                     "requested_token_type": "urn:ietf:params:oauth:token-type:access_token"})
+    if r.status_code != 200:
+        print("MINT_ERR token-exchange %d %s" % (r.status_code, r.text[:200])); sys.exit(1)
+    print("SUBJECT=" + subj)
+    print("DELEGATED=" + r.json()["access_token"])
+except Exception as e:
+    print("MINT_ERR %s" % e); sys.exit(1)
+PYEOF
+)
+    MINTED_SUBJECT_TOKEN=$(printf '%s\n' "${mint_out}" | sed -n 's/^SUBJECT=//p')
+    MINTED_DELEGATED_TOKEN=$(printf '%s\n' "${mint_out}" | sed -n 's/^DELEGATED=//p')
+    if [ -z "${MINTED_DELEGATED_TOKEN}" ]; then
+        MINT_ERR=$(printf '%s\n' "${mint_out}" | grep 'MINT_ERR' | head -1)
+        [ -z "${MINT_ERR}" ] && MINT_ERR="mint produced no delegated token (output: ${mint_out:0:200})"
+        return 1
+    fi
+    return 0
 }
 
 if [ "${BYPASS_MODE}" = true ]; then
-    #---------------------------------------------------------------------------
-    # Bypass Check 14 — Untrusted-signer control (HS256 self-forged JWT)
+    #===========================================================================
+    # Native enforcement suite (Phase 9 — the jwt/ backend is GONE, decision (e)).
     #
-    # An attacker who mints their own JWT cannot sign it with IVIA's private key,
-    # so they fall back to a symmetric secret (HS256). Vault's uc3-jwt role trusts
-    # ONLY IVIA's RS256 JWKS, so the token dies at the signature layer before any
-    # claim is even read. This is the baseline "you can't forge your way in"
-    # control; the bound_claim teeth are exercised by Check 15.
+    # UC3 presents the IVIA-issued delegated JWT DIRECTLY to Vault (X-Vault-Token)
+    # against the oauth-resource-server profile. The suite SELF-MINTS a real
+    # delegated token via the production path, so every check runs headlessly:
+    #   14. Untrusted-signer control — an HS256 forgery whose claims MATCH the
+    #       ALLOWED token (only the signature differs from Check 16) is rejected.
+    #   15. REAL delegated token jti (phase-done gate) + act.sub=uc3-actor.
+    #   16. RAR MATCH → ALLOW (RAR path == database/creds/uc3-refund-writer).
+    #   17. Per-request RAR → DENY (valid token to a path OUTSIDE its RAR).
+    #   18. Cross-UC ceiling isolation → DENY (agent-uc2 token denied UC3 refund).
+    #   19. (optional) TRUE wrong-actor → DENY (operator-supplied; absent = SKIP).
+    # A self-mint failure is a HARD FAIL (skip = not-proven != pass).
+    #===========================================================================
+
     #---------------------------------------------------------------------------
-    print_info "Bypass Check 14: Untrusted-signer control — HS256 self-forged JWT must be rejected at the signature layer"
+    # Self-mint the REAL delegated OBO token + subject token (Checks 14-18).
+    #
+    # Mint a genuine IVIA-issued delegated token via the EXACT production path
+    # (PKCE login + RFC 8693 token-exchange) for a workshop persona, so the ALLOW
+    # path, the untrusted-signer control, and the enforcement negatives all run
+    # WITHOUT an operator hand-capturing a browser token. UC3_DELEGATED_TOKEN (if
+    # set) overrides the minted delegated token so the Part B live gate can inject
+    # the real CIBA-path token instead.
+    #---------------------------------------------------------------------------
+    UC3_PERSONA="${UC3_PERSONA:-oscar}"
+    RAR_OUT_PATH="database/creds/uc3-readonly"   # in ACL+ceiling, NOT in the token RAR
 
-    FORGED_HS256_JWT=""
-    forge_pod="verify-uc3-forge-$$"
-    kubectl delete pod "${forge_pod}" -n default --ignore-not-found --wait=true &>/dev/null
+    print_info "Self-mint: obtaining a REAL delegated OBO token for '${UC3_PERSONA}' (PKCE login + RFC 8693 token-exchange, all secrets sourced at runtime)"
+    if _mint_uc3_tokens "${UC3_PERSONA}"; then
+        print_pass "Self-mint: minted a real IVIA-issued delegated token + subject token for '${UC3_PERSONA}'"
+    else
+        print_fail "Self-mint: could NOT mint a real delegated token — Checks 14-18 cannot run" \
+            "The headless mint failed: ${MINT_ERR:-unknown}. Confirm the uc3-agent pod is Running, the WRP ALB is reachable, and persona '${UC3_PERSONA}' can log in. Re-run: bash infrastructure/scripts/verify-uc3.sh --bypass"
+    fi
 
-    kubectl run "${forge_pod}" -n default --restart=Never \
-        --image=python:3.12-slim \
-        --command -- sh -c "pip install PyJWT --quiet 2>/dev/null && python3 -c \"
+    # Prefer an operator-supplied delegated token (Part B) over the minted one.
+    DELEG_TOKEN="${UC3_DELEGATED_TOKEN:-${MINTED_DELEGATED_TOKEN}}"
+
+    echo ""
+
+    #---------------------------------------------------------------------------
+    # Bypass Check 14 — Untrusted-signer control (HS256 forgery, matching claims)
+    #
+    # An attacker who mints their own JWT cannot sign it with IVIA's private key and
+    # falls back to a symmetric secret (HS256). The forgery mirrors the ALLOWED
+    # delegated token's claims EXACTLY — iss/aud/sub are decoded FROM the minted
+    # token so issuer/audience/profile matching all PASS — and differs ONLY in the
+    # signature. Because Check 16 ALLOWS the same-shape RS256 token, a denial here is
+    # attributable to the SIGNATURE alone (a clean A/B: same claims, only the signer
+    # changed — no generic "permission denied" can false-green it). Vault's
+    # oauth-resource-server trusts only IVIA's RS256 JWKS. Self-generated.
+    #---------------------------------------------------------------------------
+    print_info "Bypass Check 14: Untrusted-signer control — an HS256 forgery with claims matching the ALLOWED token (only the signature differs) must be rejected"
+
+    if [ -z "${DELEG_TOKEN}" ]; then
+        print_fail "Bypass Check 14: no delegated token to model the forgery on (mint failed) — the signature gate was NOT exercised" \
+            "Fix the self-mint (see the Self-mint failure above)."
+    else
+        f_iss=$(decode_jwt_claim "${DELEG_TOKEN}" '.iss // empty')
+        f_aud=$(decode_jwt_claim "${DELEG_TOKEN}" '([.aud] | flatten | .[0]) // "uc3-actor"')
+        f_sub=$(decode_jwt_claim "${DELEG_TOKEN}" '.sub // "oscar"')
+        FORGED_HS256_JWT=""
+        forge_pod="verify-uc3-forge-$$"
+        kubectl delete pod "${forge_pod}" -n default --ignore-not-found --wait=true &>/dev/null
+        kubectl run "${forge_pod}" -n default --restart=Never \
+            --image=python:3.12-slim \
+            --command -- sh -c "pip install PyJWT --quiet 2>/dev/null && python3 -c \"
 import jwt, time
 payload = {
-    'sub': 'attacker',
-    'iss': '${IVIA_ISSUER}',
-    'aud': 'uc3-actor',
+    'sub': '${f_sub}',
+    'iss': '${f_iss}',
+    'aud': '${f_aud}',
     'exp': int(time.time()) + 3600,
-    'may_act': {'sub': 'uc3-actor'}
+    'jti': 'forged-%d' % int(time.time()),
+    'act': {'sub': 'uc3-actor'},
+    'authorization_details': [{'type': 'vault:path_access', 'path': 'database/creds/uc3-refund-writer', 'capabilities': ['read']}]
 }
 print(jwt.encode(payload, 'forged-secret', algorithm='HS256'))
 \"" &>/dev/null
-    kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/"${forge_pod}" -n default --timeout=120s &>/dev/null || true
-    FORGED_HS256_JWT=$(kubectl logs "${forge_pod}" -n default 2>/dev/null | tail -1)
-    kubectl delete pod "${forge_pod}" -n default --ignore-not-found &>/dev/null
+        kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/"${forge_pod}" -n default --timeout=120s &>/dev/null || true
+        FORGED_HS256_JWT=$(kubectl logs "${forge_pod}" -n default 2>/dev/null | tail -1)
+        kubectl delete pod "${forge_pod}" -n default --ignore-not-found &>/dev/null
 
-    if [ -z "${FORGED_HS256_JWT}" ] || [ "${FORGED_HS256_JWT}" = "Error" ]; then
-        # A skip is a HARD FAIL — we cannot claim the gate works if we never tested it.
-        print_fail "Bypass Check 14: could not generate the HS256 forgery (PyJWT pod failed) — test NOT run, cannot claim the signature gate works" \
-            "Confirm the python:3.12-slim image is pullable in this cluster, then re-run. Check: kubectl run ${forge_pod} -n default --image=python:3.12-slim --restart=Never -- sh -c 'pip install PyJWT'"
-    else
-        hs256_out=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
-            sh -c "${VAULT_EXEC} vault write auth/jwt/login role=uc3-jwt jwt='${FORGED_HS256_JWT}' -format=json" 2>&1)
-        hs256_rc=$?
-        classify_forged_login \
-            "Bypass Check 14" "${hs256_out}" "${hs256_rc}" \
-            "Bypass Check 14 PASSED: Vault rejected the HS256 self-forged JWT at the signature layer (trusts only IVIA's RS256 JWKS) — an attacker cannot forge their way in" \
-            'unexpected signature algorithm|error verifying token signature|signature is invalid|invalid signature|no known key|failed to verify'
+        if [ -z "${FORGED_HS256_JWT}" ] || [ "${FORGED_HS256_JWT}" = "Error" ]; then
+            # A skip is a HARD FAIL — we cannot claim the gate works if we never tested it.
+            print_fail "Bypass Check 14: could not generate the HS256 forgery (PyJWT pod failed) — test NOT run, cannot claim the signature gate works" \
+                "Confirm the python:3.12-slim image is pullable in this cluster, then re-run. Check: kubectl run ${forge_pod} -n default --image=python:3.12-slim --restart=Never -- sh -c 'pip install PyJWT'"
+        else
+            assert_native_deny "Bypass Check 14 (HS256 forgery, iss=${f_iss})" "${FORGED_HS256_JWT}" \
+                "Bypass Check 14 PASSED: Vault rejected the HS256 forgery whose claims match the ALLOWED delegated token (iss/aud/sub/act.sub/RAR identical) — only the signature differs, so the denial is attributable to the untrusted signer alone (Vault trusts only IVIA's RS256 JWKS); an attacker cannot forge their way in" \
+                "The oauth-resource-server must reject any non-IVIA-signed token. Check the profile's use_jwks + jwks_uri + supported_algorithms=[RS256]." \
+                'permission denied|unexpected signature algorithm|error verifying token signature|error validating token signature|signature is invalid|invalid signature|no known key|failed to verify|invalid token|denied'
+        fi
     fi
 
     echo ""
 
     #---------------------------------------------------------------------------
-    # Bypass Check 15 — Bound-claim enforcement (real IVIA-signed token, no may_act)
+    # Bypass Check 15 — REAL delegated token jti + act.sub=uc3-actor (phase-done gate)
     #
-    # The teeth. Mint a GENUINE uc3-actor client_credentials token from IVIA: it is
-    # RS256-signed by IVIA's real key and carries aud=uc3-actor, so it sails past
-    # Vault's signature + audience checks. But a plain client_credentials grant has
-    # NO may_act delegation claim (that is injected only during the token-exchange
-    # by the isvaop_pretoken rule). Vault's uc3-jwt role REQUIRES bound_claim
-    # /may_act/sub=uc3-actor, so this token must be rejected at the bound_claim —
-    # proving bound_claims actually gate access, not merely the signature.
+    # The delegated token the agent forwards to Vault (sub=<persona>, act.sub=
+    # uc3-actor, native jti, RAR vault:path_access=uc3-refund-writer) must carry a
+    # non-empty jti (Vault JTI_MANDATORY) and act.sub=uc3-actor (the OBO actor claim
+    # Vault resolves) BEFORE the enforcement checks. UC3 has NO fallback.
     #---------------------------------------------------------------------------
-    print_info "Bypass Check 15: Bound-claim enforcement — real IVIA-signed uc3-actor token (no may_act) must be rejected at /may_act/sub"
+    print_info "Bypass Check 15: REAL delegated token must carry a non-empty jti (phase-done gate) + act.sub=uc3-actor"
 
-    # The uc3-actor client shares ${ivia_client_secret} (clients.yml.tftpl) and the
-    # agent reuses it (agent.py IVIA_ACTOR_CLIENT_SECRET defaults to IVIA_CLIENT_SECRET).
-    # Source it from the agent's ConfigMap — the single place it is materialized.
-    ivia_secret=$(kubectl get configmap uc3-agent-config -n "${BANKING_NAMESPACE}" \
-        -o jsonpath='{.data.IVIA_CLIENT_SECRET}' 2>/dev/null || echo "")
-
-    if [ -z "${ivia_secret}" ]; then
-        print_fail "Bypass Check 15: could not read IVIA_CLIENT_SECRET from ConfigMap uc3-agent-config — cannot mint the real uc3-actor token" \
-            "Confirm the uc3_agent module applied. Check: kubectl get configmap uc3-agent-config -n ${BANKING_NAMESPACE} -o jsonpath='{.data.IVIA_CLIENT_SECRET}'"
+    if [ -z "${DELEG_TOKEN}" ]; then
+        print_fail "Bypass Check 15: no delegated token available (mint failed and none supplied) — the phase-done gate was NOT exercised (skip = HARD FAIL)" \
+            "Fix the self-mint (see the Self-mint failure above) or set UC3_DELEGATED_TOKEN to a real IVIA-issued delegated token (sub=<persona>, act.sub=uc3-actor, a unique jti, RAR path=database/creds/uc3-refund-writer)."
     else
-        cc_mint_pod="uc3-actor-mint-$$"
-        kubectl delete pod "${cc_mint_pod}" -n "${BANKING_NAMESPACE}" --ignore-not-found --wait=true &>/dev/null
-        cc_mint_raw=$(kubectl run "${cc_mint_pod}" --rm -i --restart=Never \
-            -n "${BANKING_NAMESPACE}" --image=curlimages/curl -- \
-            curl -sk --max-time 20 -X POST "${IVIA_ISSUER}/token" \
-            -u "uc3-actor:${ivia_secret}" \
-            -H 'Content-Type: application/x-www-form-urlencoded' \
-            -d "grant_type=client_credentials&scope=openid" \
-            2>/dev/null || echo "")
-        UC3_ACTOR_TOKEN=$(echo "${cc_mint_raw}" | grep -o '"access_token":"[^"]*"' | cut -d'"' -f4 || echo "")
-
-        if [ -z "${UC3_ACTOR_TOKEN}" ]; then
-            print_fail "Bypass Check 15: could not mint a real uc3-actor client_credentials token from IVIA — test NOT run, cannot claim the bound_claim gate works" \
-                "Confirm uc3-actor allows client_credentials (clients.yml) and IVIA runtime is up. Mint response: ${cc_mint_raw:0:300}"
+        d_sub=$(decode_jwt_claim "${DELEG_TOKEN}" '.sub // empty')
+        d_jti=$(decode_jwt_claim "${DELEG_TOKEN}" '.jti // empty')
+        d_act=$(decode_jwt_claim "${DELEG_TOKEN}" '.act.sub // empty')
+        if [ -n "${d_jti}" ]; then
+            print_pass "Bypass Check 15: REAL delegated token carries a jti claim (sub=${d_sub}, jti=${d_jti})"
         else
-            actor_out=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
-                sh -c "${VAULT_EXEC} vault write auth/jwt/login role=uc3-jwt jwt='${UC3_ACTOR_TOKEN}' -format=json" 2>&1)
-            actor_rc=$?
-            classify_forged_login \
-                "Bypass Check 15" "${actor_out}" "${actor_rc}" \
-                "Bypass Check 15 PASSED: Vault accepted the token's RS256 signature + aud=uc3-actor but REJECTED it at the /may_act/sub bound_claim (no may_act delegation present) — bound_claims are enforced, not just the signature" \
-                'claim .*may_act.* (is )?missing|missing .*may_act|invalid bound claim|claim "/may_act/sub"|error validating claims'
+            print_fail "Bypass Check 15: REAL delegated token has NO jti" \
+                "The actual forwarded UC3 token lacks a jti — Vault (JTI_MANDATORY) rejects it and UC3 (no fallback) breaks. Fix = per-token jti emission on the token-exchange output, NEVER a fallback."
+        fi
+        if [ "${d_act}" = "uc3-actor" ]; then
+            print_pass "Bypass Check 15: REAL delegated token carries act.sub=uc3-actor (OBO actor claim Vault resolves)"
+        else
+            print_fail "Bypass Check 15: REAL delegated token act.sub != uc3-actor" \
+                "The delegated token's act.sub is '${d_act:-<absent>}' (expected uc3-actor) — native OBO cannot resolve the agent. Fix = the pretoken rule emits act.sub=uc3-actor (NOT may_act) on the token-exchange output."
+        fi
+
+        #-----------------------------------------------------------------------
+        # Bypass Check 16 — RAR MATCH → ALLOW (the fix's money shot)
+        #-----------------------------------------------------------------------
+        print_info "Bypass Check 16: delegated token with matching vault:path_access RAR must be ALLOWED"
+        assert_native_allow "Bypass Check 16 (RAR match)" "${DELEG_TOKEN}" \
+            "Bypass Check 16 PASSED: the delegated token (sub=${d_sub}, act.sub=uc3-actor, jti, RAR path=database/creds/uc3-refund-writer) was ALLOWED to read database/creds/uc3-refund-writer — the native OBO chain (subject alias external_id=${d_sub} + actor alias external_id=uc3-actor + agent ceiling + per-request RAR) authorizes a valid request" \
+            "Confirm the OAuth entity aliases carry external_id=<sub>/uc3-actor (native OBO resolves by external_id, NOT name), the token's RAR path matches database/creds/uc3-refund-writer, and the agent ceiling permits the path."
+    fi
+
+    echo ""
+
+    #---------------------------------------------------------------------------
+    # Bypass Check 17 — per-request RAR enforcement → DENY (money shot)
+    #
+    # Present the SAME valid delegated token (RAR=uc3-refund-writer ONLY) to a
+    # DIFFERENT path (database/creds/uc3-readonly) that the entity ACL + agent
+    # ceiling DO permit. If per-request RAR enforces, Vault DENIES with RAR_NO_MATCH
+    # even though ACL+ceiling allow it — proving vault:path_access is the third,
+    # request-scoped enforcing layer. Uses the real production token (proving it
+    # cannot over-reach beyond its RAR), so no adversarially-signed token is needed.
+    #---------------------------------------------------------------------------
+    print_info "Bypass Check 17: valid delegated token presented to a path NOT in its RAR (${RAR_OUT_PATH}) must be DENIED with RAR_NO_MATCH (per-request RAR enforces)"
+
+    if [ -z "${DELEG_TOKEN}" ]; then
+        print_fail "Bypass Check 17: no delegated token available — the per-request RAR gate was NOT exercised (skip = HARD FAIL)" \
+            "Fix the self-mint (see the Self-mint failure above) or set UC3_DELEGATED_TOKEN."
+    else
+        assert_native_deny "Bypass Check 17 (out-of-RAR path=${RAR_OUT_PATH})" "${DELEG_TOKEN}" \
+            "Bypass Check 17 PASSED: the delegated token (RAR path=database/creds/uc3-refund-writer) was DENIED reading ${RAR_OUT_PATH} with RAR_NO_MATCH even though the entity ACL + agent ceiling permit it — per-request vault:path_access RAR is the confirmed enforcing layer (Phase-9 money shot)" \
+            "A token allowed to read a path OUTSIDE its RAR means per-request enforcement regressed. Confirm the UC3 registration sets optional_authorization_details=false (RAR MANDATORY) and Vault matches the requested path against the token's vault:path_access RAR." \
+            'RAR_NO_MATCH' \
+            "${RAR_OUT_PATH}"
+    fi
+
+    echo ""
+
+    #---------------------------------------------------------------------------
+    # Bypass Check 18 — cross-UC AGENT-CEILING isolation → DENY
+    #
+    # The underlying subject token here is the agent-uc2 UC2 login token: it carries
+    # sub=<persona> AND act.sub=agent-uc2 (the UC2 OBO stamp — see the UC2 pretoken
+    # rule; a UC2 login IS a valid OBO delegation, just for a DIFFERENT agent).
+    # Present it to the UC3 refund path. Native OBO resolves BOTH the human (sub) and
+    # the acting agent (act.sub=agent-uc2). The human baseline for <persona> INCLUDES
+    # uc3-refund-writer (uc3-human-baseline — both personas are refund-capable via the
+    # human floor), BUT agent-uc2's ceiling (uc2-agent-ceiling) does NOT. The 3-layer
+    # OBO intersection (human baseline ∩ agent ceiling ∩ RAR) therefore DENIES: a UC2
+    # agent cannot reach UC3's privileged path even when the human it acts for could.
+    # This proves the agent ceiling ISOLATES use cases — a STRONGER property than the
+    # old "bare human, no act" premise, which is void now that UC2 correctly stamps
+    # act.sub=agent-uc2 on its login token. The deny is at the ACL/ceiling layer
+    # (permission denied), NOT per-request RAR (agent-uc2's RAR is optional), hence
+    # the must-NOT-match RAR_NO_MATCH guard.
+    #---------------------------------------------------------------------------
+    print_info "Bypass Check 18: a validly-delegated WRONG-AGENT token (agent-uc2 UC2 login, act.sub=agent-uc2) must be DENIED the UC3 refund read — the agent ceiling isolates use cases even when the human baseline allows it"
+
+    if [ -z "${MINTED_SUBJECT_TOKEN}" ]; then
+        print_fail "Bypass Check 18: no subject token available (mint failed) — the cross-UC ceiling-isolation gate was NOT exercised (skip = HARD FAIL)" \
+            "Fix the self-mint (see the Self-mint failure above)."
+    else
+        s_sub=$(decode_jwt_claim "${MINTED_SUBJECT_TOKEN}" '.sub // empty')
+        s_act=$(decode_jwt_claim "${MINTED_SUBJECT_TOKEN}" '.act.sub // empty')
+        if [ "${s_act}" != "agent-uc2" ]; then
+            print_fail "Bypass Check 18: the UC2 login token's act.sub is '${s_act:-<absent>}' (expected agent-uc2) — cannot exercise cross-UC ceiling isolation" \
+                "The agent-uc2 authorization_code login token must carry act.sub=agent-uc2 (UC2 OBO stamp). Got sub='${s_sub}', act.sub='${s_act:-<absent>}'. If it is absent, the UC2 pretoken client gate regressed; if it is uc3-actor, the wrong token was captured."
+        else
+            assert_native_deny "Bypass Check 18 (wrong-agent, sub=${s_sub}, act.sub=agent-uc2)" "${MINTED_SUBJECT_TOKEN}" \
+                "Bypass Check 18 PASSED: the agent-uc2 UC2 token (sub=${s_sub}, act.sub=agent-uc2) was DENIED reading database/creds/uc3-refund-writer — agent-uc2's ceiling (uc2-agent-ceiling) omits the refund path, so even though ${s_sub}'s human baseline (uc3-human-baseline) permits it, the 3-layer OBO intersection (human baseline ∩ agent ceiling) blocks a UC2 agent from reaching UC3's privileged path (cross-UC ceiling isolation)" \
+                "A UC2 agent token that vends UC3 refund creds means the agent ceiling no longer isolates use cases. Confirm uc2-agent-ceiling lacks database/creds/uc3-refund-writer and native OBO enforces human baseline ∩ agent ceiling." \
+                'permission denied|denied' \
+                'database/creds/uc3-refund-writer' \
+                'RAR_NO_MATCH'
+        fi
+    fi
+
+    echo ""
+
+    #---------------------------------------------------------------------------
+    # Bypass Check 19 (optional) — TRUE WRONG-ACTOR → DENY (operator-supplied)
+    #
+    # The strongest actor test: a VALIDLY IVIA-signed token identical to the real
+    # delegated token but with act.sub set to a WRONG, unregistered actor, which
+    # must be DENIED because no actor alias resolves. Production IVIA only ever
+    # signs act.sub=uc3-actor, so this token cannot be minted headlessly — it stays
+    # operator-supplied. ABSENT = a documented SKIP (WARN, not a failure): the
+    # delegation-required property is already proven by Check 18; this check only
+    # ADDS the wrong-vs-missing distinction when a token is provided.
+    #---------------------------------------------------------------------------
+    print_info "Bypass Check 19 (optional): validly-signed WRONG-actor token must be DENIED (native actor binding)"
+
+    if [ -z "${UC3_WRONG_ACTOR_TOKEN:-}" ]; then
+        print_warn "Bypass Check 19: SKIPPED — no UC3_WRONG_ACTOR_TOKEN supplied. This is the wrong-vs-missing-actor distinction; production IVIA cannot mint a wrong-actor token (it only signs act.sub=uc3-actor), so it is operator-supplied and NOT required for green (Check 18 already proves delegation is mandatory). To run it, set UC3_WRONG_ACTOR_TOKEN=<a validly IVIA-signed token identical to the real delegated token but with act.sub=a WRONG, unregistered actor>."
+    else
+        w_act=$(decode_jwt_claim "${UC3_WRONG_ACTOR_TOKEN}" '.act.sub // empty')
+        w_sub=$(decode_jwt_claim "${UC3_WRONG_ACTOR_TOKEN}" '.sub // empty')
+        w_jti=$(decode_jwt_claim "${UC3_WRONG_ACTOR_TOKEN}" '.jti // empty')
+        w_rar=$(decode_jwt_claim "${UC3_WRONG_ACTOR_TOKEN}" '[.authorization_details[]? | select(.type=="vault:path_access") | .path] | join(",")')
+        if [ "${w_act}" = "uc3-actor" ]; then
+            print_fail "Bypass Check 19: the supplied wrong-actor token has act.sub=uc3-actor — it is NOT a wrong actor" \
+                "UC3_WRONG_ACTOR_TOKEN must set act.sub to a WRONG actor (not uc3-actor). Got sub='${w_sub}', act.sub='${w_act}'."
+        elif [ -z "${w_jti}" ] || ! echo ",${w_rar}," | grep -q ',database/creds/uc3-refund-writer,'; then
+            # Self-defending A/B: the deny must hinge on act.sub ALONE, so the other
+            # claims must be held constant (jti present, RAR path MATCHING). A token
+            # that ALSO has a wrong RAR would DENY for the wrong reason (false-pass).
+            print_fail "Bypass Check 19: the wrong-actor token did NOT hold the constants (jti present, RAR path=database/creds/uc3-refund-writer) — a deny would not be attributable to act.sub alone" \
+                "Got sub='${w_sub}', jti='${w_jti:-<absent>}', RAR path(s)='${w_rar:-<none>}'. ONLY act.sub may differ; jti presence and a matching RAR path must hold so the deny hinges on the actor alone."
+        else
+            assert_native_deny "Bypass Check 19 (wrong actor, act.sub=${w_act:-<absent>})" "${UC3_WRONG_ACTOR_TOKEN}" \
+                "Bypass Check 19 PASSED: a delegated token varying act.sub to a wrong actor (act.sub=${w_act:-<absent>}, sub=${w_sub}) was DENIED — no actor alias resolves, the OBO agent-ceiling cannot attach; the native actor check is re-homed from the retired jwt bound_claims (decision (e))" \
+                "A wrong-actor token that is ALLOWED means the native act.sub actor binding regressed. Confirm only the uc3-actor actor alias (external_id=uc3-actor) is bound; a wrong act.sub must resolve no entity."
         fi
     fi
 
@@ -475,20 +804,64 @@ else
 fi
 
 #-------------------------------------------------------------------------------
-# Check 4 — Vault jwt auth role uc3-jwt exists with bound_audiences=[uc3-actor]
+# Check 4 — UC3 native OBO surface: uc3-actor registration + agent ceiling +
+#           OAuth alias binding (profile config_id == the synthetic accessor's .id)
+#
+# Phase 9 cutover (locked decisions (a)/(e)): the uc3-jwt jwt-auth role is RETIRED
+# (the jwt/ backend is GONE — asserted in test-vault-verify.sh). UC3 is OBO: the
+# human sub=jaime + the agent act.sub=uc3-actor resolve via the oauth-resource-server
+# profile. Assert the native surfaces + the alias binding.
 #-------------------------------------------------------------------------------
-# Per RFC 8693 token exchange, the exchanged JWT's audience is the actor that
-# PERFORMED the exchange (uc3-actor), NOT the subject's client (agent-uc3). Set
-# deliberately in commit fe8f133 (vault_config/main.tf:422, with rationale). Do
-# NOT "restore" agent-uc3 here — that reverts the working UC3 token-exchange chain.
-jwt_audiences=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
-    sh -c "${VAULT_EXEC} vault read auth/jwt/role/uc3-jwt -format=json" 2>/dev/null \
-    | jq -r '.data.bound_audiences[]' 2>/dev/null | tr '\n' ',' | sed 's/,$//' || echo "")
-if echo "${jwt_audiences}" | grep -q "uc3-actor"; then
-    print_pass "Vault jwt auth role uc3-jwt exists (bound_audiences contains uc3-actor)"
+uc3_reg_name=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
+    sh -c "${VAULT_EXEC} vault read -format=json agent-registry/registration/display-name/uc3-actor" 2>/dev/null \
+    | jq -r '.data.display_name // empty' 2>/dev/null || echo "")
+if [ "${uc3_reg_name}" = "uc3-actor" ]; then
+    print_pass "UC3 Agent Registry: registration 'uc3-actor' resolvable by display-name (OBO actor)"
 else
-    print_fail "Vault jwt auth role uc3-jwt" \
-        "Vault jwt role uc3-jwt not found or bound_audiences does not contain uc3-actor (got '${jwt_audiences}') — reapply vault_config. Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault read auth/jwt/role/uc3-jwt"
+    print_fail "UC3 Agent Registry registration (uc3-actor)" \
+        "agent-registry/registration/display-name/uc3-actor did not read back (got '${uc3_reg_name}') — reapply vault_config (vault_agent_registration.uc3_actor). Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault read agent-registry/registration/display-name/uc3-actor"
+fi
+
+uc3_ceiling=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
+    sh -c "${VAULT_EXEC} vault policy read uc3-agent-ceiling" 2>/dev/null || echo "")
+if [ -n "${uc3_ceiling}" ] && echo "${uc3_ceiling}" | grep -q 'path'; then
+    print_pass "UC3 agent ceiling policy 'uc3-agent-ceiling' present (OBO agent-ceiling layer)"
+else
+    print_fail "UC3 agent ceiling policy (uc3-agent-ceiling)" \
+        "Vault policy uc3-agent-ceiling not found or empty — reapply vault_config (vault_policy.uc3_agent_ceiling). Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault policy read uc3-agent-ceiling"
+fi
+
+# CONFIG_ID vs .id — Plan 05 builds the alias mount_accessor as the synthetic
+# string oauth-resource-server_root_${profile.id} (09-DISCOVERY MOUNT_ACCESSOR_FORM).
+# Confirm the profile resource `.id` equals the config_id in the accessor Vault
+# materialized: resolve the uc3-actor entity alias's mount_accessor and check its
+# oauth-resource-server_root_<config_id> form; where the profile id is field-
+# resolvable, confirm the suffix matches. If they diverged the actor alias would
+# point at a non-existent accessor and OBO would fail closed — so the load-bearing
+# proof is the OBO allow in Bypass Check 16.
+profile_id=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
+    sh -c "${VAULT_EXEC} vault read -format=json sys/config/oauth-resource-server/ivia" 2>/dev/null \
+    | jq -r '.data.config_id // .data.id // .config_id // empty' 2>/dev/null || echo "")
+uc3_actor_accessor=""
+for _aid in $(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
+    sh -c "${VAULT_EXEC} vault list -format=json identity/entity-alias/id" 2>/dev/null \
+    | jq -r '.[]?' 2>/dev/null); do
+    _a=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
+        sh -c "${VAULT_EXEC} vault read -format=json identity/entity-alias/id/${_aid}" 2>/dev/null || echo "{}")
+    if [ "$(echo "${_a}" | jq -r '.data.name // empty' 2>/dev/null)" = "uc3-actor" ]; then
+        uc3_actor_accessor=$(echo "${_a}" | jq -r '.data.mount_accessor // empty' 2>/dev/null || echo "")
+        break
+    fi
+done
+if echo "${uc3_actor_accessor}" | grep -q '^oauth-resource-server_root_'; then
+    accessor_cfg="${uc3_actor_accessor#oauth-resource-server_root_}"
+    if [ -n "${profile_id}" ] && [ "${accessor_cfg}" = "${profile_id}" ]; then
+        print_pass "UC3 alias accessor '${uc3_actor_accessor}' matches oauth profile config_id (.id=${profile_id}) — alias binding intact (config_id == .id)"
+    else
+        print_warn "UC3 alias accessor is '${uc3_actor_accessor}' (form OK); profile config_id ('${profile_id:-unresolved}') not field-matched — the OBO-allow (Bypass Check 16) is authoritative for the binding"
+    fi
+else
+    print_warn "UC3 actor alias mount_accessor not enumerable (got '${uc3_actor_accessor:-none}') — the OBO-allow (Bypass Check 16) is authoritative for the config_id/.id binding"
 fi
 
 #-------------------------------------------------------------------------------

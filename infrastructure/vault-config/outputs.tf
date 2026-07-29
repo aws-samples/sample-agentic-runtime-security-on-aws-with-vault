@@ -6,8 +6,8 @@ output "kubernetes_auth_path" {
   value = module.vault_config.kubernetes_auth_path
 }
 
-output "jwt_auth_path" {
-  value = module.vault_config.jwt_auth_path
+output "oauth_resource_server_config_id" {
+  value = module.vault_config.oauth_resource_server_config_id
 }
 
 output "database_mount_path" {

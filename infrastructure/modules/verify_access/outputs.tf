@@ -55,3 +55,30 @@ output "ivia_runtime_ca_pem" {
   value       = tls_self_signed_cert.iviaruntime.cert_pem
 }
 
+#-------------------------------------------------------------------------------
+# OBO identity constants (Plan 05, BLOCKER 1) — the act.sub actor + human sub
+# values IVIA emits. Single source of truth (local.obo_*, cited against
+# clients.yml.tftpl + base_layer.yaml.tftpl). Re-exported by tier-2 services and
+# consumed by vault-config so the Vault entity aliases bind to the exact values.
+#-------------------------------------------------------------------------------
+
+output "uc2_agent_identity" {
+  description = "UC2 agent OAuth act.sub ACTOR value (agent-uc2). Consumed by vault-config for the UC2 actor alias."
+  value       = local.obo_uc2_agent_identity
+}
+
+output "uc3_agent_identity" {
+  description = "UC3 agent OAuth act.sub ACTOR value (uc3-actor) — the token-exchange performer, NOT the human sub. Consumed by vault-config for the UC3 actor alias."
+  value       = local.obo_uc3_agent_identity
+}
+
+output "uc3_human_sub" {
+  description = "UC3 human OAuth sub SUBJECT value (jaime), the sole CIBA refund approver. Consumed by vault-config for the shared jaime subject alias."
+  value       = local.obo_uc3_human_sub
+}
+
+output "uc2_human_subs" {
+  description = "UC2 closed human OAuth sub set ([oscar, jaime]). Consumed by vault-config for the UC2 subject aliases (jaime deduped across UC2+UC3)."
+  value       = local.obo_uc2_human_subs
+}
+

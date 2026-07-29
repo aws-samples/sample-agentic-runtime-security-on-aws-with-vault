@@ -25,7 +25,7 @@ Expected output:
 
 ```hcl
 # UC2: Personal-data agent policy (ENFC-02)
-# Allows: kubernetes + jwt auth login, database creds (R/O), AWS (Bedrock) STS creds
+# Allows: kubernetes auth + OAuth resource server (X-Vault-Token), database creds (R/O), AWS (Bedrock) STS creds
 # database/creds/uc2-personal-readonly only — no write DB roles accessible
 path "database/creds/uc2-personal-readonly" {
   capabilities = ["read"]
@@ -42,6 +42,8 @@ path "sys/leases/renew" {
 ```
 
 Note: there is no path for any Use Case 3 write-capable role (e.g., `database/creds/uc3-refund-writer`). The policy grants `read` on exactly **one** database credential path — `uc2-personal-readonly`. The other three paths give the agent its Vault-vended Bedrock STS credentials (`aws/sts/bedrock-reader`), let it inspect its own Vault token (`auth/token/lookup-self`), and let it extend an in-flight DB credential lease (`sys/leases/renew`). None of these grant write access to banking data.
+
+This `uc2-personal` policy is the MCP server's own **workload** policy — the token its `uc2-mcp-server-sa` Kubernetes identity receives. It is distinct from `uc2-human-baseline`, the per-user policy Vault intersects with the agent ceiling in the OBO path shown on the previous pages (that one has no Bedrock path). Both correctly lack any Use Case 3 write path — which is exactly what the next step proves.
 
 ### Step 1.2 — Attempt to read a write-capable credential role
 
@@ -133,6 +135,7 @@ The credential issued above lives for **15 minutes** (`default_ttl`). If you tak
 No workshop pod has the `psql` binary pre-installed, so spawn a transient `postgres:16-alpine` pod that connects to RDS as the Vault-vended ephemeral role, attempts the INSERT, and auto-deletes when it exits. The `${PG_USER}`, `${PG_PASS}`, and `${RDS_HOST}` references resolve from the exports you just ran in Step 2.1:
 
 ```bash
+kubectl delete pod pg-insert-attempt -n banking-app --ignore-not-found --now >/dev/null 2>&1
 kubectl run pg-insert-attempt --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${PG_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop \
@@ -155,14 +158,16 @@ The Postgres GRANT layer rejected the INSERT independently of Vault policy. Even
 The grant snapshot lives in the Postgres system catalog `pg_class.relacl`; `\dp banking.accounts` is `psql`'s pretty-printer for it. Reading it requires admin access (the ephemeral `uc2-personal-readonly` role cannot read `pg_class`), so pull the RDS master credentials from AWS Secrets Manager and run a transient `postgres:16-alpine` pod as the master:
 
 ```bash
-SECRET_ID=$(aws secretsmanager list-secrets \
-  --query 'SecretList[?contains(Name,`rds!db`)].Name | [0]' --output text)
-MASTER_USER=$(aws secretsmanager get-secret-value --secret-id "${SECRET_ID}" \
-  --query SecretString --output text | jq -r '.username')
-MASTER_PASS=$(aws secretsmanager get-secret-value --secret-id "${SECRET_ID}" \
-  --query SecretString --output text | jq -r '.password')
 RDS_HOST=$(kubectl get configmap banking-mcp-config -n banking-app -o jsonpath='{.data.RDS_ADDRESS}')
+REGION=$(echo "${RDS_HOST}" | sed -E 's/.*\.([a-z0-9-]+)\.rds\.amazonaws\.com$/\1/')
+SECRET_ARN=$(aws rds describe-db-instances --region "${REGION}" \
+  --query 'DBInstances[0].MasterUserSecret.SecretArn' --output text)
+SECRET_JSON=$(aws secretsmanager get-secret-value --region "${REGION}" \
+  --secret-id "${SECRET_ARN}" --query SecretString --output text)
+MASTER_USER=$(echo "${SECRET_JSON}" | jq -r '.username')
+MASTER_PASS=$(echo "${SECRET_JSON}" | jq -r '.password')
 
+kubectl delete pod pg-grants -n banking-app --ignore-not-found --now >/dev/null 2>&1
 kubectl run pg-grants --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${MASTER_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${MASTER_USER}" -d workshop \
@@ -176,8 +181,8 @@ Expected output — one `vault_root=arwdDxtm/vault_root` line followed by one ro
  Schema  |   Name   | Type  |                         Access privileges                          | Column privileges |                                    Policies
 ---------+----------+-------+--------------------------------------------------------------------+-------------------+---------------------------------------------------------------------------------
  banking | accounts | table | vault_root=arwdDxtm/vault_root                                    +|                   | user_accounts (r):                                                             +
-         |          |       | "v-jwt-osca-uc2-pers-<random>-<timestamp>"=r/vault_root           +|                   |   (u): ((user_sub)::text = current_setting('app.current_user_sub'::text, true))
-         |          |       | "v-jwt-jaim-uc2-pers-<random>-<timestamp>"=r/vault_root           +|                   |
+         |          |       | "v-root-uc2-pers-<random>-<timestamp>"=r/vault_root               +|                   |   (u): ((user_sub)::text = current_setting('app.current_user_sub'::text, true))
+         |          |       | "v-root-uc2-pers-<random>-<timestamp>"=r/vault_root               +|                   |
          |          |       | "v-root-uc2-pers-<random>-<timestamp>"=r/vault_root                |                   |
 (1 row)
 

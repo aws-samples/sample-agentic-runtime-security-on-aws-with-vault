@@ -11,6 +11,11 @@
 #   6. IVIA OIDC discovery reachable (issuer non-empty)
 #   7. cert-manager pods running
 #   8. AWS Load Balancer Controller running
+#   9. Vault Enterprise edition (native Agent Registry is Enterprise-only)
+#  10. database/ + aws/ secrets engines mounted (license-module gate)
+#  11. agent-registry responds (uc1-agent registration resolvable by display-name)
+#  12. oauth-resource-server profile 'ivia' responds
+#  13. jwt/ auth mount ABSENT (retired IVIA jwt backend gone — decision (e))
 #
 # Usage:
 #   ./test-vault-verify.sh [--help]
@@ -40,7 +45,7 @@ test-vault-verify.sh — ${SCRIPT_DESCRIPTION}
 Usage:
   ./test-vault-verify.sh [--help]
 
-Checks (8 total):
+Checks (13 total):
   1. Vault pods running (3 of 3)
   2. Vault seal status: unsealed
   3. Vault Raft peers: 3
@@ -49,6 +54,11 @@ Checks (8 total):
   6. IVIA OIDC discovery: issuer reachable
   7. cert-manager pods running
   8. AWS Load Balancer Controller running
+  9. Vault Enterprise edition (native Agent Registry is Enterprise-only)
+ 10. database/ + aws/ secrets engines mounted (license-module gate)
+ 11. agent-registry responds (uc1-agent registration by display-name)
+ 12. oauth-resource-server profile 'ivia' responds
+ 13. jwt/ auth mount ABSENT (retired IVIA jwt backend gone — decision (e))
 
 Env-var overrides:
   VAULT_NAMESPACE   (default: vault)
@@ -178,6 +188,108 @@ if [ "${running_lbc}" -ge 1 ]; then
 else
     print_fail "AWS Load Balancer Controller running" \
         "No AWS LBC pods Running. Check the addons module: kubectl get pods -n kube-system -l ${LBC_LABEL}. Re-apply the addons module if needed."
+fi
+
+#===============================================================================
+# Phase 9 native-surface assertions (Agent Registry + OAuth resource server)
+#
+# These prove the Vault Enterprise native-agent-identity adoption landed:
+#   9.  Vault reports Enterprise edition (native Agent Registry is Enterprise-only)
+#   10. database/ + aws/ secrets engines mounted (license-module gate — pki-only
+#       would refuse these; their presence proves the platform-standard license)
+#   11. agent-registry responds — the uc1-agent registration reads back
+#       (agent-registry/registration/display-name/<name>, 09-DISCOVERY path)
+#   12. oauth-resource-server profile 'ivia' responds (sys/config/oauth-resource-server/ivia)
+#   13. jwt/ auth mount is ABSENT — the retired IVIA jwt auth backend is GONE
+#       (locked decision (e) cutover proof; a still-mounted jwt/ FAILS LOUD)
+#
+# All use the same kubectl-exec + root-token pattern as Checks 3/4 above.
+#===============================================================================
+VAULT_EXEC="VAULT_TOKEN='${VAULT_ROOT_TOKEN}'"
+
+#-------------------------------------------------------------------------------
+# Check 9 — Vault Enterprise edition
+#
+# Two independent signals, either of which proves Enterprise:
+#   - the version string carries the '+ent' build suffix, AND/OR
+#   - sys/license/status responds (an Enterprise-only endpoint; OSS 404s /
+#     returns "unsupported path").
+#-------------------------------------------------------------------------------
+vault_version=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
+    vault status -format=json 2>/dev/null | jq -r '.version // empty' 2>/dev/null || echo "")
+lic_out=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
+    sh -c "${VAULT_EXEC} vault read sys/license/status" 2>&1 || true)
+if echo "${vault_version}" | grep -qi 'ent' \
+    || { [ -n "${lic_out}" ] && ! echo "${lic_out}" | grep -qiE 'unsupported path|not supported|no handler'; }; then
+    print_pass "Vault Enterprise edition (version=${vault_version:-unknown}; sys/license/status responds)"
+else
+    print_fail "Vault Enterprise edition" \
+        "Vault does NOT report Enterprise (version='${vault_version}', license/status='${lic_out:0:120}'). The native Agent Registry + OAuth resource server are Enterprise-only — the vault_server image must be hashicorp/vault-enterprise:2.0.3-ent with a platform-standard license. Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault status"
+fi
+
+#-------------------------------------------------------------------------------
+# Check 10 — database/ + aws/ secrets engines mounted (license-module gate)
+#-------------------------------------------------------------------------------
+mounts_json=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
+    sh -c "${VAULT_EXEC} vault secrets list -format=json" 2>/dev/null || echo "{}")
+missing_engines=""
+for _eng in database aws; do
+    if ! echo "${mounts_json}" | jq -e --arg m "${_eng}/" 'has($m)' >/dev/null 2>&1; then
+        missing_engines="${missing_engines} ${_eng}/"
+    fi
+done
+if [ -z "${missing_engines}" ]; then
+    print_pass "Secrets engines mounted: database/ + aws/ (platform-standard license present; pki-only absent)"
+else
+    print_fail "Secrets engines database/ + aws/" \
+        "Missing secrets engine(s):${missing_engines}. A pki-only Vault Enterprise license refuses these mounts — replace with a platform-standard .hclic and re-run deploy-workshop.sh --tier 2. Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault secrets list"
+fi
+
+#-------------------------------------------------------------------------------
+# Check 11 — agent-registry responds (Agent Registry / agentic-iam present)
+#
+# Read back the uc1-agent registration the vault_config apply reconciled. The
+# display-name lookup path is the 09-DISCOVERY-confirmed contract. A successful
+# read proves the agent-registry surface is live (agentic-iam is bundled in the
+# platform-standard license).
+#-------------------------------------------------------------------------------
+reg_out=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
+    sh -c "${VAULT_EXEC} vault read -format=json agent-registry/registration/display-name/uc1-agent" 2>/dev/null || echo "")
+reg_name=$(echo "${reg_out}" | jq -r '.data.display_name // empty' 2>/dev/null || echo "")
+if [ "${reg_name}" = "uc1-agent" ]; then
+    print_pass "Agent Registry responds — registration 'uc1-agent' resolvable by display-name (agentic-iam present)"
+else
+    print_fail "Agent Registry (agent-registry/registration/display-name/uc1-agent)" \
+        "The uc1-agent registration did not read back (agentic-iam / platform-standard may be absent, or vault_config did not reconcile). Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault read agent-registry/registration/display-name/uc1-agent"
+fi
+
+#-------------------------------------------------------------------------------
+# Check 12 — oauth-resource-server profile 'ivia' responds
+#-------------------------------------------------------------------------------
+oauth_out=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
+    sh -c "${VAULT_EXEC} vault read sys/config/oauth-resource-server/ivia" 2>&1 || true)
+if [ -n "${oauth_out}" ] && ! echo "${oauth_out}" | grep -qiE 'no value found|unsupported path|not found|error reading'; then
+    print_pass "OAuth resource server profile 'ivia' responds (feature active + profile applied)"
+else
+    print_fail "OAuth resource server profile 'ivia'" \
+        "sys/config/oauth-resource-server/ivia did not return a profile. Confirm the oauth-resource-server activation flag is set and vault_config applied the profile. Got: ${oauth_out:0:160}. Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault read sys/config/oauth-resource-server/ivia"
+fi
+
+#-------------------------------------------------------------------------------
+# Check 13 — jwt/ auth mount is ABSENT (locked decision (e) cutover proof)
+#
+# The retired IVIA jwt auth backend (and its uc2-jwt / uc3-jwt roles) MUST be
+# gone: UC2/UC3 now present the OAuth JWT directly via X-Vault-Token against the
+# oauth-resource-server profile. A lingering jwt/ mount means the cutover is
+# incomplete and a dead auth path survives — FAIL LOUD.
+#-------------------------------------------------------------------------------
+auth_list_json=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
+    sh -c "${VAULT_EXEC} vault auth list -format=json" 2>/dev/null || echo "{}")
+if echo "${auth_list_json}" | jq -e 'has("jwt/")' >/dev/null 2>&1; then
+    print_fail "jwt/ auth mount ABSENT (decision (e) cutover)" \
+        "The retired IVIA jwt/ auth backend is STILL mounted — the native cutover (locked decision (e)) is incomplete. UC2/UC3 must present the OAuth JWT via X-Vault-Token, not vault write auth/jwt/login. Disable it: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault auth disable jwt. Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault auth list"
+else
+    print_pass "jwt/ auth mount is ABSENT — retired IVIA jwt backend removed (decision (e) cutover proof)"
 fi
 
 # Summary is printed automatically by the common-checks.sh EXIT trap

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 #===============================================================================
 # 03-ivia-licensing/check-cloud-client
-# Asserts the attendee uploaded their IVIA trial activation certificate:
+# Asserts the bundled IVIA trial activation certificate is usable:
 #   - ISAM-Trial-HashiCorp.cer present at the canonical repo path
+#     (it ships committed in the repo; a missing file means a broken clone)
 #   - notAfter date in the future
 #
 # ICR entitlement key + MMFA push secret are NOT checked here — they are
@@ -17,7 +18,7 @@ TRIAL_CERT="${REPO_DIR}/infrastructure/modules/verify_access/base_layer/ISAM-Tri
 
 # Trial cert present
 [ -f "${TRIAL_CERT}" ] \
-    || { echo "FAIL: ${TRIAL_CERT} missing — upload your trial PEM via the IDE tab"; exit 1; }
+    || { echo "FAIL: ${TRIAL_CERT} missing — the cert ships in the repo, so this means an incomplete clone; re-clone the workshop repository"; exit 1; }
 
 # Trial cert not expired (notAfter date is in the future)
 NOT_AFTER_EPOCH=$(openssl x509 -in "${TRIAL_CERT}" -noout -enddate 2>/dev/null \
@@ -27,12 +28,12 @@ NOT_AFTER_EPOCH=$(openssl x509 -in "${TRIAL_CERT}" -noout -enddate 2>/dev/null \
 # macOS `date` doesn't grok the openssl format with -d; the sandbox is Linux so
 # this should always succeed there. Fail loud if it doesn't.
 [ -n "${NOT_AFTER_EPOCH}" ] \
-    || { echo "FAIL: could not parse trial cert notAfter date — is the upload a valid PEM?"; exit 1; }
+    || { echo "FAIL: could not parse trial cert notAfter date — is the bundled PEM intact?"; exit 1; }
 
 NOW_EPOCH=$(date +%s)
 if [ "${NOT_AFTER_EPOCH}" -le "${NOW_EPOCH}" ]; then
     echo "FAIL: trial cert is expired (notAfter epoch ${NOT_AFTER_EPOCH} <= now ${NOW_EPOCH})"
-    echo "      Request a fresh cert from https://isva-trial.verify.ibm.com/ and re-upload via the IDE tab"
+    echo "      The bundled cert is refreshed by the workshop maintainer — notify your organizer (attendees do not replace it)"
     exit 1
 fi
 echo "PASS: trial cert present and not expired"

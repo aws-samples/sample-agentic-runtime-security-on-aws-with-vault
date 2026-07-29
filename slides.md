@@ -58,12 +58,12 @@ Every credential an agent uses is **minted on demand, scoped to the action, and 
 
 | Credential | How it's obtained | TTL |
 |---|---|---|
-| Vault client token | Proven identity (K8s SA JWT **or** OIDC JWT) | 1h (`token_ttl 3600`) |
+| Vault client token _(UC1 only)_ | K8s SA JWT, validated by TokenReview | 1h (`token_ttl 3600`) |
 | Postgres **read** role | `database/creds/*-readonly` — Vault `CREATE ROLE` per request | **15m** (`900s` / max `1800s`) |
 | Postgres **write** role (UC3) | `database/creds/uc3-refund-writer` — gated on delegated JWT | **5m** (`300s` / max `600s`) |
 | AWS STS (Bedrock) | `aws/sts/bedrock-reader` — `assumed_role`, vended per call | Ephemeral STS session |
 
-No pod ships with a DB password or a static AWS key. Lease expiry → Vault `DROP ROLE`.
+No pod ships with a DB password or a static AWS key. UC2/UC3 present the IVIA OAuth JWT **directly** to Vault (`X-Vault-Token`) — no intermediate Vault token. Lease expiry → Vault `DROP ROLE`.
 
 Note:
 This table is the whole thesis made concrete, and the numbers are exact from `vault_config`. Reads get 15-minute Postgres roles; the one privileged write path gets 5 minutes and only after a human approves. Bedrock is never reached with a baked-in key — Vault's AWS secrets engine assumes a role and hands back an ephemeral STS session scoped to `bedrock:InvokeModel`/`Retrieve`. Revocation is not a separate system: when the lease ends Vault drops the Postgres role, so a leaked credential is dead in minutes whether or not anyone noticed.
@@ -74,10 +74,10 @@ This table is the whole thesis made concrete, and the numbers are exact from `va
 
 <img src="assets/verify-vault-split.svg" style="max-height: 420px;" />
 
-**IBM Verify** brokers human identity — OAuth/OIDC, PKCE, CIBA. **HashiCorp Vault** brokers workload identity & credentials — K8s/JWT auth, dynamic DB roles, STS. They meet at exactly **one** seam: Vault's JWT auth trusts IVIA's JWKS via `bound_issuer`.
+**IBM Verify** brokers human identity — OAuth/OIDC, PKCE, CIBA. **HashiCorp Vault** brokers workload identity & credentials — K8s auth, OAuth resource server, dynamic DB roles, STS. They meet at exactly **one** seam: Vault's **OAuth resource server** profile trusts IVIA's JWKS and pins `issuer_id`, so an IVIA-minted JWT authorizes Vault **directly** via `X-Vault-Token`.
 
 Note:
-Clean separation of duties, usually different teams. Verify never sees a database; Vault never authenticates an end user. The single integration point is OIDC: Vault's JWT auth method is configured with IVIA's `jwks_url` and pins `bound_issuer` to IVIA's issuer, so a user (or delegated) token minted by IVIA becomes the thing that unlocks a Vault-vended, short-lived credential. That seam is where "user intent" crosses into "workload credential" — and it's the only place the two systems touch.
+Clean separation of duties, usually different teams. Verify never sees a database; Vault never authenticates an end user. The single integration point is OIDC: Vault's OAuth resource server profile (`sys/config/oauth-resource-server/ivia`) is configured with IVIA's JWKS and pins `issuer_id` to IVIA's issuer. A user (or delegated) token minted by IVIA is presented directly on the Vault request as `X-Vault-Token` — there is no `auth/jwt/login` step and no intermediate Vault token; the legacy `jwt` auth backend is retired. That seam is where "user intent" crosses into "workload credential" — and it's the only place the two systems touch.
 
 ---
 
@@ -205,10 +205,9 @@ sequenceDiagram
     Note over User,RDS: Query — identity becomes a per-user credential
     User->>UI: "What are my accounts?"
     UI->>MCP: tools/call + Bearer id_token
-    MCP->>Vault: auth/jwt/login {jwt, role: "uc2-jwt"}
-    Vault->>IVIA: validate via JWKS (bound_issuer, aud=agent-uc2)
-    Vault-->>MCP: Vault token (policy uc2-personal)
-    MCP->>Vault: GET database/creds/uc2-personal-readonly
+    MCP->>Vault: GET database/creds/uc2-personal-readonly<br/>(X-Vault-Token: IVIA OAuth JWT, aud=agent-uc2)
+    Vault->>IVIA: validate JWT via JWKS (issuer_id)
+    Vault->>Vault: resolve sub=user; OBO baseline intersect agent-uc2 ceiling
     Vault->>RDS: CREATE ROLE … GRANT SELECT (TTL 900s)
     MCP->>RDS: set_config('app.current_user_sub', sub) + SELECT
     RDS->>RDS: RLS: USING (user_sub = current_setting(...))
@@ -221,10 +220,10 @@ sequenceDiagram
     end
 ```
 
-<p class="uc-footer">user JWT (PKCE) → Vault jwt auth → SELECT-only role + Postgres RLS on <code>user_sub</code> &nbsp;·&nbsp; + OBJ-3, 4</p>
+<p class="uc-footer">user JWT (PKCE) → Vault OAuth resource server (X-Vault-Token) → SELECT-only role + Postgres RLS on <code>user_sub</code> &nbsp;·&nbsp; + OBJ-3, 4</p>
 
 Note:
-The user enters. IVIA runs Authorization Code + PKCE and mints a user id_token (aud `agent-uc2`, `sub` = the user). The MCP server (Node/TypeScript) presents that JWT to Vault's JWT auth role `uc2-jwt`, which validates it against IVIA's JWKS and pins `bound_audiences=["agent-uc2"]`. Vault issues a 15-minute SELECT-only Postgres role; the MCP server calls `set_config('app.current_user_sub', <sub>)` and Postgres RLS policy `user_accounts USING (user_sub = current_setting('app.current_user_sub', true))` filters every row. Note the column is `user_sub`. Two enforcement dimensions get added here, proven on the next slide.
+The user enters. IVIA runs Authorization Code + PKCE and mints a user id_token (aud `agent-uc2`, `sub` = the user). The MCP server (Node/TypeScript) presents that JWT **directly** to Vault as `X-Vault-Token` on the `database/creds` read — no `auth/jwt/login`, no intermediate token. Vault's OAuth resource server profile validates it against IVIA's JWKS (`issuer_id`, `aud=agent-uc2`), resolves `sub` to the user's Vault entity, and applies the OBO intersection (human `sub` baseline ∩ `agent-uc2` ceiling). Vault issues a 15-minute SELECT-only Postgres role; the MCP server calls `set_config('app.current_user_sub', <sub>)` and Postgres RLS policy `user_accounts USING (user_sub = current_setting('app.current_user_sub', true))` filters every row. Note the column is `user_sub`. Two enforcement dimensions get added here, proven on the next slide.
 
 ---
 
@@ -313,85 +312,108 @@ IVIA's `isvaop_pretoken` mapping rule stamps the delegated JWT **server-side**:
 
 ```jsonc
 {
-  "sub": "jaime",                                   // the human who approved
-  "may_act": { "sub": "uc3-actor" },                // RFC 8693 — WHO may act
-  "authorization_details": [{ "type": "refund_approval" }]  // RFC 9396 — WHAT class
+  "sub": "jaime",                                   // the human who approved (CIBA)
+  "act":     { "sub": "uc3-actor" },                // RFC 8693 — the claim Vault RESOLVES the agent from
+  "may_act": { "sub": "uc3-actor" },                // retained for RFC 8693 audit semantics (Vault ignores it)
+  "authorization_details": [
+    { "type": "refund_approval" },                  // RFC 9396 business RAR — the audit story (no amount claim)
+    { "type": "vault:path_access",                  // RFC 9396 Vault-native RAR — the ENFORCED path
+      "path": "database/creds/uc3-refund-writer",
+      "capabilities": ["read"] }
+  ]
 }
 ```
 
-<p class="uc-footer">delegation + RAR type are injected by IVIA, not asserted by the agent — the agent cannot forge its own authority</p>
+<p class="uc-footer">delegation + RAR are injected by IVIA, not asserted by the agent — the agent cannot forge its own authority</p>
 
 Note:
-The key technical point an expert will probe: the agent does not send an `actor_token` and does not set its own `may_act`. It authenticates the exchange as a separate OAuth client (`uc3-actor`) and presents only the user's subject_token; IVIA refuses a client exchanging its own token (FBTAQ5207E). The `may_act` and `authorization_details` claims are injected by the `isvaop_pretoken` mapping rule on the token-exchange grant. So the proof of "who may act" is minted by the identity provider, not claimed by the workload — which is exactly what makes it trustworthy at the Vault gate.
+The key technical point an expert will probe: the agent authenticates the exchange as a separate OAuth client (`uc3-actor`) and presents only the user's subject_token — no `actor_token`, and it stamps none of these claims itself; IVIA refuses a client exchanging its own token (FBTAQ5207E). IVIA's `isvaop_pretoken` mapping rule injects them server-side: `act.sub` is the load-bearing claim Vault's native OBO resolves the agent from (proven in 09-DISCOVERY — `act.sub`→resolves/allow, `may_act.sub`→ignored/deny); `may_act` is retained purely for RFC 8693 audit semantics; and two `authorization_details` entries ride along — the business `refund_approval` (the audit story) and the `vault:path_access` RAR (the path Vault actually enforces). So the proof of who may act is minted by the identity provider, not claimed by the workload — which is what makes it trustworthy at the Vault gate.
 
 ---
 
 ### UC3 — the Vault gate (OBJ-4 point of use)
 
-Vault JWT role `uc3-jwt` issues **nothing** unless the delegated JWT satisfies all of:
+The delegated JWT is presented **directly** to Vault as `X-Vault-Token` on the `database/creds/uc3-refund-writer` read. The OAuth resource server validates the signature (RS256, IVIA JWKS, `issuer_id`), then Vault issues **nothing** unless all three layers intersect:
 
-```hcl
-bound_issuer    = <IVIA issuer>          # RS256, validated via IVIA JWKS
-bound_audiences = ["uc3-actor"]          # RFC 8693: audience = the actor that exchanged
-bound_claims_type = "glob"
-bound_claims = {
-  "/may_act/sub"                  = "uc3-actor"        # delegation present
-  "/authorization_details/0/type" = "refund_approval"  # RAR type present
-}
+```text
+① identity    sub = jaime           -> the human's Vault entity            (baseline)
+② delegation  act.sub = uc3-actor   -> resolves the acting agent in the Agent Registry;
+                                        applies the uc3-agent-ceiling (restrict-only)
+③ per-request authorization_details type = vault:path_access,
+   RAR        path = database/creds/uc3-refund-writer   (must match the path being read)
+              MANDATORY: the uc3-actor registration sets optional_authorization_details=false
 ```
 
-→ then, and only then: `database/creds/uc3-refund-writer` — `GRANT SELECT, INSERT, UPDATE ON banking.refunds` (no DELETE), **TTL 300s**, **not** `BYPASSRLS`.
+Effective grant = ① baseline ∩ ② ceiling ∩ ③ RAR. Miss any one → deny — then, and only then: `database/creds/uc3-refund-writer` — `GRANT SELECT, INSERT, UPDATE ON banking.refunds` (no DELETE), **TTL 300s**, **not** `BYPASSRLS`.
 
 <p class="uc-footer">amount is NOT a claim — ISVAOP can't expose consent-time RAR to a mapping rule; it's consent-bound via audit correlation</p>
 
 Note:
-Vault denies the write credential unless both `bound_claims` match (glob, exact literals) AND the audience is `uc3-actor` AND the signature validates against IVIA's JWKS. The audience is the actor client per RFC 8693, not the subject's client — that surprises people, so call it out. Two honesty points for a sharp audience: (1) the role is NOT `BYPASSRLS`, so RLS still applies to the write as defense-in-depth; (2) the approved amount is deliberately not a JWT claim — ISVAOP 25.10 doesn't expose the consent-time `authorization_details` to any mapping rule at mint or exchange, and a glob bound_claim couldn't enforce a number anyway. The amount is bound by three-plane audit correlation on request_id, which is the next major slide. Credential lives 5 minutes.
+Vault denies the write credential unless the signature validates against IVIA's JWKS (RS256) AND all three layers intersect: the `sub` resolves to jaime's entity (baseline), the `act.sub` resolves the `uc3-actor` agent in the Agent Registry and applies its `uc3-agent-ceiling`, and the per-request `vault:path_access` RAR path matches the creds path being read. The RAR is mandatory here — the `uc3-actor` registration sets `optional_authorization_details=false`, so a token with no RAR (or the wrong path) is denied. Two honesty points for a sharp audience: (1) the role is NOT `BYPASSRLS`, so RLS still applies to the write as defense-in-depth; (2) the approved amount is deliberately not a JWT claim — ISVAOP 25.10 doesn't expose the consent-time `authorization_details` to any mapping rule at mint or exchange, and a glob bound_claim couldn't enforce a number anyway. The amount is bound by the 1:1 `request_id` correlation between the CIBA approval and the single `banking.refunds` write — surfaced on the three-plane audit slide next. Credential lives 5 minutes.
 
 ---
 
-### UC3 — the bypass test proves the gate has teeth
+### UC3 — the bypass tests prove the gate has teeth
 
-Two negative tests in `verify-uc3.sh --bypass`:
+`verify-uc3.sh --bypass` runs three negative gates against the positive one (Checks 15/16 — a **real** delegated token IS allowed to read the creds):
 
 <div class="tight">
 
-- **Check 14 — algorithm confusion.** A self-forged **HS256** JWT (attacker's symmetric key) with a perfect `may_act` + RAR payload → Vault rejects: *unexpected signature algorithm*. Vault trusts only IVIA's **RS256** JWKS; symmetric forgery never gets in.
-- **Check 15 — real signature, missing delegation.** A **genuine, IVIA-signed** `uc3-actor` `client_credentials` token → passes the RS256 signature check **and** the `aud=uc3-actor` check, then is rejected at `/may_act/sub` (missing). `client_credentials` never gets `may_act` — only token-exchange does.
+- **Check 14 — untrusted signer.** A self-forged **HS256** JWT (attacker's symmetric key) with a perfect `act` + RAR payload → rejected: *unexpected signature algorithm*. Vault trusts only IVIA's **RS256** JWKS; symmetric forgery never gets in.
+- **Check 17 — wrong RAR path → DENY.** A **genuine, IVIA-signed** delegated token (`sub=jaime`, `act.sub=uc3-actor`, unique `jti`) whose `vault:path_access` RAR path is **not** `database/creds/uc3-refund-writer` is denied — every other claim held constant, so the deny is attributable to the path alone.
+- **Check 18 — wrong actor → DENY.** The same token varying **only** `act.sub` to a wrong actor is denied — no actor alias resolves in the Agent Registry, so native OBO has no agent to act as.
 
 </div>
 
-Check 15 is the strong one: a legitimately signed IVIA token is still denied because it lacks the delegation a real CIBA approval would have produced.
+17 and 18 are the strong ones: a legitimately IVIA-signed token is still denied because it names the wrong **path** or the wrong **actor** — the exact differences a forged delegation would carry.
 
 Note:
-Check 14 closes the obvious door — you can't forge with a symmetric key because Vault only accepts RS256 against IVIA's published keys. Check 15 is the one that lands: the attacker holds a real, IVIA-signed token (they have the uc3-actor client secret), it sails past signature and audience, and Vault still refuses to vend the write credential because `may_act` is absent. There is no IVIA code path that puts `may_act` on a token without a token-exchange grant, and token-exchange requires the user's CIBA-approved subject_token. So the bound_claims are not decoration — they are the thing standing between a valid client credential and a privileged write.
+Check 14 closes the obvious door — you can't forge with a symmetric key because Vault only accepts RS256 against IVIA's published keys. Checks 17 and 18 are the ones that land: the attacker can hold a real, IVIA-signed delegated token, and Vault still refuses to vend the write credential if the per-request `vault:path_access` RAR names a different path (17) or the `act.sub` names a different actor (18). Both are enforced per request against the Agent Registry — the RAR path and the actor alias are the things standing between a valid-looking token and a privileged write. There is no IVIA code path that produces a correct `act.sub` + matching RAR without a real token-exchange, and token-exchange requires the user's CIBA-approved subject_token.
 
 ---
 
-## One request_id, three planes
+## One refund — three planes, one row
 
 <img src="assets/audit-correlation.svg" style="max-height: 460px;" />
 
-A single Athena view **`audit_correlation`** (12 cols) stitches **IVIA decision · Vault audit · RDS pgaudit**. `request_id` anchors IVIA↔pgaudit; Vault is bridged by **principal + path + ±30s**.
+A single Athena view **`audit_correlation`** (11 cols) stitches **IVIA decision · Vault audit · RDS pgaudit**. `request_id` anchors IVIA↔pgaudit; Vault is bridged by **path + response event + ±30s** (nearest match).
 
 Note:
-The pedagogical money shot — and here's the honest mechanism an expert will want. IVIA emits a decision record carrying the agent's `request_id` (it was the CIBA `binding_message`). The agent embeds that same UUID as a `/* uc3_request_id=… */` SQL comment, which pgaudit logs verbatim and the view regex-extracts — so IVIA and Postgres correlate directly on request_id. Vault's native audit `request.id` is a different value, so the view bridges Vault by composite key: principal `jwt-<sub>`, path `database/creds/uc3-refund-writer`, response event, within a ±30s window. Three CloudWatch log groups → Firehose (decompress + extract) → S3 → Glue → one Athena view. The correlated row is on the next slide.
+The pedagogical money shot — and here's the honest mechanism an expert will want. IVIA emits a decision record carrying the agent's `request_id` (it was the CIBA `binding_message`). The agent embeds that same UUID as a `/* uc3_request_id=… */` SQL comment, which pgaudit logs verbatim and the view regex-extracts — so IVIA and Postgres correlate directly on request_id. Vault's native audit carries neither the `request_id` nor the human sub — `auth.display_name` is the delegated token's JTI (`JWT Token with JTI: …`), not a name — so the view bridges Vault by what it *does* share with the approval: the creds path `database/creds/uc3-refund-writer`, a response event, within a ±30s window, keeping the vault response nearest in time to each approval (deterministic when refunds cluster). The `vault_agent_registry_id` and the agent half of `vault_principal` come from Vault's own `auth.metadata['actor_entity_name']` (`uc3-actor` — the Agent Registry actor Vault resolved from `act.sub`), NOT the IVIA `client_id` (`agent-uc3`, the CIBA exchange client that never authenticates to Vault); `vault_rar_path` is the exact `database/creds/…` path the per-request `vault:path_access` RAR scoped the token to. Three CloudWatch log groups → Firehose (decompress + extract) → S3 → Glue → one Athena view. The correlated row is on the next slide.
 
 ---
 
 ### `audit_correlation` — one row, three planes
 
 ```text
-request_id         2f50b532-…-71250b5470c3  vault_principal            jwt-jaime
-user_approved_sub  jaime                    vault_path                 database/creds/uc3-refund-writer
-approval_time      2026-…T15:20:47          vault_bound_claim_may_act  uc3-actor
-db_write_time      2026-… 15:20:47 UTC      vault_bound_claim_rar_type refund_approval
-db_command         WRITE,INSERT             db_credential_ttl          300
+request_id         2f50b532-…-71250b5470c3  vault_principal          uc3-actor (on behalf of jaime)
+user_approved_sub  jaime                    vault_agent_registry_id  uc3-actor
+approval_time      2026-…T15:20:47          vault_rar_path           database/creds/uc3-refund-writer
+db_write_time      2026-… 15:20:47 UTC      db_command               WRITE,INSERT
+db_credential_ttl  300
 ```
 
 One row answers: **who approved, when, what claims Vault bound them to, what write landed, and the credential's TTL.**
 
 Note:
-This single row is the auditor's answer. The TTL column comes from the value the agent observed in the Vault creds response and threaded into its IVIA anchor — because the `database/creds` read response doesn't log a numeric duration. Read it left-to-right across the three planes: IVIA says jaime approved at 15:20:47; Vault says principal `jwt-jaime` was vended `database/creds/uc3-refund-writer` with `may_act=uc3-actor` and RAR type `refund_approval` at a 300-second TTL; RDS pgaudit says an INSERT write landed on `banking.refunds` at the same instant — all keyed by the one `request_id`.
+This single row is the auditor's answer. The TTL column comes from the value the agent observed in the Vault creds response and threaded into its IVIA anchor — because the `database/creds` read response doesn't log a numeric duration. Read it left-to-right across the three planes: IVIA says jaime approved at 15:20:47; Vault says principal `uc3-actor (on behalf of jaime)` was vended `database/creds/uc3-refund-writer` — the agent (`vault_agent_registry_id=uc3-actor`) scoped by the per-request `vault:path_access` RAR to that exact path — at a 300-second TTL; RDS pgaudit says an INSERT write landed on `banking.refunds` at the same instant — correlated into one row: `request_id` keys IVIA↔the write, and Vault is bridged in by its creds path and same-instant timing.
+
+---
+
+## Three use cases → Vault-native primitives
+
+Each use case maps onto Vault Enterprise 2.0.3's first-class agent features — not a hand-rolled approximation:
+
+| Use Case | Vault-native primitive | Identity resolved from | Enforcement layers |
+|---|---|---|---|
+| **UC1** — workload read | Agent Registry (`uc1-agent`) + **Kubernetes auth** | SA token via TokenReview — ceiling **inert** (no `act.sub`) | **1** — `uc1-readonly` K8s floor |
+| **UC2** — user-scoped read | **OAuth resource server** (`X-Vault-Token`) + OBO | `sub` → user Vault entity | **3** — `sub` baseline ∩ `agent-uc2` ceiling ∩ *optional* RAR |
+| **UC3** — delegated write | OBO + **mandatory** per-request RAR (`vault:path_access`) | `sub` **+** `act.sub` → entity aliases | **3** — baseline ∩ `uc3-agent-ceiling` ∩ *mandatory* RAR |
+
+Shared by all three: every agent is a **registered** Agent Registry identity; the IVIA OAuth JWT authorizes Vault **directly** (legacy `jwt` backend retired); credentials are short-lived and Vault-vended.
+
+Note:
+This is the one-slide answer to "what did Vault's native agent support actually give us." UC1 uses the Agent Registry for identity but enforces at the Kubernetes-auth floor — its registry ceiling is inert because a K8s token carries no `act.sub` to resolve an agent. UC2 and UC3 both authenticate the IVIA OAuth JWT directly through the OAuth resource server (no `auth/jwt/login`) and enforce the on-behalf-of intersection: the human `sub` baseline intersected with the agent's ceiling policy. UC3 adds the mandatory per-request `vault:path_access` RAR — the `uc3-actor` registration sets `optional_authorization_details=false`, so the exact path must be named on every request. Same three primitives — Agent Registry, OAuth resource server, per-request RAR — dialed to each use case's risk.
 
 ---
 
@@ -408,10 +430,10 @@ Progressive maturity on Vault + IBM Verify — the workshop drops you at **Integ
 
 </div>
 
-Vault's native AI agent support (2026) makes the patterns wired by hand here — agent registry, layered policy intersection, on-behalf-of delegation, ephemeral authorization — first-class.
+Vault Enterprise 2.0.3's native AI agent support is what you deployed here — the **Agent Registry** (first-class agent identity), **ceiling-policy intersection**, on-behalf-of delegation, and Vault-side per-request **`vault:path_access`** authorization are the enforcement model, not a hand-rolled approximation.
 
 Note:
-The patterns in this deck — verifiable agent identity, JIT short-lived scoped credentials, delegated authority, and cross-plane correlation — are the same primitives Vault's native agent-identity features formalize. Today you wire them; tomorrow they're built in. The reference you deployed is the on-ramp.
+This deck's patterns — verifiable agent identity, JIT short-lived scoped credentials, delegated authority, and cross-plane correlation — are Vault's native agent-identity primitives, and you deployed them running. Every agent is registered (`uc1-agent`, `agent-uc2`, `uc3-actor`); the IVIA OAuth JWT authorizes Vault directly via `X-Vault-Token` (the legacy `jwt` backend is retired); and Vault is the sole enforcement point. The layer count is honest per use case: Use Case 1 enforces one layer (the `uc1-readonly` Kubernetes floor; its ceiling is inert with no OAuth actor), while Use Case 2 and Use Case 3 enforce three — the human `sub` baseline ∩ the agent ceiling (`uc2-agent-ceiling` / `uc3-agent-ceiling`) ∩ the per-request `vault:path_access` RAR (mandatory for Use Case 3, optional for Use Case 2). The reference you deployed is the model, not the on-ramp to it.
 
 ---
 

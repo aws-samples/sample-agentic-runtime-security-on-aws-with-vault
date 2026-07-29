@@ -137,20 +137,43 @@ UC3's privileged refund chains RFC 8693 token-exchange with RFC 9396 Rich Author
 Requests (RAR). The honest, verified security model — recorded here because it shapes any
 future decision to switch CIBA providers:
 
-**Vault cryptographically enforces** (the `uc3-jwt` role's `bound_claims` on the exchanged
-JWT, in `vault_config`):
-- identity — `sub=jaime`, the human who approved via CIBA;
-- delegation — `/may_act/sub=uc3-actor` (RFC 8693: WHO may act);
-- RAR **type** — `/authorization_details/0/type=refund_approval` (WHAT class of action).
+> **Phase 9 — dual RAR emission (`vault:path_access` alongside `refund_approval`).**
+> The `isvaop_pretoken` mapping rule (`iviaop-config/rules.yaml`) now stamps **two**
+> `authorization_details` entries on the token-exchange output:
+> ```json
+> "authorization_details": [
+>   { "type": "refund_approval" },
+>   { "type": "vault:path_access", "path": "database/creds/uc3-refund-writer", "capabilities": ["read"] }
+> ]
+> ```
+> `refund_approval` stays for the business/audit-correlation story (unchanged);
+> `vault:path_access` is the **Vault-native per-request RAR** that Vault Enterprise's
+> OAuth resource server reads to scope the token to exactly that path + capability for
+> that one request. Both types are allowlisted on the ISVAOP client
+> (`clients.yml.tftpl` `authorization_details` → `[refund_approval, vault:path_access]`)
+> and registered in `provider.yml.tftpl`
+> `definition.authorization_details_types_supported`. The rule also stamps a unique
+> `jti` (Vault schema-validates it) and `act`/`may_act` = `uc3-actor`. UC2 emits NO
+> `vault:path_access` RAR (its registration is `optional_authorization_details=true`).
+> With the native cutover, Vault — not IVIA — is the per-request path/action decision
+> point; the retired `uc3-jwt` `bound_claims` gate (below) is superseded by the
+> agent-registry ceiling ∩ `vault:path_access` model in
+> `infrastructure/modules/vault_config/README.md`.
+
+**Vault cryptographically enforces** (natively, via the OAuth resource server + Agent
+Registry — the retired `uc3-jwt` `bound_claims` role is gone):
+- identity — `sub=jaime`, the human who approved via CIBA, resolved to the human entity baseline (`user_claim=sub`);
+- delegation — `act.sub=uc3-actor`, resolved against the Agent Registry to apply the `uc3-agent-ceiling` (RFC 8693: WHO may act; the `may_act` claim IVIA also stamps is ignored by native OBO);
+- RAR **path** — the per-request `vault:path_access` on `database/creds/uc3-refund-writer` (WHERE the token is scoped), mandatory (`optional_authorization_details=false`).
 
 **Audit correlation proves the amount.** Restating the architecture plainly: Vault
-cryptographically enforces identity (`sub=jaime`), delegation (`may_act=uc3-actor`), and
-RAR type (`refund_approval`). The amount/currency is consent-bound by three-plane audit
-correlation on `request_id` — the green 12-column / 0-blank `audit_correlation` row is the
-proof that the amount the user approved (e.g. $88.30) is the same amount that hit Vault and
-the DB. Vault couldn't numerically enforce an amount anyway (`bound_claims` are string/glob
-matches, not range checks), so amount-by-correlation is the correct control, not a
-consolation prize.
+cryptographically enforces identity (`sub=jaime`), delegation (`act.sub=uc3-actor` via the
+Agent Registry), and the per-request `vault:path_access` RAR path. The amount/currency is
+consent-bound by the 1:1 `request_id` correlation between the CIBA approval and the single
+`banking.refunds` write — the 11-column `audit_correlation` row is the proof that the amount
+the user approved (e.g. $88.30) is the same amount that hit the DB. Vault couldn't
+numerically enforce an amount anyway (RAR path scoping is not a range check), so
+amount-by-correlation is the correct control, not a consolation prize.
 
 **Why the amount is not a token claim (verified ISVAOP 25.10, 2026-05-29).** The
 consent-time RAR is not exposed to any mapping rule at the CIBA token mint or the

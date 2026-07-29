@@ -3,8 +3,9 @@
 Security architecture (OBJ-1 through OBJ-5):
 
   OBJ-1: Agent workload identity via Vault Kubernetes auth (K8s SA JWT, role "uc3").
-  OBJ-2: No standing DB write credentials — write creds fetched per-refund via
-          Vault jwt auth after CIBA consent + token exchange. TTL = 5 minutes.
+  OBJ-2: No standing DB write credentials — write creds fetched per-refund by
+          presenting the delegated OAuth JWT directly as the Vault token
+          (X-Vault-Token) after CIBA consent + token exchange. TTL = 5 minutes.
   OBJ-3: Privileged write is gated on user's CIBA consent (may_act claim in JWT).
           Agent identity present as actor_token in RFC 8693 exchange.
   OBJ-4: Vault policy enforces uc3-refund-writer access ONLY with delegated JWT.
@@ -16,7 +17,7 @@ Security architecture (OBJ-1 through OBJ-5):
 
 Tools:
   list_transactions    — read-only SELECT recent transactions (K8s auth creds)
-  initiate_refund      — full CIBA + exchange + write flow (delegated jwt auth creds)
+  initiate_refund      — full CIBA + exchange + write flow (delegated OAuth JWT creds)
   complete_refund      — completes refund after CIBA consent received
   check_refund_status  — read-only SELECT from banking.refunds by refund_id
 """
@@ -343,10 +344,13 @@ def _token_exchange(ciba_token: str, request_id: str) -> str:
     IVIA issues a delegated JWT containing:
       - sub: the user (subject)
       - act / may_act: the agent SA (actor)
-      - authorization_details: the RAR refund_approval scope
+      - jti: unique token id (Vault OAuth resource server schema-validates it)
+      - authorization_details: the RAR refund_approval scope plus the
+        vault:path_access entry scoping database/creds/uc3-refund-writer
 
-    This delegated JWT is then presented to Vault jwt auth (uc3-jwt role)
-    which validates may_act and issues uc3-refund-writer DB credentials.
+    This delegated JWT is then presented DIRECTLY as the Vault token
+    (X-Vault-Token); Vault's OAuth resource server validates it and issues
+    uc3-refund-writer DB credentials scoped by the vault:path_access RAR.
 
     Args:
         ciba_token: The CIBA access_token (user consent proof).
@@ -595,7 +599,8 @@ def complete_refund(
     Polls IVIA for consent approval, then executes:
       1. CIBA token poll (user already approved via banking UI)
       2. RFC 8693 token exchange → delegated JWT with may_act claim
-      3. Vault jwt auth (uc3-jwt) → uc3-refund-writer DB credentials
+      3. Present the delegated OAuth JWT directly as the Vault token
+         (X-Vault-Token) → uc3-refund-writer DB credentials
       4. INSERT into banking.refunds
 
     Args:

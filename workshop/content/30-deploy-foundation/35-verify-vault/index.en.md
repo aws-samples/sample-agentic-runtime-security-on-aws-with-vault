@@ -73,3 +73,54 @@ kubectl exec -n vault vault-0 -- \
 ```
 
 Expected — at least one audit device listed. If the list is empty, `deploy-workshop.sh` has not completed successfully — re-run it.
+
+## Step 5 — Confirm Vault Enterprise + the Agent Registry
+
+The native agent-identity model this workshop teaches — the **Agent Registry** and the **OAuth resource server** — is a Vault **Enterprise** capability. Confirm the running binary is Enterprise and that the Agent Registry secrets engine is mounted before you rely on either.
+
+Enterprise edition — the reported server `Version` ends in `+ent`:
+
+```bash
+kubectl exec -n vault vault-0 -- vault status | grep -i version
+```
+
+Expected — the `+ent` suffix marks an Enterprise build:
+
+```
+Version             2.0.3+ent
+Build Date          2026-...
+```
+
+Agent Registry mount present alongside the database and AWS secrets engines:
+
+```bash
+kubectl exec -n vault vault-0 -- sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault secrets list" | grep -E 'agent-registry|database|aws'
+```
+
+Expected — `agent-registry/`, `aws/`, and `database/` all listed:
+
+```
+agent-registry/    agent-registry    n/a
+aws/               aws               n/a
+database/          database          n/a
+```
+
+If `agent-registry/` is missing, the Enterprise license does not carry the `agentic-iam` feature that unlocks the Agent Registry + OAuth resource server — re-check the license and re-run `deploy-workshop.sh`.
+
+List the three workshop agent registrations Vault knows about — each Use Case agent has a first-class, named identity in the registry:
+
+```bash
+kubectl exec -n vault vault-0 -- sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault list agent-registry/registration/display-name"
+```
+
+Expected — the three registered agents:
+
+```
+Keys
+----
+agent-uc2
+uc1-agent
+uc3-actor
+```
+
+You will inspect each registration's `ceiling_policies` on its Use Case page. For now, seeing all three confirms the registry is populated and the native model is ready.

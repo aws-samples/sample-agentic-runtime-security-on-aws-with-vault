@@ -37,6 +37,7 @@ The credential issued above lives for **15 minutes** (`default_ttl`). If you tak
 Now spawn a transient `postgres:16-alpine` pod, run the SELECT as Oscar, and let it auto-delete (no psql binary lives in any workshop pod — this is the cluster-side equivalent of the MCP server's per-request connect → SET → SELECT pattern):
 
 ```bash
+kubectl delete pod pg-client-oscar -n banking-app --ignore-not-found --now >/dev/null 2>&1
 kubectl run pg-client-oscar --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${PG_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop \
@@ -67,6 +68,7 @@ Open a **new Incognito / Private browser window**, go to the Banking UI URL, and
 Run the same manual query with `app.current_user_sub = 'jaime'` (you can reuse the same Vault-vended credential — RLS isolation is driven entirely by the session variable, not by the Postgres user):
 
 ```bash
+kubectl delete pod pg-client-jaime -n banking-app --ignore-not-found --now >/dev/null 2>&1
 kubectl run pg-client-jaime --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${PG_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop \
@@ -91,13 +93,15 @@ pod "pg-client-jaime" deleted
 The RLS policy lives in the `pg_policy` system catalog. Reading it requires admin access (the `uc2-personal-readonly` Vault-vended role is non-superuser and cannot query `pg_policy`). The RDS master credentials are stored in AWS Secrets Manager — pull them and run a SELECT against the catalog from a transient `postgres:16-alpine` pod:
 
 ```bash
-SECRET_ID=$(aws secretsmanager list-secrets \
-  --query 'SecretList[?contains(Name,`rds!db`)].Name | [0]' --output text)
-MASTER_USER=$(aws secretsmanager get-secret-value --secret-id "${SECRET_ID}" \
-  --query SecretString --output text | jq -r '.username')
-MASTER_PASS=$(aws secretsmanager get-secret-value --secret-id "${SECRET_ID}" \
-  --query SecretString --output text | jq -r '.password')
+REGION=$(echo "${RDS_HOST}" | sed -E 's/.*\.([a-z0-9-]+)\.rds\.amazonaws\.com$/\1/')
+SECRET_ARN=$(aws rds describe-db-instances --region "${REGION}" \
+  --query 'DBInstances[0].MasterUserSecret.SecretArn' --output text)
+SECRET_JSON=$(aws secretsmanager get-secret-value --region "${REGION}" \
+  --secret-id "${SECRET_ARN}" --query SecretString --output text)
+MASTER_USER=$(echo "${SECRET_JSON}" | jq -r '.username')
+MASTER_PASS=$(echo "${SECRET_JSON}" | jq -r '.password')
 
+kubectl delete pod pg-client-policy -n banking-app --ignore-not-found --now >/dev/null 2>&1
 kubectl run pg-client-policy --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${MASTER_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${MASTER_USER}" -d workshop \
@@ -137,7 +141,9 @@ The script checks all Use Case 2 success criteria:
 | MCP Server pod Running | `app=banking-mcp-server` pod is Running |
 | ServiceAccount bound | `uc2-mcp-server-sa` exists in `banking-app` namespace |
 | Vault k8s role binding | `auth/kubernetes/role/uc2` bound to `uc2-mcp-server-sa` |
-| Vault jwt role | `auth/jwt/role/uc2-jwt` exists with `bound_audiences=[agent-uc2]` |
+| Agent Registry registration | `agent-registry/registration/display-name/agent-uc2` resolves (the OBO actor) |
+| Agent ceiling policy | `uc2-agent-ceiling` policy present (the OBO agent-ceiling layer) |
+| OAuth alias binding | the entity alias accessor matches the `ivia` OAuth resource server profile `config_id` |
 | JIT DB creds issuable | `database/creds/uc2-personal-readonly` returns username + password |
 | DB read works | SELECT from `banking.accounts` with `app.current_user_sub = 'oscar'` returns ≥ 2 rows |
 | ENFC-02 enforced | INSERT with JIT creds returns `ERROR: permission denied for table` |
@@ -147,7 +153,7 @@ The script checks all Use Case 2 success criteria:
 | Active lease exists | At least one active lease for `uc2-personal-readonly` |
 | OAuth discovery | IVIA OIDC Provider `/.well-known/openid-configuration` reachable via the WRP ALB |
 
-Expected summary output (counts in parentheses — leases, keys — vary per run):
+Expected summary output — a clean deploy self-mints the OBO token, so every check PASSes (values in parentheses — `jti`, `config_id`, lease/key counts, and the `v-…` random+timestamp suffixes — vary per run):
 
 ```
   ℹ INFO Use Case 2 — OAuth Personalized Read-Only verification
@@ -157,7 +163,13 @@ Expected summary output (counts in parentheses — leases, keys — vary per run
   ✓ PASS MCP Server pod Running (1 pod(s) in banking-app)
   ✓ PASS ServiceAccount uc2-mcp-server-sa exists in banking-app
   ✓ PASS Vault k8s auth role uc2 bound to uc2-mcp-server-sa
-  ✓ PASS Vault jwt auth role uc2-jwt exists (bound_audiences contains agent-uc2)
+  ✓ PASS UC2 Agent Registry: registration 'agent-uc2' resolvable by display-name (OBO actor)
+  ✓ PASS UC2 agent ceiling policy 'uc2-agent-ceiling' present (OBO agent-ceiling layer)
+  ✓ PASS UC2 real token carries a jti claim (jti=<uuid>)
+  ✓ PASS UC2 real token carries act.sub=agent-uc2 (OBO actor binding — AGENT_IDENTITY_CLAIM_UC2=act.sub)
+  ✓ PASS UC2 refresh grant FAILS CLOSED at the source — agent-uc2 refresh_token grant rejected (HTTP 400; refresh_token issued at login=no)
+  ✓ PASS UC2 alias accessor 'oauth-resource-server_root_<config_id>' matches oauth profile config_id — alias binding intact
+  ✓ PASS UC2 OBO allow: real token (sub + act.sub=agent-uc2) authorized database/creds/uc2-personal-readonly (username=v-JWT Toke-uc2-pers-<random>-<timestamp>)
   ✓ PASS JIT DB creds issuance: username=v-root-uc2-pers-<random>-<timestamp>
   ✓ PASS DB read: SELECT from banking.accounts returned 2 row(s) for user 'oscar' (>= 2 expected)
   ✓ PASS ENFC-02: INSERT rejected by PostgreSQL (permission denied for table)
@@ -168,9 +180,11 @@ Expected summary output (counts in parentheses — leases, keys — vary per run
   ✓ PASS OAuth discovery: IVIA OIDC Provider reachable (issuer=https://<wrp-alb-host>)
 
 ===============================================================================
- ✓ 14 check(s) passed
+ ✓ 20 check(s) passed
 ===============================================================================
 ```
+
+`verify-uc2.sh` self-mints a real `agent-uc2` OBO token headlessly via the **production PKCE login path** (WebSEAL authorization-code login, then the token endpoint with `client=agent-uc2`), so on a healthy cluster the `jti`, `act.sub`, refresh-fail-closed, and OBO-allow checks all PASS. If the `uc3-agent` pod is not Running or IVIA is unreachable, the self-mint fails and those four checks WARN-skip instead — set `UC2_VERIFY_TOKEN` to a browser-captured JWT to exercise them, or re-run with `--gate` to turn a skip into a hard failure.
 
 :::expand{header="Platform Track — RLS policy SQL and session variable pattern"}
 
@@ -243,7 +257,7 @@ Banking Agent (Strands SDK)
 MCP Server  POST /mcp
   handler: "get_accounts"
     ↓
-  vaultClient.getDbCredsForUser(jwt)      ← jwt auth login + DB creds (per request)
+  vaultClient.getDbCreds(jwt)             ← JWT as X-Vault-Token → DB creds (one call, per request)
     ↓
   pgClient.connect(host, user, password)
   await pgClient.query("SET app.current_user_sub = $1", [sub])
@@ -259,7 +273,7 @@ Banking Agent formats response
 
 Key design choices:
 
-- **Per-request Vault login**: Each `get_accounts` or `get_transactions` tool call performs a fresh `jwt/login`. This creates one audit log entry per tool invocation — linking user identity to data access at query granularity.
+- **Per-request credential fetch**: Each `get_accounts` or `get_transactions` tool call presents the user's OAuth JWT via `X-Vault-Token` on a fresh `database/creds` read. This creates one audit log entry per tool invocation — linking user identity to data access at query granularity.
 - **Connection closed after query**: The Postgres connection is opened, used, and closed within the tool handler. No connection pool is used. This ensures the JIT credential's Postgres session variable (`app.current_user_sub`) is set fresh on every connection — no risk of session state leaking between users.
 - **JWT never stored**: The MCP Server extracts the `sub` from the Vault `token_meta` response — it never decodes the JWT itself. Vault is the authority on what the JWT says.
 :::
@@ -268,10 +282,10 @@ Key design choices:
 
 ### What Would Have Failed
 
-**Without workload identity for the MCP Server (OBJ-1 failure):** If the MCP Server pod used the `default` ServiceAccount instead of `uc2-mcp-server-sa`, Vault's Kubernetes auth role binding would reject its startup token request. The MCP Server could not authenticate to Vault with its workload identity, and the fallback jwt auth login path would be the only auth option — creating a situation where the workload identity layer is bypassed entirely. Vault's `bound_service_account_names = ["uc2-mcp-server-sa"]` is the gating check.
+**Without workload identity for the MCP Server (OBJ-1 failure):** If the MCP Server pod used the `default` ServiceAccount instead of `uc2-mcp-server-sa`, Vault's Kubernetes auth role binding would reject its startup token request. The MCP Server could not authenticate to Vault with its workload identity — there is no separate `auth/jwt/login` path in the native model, so the workload-identity gate cannot be sidestepped. Vault's `bound_service_account_names = ["uc2-mcp-server-sa"]` is the gating check.
 
-**Without user JWT (OBJ-3 failure):** If the Banking Agent called the MCP Server tools without forwarding the user's JWT, the MCP Server would have no user identity to present to Vault's jwt auth. The design choice to make the Vault jwt auth the only path to DB credentials means "no JWT" directly translates to "no DB access" — the agent cannot act on behalf of no one.
+**Without user JWT (OBJ-3 failure):** If the Banking Agent called the MCP Server tools without forwarding the user's JWT, the MCP Server would have no user identity to present to Vault's OAuth resource server. The design choice to make the presented user JWT (via `X-Vault-Token`) the only path to DB credentials means "no JWT" directly translates to "no DB access" — the agent cannot act on behalf of no one.
 
-**With shared DB credentials (OBJ-2 failure):** If a single long-lived Postgres password were used for all users, Row-Level Security would still filter rows (because `app.current_user_sub` would still be set), but a compromised credential would give an attacker access to all users' data by simply setting a different `app.current_user_sub` value. JIT credentials limit each credential to a 15-minute window and a specific Vault token entity — a stolen credential self-destructs and the Vault audit log records which user's jwt login it was issued for.
+**With shared DB credentials (OBJ-2 failure):** If a single long-lived Postgres password were used for all users, Row-Level Security would still filter rows (because `app.current_user_sub` would still be set), but a compromised credential would give an attacker access to all users' data by simply setting a different `app.current_user_sub` value. JIT credentials limit each credential to a 15-minute window and a specific Vault token entity — a stolen credential self-destructs and the Vault audit log records which user's OAuth JWT it was issued for.
 
-**Without audit logging (OBJ-5 failure):** The Vault audit log entry for `auth/jwt/login` carries `token_meta.sub = "oscar"`. The subsequent `database/creds/uc2-personal-readonly` entry carries the same `lease_id` that can be joined to the Postgres pgaudit log in CloudWatch. Without Vault audit logging, there is no starting point to attribute a specific SELECT query to a specific user identity — the data access event becomes unattributable.
+**Without audit logging (OBJ-5 failure):** The Vault audit log entry for the `database/creds/uc2-personal-readonly` read — authorized by the presented OAuth JWT — carries the resolved requester identity and a `lease_id` that can be joined to the Postgres pgaudit log in CloudWatch. Without Vault audit logging, there is no starting point to attribute a specific SELECT query to a specific user identity — the data access event becomes unattributable.

@@ -21,8 +21,20 @@ clients:
     client_name: Agentic Runtime UC2 — OAuth Personalized Read-Only
     enabled: true
     grant_types:
+      # authorization_code ONLY — the refresh_token grant is deliberately WITHHELD.
+      # UC2 is OBO: the isvaop_pretoken rule stamps act=agent-uc2 (the agent identity
+      # Vault's native OBO resolves) onto this client's login access token. ISVAOP
+      # auto-propagates that act claim into any refresh-grant reissue AND the mapping
+      # rule cannot strip it (proven live: the rule's delete runs but ISVAOP re-injects
+      # the parent claims downstream of the pre_token rule, so a refreshed token still
+      # carries act -> Vault 200). Granting refresh here would therefore let a stolen
+      # 30-day refresh token mint agent-identity DB access indefinitely. Withholding
+      # the grant makes the agent identity mintable ONLY on fresh interactive auth
+      # (fail-closed at the source), capping the stolen-refresh blast radius. The app
+      # never uses refresh (access_token cookie = expires_in; no refresh_token call in
+      # the UI; the callback simply skips the absent refresh_token cookie), so this is
+      # pure security upside. verify-uc2 Check 6c asserts the refresh grant is rejected.
       - authorization_code
-      - refresh_token
     response_types:
       - code
     redirect_uris:
@@ -65,3 +77,13 @@ clients:
       - client_credentials
       - urn:ietf:params:oauth:grant-type:token-exchange
     token_endpoint_auth_method: client_secret_basic
+    # RAR allowlist for the token-exchange output. The isvaop_pretoken rule stamps
+    # BOTH refund_approval (business/audit) and vault:path_access (Vault-native
+    # per-request scope) on the exchanged token. Both are listed as a regression-safe
+    # superset: refund_approval works on the exchange today with no block present, so
+    # introducing a block that omitted it could newly un-allowlist the working refund
+    # flow. Must also be registered provider-side in provider.yml
+    # definition.authorization_details_types_supported.
+    authorization_details_types:
+      - refund_approval
+      - vault:path_access

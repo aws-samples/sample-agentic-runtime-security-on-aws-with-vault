@@ -77,6 +77,33 @@ output "ivia_runtime_ca_pem" {
 }
 
 #-------------------------------------------------------------------------------
+# OBO identity constants (Plan 05, BLOCKER 1) — re-export of module.ivia's
+# authoritative act.sub/human-sub constants, mirroring the ivia_issuer channel.
+# Consumed by infrastructure/vault-config → module.vault_config so the Vault
+# entity aliases bind to exactly the values IVIA emits.
+#-------------------------------------------------------------------------------
+
+output "uc2_agent_identity" {
+  description = "UC2 agent OAuth act.sub value (agent-uc2). vault-config wires this into module.vault_config.uc2_agent_identity."
+  value       = module.ivia.uc2_agent_identity
+}
+
+output "uc3_agent_identity" {
+  description = "UC3 agent OAuth act.sub value (uc3-actor). vault-config wires this into module.vault_config.uc3_agent_identity."
+  value       = module.ivia.uc3_agent_identity
+}
+
+output "uc3_human_sub" {
+  description = "UC3 human OAuth sub value (jaime). vault-config wires this into module.vault_config.uc3_human_sub."
+  value       = module.ivia.uc3_human_sub
+}
+
+output "uc2_human_subs" {
+  description = "UC2 closed human OAuth sub set ([oscar, jaime]). vault-config wires this into module.vault_config.uc2_human_subs."
+  value       = module.ivia.uc2_human_subs
+}
+
+#-------------------------------------------------------------------------------
 # Vault server passthroughs
 #-------------------------------------------------------------------------------
 

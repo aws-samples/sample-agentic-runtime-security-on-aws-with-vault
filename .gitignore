@@ -1,6 +1,13 @@
 # Terraform
 .terraform/
 .terraform-build/
+
+# GSD planning scaffolding — internal dev docs, excluded from the public samples repo
+.planning/
+
+# Vault Enterprise license — supplied per-deploy (VAULT_ENTERPRISE_LICENSE_PATH),
+# never committed. Real .hclic files are commercial secrets.
+*.hclic
 *.tfstate
 *.tfstate.*
 *.tfplan

@@ -25,7 +25,7 @@ variable "ivia_jwks_url" {
 }
 
 variable "ivia_issuer" {
-  description = "IVIA token issuer URL — bound_issuer for the JWT auth backend. Vault rejects tokens whose iss claim doesn't match."
+  description = "IVIA token issuer URL — issuer_id (immutable) on the OAuth resource server profile. Vault rejects tokens whose iss claim doesn't match, and Plan 05's entity aliases bind to this same issuer."
   type        = string
 }
 
@@ -72,6 +72,43 @@ variable "uc3_logs_role_arn" {
 variable "region" {
   description = "AWS region — passed to the Vault AWS secrets engine backend configuration."
   type        = string
+}
+
+################################################################################
+# OBO identity constants (Phase 9, Plan 05 — BLOCKER 1)
+#
+# These are STATIC WORKSHOP CONSTANTS, not computed values. Their single source
+# of truth lives in the verify_access module (clients.yml.tftpl agent client_ids
+# + base_layer.yaml.tftpl human usernames); Plan 05 threads them
+# verify_access -> services -> vault-config into this module (no defaults here so
+# an unbound value fails loud rather than silently binding the wrong identity).
+#
+# CRITICAL: the *_agent_identity values are the OAuth `act.sub` ACTOR claim
+# values (the agents), NEVER a human sub. The *_human_sub(s) values are the human
+# OAuth `sub` SUBJECT claim values. Wiring a human sub as an actor (or vice versa)
+# breaks the OBO delegation check. UC1 is Kubernetes auth and presents no OAuth
+# token to Vault, so it has deliberately NO agent-identity variable of its own
+# (its registry identity binds via the Kubernetes-mount alias, not an act.sub).
+################################################################################
+
+variable "uc2_agent_identity" {
+  description = "UC2 agent OAuth `act.sub` ACTOR claim value (the acting agent, e.g. 'agent-uc2'). Bound by the UC2 actor alias to the agent-uc2 entity. NOT a human sub. Source of truth: verify_access clients.yml.tftpl client_id agent-uc2."
+  type        = string
+}
+
+variable "uc3_agent_identity" {
+  description = "UC3 agent OAuth `act.sub` ACTOR claim value (the acting agent, e.g. 'uc3-actor') — the ACTOR that performs the RFC 8693 token exchange, NOT the human refund approver. Bound by the UC3 actor alias to the uc3-actor entity. Source of truth: verify_access clients.yml.tftpl client_id uc3-actor."
+  type        = string
+}
+
+variable "uc3_human_sub" {
+  description = "UC3 human OAuth `sub` SUBJECT claim value — the sole CIBA refund approver (e.g. 'jaime'). Registered as a human entity + subject alias (SUBJECT_HUMAN_MUST_BE_REGISTERED=yes). jaime is ALSO in uc2_human_subs — exactly ONE shared jaime entity spans UC2+UC3. Source of truth: verify_access base_layer.yaml.tftpl username jaime."
+  type        = string
+}
+
+variable "uc2_human_subs" {
+  description = "UC2 closed human OAuth `sub` set (e.g. ['oscar','jaime']). Each becomes a registered human entity + subject alias; no self-registration path exists. jaime overlaps uc3_human_sub and is deduped to ONE entity via toset(). Source of truth: verify_access base_layer.yaml.tftpl usernames oscar, jaime."
+  type        = list(string)
 }
 
 variable "tags" {

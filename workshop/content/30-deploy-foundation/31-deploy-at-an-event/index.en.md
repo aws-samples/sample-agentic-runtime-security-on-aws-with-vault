@@ -54,6 +54,15 @@ The **first** time you run `deploy-workshop.sh`, a preflight check prompts for t
 - **IBM Container Registry entitlement key** — from [Obtain IVIA Licenses](../../20-prerequisites/22-ivia-licensing/).
 - **IBM Verify MMFA push client secret** — required by Use Case 3.
 
+Your event organizer provides these two values. Paste them at the prompts, **or** export them before running for a hands-off deploy — the preflight uses the environment variables when set and skips the prompts:
+
+```bash
+export ICR_ENTITLEMENT_KEY="<value from your organizer>"
+export IVIA_MMFA_PUSH_CLIENT_SECRET="<value from your organizer>"
+```
+
+Either way, the values are written only into the gitignored `terraform.tfvars` — never committed.
+
 It does **not** ask for a Let's Encrypt email — that was set when CodeBuild provisioned Tier 1, and you pulled it in Step 3.
 
 ```bash
@@ -105,16 +114,16 @@ bash infrastructure/scripts/deploy-workshop.sh --tier 2 --skip-vault-init
 `--skip-acme` returns before the IVIA re-apply step, so it will **not** correct the issuer. Re-run with `--skip-vault-init` only.
 ::::
 
-**3. Validate the fix** — Vault's `jwt` `bound_issuer` must be the `nip.io` host, not an `*.elb.amazonaws.com` load-balancer hostname:
+**3. Validate the fix** — Vault's OAuth resource server `issuer_id` must be the `nip.io` host, not an `*.elb.amazonaws.com` load-balancer hostname:
 
 ```bash
-export VAULT_ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json) && kubectl exec -n vault vault-0 -- sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read auth/jwt/config" | grep bound_issuer
+export VAULT_ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json) && kubectl exec -n vault vault-0 -- sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read sys/config/oauth-resource-server/ivia" | grep issuer_id
 ```
 
 Expected — the `nip.io` FQDN (resolve the exact value with `grep NIP_FQDN_WRP infrastructure/.acme-state`):
 
 ```
-bound_issuer    https://wrp.<deploy-id>.<alb-ip-dashed>.nip.io
+issuer_id    https://wrp.<deploy-id>.<alb-ip-dashed>.nip.io
 ```
 
 If it still shows an `*.elb.amazonaws.com` host, the IVIA re-apply did not run — confirm the certificate is `Ready=True`, that you did **not** pass `--skip-acme`, then re-run the Tier 2 command above.

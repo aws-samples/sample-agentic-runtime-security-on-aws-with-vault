@@ -10,6 +10,7 @@
 #   5. JIT STS creds issuance (aws/sts/bedrock-reader)
 #   6. Agent /health endpoint returns "healthy"
 #   7. ENFC-01: uc1-readonly policy does NOT grant UC3 database path access
+#   7b. UC1 Agent Registry registration resolvable by display-name (ceiling INERT)
 #   8. Vault audit device enabled (>= 1 audit device)
 #   9. Agent /query end-to-end: KB retrieve + Nova Pro answer returned
 #
@@ -49,6 +50,7 @@ Checks (9 total):
   5. JIT STS creds issuance (aws/sts/bedrock-reader)
   6. Agent /health endpoint returns "healthy"
   7. ENFC-01: uc1-readonly policy does not grant UC3 database path access
+  7b. UC1 Agent Registry registration resolvable by display-name (ceiling INERT)
   8. Vault audit device enabled
   9. Agent /query end-to-end (KB retrieve + Nova Pro answer)
 
@@ -166,6 +168,28 @@ if echo "${uc1_policy}" | grep -q 'uc3-refund-writer'; then
         "ENFC-01 FAIL: uc1-readonly policy incorrectly grants UC3 database path access (uc3-refund-writer found in policy). Reapply vault_config component to enforce policy isolation."
 else
     print_pass "ENFC-01: uc1-readonly policy does not grant UC3 (uc3-refund-writer) path access"
+fi
+
+#-------------------------------------------------------------------------------
+# Check 7b — UC1 Agent Registry registration resolvable by display-name
+#
+# Phase 9 native model (UC1_AUTH=kubernetes): UC1 keeps k8s auth AND gains an
+# Agent-Registry registration for REGISTRY IDENTITY. Assert the registration
+# reads back by display-name `uc1-agent`.
+#
+# IMPORTANT (09-DISCOVERY UC1_CEILING=inert): UC1's registry ceiling does NOT
+# enforce — with no act.sub, the agent's own ceiling never self-applies. UC1's
+# enforcement floor is the k8s `uc1-readonly` policy (asserted by Checks 3/4/7
+# above). We deliberately do NOT assert a ceiling ENFORCES for UC1 here.
+#-------------------------------------------------------------------------------
+uc1_reg_name=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
+    sh -c "${VAULT_EXEC} vault read -format=json agent-registry/registration/display-name/uc1-agent" 2>/dev/null \
+    | jq -r '.data.display_name // empty' 2>/dev/null || echo "")
+if [ "${uc1_reg_name}" = "uc1-agent" ]; then
+    print_pass "UC1 Agent Registry: registration 'uc1-agent' resolvable by display-name (registry identity; ceiling INERT — k8s uc1-readonly is the floor)"
+else
+    print_fail "UC1 Agent Registry registration" \
+        "agent-registry/registration/display-name/uc1-agent did not read back (got '${uc1_reg_name}') — reapply vault_config (vault_agent_registration.uc1_agent). Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault read agent-registry/registration/display-name/uc1-agent"
 fi
 
 #-------------------------------------------------------------------------------

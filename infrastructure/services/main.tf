@@ -58,9 +58,10 @@ locals {
 module "vault_server" {
   source = "../modules/vault_server"
 
-  region     = local.infra.region
-  kms_key_id = local.infra.vault_unseal_kms_key_id
-  tags       = local.infra.tags
+  region                   = local.infra.region
+  kms_key_id               = local.infra.vault_unseal_kms_key_id
+  tags                     = local.infra.tags
+  vault_enterprise_license = var.vault_enterprise_license
 }
 
 #-------------------------------------------------------------------------------

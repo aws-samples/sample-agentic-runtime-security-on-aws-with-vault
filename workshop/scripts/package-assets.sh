@@ -28,7 +28,7 @@ if ! command -v rsvg-convert >/dev/null 2>&1; then
     exit 1
 fi
 rm -f "$DST_DIR"/*.svg   # drop any stale synced SVGs; Workshop Studio serves the PNGs below
-for svg in architecture-overview uc1-flow uc2-oauth-flow uc3-ciba-flow audit-correlation verify-vault-split vault-authorization-flow ivia-stack; do
+for svg in architecture-overview uc1-flow uc2-oauth-flow uc3-ciba-flow audit-correlation verify-vault-split vault-authorization-flow ivia-stack agent-registry-flow; do
     if [ -f "$SRC_DIR/$svg.svg" ]; then
         rsvg-convert -z 2 -b '#0d1117' -o "$DST_DIR/$svg.png" "$SRC_DIR/$svg.svg"
         echo "  rasterized $svg.svg -> workshop/static/images/$svg.png"
@@ -102,7 +102,7 @@ echo "  synced applications/ -> workshop/assets/terraform/applications/ (uc3-age
 # made it into the assets tree. (.example tfvars are safe; everything else is not.)
 # Scans both trees: tfvars/tfstate/.acme-state from infrastructure/, plus a bare .env
 # from the app trees (a developer's uncommitted local secrets must never ship).
-LEAK="$(find "$REPO_ROOT/workshop/assets/terraform" \( -name '*.tfvars' ! -name '*.tfvars.example' \) -o -name '*.tfstate*' -o -name '.acme-state' -o -name '.env' 2>/dev/null)"
+LEAK="$(find "$REPO_ROOT/workshop/assets/terraform" \( -name '*.tfvars' ! -name '*.tfvars.example' \) -o -name '*.tfstate*' -o -name '.acme-state' -o -name '.env' 2>/dev/null || true)"
 if [ -n "$LEAK" ]; then
     echo "  ABORT: secret-bearing files leaked into workshop/assets/terraform:" >&2
     echo "$LEAK" >&2
@@ -117,7 +117,11 @@ echo "  secret-leak gate: PASS (no real tfvars/tfstate/.acme-state/.env in asset
 # (the BEGIN banner), so a future accidental re-commit of a *.key/*.pem private
 # key can never be published to the S3 assets bucket. Public certs (*.crt, *.pem
 # CERTIFICATE, dhparam.pem) do NOT match and ship normally.
-KEYLEAK="$(grep -rlE -- '-----BEGIN (RSA |EC |OPENSSH |DSA |ENCRYPTED )?PRIVATE KEY-----' "$REPO_ROOT/workshop/assets/terraform" 2>/dev/null)"
+# NOTE: `|| true` is REQUIRED — `grep -rl` exits 1 when it finds nothing (the CLEAN
+# case), and under `set -e` a bare `VAR=$(grep ...)` would abort the script on that
+# success path (silently killing `preview.sh` after the asset copy, before the server
+# starts). The `if [ -n "$KEYLEAK" ]` below is the actual gate; the grep exit code is not.
+KEYLEAK="$(grep -rlE -- '-----BEGIN (RSA |EC |OPENSSH |DSA |ENCRYPTED )?PRIVATE KEY-----' "$REPO_ROOT/workshop/assets/terraform" 2>/dev/null || true)"
 if [ -n "$KEYLEAK" ]; then
     echo "  ABORT: private-key material leaked into workshop/assets/terraform:" >&2
     echo "$KEYLEAK" >&2
@@ -131,7 +135,7 @@ echo "  private-key gate: PASS (no PEM private keys in assets — keys are Terra
 # was the one committed binary keystore and is now minted at deploy, so NO
 # keystore should ship. This filename gate blocks any *.p12/.jks/.pfx/.keystore
 # from reaching the assets bucket if one is ever re-committed.
-KSLEAK="$(find "$REPO_ROOT/workshop/assets/terraform" \( -name '*.p12' -o -name '*.jks' -o -name '*.pfx' -o -name '*.keystore' \) 2>/dev/null)"
+KSLEAK="$(find "$REPO_ROOT/workshop/assets/terraform" \( -name '*.p12' -o -name '*.jks' -o -name '*.pfx' -o -name '*.keystore' \) 2>/dev/null || true)"
 if [ -n "$KSLEAK" ]; then
     echo "  ABORT: binary keystore(s) leaked into workshop/assets/terraform:" >&2
     echo "$KSLEAK" >&2
@@ -148,13 +152,13 @@ echo "  binary-keystore gate: PASS (no .p12/.jks/.pfx in assets — the WRP p12 
 # yq catches both here, before publish/sim.
 BS="$REPO_ROOT/workshop/assets/buildspec/buildspec.yml"
 if command -v yq >/dev/null 2>&1; then
-    BAD="$(yq '[.phases[] | (.commands[], .finally[])] | map(select(tag != "!!str")) | length' "$BS" 2>/dev/null)"
+    BAD="$(yq '[.phases[] | (.commands[], .finally[])] | map(select(tag != "!!str")) | length' "$BS" 2>/dev/null || true)"
     if [ "${BAD:-0}" -ne 0 ]; then
         echo "  ABORT: buildspec has $BAD non-string command(s) — colon-space in an echo?" >&2
         yq '[.phases[] | (.commands[], .finally[])] | .[] | select(tag != "!!str")' "$BS" >&2
         exit 1
     fi
-    BADPHASE="$(yq '.phases | keys | map(select(. != "install" and . != "pre_build" and . != "build" and . != "post_build")) | join(",")' "$BS" 2>/dev/null)"
+    BADPHASE="$(yq '.phases | keys | map(select(. != "install" and . != "pre_build" and . != "build" and . != "post_build")) | join(",")' "$BS" 2>/dev/null || true)"
     if [ -n "$BADPHASE" ]; then
         echo "  ABORT: buildspec has invalid phase name(s): $BADPHASE (finally is a nested block, not a phase)" >&2
         exit 1

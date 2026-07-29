@@ -1,6 +1,6 @@
 # banking-mcp-server
 
-Express server exposing an MCP endpoint for the UC2 banking agent. Receives agent tool calls with the user's JWT, authenticates to Vault, obtains per-user-scoped PostgreSQL credentials, and queries RDS with Row-Level Security.
+Express server exposing an MCP endpoint for the UC2 banking agent. Receives agent tool calls with the user's IVIA OAuth JWT, presents that JWT **directly to Vault as the `X-Vault-Token` header** (Phase 9 native cutover — no `jwt_login` round-trip, no intermediate Vault token), obtains per-user-scoped PostgreSQL credentials, and queries RDS with Row-Level Security.
 
 ## Endpoints
 
@@ -14,7 +14,9 @@ Express server exposing an MCP endpoint for the UC2 banking agent. Receives agen
 - **get_accounts** — Retrieve bank accounts for the authenticated user.
 - **get_transactions** — Retrieve recent transactions, optionally filtered by `account_id`.
 
-Both tools require a `jwt` parameter (IVIA-issued access token). The server authenticates to Vault using this JWT (`auth/jwt/login`), receives short-lived PostgreSQL credentials scoped to the user's `sub` claim, and executes the query with RLS enforced.
+Both tools require a `jwt` parameter (IVIA-issued OAuth access token). The server sets this JWT as the `X-Vault-Token` header on the Vault request (`vault-client.ts` — the OAuth resource server profile validates it via its synthetic mount accessor + issuer-bound subject alias; `Authorization: Bearer` is NOT used because Bearer silently resolves to no identity). Vault returns short-lived PostgreSQL credentials scoped to the user's `sub` claim, and the server executes the query with RLS enforced.
+
+The former `auth/jwt/login` round-trip is retired: there is no intermediate Vault token — the IVIA OAuth JWT authorizes each Vault call directly. UC2's registration uses `optional_authorization_details=true` (RAR optional). See `infrastructure/modules/vault_config/README.md` for the OAuth resource server profile and Agent Registry model.
 
 ## Known Issue: MCP SDK Singleton Bug (v1.10.x)
 

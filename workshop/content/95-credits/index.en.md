@@ -8,8 +8,8 @@ This workshop was made possible by the collaboration and expertise of the follow
 | Name | Role |
 |------|------|
 | [Oscar Medina](https://www.linkedin.com/in/oscarmedina/) | Author, Technical Field Strategy Director, HashiCorp/IBM |
-| [placeholder](https://www.linkedin.com/in/oscarmedina/) | Security Reviewer, HashiCorp/IBM |
-| [placeholder](https://www.linkedin.com/in/oscarmedina/) | Tester, HashiCorp/IBM |
+| [Jonathan Hurley](https://www.linkedin.com/in/jonathan-hurley-55a86a7) | Senior Technical Account Manager, Amazon Web Services |
+| [Robert Graham](https://www.linkedin.com/in/robertgraham4/) | Global Product Architect - Verify/HashiCorp |
 
 ---
 

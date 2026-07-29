@@ -75,7 +75,7 @@
   <text x="392" y="330" fill="#fb923c" font-size="10" font-weight="bold">Identity Access</text>
   <text x="350" y="351" fill="#fdba74" font-size="9">UC2: PKCE → JWT (sub)</text>
   <text x="350" y="363" fill="#fdba74" font-size="9">UC3: CIBA + RAR JWT</text>
-  <text x="350" y="375" fill="#6b7280" font-size="8">(may_act · auth_details)</text>
+  <text x="350" y="375" fill="#6b7280" font-size="8">(act.sub · vault:path_access)</text>
 
   <!-- IVIA → auth-details boxes: UC2 (purple) -->
   <line x1="490" y1="326" x2="518" y2="284" stroke="#a855f7" stroke-width="1.5" marker-end="url(#ap)"/>
@@ -97,14 +97,14 @@
   <!-- UC2 box -->
   <rect x="518" y="248" width="300" height="68" rx="8" fill="#1e1040" stroke="#a855f7" stroke-width="1.8"/>
   <text x="536" y="269" fill="#c084fc" font-size="10" font-weight="bold">UC2 — OAuth Personalized R/O</text>
-  <text x="536" y="284" fill="#e9d5ff" font-size="11">IVIA JWT (sub claim) → Vault jwt auth</text>
+  <text x="536" y="284" fill="#e9d5ff" font-size="11">IVIA JWT (sub) → Vault via X-Vault-Token</text>
   <text x="536" y="298" fill="#6b7280" font-size="10">uc2-mcp-server-sa · per-user creds · TTL 15m</text>
 
   <!-- UC3 box -->
   <rect x="518" y="348" width="300" height="68" rx="8" fill="#0a1a3f" stroke="#3b82f6" stroke-width="1.8"/>
   <text x="536" y="369" fill="#60a5fa" font-size="10" font-weight="bold">UC3 — CIBA Privileged Write</text>
-  <text x="536" y="384" fill="#bfdbfe" font-size="11">IVIA RAR JWT → Vault bound_claims</text>
-  <text x="536" y="398" fill="#6b7280" font-size="10">may_act (RFC 8693) · auth_details (RFC 9396) · TTL 5m</text>
+  <text x="536" y="384" fill="#bfdbfe" font-size="11">IVIA RAR JWT → Vault via vault:path_access</text>
+  <text x="536" y="398" fill="#6b7280" font-size="10">act.sub (RFC 8693) · auth_details (RFC 9396) · TTL 5m</text>
 
   <!-- No standing privs box -->
   <rect x="518" y="438" width="300" height="48" rx="8" fill="#1a1200" stroke="#b45309" stroke-width="1.8"/>
@@ -122,7 +122,7 @@
   <polygon points="982,292 960,330 1004,330" fill="white" opacity="0.9"/>
   <rect x="973" y="302" width="18" height="12" fill="#0d1117"/>
   <text x="982" y="354" fill="white" font-size="12" text-anchor="middle" font-weight="bold">Vault</text>
-  <text x="982" y="366" fill="#8b949e" font-size="8.5" text-anchor="middle">4-layer policy</text>
+  <text x="982" y="366" fill="#8b949e" font-size="8.5" text-anchor="middle">UC1: 1 · UC2/3: 3 layers</text>
 
   <!-- Vault → action boxes -->
   <line x1="1050" y1="298" x2="1096" y2="190" stroke="#14b8a6" stroke-width="1.5" marker-end="url(#at)"/>
@@ -149,7 +149,7 @@
   <rect x="1096" y="348" width="310" height="68" rx="8" fill="#0a1a3f" stroke="#3b82f6" stroke-width="1.8"/>
   <text x="1114" y="369" fill="#60a5fa" font-size="10" font-weight="bold">UC3 — Time-boxed Write Creds</text>
   <text x="1114" y="384" fill="#bfdbfe" font-size="11">uc3-refund-writer · SELECT+INSERT+UPDATE</text>
-  <text x="1114" y="398" fill="#6b7280" font-size="10">TTL 5m · 3-plane audit (request_id JOIN)</text>
+  <text x="1114" y="398" fill="#6b7280" font-size="10">TTL 5m · 3-plane audit (request_id + path/time)</text>
 
   <!-- Ephemeral action -->
   <rect x="1096" y="430" width="310" height="48" rx="8" fill="#1a1200" stroke="#b45309" stroke-width="1.8"/>
@@ -164,13 +164,13 @@
   <text x="130" y="556" fill="#8b949e" font-size="10">UC1 — K8s workload identity only (uc1-retriever-sa); Vault k8s auth validates SA JWT against EKS OIDC; no IVIA involvement; JIT Postgres+Bedrock TTL 15m</text>
 
   <rect x="114" y="563" width="12" height="12" rx="2" fill="#a855f7"/>
-  <text x="130" y="574" fill="#8b949e" font-size="10">UC2 — IVIA issues OAuth PKCE JWT (sub claim) → Vault jwt auth maps sub to per-user DB creds; RLS enforces data isolation; TTL 15m</text>
+  <text x="130" y="574" fill="#8b949e" font-size="10">UC2 — IVIA issues OAuth PKCE JWT (sub) → Vault OAuth resource server resolves agent-uc2 via act.sub; OBO = human baseline ∩ agent ceiling (∩ optional per-request RAR); per-user DB creds; RLS; TTL 15m</text>
 
   <rect x="114" y="581" width="12" height="12" rx="2" fill="#3b82f6"/>
-  <text x="130" y="592" fill="#8b949e" font-size="10">UC3 — IVIA handles CIBA backchannel approval + token exchange; stamps may_act (RFC 8693) + authorization_details (RFC 9396 RAR); Vault bound_claims enforces; uc3-refund-writer TTL 5m; 3-plane audit</text>
+  <text x="130" y="592" fill="#8b949e" font-size="10">UC3 — IVIA handles CIBA backchannel approval + token exchange; stamps act.sub (RFC 8693) + authorization_details (RFC 9396 RAR); Vault resolves act.sub via Agent Registry + enforces vault:path_access RAR; uc3-refund-writer TTL 5m; 3-plane audit</text>
 
   <rect x="114" y="599" width="12" height="12" rx="2" fill="#f97316"/>
-  <text x="130" y="610" fill="#8b949e" font-size="10">IVIA (IBM Verify Identity Access) — identity &amp; authorization authority for UC2+UC3; issues JWTs that Vault trusts via jwt auth method</text>
+  <text x="130" y="610" fill="#8b949e" font-size="10">IVIA (IBM Verify Identity Access) — identity &amp; authorization authority for UC2+UC3; issues JWTs that Vault trusts via its OAuth resource server profile</text>
 
   <rect x="114" y="617" width="12" height="12" rx="2" fill="#b45309"/>
   <text x="130" y="628" fill="#8b949e" font-size="10">All UCs — No standing privileges; credentials are JIT-issued and expire with the Vault token lifecycle</text>

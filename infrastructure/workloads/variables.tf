@@ -2,11 +2,11 @@
 # Tier-3 (workloads) — Input Variables
 #
 # image_source selects the container image consume path for this tier:
-#   ghcr (default): URIs derived from var.ghcr_registry_base in locals;
+#   ecr (default): the 5 image vars below carry the ECR URIs stamped by
+#                  bootstrap.sh; imagePullPolicy Always.
+#   ghcr (opt-out): URIs derived from var.ghcr_registry_base in locals;
 #                   imagePullPolicy IfNotPresent; the 5 image vars below are
 #                   ignored (default "").
-#   ecr (opt-in):   the 5 image vars below carry the ECR URIs stamped by
-#                   bootstrap.sh; imagePullPolicy Always.
 #
 # region / cluster wiring / RDS / KB / ACM cert come from tier-1 state; Vault +
 # IVIA wiring comes from tier-2 state.
@@ -18,8 +18,8 @@
 
 variable "image_source" {
   type        = string
-  description = "Image source mode: 'ghcr' (default — pull pre-built public images from GHCR, no build required) or 'ecr' (self-paced opt-in — build locally and push to private ECR)."
-  default     = "ghcr"
+  description = "Image source mode: 'ecr' (default — build the five Use Case images locally and push them to the account's private ECR; requires a container runtime) or 'ghcr' (opt-out — pull pre-built public images from GHCR, no build)."
+  default     = "ecr"
 
   validation {
     condition     = contains(["ghcr", "ecr"], var.image_source)

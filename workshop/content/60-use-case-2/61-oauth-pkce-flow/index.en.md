@@ -5,7 +5,7 @@ weight: 61
 
 ## Overview
 
-In this module you open the OscarVault Banking UI, sign in with your LDAP credentials at the IBM Verify Identity Access (IVIA) login page, and observe how the **OAuth Authorization Code + PKCE** flow delivers a JWT to the SvelteKit server. You will see how the JWT carries the `sub` claim that Vault's `jwt` auth method validates and that PostgreSQL Row-Level Security uses to filter rows.
+In this module you open the OscarVault Banking UI, sign in with your LDAP credentials at the IBM Verify Identity Access (IVIA) login page, and observe how the **OAuth Authorization Code + PKCE** flow delivers a JWT to the SvelteKit server. You will see how the JWT carries the `sub` claim that Vault's **OAuth resource server** validates — the MCP Server presents that JWT directly via the `X-Vault-Token` header — and that PostgreSQL Row-Level Security uses to filter rows.
 
 ## Request Flow
 
@@ -74,15 +74,12 @@ sequenceDiagram
     UI->>Agent: POST /chat + Authorization: Bearer id_token
     Agent->>Agent: Extract JWT from header
     Agent->>MCP: JSON-RPC tools/call get_accounts<br/>Authorization: Bearer id_token
-    MCP->>MCP: Decode JWT → extract sub claim
+    MCP->>MCP: Decode JWT → read sub claim (for RLS only)
 
-    MCP->>Vault: POST /v1/auth/jwt/login<br/>{jwt, role: "uc2-jwt"}
+    MCP->>Vault: GET /v1/database/creds/uc2-personal-readonly<br/>X-Vault-Token: IVIA JWT (no login round-trip)
     Vault->>OP: Validate JWT signature via JWKS
     OP-->>Vault: Public key confirmation
-    Vault->>Vault: Check bound_audiences = "agent-uc2"
-    Vault-->>MCP: Vault token (uc2-personal policy)
-
-    MCP->>Vault: GET /v1/database/creds/uc2-personal-readonly
+    Vault->>Vault: Resolve sub (human) + act.sub=agent-uc2 (Agent Registry)<br/>OBO: uc2-human-baseline intersect uc2-agent-ceiling
     Vault->>RDS: CREATE ROLE with 15-min TTL
     Vault-->>MCP: JIT credentials {username, password}
 
@@ -115,9 +112,9 @@ sequenceDiagram
 7. The Banking UI stores the tokens in httpOnly cookies (`access_token`, `id_token`, optional `refresh_token`) and 302s the browser to `/dashboard`.
 8. When the user asks a banking question, the UI's server-side proxy reads the `id_token` cookie and forwards it to the Banking Agent as a Bearer token.
 9. The Banking Agent forwards the JWT unchanged to the MCP Server for each tool invocation.
-10. The MCP Server presents the JWT to Vault's `jwt` auth method. Vault validates the signature against IVIA's JWKS endpoint and checks the `bound_audiences` claim (`agent-uc2`).
-11. Vault issues a short-lived token bound to the `uc2-personal` policy.
-12. The MCP Server uses that token to call `database/creds/uc2-personal-readonly`. Vault issues a JIT Postgres credential with a 15-minute TTL.
+10. The MCP Server presents the JWT **directly** to Vault as the `X-Vault-Token` header on a single `GET database/creds/uc2-personal-readonly` read — there is no `auth/jwt/login` round-trip and no intermediate Vault token. Vault's OAuth resource server validates the signature against IVIA's JWKS endpoint.
+11. Vault resolves the human `sub` and the agent actor `act.sub = agent-uc2` (against the Agent Registry) and applies the On-Behalf-Of intersection `uc2-human-baseline ∩ uc2-agent-ceiling`.
+12. In that same call Vault issues a JIT Postgres credential with a 15-minute TTL.
 13. The MCP Server opens a Postgres connection, sets `app.current_user_sub` to the JWT's `sub` claim, and executes `SELECT` queries. PostgreSQL Row-Level Security filters results to the authenticated user's rows only.
 14. The credential expires at TTL; Vault revokes the Postgres role automatically.
 
@@ -125,7 +122,7 @@ The `sub` claim in the `id_token` (e.g. `oscar`) flows to:
 
 1. The **Banking UI** — identifies the logged-in user for display.
 2. The **Strands agent** — forwarded in the `Authorization: Bearer` header to the MCP server.
-3. **Vault jwt auth** — the MCP server exchanges the JWT for a Vault token scoped to the `uc2-jwt` role.
+3. **Vault OAuth resource server** — the MCP server presents the JWT directly via `X-Vault-Token`; Vault resolves `sub` and the actor `act.sub = agent-uc2` and applies `uc2-human-baseline ∩ uc2-agent-ceiling`.
 4. **PostgreSQL RLS** — the `app.current_user_sub` session variable is set from `sub`; the RLS policy filters `banking.accounts` rows to the authenticated user.
 
 ## Step 1 — Get the Banking UI URL
@@ -206,7 +203,7 @@ The IVIA `agent-uc2` client is provisioned by the `verify_access` Terraform modu
 
 | Setting | Value | Why |
 |---|---|---|
-| `client_id` | `agent-uc2` | Matches Vault jwt role `bound_audiences` |
+| `client_id` | `agent-uc2` | Matches the OAuth resource server profile `audiences` (and the registered agent actor) |
 | `client_secret` | `<generated>` | Confidential client — sent via HTTP Basic on the token exchange |
 | `grant_types` | `authorization_code`, `refresh_token` | Authorization Code flow with optional refresh |
 | `response_types` | `code` | Authorization Code response type |
@@ -266,25 +263,36 @@ src/lib/
 
 The Banking Agent receives the user's JWT in the `Authorization: Bearer <token>` header of every API call from the Banking UI. The agent does **not** validate the JWT signature — that is Vault's responsibility. The agent treats the JWT as an opaque credential and forwards it to the MCP Server.
 
-The MCP Server calls Vault's `jwt` auth endpoint:
+The MCP Server presents the OAuth JWT **directly** to Vault as the `X-Vault-Token` header on a single `database/creds` read — there is no `auth/jwt/login` round-trip and no intermediate Vault token:
 
 ```typescript
 // vault-client.ts
-async loginWithJwt(userJwt: string): Promise<string> {
-  const response = await fetch(`${VAULT_ADDR}/v1/auth/jwt/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ role: 'uc2-jwt', jwt: userJwt }),
+export async function getDbCreds(
+  oauthJwt: string,
+  role: string = 'uc2-personal-readonly'
+): Promise<DbCredentials> {
+  const url = `${VAULT_ADDR}/v1/database/creds/${role}`;
+
+  const res = await fetch(url, {
+    method: 'GET',
+    headers: { 'X-Vault-Token': oauthJwt },   // the IVIA OAuth JWT, presented directly
   });
-  const data = await response.json();
-  if (!response.ok) {
-    throw new Error(`Vault jwt login failed: ${data.errors?.join(', ')}`);
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Vault DB creds fetch failed [${res.status}]: ${body}`);
   }
-  return data.auth.client_token;
+
+  const data = (await res.json()) as {
+    data?: { username?: string; password?: string };
+    lease_id?: string;
+    lease_duration?: number;
+  };
+  // ... returns { username, password, leaseId, leaseDuration }
 }
 ```
 
-Vault validates the JWT against IVIA's JWKS endpoint (fetched from the `oidc_discovery_url` configured in the jwt auth backend). Vault then maps the `sub` claim from the JWT to the Vault entity metadata — enabling per-user policy evaluation.
+Vault's OAuth resource server validates the JWT against IVIA's JWKS endpoint (the signing CA pinned in the `ivia` profile), resolves the human `sub` and the agent actor `act.sub = agent-uc2` (against the Agent Registry), and applies the On-Behalf-Of intersection `uc2-human-baseline ∩ uc2-agent-ceiling` — all in that one `database/creds` read.
 
 The `sub` claim value (e.g., `oscar`) is also passed directly to the Postgres session:
 
@@ -296,5 +304,5 @@ const accounts = await client.query(
 );
 ```
 
-This is the complete chain: `sub` in JWT → Vault jwt login claim extraction → Postgres session variable → RLS predicate. Each link is visible in application code — no magic.
+This is the complete chain: `sub` in JWT → presented as `X-Vault-Token` on the `database/creds` read → Postgres session variable → RLS predicate. Each link is visible in application code — no magic.
 :::

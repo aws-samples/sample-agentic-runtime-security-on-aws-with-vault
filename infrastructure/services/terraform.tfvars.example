@@ -7,11 +7,13 @@
 # fabric: the Vault server (modules/vault_server) and IVIA OIDC provider
 # (modules/verify_access). region / cluster wiring / KMS key / tags all come
 # from tier-1 state via terraform_remote_state — the ONLY inputs here are the
-# two registry/MMFA secrets below (sensitive, never in tier-1 state).
+# secrets below (sensitive, never in tier-1 state).
 #
-# Leave both empty: deploy-workshop.sh prompts for them (input hidden) on first
-# run and writes them into the gitignored terraform.tfvars — secrets never get
-# committed to the repo.
+# Leave all empty: deploy-workshop.sh resolves them on every run and writes them
+# into the gitignored terraform.tfvars — secrets never get committed to the repo.
+# The two IVIA secrets come from the ICR_ENTITLEMENT_KEY /
+# IVIA_MMFA_PUSH_CLIENT_SECRET env vars when set, otherwise a hidden prompt;
+# vault_enterprise_license is always read from a file (VAULT_ENTERPRISE_LICENSE_PATH).
 ################################################################################
 
 # IBM Container Registry entitlement key for pulling IVIA images
@@ -21,3 +23,9 @@ icr_entitlement_key = ""
 # IBM Verify mobile-push (MMFA) — VerifyPushCreds API Key (= push provider Client
 # Secret for ISVA 10.0.3+). Required by Use Case 3 MMFA push.
 ivia_mmfa_push_client_secret = ""
+
+# Vault Enterprise license (.hclic contents) — autoloaded via K8s secret +
+# Helm server.enterpriseLicense (Phase 9). NOT hand-edited: deploy-workshop.sh
+# reads the license file fresh (VAULT_ENTERPRISE_LICENSE_PATH, default
+# ~/Downloads/vault-ent.hclic) on every run and overwrites this value.
+vault_enterprise_license = ""
