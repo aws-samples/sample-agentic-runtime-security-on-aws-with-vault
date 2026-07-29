@@ -54,7 +54,14 @@ export IVIA_MMFA_PUSH_CLIENT_SECRET=[REDACTED_PASSWORD] secret>"
 
 Applies Vault HA + IVIA, initializes Vault (`~/vault-init.json`), issues the Let's Encrypt `nip.io` cert, imports it into ACM, re-applies IVIA on the trusted host, configures Vault auth/policies/secrets engines, and verifies the IVIA OIDC discovery endpoint.
 
+Tier 2 requires a **Vault Enterprise license** — Vault runs in Enterprise mode for the native Agent Registry. The preflight reads it from a **file**, not a prompt: save your HashiCorp Vault Enterprise `.hclic` to `~/Downloads/vault-ent.hclic`, or point `VAULT_ENTERPRISE_LICENSE_PATH` at it, before running. The deploy fails fast (and tells you the path) if the file is missing.
+
 ```bash
+# save your Vault Enterprise license to the default path...
+cp /path/to/vault-ent.hclic ~/Downloads/vault-ent.hclic
+# ...or point the env var at wherever you saved it:
+export VAULT_ENTERPRISE_LICENSE_PATH=/path/to/vault-ent.hclic
+
 bash infrastructure/scripts/deploy-workshop.sh --tier 2
 ```
 
