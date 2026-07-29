@@ -71,6 +71,6 @@ Your `WSParticipantRole` session already has EKS cluster access (granted by the 
 
 ## Next Steps
 
-1. **IVIA licensing** — [IVIA Licensing](../22-ivia-licensing/) covers the IBM-supplied artifacts the IVIA deployment needs. You supply the IBM Container Registry entitlement key (and, for Use Case 3, the MMFA push client secret) at deploy time; the trial activation certificate is already included with the workshop. Have your entitlement key ready before you deploy Tier 2.
+1. **IVIA licensing** — [IVIA Licensing](../22-ivia-licensing/) covers the IBM-supplied artifacts the IVIA deployment needs. You supply the IBM Container Registry entitlement key (and, for Use Case 3, the MMFA push client secret) at deploy time; the trial activation certificate is already included with the workshop. Tier 2 also needs a **Vault Enterprise license** (`.hclic`) your organizer provides — save it to `~/Downloads/vault-ent.hclic`. Have your entitlement key and license file ready before you deploy Tier 2.
 2. **Install the IBM Verify app** — Use Case 3 (CIBA mobile push) requires the IBM Verify mobile app. Install it on your phone now — see the [Prerequisites overview](../) for download links.
 3. **Continue to Deploy — At an Event** — [Deploy — At an Event](../../30-deploy-foundation/31-deploy-at-an-event/) is where you pull the Tier-1 state and run Tier 2 and Tier 3.
