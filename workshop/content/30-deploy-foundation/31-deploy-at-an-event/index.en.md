@@ -63,6 +63,15 @@ export IVIA_MMFA_PUSH_CLIENT_SECRET="<value from your organizer>"
 
 Either way, the values are written only into the gitignored `terraform.tfvars` — never committed.
 
+Tier 2 also needs a **Vault Enterprise license** — Vault runs in Enterprise mode for the native Agent Registry. Unlike the two secrets above it is read from a **file**, not a prompt, so place it before you run the deploy: save the `.hclic` your organizer provides to `~/Downloads/vault-ent.hclic`, or point `VAULT_ENTERPRISE_LICENSE_PATH` at it. The preflight fails fast (and tells you the path) if the file is missing.
+
+```bash
+# organizer-provided Vault Enterprise license — save to the default path...
+cp /path/to/vault-ent.hclic ~/Downloads/vault-ent.hclic
+# ...or point the env var at wherever you saved it:
+export VAULT_ENTERPRISE_LICENSE_PATH=/path/to/vault-ent.hclic
+```
+
 It does **not** ask for a Let's Encrypt email — that was set when CodeBuild provisioned Tier 1, and you pulled it in Step 3.
 
 ```bash
