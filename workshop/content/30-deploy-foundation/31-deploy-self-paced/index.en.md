@@ -13,7 +13,7 @@ Run the full stack from scratch on your own AWS account. Three Terraform roots, 
 If you joined via a Workshop Studio invite link, Tier 1 is already running — follow **[Deploy — At an Event](../31-deploy-at-an-event/)** and skip straight to Tier 2.
 ::::
 
-By default `deploy-workshop.sh` **builds the five Use Case images from source and pushes them to your own account's private ECR** (`<account>.dkr.ecr.<region>.amazonaws.com/...`); the pods then pull from there. This requires a running container runtime (Docker or Podman) — see [Self-paced: container runtime](../../20-prerequisites/23-pre-flight-checks/#self-paced-container-runtime---image-source-ecr) in pre-flight checks. The Dockerfile base images come from Amazon ECR Public, so the build never touches Docker Hub. To pull pre-built public images instead — no build, no container runtime — see [Pull pre-built images from GHCR](#pull-pre-built-images-from-ghcr---image-source-ghcr) below.
+By default `deploy-workshop.sh` **builds the five Use Case images from source and pushes them to your own account's private ECR** (`<account>.dkr.ecr.<region>.amazonaws.com/...`); the pods then pull from there. This requires a running container runtime (Docker or Podman) — see [Self-paced: container runtime](../../20-prerequisites/23-pre-flight-checks/#self-paced-container-runtime---image-source-ecr) in pre-flight checks. The Dockerfile base images come from Amazon ECR Public, so the build never touches Docker Hub. (An optional no-build path that pulls pre-built images from your own GHCR namespace exists for advanced users — it is documented in the repository README, not walked through here.)
 
 #### Step 1 — Bootstrap (one-time)
 
@@ -138,18 +138,3 @@ issuer_id    https://wrp.<deploy-id>.<alb-ip-dashed>.nip.io
 
 If it still shows an `*.elb.amazonaws.com` host, the IVIA re-apply did not run — confirm the certificate is `Ready=True`, that you did **not** pass `--skip-acme`, then re-run the Tier 2 command above.
 
----
-
-## Pull pre-built images from GHCR (`--image-source ghcr`)
-
-If you don't want to install a container runtime, you can skip the image build entirely and pull pre-built public images from GHCR (`ghcr.io/sharepointoscar/*:v1`) anonymously at pod start. Pass `--image-source ghcr` to every `deploy-workshop.sh` invocation — no Docker/Podman, no build, no ECR repos:
-
-```bash
-bash infrastructure/scripts/deploy-workshop.sh --image-source ghcr --tier 1
-bash infrastructure/scripts/deploy-workshop.sh --image-source ghcr --tier 2
-bash infrastructure/scripts/deploy-workshop.sh --image-source ghcr --tier 3
-```
-
-In `ghcr` mode Step 3 (image build) is skipped and the pods pull the pinned public packages directly, so there is no ECR provisioning and no deployment roll.
-
-The `ghcr_registry_base` variable (default `ghcr.io/sharepointoscar`) is configurable via `--ghcr-registry-base` if you want to repoint the GHCR consume side to your own namespace. See [Bring Your Own GHCR Registry](../../90-resources/#bring-your-own-ghcr-registry) for the full fork flow.
