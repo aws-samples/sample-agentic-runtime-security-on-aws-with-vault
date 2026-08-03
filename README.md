@@ -65,6 +65,45 @@ Bedrock access required: enable `us.amazon.nova-pro-v1:0` (Nova Pro via CRIS) in
 
 ---
 
+## Optional: pre-built images from GHCR (bring your own)
+
+The workshop deploys five container images. **The default and supported path is ECR** — `deploy-workshop.sh` builds the images from source and pushes them to your own account's private ECR (needs Docker or Podman). The workshop walkthrough only covers this ECR path.
+
+As an **optional, advanced opt-out**, you can skip the local build and have the pods pull pre-built public images from GHCR instead (`--image-source ghcr`). This is **bring-your-own**: there is **no default namespace** — you publish the five images to your *own* GHCR namespace first, then point the deploy at it. If you select `ghcr` mode without a base, the deploy fails fast before any AWS work. This path is documented here only, not in the attendee walkthrough.
+
+**1. Prerequisites** — a GitHub account with the `write:packages` scope on your CLI token, and a running container runtime (publishing builds the images locally before pushing):
+
+```bash
+gh auth refresh -h github.com -s write:packages
+```
+
+**2. Publish the five images to your namespace** — the script reads the `write:packages` token from `GHCR_PAT` or `gh auth token`:
+
+```bash
+export GHCR_PAT=$(gh auth token)
+bash infrastructure/scripts/publish-images.sh --registry-base ghcr.io/<githubusername>
+```
+
+**3. Make the five packages Public** — via the GitHub web UI (Settings → Packages on your profile); there is no REST API for container-package visibility. The package names (under `ghcr.io/<githubusername>/`) are `workshop-uc1-agent`, `workshop-banking-app-ui`, `workshop-banking-app-agent`, `workshop-banking-app-mcp`, `workshop-uc3-agent`.
+
+**4. Deploy pointing consume at your base** — pass `--image-source ghcr` and `--ghcr-registry-base` on every tier:
+
+```bash
+bash infrastructure/scripts/deploy-workshop.sh --tier 1 --image-source ghcr --ghcr-registry-base ghcr.io/<githubusername>
+bash infrastructure/scripts/deploy-workshop.sh --tier 2 --image-source ghcr --ghcr-registry-base ghcr.io/<githubusername>
+bash infrastructure/scripts/deploy-workshop.sh --tier 3 --image-source ghcr --ghcr-registry-base ghcr.io/<githubusername>
+```
+
+**Gotcha — publish base must equal consume base.** The `--registry-base` you pass to `publish-images.sh` and the `--ghcr-registry-base` you pass to `deploy-workshop.sh` must be identical. Pointing consume at a base where the packages do not exist, or are still Private, yields `ImagePullBackOff` on all five pods with no other error.
+
+**Updating one image after a change** — republish only that image at the next version, bump the matching `ghcr_*` pin in `infrastructure/workloads/main.tf`, then re-deploy Tier 3 (a new tag makes Terraform roll the Deployment):
+
+```bash
+bash infrastructure/scripts/publish-images.sh --image banking-ui --version v2 --registry-base ghcr.io/<githubusername>
+```
+
+---
+
 ## Workshop content (preview + publish)
 
 Attendee-facing pages live under `workshop/content/` (Hugo + AWS Workshop Studio v2 contentspec). Three admin actions:

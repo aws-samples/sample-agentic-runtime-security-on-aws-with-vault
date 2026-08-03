@@ -14,7 +14,7 @@ Follow **[Deploy — Self-paced](../31-deploy-self-paced/)** — you bootstrap a
 Clone the workshop repo at the pinned event tag from the public mirror:
 
 ```bash
-git clone https://github.com/sharepointoscar/agentic-runtime-security-aws.git && cd agentic-runtime-security-aws
+git clone https://github.com/aws-samples/sample-agentic-runtime-security-on-aws-with-vault.git && cd sample-agentic-runtime-security-on-aws-with-vault
 ```
 
 #### Step 2 — Bootstrap

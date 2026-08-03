@@ -60,7 +60,7 @@ Once every check is green, continue to [Deploy Foundation](../../30-deploy-found
 
 ## Self-paced: container runtime (`--image-source ecr`)
 
-The default self-paced deploy **builds the five Use Case images and pushes them to your own account's private ECR**, so a running container runtime (Docker or Podman) is **required** — install and start it before you deploy. (Prefer to skip the build? Pass `--image-source ghcr` to pull pre-built public images from GHCR instead — see [Pull pre-built images from GHCR](../../30-deploy-foundation/31-deploy-self-paced/#pull-pre-built-images-from-ghcr---image-source-ghcr); that path needs no container runtime.)
+The default self-paced deploy **builds the five Use Case images and pushes them to your own account's private ECR**, so a running container runtime (Docker or Podman) is **required** — install and start it before you deploy. (An optional no-build path that pulls pre-built images from your own GHCR namespace needs no container runtime; it is an advanced option documented in the repository README, not part of this walkthrough.)
 
 **A container runtime is the one exception you install *and start* yourself — Docker *or* Podman.** The deploy builds and pushes the Use Case agent container images with whichever one you have; the pre-flight script auto-detects it but does not install it. Installing it is not enough — the engine must be **running** before you deploy (the pre-flight check fails with a clear "installed but not running" message otherwise). Set up **one** of:
 

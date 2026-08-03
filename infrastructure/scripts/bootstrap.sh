@@ -23,7 +23,8 @@
 #                            tfvars. ghcr: no build — pull pre-built public images.
 #                            Env fallback: WORKSHOP_IMAGE_SOURCE.
 #   --ghcr-registry-base <base>
-#                            GHCR registry base (default: ghcr.io/sharepointoscar).
+#                            GHCR registry base, e.g. ghcr.io/<githubusername>.
+#                            REQUIRED in ghcr mode — no default; bring your own images.
 #                            Persisted to tier-3 tfvars ONLY (tier-1 never receives it).
 #                            Env fallback: WORKSHOP_GHCR_REGISTRY_BASE.
 #   --help                   Show this help message
@@ -53,14 +54,14 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 #   1. --image-source flag
 #   2. WORKSHOP_IMAGE_SOURCE env var
 #   3. Hard default: ecr
-# GHCR_REGISTRY_BASE: --ghcr-registry-base flag → WORKSHOP_GHCR_REGISTRY_BASE env → default
-# ghcr.io/sharepointoscar is an image-source URI base, NOT an identity/auth value.
+# GHCR_REGISTRY_BASE: --ghcr-registry-base flag → WORKSHOP_GHCR_REGISTRY_BASE env → (no default)
+# The GHCR base is a bring-your-own image-source URI base (no default namespace).
 # (Only consulted in the ghcr opt-out; ecr builds into the attendee's own account.)
 #-------------------------------------------------------------------------------
 DRY_RUN=false
 SKIP_PREREQ_GATE=false
 IMAGE_SOURCE="${WORKSHOP_IMAGE_SOURCE:-ecr}"
-GHCR_REGISTRY_BASE="${WORKSHOP_GHCR_REGISTRY_BASE:-ghcr.io/sharepointoscar}"
+GHCR_REGISTRY_BASE="${WORKSHOP_GHCR_REGISTRY_BASE:-}"
 
 usage() {
     cat <<USAGE
@@ -73,7 +74,7 @@ Options:
   --dry-run                Show what would be done without executing
   --skip-prereq-gate       Skip the "Have you run check-prerequisites.sh?" prompt
   --image-source <ghcr|ecr>  Image source mode (default: ecr)
-  --ghcr-registry-base <base> GHCR registry base (default: ghcr.io/sharepointoscar)
+  --ghcr-registry-base <base> GHCR registry base, e.g. ghcr.io/<githubusername> (required in ghcr mode)
   --help                   Show this help message
 
 Examples:
@@ -104,6 +105,15 @@ case "$IMAGE_SOURCE" in
     ghcr|ecr) : ;;
     *) echo -e "${RED}Error: --image-source must be 'ghcr' or 'ecr' (got: '${IMAGE_SOURCE}')${NC}" >&2; exit 1 ;;
 esac
+
+# ghcr is a bring-your-own path with no default registry base — fail fast if selected
+# without one, before any tfvars are stamped.
+if [ "$IMAGE_SOURCE" = "ghcr" ] && [ -z "$GHCR_REGISTRY_BASE" ]; then
+    echo -e "${RED}Error: --image-source ghcr requires --ghcr-registry-base <base> (e.g. ghcr.io/<githubusername>)${NC}" >&2
+    echo -e "${RED}       or the WORKSHOP_GHCR_REGISTRY_BASE env var. No default namespace is provided —${NC}" >&2
+    echo -e "${RED}       publish your own images first (see the repo README), then pass the base.${NC}" >&2
+    exit 1
+fi
 
 step_header() {
     echo
@@ -295,7 +305,7 @@ step_generate_tfvars_and_init() {
         _stamp_tier3_image banking_app_mcp_image   "workshop-banking-app:mcp"
         echo -e "${GREEN}OK: stamped 5 active tier-3 ECR image URIs (account ${AWS_ACCOUNT_ID}, region ${REGION})${NC}"
     elif [ "$IMAGE_SOURCE" != "ecr" ]; then
-        echo -e "${GREEN}OK: ECR image URI stamping skipped (${IMAGE_SOURCE} mode — GHCR defaults stand)${NC}"
+        echo -e "${GREEN}OK: ECR image URI stamping skipped (${IMAGE_SOURCE} mode — GHCR base ${GHCR_REGISTRY_BASE} stands)${NC}"
     fi
 
     # --- terraform init all 3 roots (bare init, NEVER -upgrade) ---------------

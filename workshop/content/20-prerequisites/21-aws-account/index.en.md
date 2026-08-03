@@ -17,7 +17,7 @@ Install the following tools before running any workshop scripts. The workshop's 
 | Terraform | 1.10+ | `terraform -version` — 1.10 is required for the workshop's deploy scripts |
 | kubectl | 1.34+ | `kubectl version --client` |
 | Helm | 3.12+ | `helm version` |
-| Docker or Podman | Any recent | Required for the default self-paced deploy (builds the images into your account ECR); not needed only if you opt out with `--image-source ghcr` |
+| Docker or Podman | Any recent | Required for the default self-paced deploy (builds the images into your account ECR). Only the optional no-build GHCR path (advanced; documented in the repo README) skips it. |
 | jq | 1.6+ | `jq --version` |
 
 Run the pre-flight checker to install and verify all tools in one shot:
@@ -35,7 +35,7 @@ At minimum you need the AWS managed policies **PowerUserAccess** plus **IAMFullA
 ## Step 1: Clone the Repository
 
 ```bash
-git clone https://github.com/sharepointoscar/agentic-runtime-security-aws.git && cd agentic-runtime-security-aws
+git clone https://github.com/aws-samples/sample-agentic-runtime-security-on-aws-with-vault.git && cd sample-agentic-runtime-security-on-aws-with-vault
 ```
 
 ## Step 2: Verify AWS Access
