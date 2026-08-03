@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #===============================================================================
 # publish-images.sh — Maintainer-only: build all 5 workshop images and push to
-#                     a configurable public GHCR base (default ghcr.io/sharepointoscar)
+#                     a configurable public GHCR base (bring your own; no default —
+#                     e.g. ghcr.io/<githubusername>)
 #
 # NOT part of the attendee deploy path. Attendees pull pre-built images
 # anonymously from the configured GHCR base; they never need a container runtime
@@ -17,9 +18,10 @@
 # verbatim — there is ONE build definition, no duplicated Dockerfile logic.
 #
 # CONFIGURABLE BASE (D-15)
-#   GHCR_REGISTRY_BASE env (default ghcr.io/sharepointoscar) or --registry-base
-#   flag. The same base drives the consume side (Plan 02 'ghcr_registry_base'
-#   Terraform var). Publish base MUST equal consume base — see README.
+#   GHCR_REGISTRY_BASE env (bring your own; no default) or --registry-base
+#   flag — e.g. ghcr.io/<githubusername>. The same base drives the consume side
+#   (Plan 02 'ghcr_registry_base' Terraform var). Publish base MUST equal consume
+#   base — see README.
 #
 # AUTHENTICATION (never a hardcoded token)
 #   GHCR_PAT env — set via 'gh auth refresh -h github.com -s write:packages'
@@ -44,7 +46,7 @@
 #   ./publish-images.sh --image banking-ui --version v2
 #
 # Env-var overrides:
-#   GHCR_REGISTRY_BASE  GHCR registry base (default ghcr.io/sharepointoscar)
+#   GHCR_REGISTRY_BASE  GHCR registry base, e.g. ghcr.io/<githubusername> (required — no default)
 #   GHCR_PAT            write:packages token (required for real publish)
 #
 # Design:
@@ -71,7 +73,7 @@ source "${SCRIPT_DIR}/common-checks.sh"
 #-------------------------------------------------------------------------------
 # Defaults (arg-parse MUST come before any auth/runtime/login)
 #-------------------------------------------------------------------------------
-GHCR_REGISTRY_BASE="${GHCR_REGISTRY_BASE:-ghcr.io/sharepointoscar}"
+GHCR_REGISTRY_BASE="${GHCR_REGISTRY_BASE:-}"   # bring your own; no default (validated below)
 DRY_RUN=false
 IMAGE_VERSION="v1"        # tag published this run (default v1); --version overrides
 SELECTED_IMAGES=""        # space-separated friendly names; empty = all 5
@@ -128,8 +130,8 @@ Options:
   --help                    Show this help message
   --dry-run                 Print intended build/tag/push for each image without
                             executing any build, push, or login
-  --registry-base <base>    Override GHCR registry base (must start with
-                            ghcr.io/); default ghcr.io/sharepointoscar
+  --registry-base <base>    GHCR registry base (must start with ghcr.io/);
+                            required — no default. E.g. ghcr.io/<githubusername>
   --image <name>            Publish ONLY this image (repeatable). One of:
                             uc1-agent, banking-ui, banking-agent, banking-mcp,
                             uc3-agent. Omit to publish all 5.
@@ -138,7 +140,7 @@ Options:
                             be bumped to the same tag — fake versioning).
 
 Environment variables:
-  GHCR_REGISTRY_BASE  GHCR registry base (default ghcr.io/sharepointoscar)
+  GHCR_REGISTRY_BASE  GHCR registry base, e.g. ghcr.io/<githubusername> (required — no default)
   GHCR_PAT            write:packages token (required for real publish; never
                       set a default — must be provided explicitly or via
                       'export GHCR_PAT=\$(gh auth token)')
@@ -158,9 +160,9 @@ After first push, set all 5 packages Public via GitHub UI (one-time):
   https://github.com/users/<owner>/packages/container/<image>/settings
 
 Examples:
-  # Publish all 5 to default base (ghcr.io/sharepointoscar)
+  # Publish all 5 to your own GHCR base
   export GHCR_PAT=\$(gh auth token)
-  ./publish-images.sh
+  ./publish-images.sh --registry-base ghcr.io/<githubusername>
 
   # Ship a fix to ONE image at the next version (only this image is rebuilt)
   ./publish-images.sh --image banking-ui --version v2
@@ -213,9 +215,14 @@ done
 # Fail loud before any auth attempt if the base is misconfigured.
 # Done after arg-parse so '--dry-run --registry-base invalid' also fails.
 #-------------------------------------------------------------------------------
+if [[ -z "${GHCR_REGISTRY_BASE}" ]]; then
+    print_fail "No GHCR registry base set" \
+        "Bring your own — pass --registry-base ghcr.io/<githubusername> or set GHCR_REGISTRY_BASE. There is no default namespace."
+    exit 1
+fi
 if [[ "${GHCR_REGISTRY_BASE}" != ghcr.io/* ]]; then
     print_fail "Invalid GHCR_REGISTRY_BASE: '${GHCR_REGISTRY_BASE}'" \
-        "Base must start with 'ghcr.io/' (e.g. ghcr.io/sharepointoscar)."
+        "Base must start with 'ghcr.io/' (e.g. ghcr.io/<githubusername>)."
     exit 1
 fi
 GHCR_OWNER="${GHCR_REGISTRY_BASE#ghcr.io/}"

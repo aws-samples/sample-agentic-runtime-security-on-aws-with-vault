@@ -45,9 +45,10 @@
 #                                 ECR (container runtime required). ghcr pulls pre-built
 #                                 public images from GHCR — no build, no runtime. Invalid
 #                                 value fails loud. Env fallback: WORKSHOP_IMAGE_SOURCE.
-#   --ghcr-registry-base <base>   GHCR registry base for pre-built images (default:
-#                                 ghcr.io/sharepointoscar). Only meaningful in ghcr mode;
-#                                 repoints the consume base for a fork.
+#   --ghcr-registry-base <base>   GHCR registry base for pre-built images
+#                                 (e.g. ghcr.io/<githubusername>). REQUIRED in ghcr
+#                                 mode — no default; bring your own published images.
+#                                 Only meaningful in ghcr mode.
 #                                 Env fallback: WORKSHOP_GHCR_REGISTRY_BASE.
 #   --skip-infra             Skip the tier-1 apply (cluster + core infra already up)
 #   --skip-vault-init        Skip Vault initialization (Vault already initialized)
@@ -74,7 +75,7 @@
 #
 # Examples:
 #   ./deploy-workshop.sh                              # full deploy, ecr mode (default) — build+push to ECR
-#   ./deploy-workshop.sh --image-source ghcr         # full deploy, pull pre-built GHCR images (no build)
+#   ./deploy-workshop.sh --image-source ghcr --ghcr-registry-base ghcr.io/<githubusername>  # no build; pull your own pre-built GHCR images
 #   ./deploy-workshop.sh --tier 1                    # only steps 1-4 (Instruqt tier-1 challenge)
 #   ./deploy-workshop.sh --tier 2                    # only steps 5-9 (Instruqt tier-2 challenge)
 #   ./deploy-workshop.sh --tier 3                    # only steps 10-14 (Instruqt tier-3 challenge)
@@ -106,14 +107,14 @@ source "${SCRIPT_DIR}/common-checks.sh"
 #   1. --image-source / --ghcr-registry-base flag (explicit CLI)
 #   2. WORKSHOP_IMAGE_SOURCE / WORKSHOP_GHCR_REGISTRY_BASE env var
 #   3. image_source from the persisted tier-1 terraform.tfvars (after parsing)
-#   4. Hard default: ecr (GHCR base ghcr.io/sharepointoscar applies only in the ghcr opt-out)
+#   4. Hard default: ecr (the GHCR base has no default — it is required only in the ghcr opt-out)
 # Steps 3-4 happen after arg-parse (needs TFVARS path) and before step functions.
-# ghcr.io/sharepointoscar is an image-source URI base, NOT an identity/auth value.
+# The GHCR base is a bring-your-own image-source URI base (no default namespace).
 #-------------------------------------------------------------------------------
 REGION=""
 CLUSTER_NAME=""
 IMAGE_SOURCE="${WORKSHOP_IMAGE_SOURCE:-}"        # flag or env; resolved from tfvar below
-GHCR_REGISTRY_BASE="${WORKSHOP_GHCR_REGISTRY_BASE:-ghcr.io/sharepointoscar}"  # env or default
+GHCR_REGISTRY_BASE="${WORKSHOP_GHCR_REGISTRY_BASE:-}"  # flag or env; no default (ghcr mode requires it)
 SKIP_INFRA=false
 SKIP_VAULT_INIT=false
 SKIP_BUILD=false
@@ -224,6 +225,16 @@ case "$IMAGE_SOURCE" in
     ghcr|ecr) : ;;
     *) echo "ERROR: --image-source must be 'ghcr' or 'ecr' (got: '${IMAGE_SOURCE}')" >&2; exit 1 ;;
 esac
+
+# ghcr is a bring-your-own path: it has no default registry base. Fail fast (before
+# any AWS/terraform work) if the operator selected ghcr mode without supplying one.
+if [[ "$IMAGE_SOURCE" = "ghcr" && -z "$GHCR_REGISTRY_BASE" ]]; then
+    echo "ERROR: --image-source ghcr requires --ghcr-registry-base <base> (e.g. ghcr.io/<githubusername>)" >&2
+    echo "       or the WORKSHOP_GHCR_REGISTRY_BASE env var. There is no default namespace —" >&2
+    echo "       publish the five workshop images to your own GHCR first (see the repo README:" >&2
+    echo "       'Optional: pre-built images from GHCR (bring your own)'), then pass the base." >&2
+    exit 1
+fi
 
 #-------------------------------------------------------------------------------
 # EXIT cleanup — kill port-forward on any exit, then emit our summary

@@ -29,8 +29,8 @@ variable "image_source" {
 
 variable "ghcr_registry_base" {
   type        = string
-  description = "Base registry/namespace for pre-built GHCR images (ghcr mode). The five workshop image URIs are derived from this base in locals. A fork repoints both publish (publish-images.sh --registry-base) and consume (this var) with a single setting. Default matches the maintainer publish base from Plan 01."
-  default     = "ghcr.io/sharepointoscar"
+  description = "Base registry/namespace for pre-built GHCR images (ghcr mode), e.g. ghcr.io/<githubusername>. Bring your own — there is no default namespace; the ghcr opt-out requires you to publish the five workshop images to your own GHCR first (see the repo README). The five workshop image URIs are derived from this base in locals; a fork repoints both publish (publish-images.sh --registry-base) and consume (this var) with a single setting. Ignored in ecr mode."
+  default     = ""
 }
 
 #-------------------------------------------------------------------------------
