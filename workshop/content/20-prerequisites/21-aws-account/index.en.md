@@ -35,7 +35,7 @@ At minimum you need the AWS managed policies **PowerUserAccess** plus **IAMFullA
 ## Step 1: Clone the Repository
 
 ```bash
-git clone https://github.com/sharepointoscar/agentic-runtime-security-aws.git && cd agentic-runtime-security-aws
+git clone https://github.com/aws-samples/sample-agentic-runtime-security-on-aws-with-vault.git && cd sample-agentic-runtime-security-on-aws-with-vault
 ```
 
 ## Step 2: Verify AWS Access
