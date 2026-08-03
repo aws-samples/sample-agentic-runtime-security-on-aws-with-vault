@@ -49,14 +49,13 @@ Parameters:
     Default: ecr
     AllowedValues:
       - ecr
-      - ghcr
     Description: >-
-      How the Use Case container images are sourced at-an-event. Default "ecr":
-      CodeBuild builds the images from source and pushes them to the attendee's own
-      ECR (requires PrivilegedMode). Set "ghcr" to fall back — with ZERO code change —
-      to pulling the maintainer-published public images from ghcr.io/sharepointoscar
-      at runtime (the pre-parameterization behavior). Flows to the buildspec as the
-      IMAGE_SOURCE env var and on to bootstrap.sh / deploy-workshop.sh --image-source.
+      How the Use Case container images are sourced at-an-event. ECR is the
+      supported at-an-event path: CodeBuild builds the images from source and pushes
+      them to the attendee's own ECR (requires PrivilegedMode). The no-build GHCR
+      opt-out is a self-paced, bring-your-own-images path only (see the repo README)
+      and is not offered at an event. Flows to the buildspec as the IMAGE_SOURCE env
+      var and on to bootstrap.sh / deploy-workshop.sh --image-source.
 
 Resources:
 
