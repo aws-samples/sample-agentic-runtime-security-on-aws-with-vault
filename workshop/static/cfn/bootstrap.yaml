@@ -12,6 +12,8 @@ Parameters:
   AcmeEmail:
     Type: String
     NoEcho: true
+    AllowedPattern: '^[^@\s]+@[^@\s]+\.[^@\s]+$'
+    ConstraintDescription: Must be a valid email address (not *@example.com).
     Description: >-
       Let's Encrypt registration email for TLS certificate issuance (ACME).
       Must be a real, reachable address — not *@example.com.

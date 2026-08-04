@@ -82,7 +82,6 @@ infrastructure:
       #   `deploy-workshop.sh` runs. We deliberately did NEITHER yet — pending your answer.
       parameters:
         - templateParameter: AcmeEmail
-          defaultValue: "hurleyjm@amazon.com"
         - templateParameter: TerraformSourceBucket
           defaultValue: "{{.AssetsBucketName}}"
         - templateParameter: AssetsKeyPrefix
