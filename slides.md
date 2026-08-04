@@ -7,16 +7,37 @@ revealOptions:
   slideNumber: true
   width: 1280
   height: 720
-  margin: 0.04
+  margin: 0
+  pdfMaxPagesPerSlide: 1
 ---
 
 <style>
+/* PDF export: `reveal-md slides.md --print slides.pdf --print-size 1280x720`.
+   --print-size 1280x720 is REQUIRED so the printed page matches the 16:9 slide.
+   The deck sets reveal `margin: 0` on purpose: reveal sizes its expected PDF page
+   as slideWidth*(1+margin) and centers the slide in it, but --print-size pins the
+   real page to 1280 — any non-zero margin shifts the slide right and clips its
+   right edge. margin:0 keeps reveal's expected page == the printed page. Gutters
+   below are added via content max-width (reveal forces section padding:0). */
+.reveal .slides section > * { max-width: 1180px; margin-left: auto; margin-right: auto; }
+/* Dense slides (heavy intro + bullets + closing, or a wide 4-col table) overflow
+   the slide vertically/horizontally; shrink them proportionally so the title clears
+   the logo and wide tables fit. Applied via `<!-- .slide: class="dense" -->`. */
+.reveal .slides section.dense { font-size: 0.84em; }
+/* The one dense slide with a table (Vault-native primitives) has a wide 4-col
+   table whose long last-column strings won't wrap; fixed layout + full width
+   forces them to wrap inside the page instead of overrunning the right edge.
+   Scoped to .dense so the other (narrower) tables keep their natural sizing. */
+.reveal .slides section.dense table { table-layout: fixed; width: 100%; }
 .reveal section .mermaid { text-align: center; margin: 0 auto; }
-.reveal section .mermaid svg { max-height: 560px; max-width: 96%; height: auto; width: auto; }
+.reveal section .mermaid svg { max-height: 440px !important; max-width: 96%; height: auto !important; width: auto; }
 .reveal section .uc-footer { font-size: 0.5em; color: #555; margin-top: 6px; }
-.reveal section pre code { font-size: 0.74em; line-height: 1.25; }
-.reveal section table { font-size: 0.62em; }
+.reveal section pre code { font-size: 0.66em; line-height: 1.22; }
+.reveal section table { font-size: 0.5em; width: auto; }
+.reveal section td, .reveal section th { padding: 3px 7px; }
 .reveal section .tight li { margin: 2px 0; }
+.reveal .slides section { overflow: hidden; }
+.reveal section pre { max-width: 100%; }
 </style>
 
 # Agentic Runtime Security on AWS
@@ -72,7 +93,7 @@ This table is the whole thesis made concrete, and the numbers are exact from `va
 
 ## Two brokers, one OIDC seam
 
-<img src="assets/verify-vault-split.svg" style="max-height: 420px;" />
+<img src="assets/verify-vault-split.svg" style="max-height: 360px;" />
 
 **IBM Verify** brokers human identity — OAuth/OIDC, PKCE, CIBA. **HashiCorp Vault** brokers workload identity & credentials — K8s auth, OAuth resource server, dynamic DB roles, STS. They meet at exactly **one** seam: Vault's **OAuth resource server** profile trusts IVIA's JWKS and pins `issuer_id`, so an IVIA-minted JWT authorizes Vault **directly** via `X-Vault-Token`.
 
@@ -83,7 +104,7 @@ Clean separation of duties, usually different teams. Verify never sees a databas
 
 ## Reference architecture
 
-<img src="assets/architecture-overview.svg" style="max-height: 500px;" />
+<img src="assets/architecture-overview.svg" style="max-height: 430px;" />
 
 IVIA + Vault credential-vending backbone on AWS-native services — EKS 1.34 · RDS PostgreSQL 17 · Bedrock · Athena
 
@@ -207,7 +228,7 @@ sequenceDiagram
     UI->>MCP: tools/call + Bearer id_token
     MCP->>Vault: GET database/creds/uc2-personal-readonly<br/>(X-Vault-Token: IVIA OAuth JWT, aud=agent-uc2)
     Vault->>IVIA: validate JWT via JWKS (issuer_id)
-    Vault->>Vault: resolve sub=user; OBO baseline intersect agent-uc2 ceiling
+    Vault->>Vault: resolve sub=user — OBO baseline intersect agent-uc2 ceiling
     Vault->>RDS: CREATE ROLE … GRANT SELECT (TTL 900s)
     MCP->>RDS: set_config('app.current_user_sub', sub) + SELECT
     RDS->>RDS: RLS: USING (user_sub = current_setting(...))
@@ -355,6 +376,8 @@ Vault denies the write credential unless the signature validates against IVIA's 
 
 ### UC3 — the bypass tests prove the gate has teeth
 
+<!-- .slide: class="dense" -->
+
 `verify-uc3.sh --bypass` runs three negative gates against the positive one (Checks 15/16 — a **real** delegated token IS allowed to read the creds):
 
 <div class="tight">
@@ -374,7 +397,7 @@ Check 14 closes the obvious door — you can't forge with a symmetric key becaus
 
 ## One refund — three planes, one row
 
-<img src="assets/audit-correlation.svg" style="max-height: 460px;" />
+<img src="assets/audit-correlation.svg" style="max-height: 340px;" />
 
 A single Athena view **`audit_correlation`** (11 cols) stitches **IVIA decision · Vault audit · RDS pgaudit**. `request_id` anchors IVIA↔pgaudit; Vault is bridged by **path + response event + ±30s** (nearest match).
 
@@ -402,6 +425,8 @@ This single row is the auditor's answer. The TTL column comes from the value the
 
 ## Three use cases → Vault-native primitives
 
+<!-- .slide: class="dense" -->
+
 Each use case maps onto Vault Enterprise 2.0.3's first-class agent features — not a hand-rolled approximation:
 
 | Use Case | Vault-native primitive | Identity resolved from | Enforcement layers |
@@ -418,6 +443,8 @@ This is the one-slide answer to "what did Vault's native agent support actually 
 ---
 
 ## Where this goes next
+
+<!-- .slide: class="dense" -->
 
 Progressive maturity on Vault + IBM Verify — the workshop drops you at **Integrate / Observe** with a working reference:
 

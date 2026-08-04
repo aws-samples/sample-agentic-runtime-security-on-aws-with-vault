@@ -133,8 +133,10 @@ The slide deck `slides.md` is reveal-md markdown; it lives in the sibling worktr
 # Live present (opens browser at http://localhost:1948, hot-reloads on edit)
 npx reveal-md slides.md
 
-# Export to PDF for offline / printed handouts
-npx reveal-md slides.md --print slides.pdf
+# Export to PDF for offline / printed handouts.
+# --print-size 1280x720 is REQUIRED: it matches the PDF page to the 16:9 slide
+# size. Without it reveal-md prints a ~4:3 page and clips the right edge.
+npx reveal-md slides.md --print slides.pdf --print-size 1280x720
 ```
 
 No build step — `reveal-md.json` next to `slides.md` carries the theme + transition config.
