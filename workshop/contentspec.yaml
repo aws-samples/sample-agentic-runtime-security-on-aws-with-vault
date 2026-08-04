@@ -65,7 +65,8 @@ infrastructure:
     - templateLocation: static/cfn/bootstrap.yaml
       label: "Workshop-Foundation-EKS-Vault-Bootstrap"
       participantAllStackOutputsVisible: true
-      # AcmeEmail: event organizer fills this in Workshop Studio event config (NoEcho in CFN).
+      # AcmeEmail: OPTIONAL (NoEcho in CFN). Leave blank to register a no-contact Let's Encrypt
+      # account (LE deprecated account emails 2025-06-04); the organizer MAY set a real address.
       # TerraformSourceBucket + AssetsKeyPrefix: where `aws s3 sync ./assets` (publish.sh)
       # lands the workshop/assets/ tree — CodeBuild sources buildspec/ + terraform/ from here.
       #

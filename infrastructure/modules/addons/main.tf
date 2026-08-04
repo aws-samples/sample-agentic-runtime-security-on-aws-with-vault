@@ -133,11 +133,17 @@ resource "kubectl_manifest" "letsencrypt_prod_issuer" {
       name = "letsencrypt-prod"
     }
     spec = {
-      acme = {
+      # The ACME `email` key is included ONLY when var.acme_email is non-empty.
+      # An empty value registers a no-contact account: Let's Encrypt turned off
+      # expiration-notice emails and DELETED all stored ACME account emails on
+      # 2025-06-04, and accepts (does not error on) no-contact accounts.
+      # Rendering `email: ""` is NOT the same as omitting the key, so merge it
+      # in conditionally rather than always setting it.
+      acme = merge(
+        {
         # D-08 — Let's Encrypt PRODUCTION ACME endpoint (literal, hardcoded;
         # no staging knob, no attendee-facing override).
         server = "https://acme-v02.api.letsencrypt.org/directory"
-        email  = var.acme_email
         privateKeySecretRef = {
           name = "letsencrypt-prod-account-key"
         }
@@ -165,7 +171,9 @@ resource "kubectl_manifest" "letsencrypt_prod_issuer" {
             }
           }
         ]
-      }
+        },
+        var.acme_email != "" ? { email = var.acme_email } : {}
+      )
     }
   })
 

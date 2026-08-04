@@ -459,19 +459,32 @@ else
              "Seed the roots first: bash infrastructure/scripts/bootstrap.sh"
     fi
 
-    # 1) acme_email (tier-1) — required, must be a real address (not *@example.com)
+    # 1) acme_email (tier-1) — OPTIONAL. Empty is valid and needs no prompt: the
+    #    ClusterIssuer registers the Let's Encrypt account with no contact address
+    #    (LE turned off account emails and deleted stored addresses 2025-06-04, and
+    #    accepts no-contact accounts), so a tier-1 CodeBuild run with a blank
+    #    acme_email proceeds without a TTY. A non-empty *@example.com placeholder is
+    #    still rejected — if that leaked in, prompt for a real address (or Enter to
+    #    clear it to no-contact); a valid non-empty address is reused as-is.
     if [[ -z "$TIER" || "$TIER" == "1" ]]; then
         acme_email="$(_tfvars_get "$TFVARS" acme_email)"
-        if [[ -z "$acme_email" || "$acme_email" == *@example.com ]]; then
+        if [[ -z "$acme_email" ]]; then
+            print_info "Preflight: acme_email empty — Let's Encrypt account will be registered with no contact email (accepted by LE)"
+        elif [[ "$acme_email" == *@example.com ]]; then
             _require_tty "acme_email" "$TFVARS"
             email_re='^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$'
             while :; do
-                read -r -p "  $(echo -e "${YELLOW}?${NC}") Let's Encrypt contact email (TLS cert issuance/renewal notices): " acme_email < /dev/tty
+                read -r -p "  $(echo -e "${YELLOW}?${NC}") Let's Encrypt contact email (optional — press Enter for no contact): " acme_email < /dev/tty
+                [[ -z "$acme_email" ]] && break
                 [[ "$acme_email" =~ $email_re && "$acme_email" != *@example.com ]] && break
-                print_warn "Enter a real, deliverable email — Let's Encrypt rejects blanks and the example.com domain."
+                print_warn "Enter a real, deliverable email, or press Enter to register with no contact."
             done
             _tfvars_set "$TFVARS" acme_email "$acme_email"
-            print_pass "Preflight: acme_email set (${acme_email})"
+            if [[ -z "$acme_email" ]]; then
+                print_pass "Preflight: acme_email cleared — no-contact Let's Encrypt account"
+            else
+                print_pass "Preflight: acme_email set (${acme_email})"
+            fi
         else
             print_info "Preflight: acme_email already set (${acme_email}) — reusing"
         fi

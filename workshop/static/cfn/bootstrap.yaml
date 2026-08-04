@@ -12,12 +12,13 @@ Parameters:
   AcmeEmail:
     Type: String
     NoEcho: true
-    AllowedPattern: '^[^@\s]+@[^@\s]+\.[^@\s]+$'
-    ConstraintDescription: Must be a valid email address (not *@example.com).
+    Default: ""
     Description: >-
       Let's Encrypt registration email for TLS certificate issuance (ACME).
-      Must be a real, reachable address — not *@example.com.
-      Event organizer fills this in the Workshop Studio event config.
+      OPTIONAL — leave blank to register a no-contact ACME account (Let's Encrypt
+      turned off expiration-notice emails and deleted stored account addresses on
+      2025-06-04). The event organizer MAY set a real, reachable address (not
+      *@example.com) if renewal/revocation notices are wanted.
 
   TerraformSourceBucket:
     Type: String

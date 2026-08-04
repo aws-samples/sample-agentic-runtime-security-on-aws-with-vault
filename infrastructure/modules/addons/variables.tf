@@ -34,8 +34,9 @@ variable "tags" {
 }
 
 variable "acme_email" {
-  description = "Let's Encrypt ACME account contact email — passed through from root var.acme_email. Required input; no fallback value is shipped (project identity-fallback rule). Plan 03 cert-manager ClusterIssuer consumes this in spec.acme.email."
+  description = "Let's Encrypt ACME account contact email — passed through from root var.acme_email. Optional (default empty); empty registers a no-contact account (LE turned off account emails and deleted stored addresses 2025-06-04). The cert-manager ClusterIssuer omits spec.acme.email entirely when this is empty."
   type        = string
+  default     = ""
 }
 
 variable "workshop_tls_arn" {

@@ -81,16 +81,20 @@ variable "rds_instance_class" {
 
 #-------------------------------------------------------------------------------
 # Attendee-trusted TLS via nip.io + Let's Encrypt
-# acme_email: Let's Encrypt ACME account contact email. NO default (per project
-#   rule never-hardcode-identity-defaults — identity-bearing inputs are caller-
-#   supplied, never defaulted). Consumed by the cert-manager ClusterIssuer in
-#   module.addons. The .acme-state file written by deploy-workshop.sh is read
-#   by the tier-2 services root (IVIA nip.io FQDN), not here.
+# acme_email: Let's Encrypt ACME account contact email — OPTIONAL. Empty (the
+#   default) registers the ACME account with NO contact address; Let's Encrypt
+#   turned off expiration-notice emails and DELETED all stored ACME account
+#   emails on 2025-06-04, and accepts no-contact accounts. This is not an
+#   identity/auth value, so an empty default carries no identity-fallback risk.
+#   Consumed by the cert-manager ClusterIssuer in module.addons, which omits the
+#   email key entirely when this is empty. The .acme-state file written by
+#   deploy-workshop.sh is read by the tier-2 services root (IVIA nip.io FQDN).
 #-------------------------------------------------------------------------------
 
 variable "acme_email" {
   type        = string
-  description = "Let's Encrypt ACME account contact email. Required input — no fallback value is shipped (CLAUDE.md identity-fallback rule). Consumed by the cert-manager ClusterIssuer in module.addons."
+  description = "Let's Encrypt ACME account contact email. Optional (default empty) — empty registers a no-contact account (LE deprecated account emails 2025-06-04). Consumed by the cert-manager ClusterIssuer in module.addons, which omits spec.acme.email when empty."
+  default     = ""
 }
 
 #-------------------------------------------------------------------------------
