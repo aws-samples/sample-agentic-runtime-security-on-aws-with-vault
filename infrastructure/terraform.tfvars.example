@@ -59,4 +59,4 @@ tags = {
 
 # EDR (Uptycs KSPM) — deploy k8sosquery DaemonSet + kubequery Deployment for
 # HC-COMPUTE-011 compliance. Values files in modules/edr/values/ are tenant-specific.
-enable_edr = true
+enable_edr = false
