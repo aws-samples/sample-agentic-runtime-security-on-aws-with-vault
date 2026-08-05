@@ -75,7 +75,7 @@ Plan events accordingly:
 - **One event per rolling 7-day window — no back-to-back weeks.** A prior event's issuances stay counted for 7 days; space events **≥7 days apart** so they age out of the window and the refill replenishes.
 - Even 12–20 can fail in a heavy-usage week — the bucket is shared and there is **no way to check remaining budget or reserve it in advance**.
 
-To run larger cohorts (20–60) reliably, move off the shared `nip.io` bucket onto an owned domain + self-hosted magic-DNS resolver + a Let's Encrypt rate-limit override — tracked in [issue #54](https://github.com/sharepointoscar/agentic-runtime-security-aws/issues/54).
+To run larger cohorts (20–60) reliably, move off the shared `nip.io` bucket onto an owned domain + self-hosted magic-DNS resolver + a Let's Encrypt rate-limit override — tracked in [issue #5](https://github.com/aws-samples/sample-agentic-runtime-security-on-aws-with-vault/issues/5).
 
 ---
 
