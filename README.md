@@ -65,6 +65,20 @@ Bedrock access required: enable `us.amazon.nova-pro-v1:0` (Nova Pro via CRIS) in
 
 ---
 
+## Event capacity (multi-attendee TLS limit)
+
+Browser-trusted TLS is issued per attendee account from Let's Encrypt over `nip.io` hostnames. `nip.io` is **not** on the Public Suffix List, so every `*.nip.io` certificate on the internet — not just this workshop's — counts against the single registered domain `nip.io`, which Let's Encrypt caps at **50 certificate issuances per rolling 7 days** (~1 refill every 202 min). Each attendee's Tier-2 deploy burns **one** issuance (more if the Step 7 HTTP-01 readiness gate retries); teardown does **not** refund it.
+
+Plan events accordingly:
+
+- **~12–20 attendees per event.** 12 is the safe floor — the 50/week bucket is shared with every `nip.io` user on the internet, and your own retries burn extra; 20 is the upper edge for a low-usage week. Never plan against the full 50 — you never own the whole bucket.
+- **One event per rolling 7-day window — no back-to-back weeks.** A prior event's issuances stay counted for 7 days; space events **≥7 days apart** so they age out of the window and the refill replenishes.
+- Even 12–20 can fail in a heavy-usage week — the bucket is shared and there is **no way to check remaining budget or reserve it in advance**.
+
+To run larger cohorts (20–60) reliably, move off the shared `nip.io` bucket onto an owned domain + self-hosted magic-DNS resolver + a Let's Encrypt rate-limit override — tracked in [issue #54](https://github.com/sharepointoscar/agentic-runtime-security-aws/issues/54).
+
+---
+
 ## Optional: pre-built images from GHCR (bring your own)
 
 The workshop deploys five container images. **The default and supported path is ECR** — `deploy-workshop.sh` builds the images from source and pushes them to your own account's private ECR (needs Docker or Podman). The workshop walkthrough only covers this ECR path.
