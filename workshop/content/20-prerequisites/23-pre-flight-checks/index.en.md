@@ -20,7 +20,23 @@ bash infrastructure/scripts/check-prerequisites.sh
 Available flags:
   - `--interactive` — prompt before each install AND before each check section
   - `--dry-run` — print install plan without executing
+  - `--skip-iam-sim` — skip the IAM permission simulation (see the note below on at-an-event accounts)
+  - `--skip-quotas` — skip the service-quota probe when the account blocks the `servicequotas` API
   - `--help` — usage
+
+:::alert{header="At an AWS-led event: IAM permission checks will report failures, and that is expected" type="info"}
+If you are running this in a Workshop Studio event account (your role is `WSParticipantRole`), the IAM permissions section will report `implicitDeny` failures for actions such as `iam:CreateRole`, `eks:CreateCluster`, and `rds:CreateDBInstance`. This is expected and does not mean anything is broken.
+
+The check uses `iam:SimulatePrincipalPolicy`, which evaluates only the policies attached directly to your role. In an event account your permissions are granted through Service Control Policies and permission boundaries that the simulator cannot see, so it reports a denial for write actions you can actually perform. The read-only checks (for example `eks:DescribeCluster`) pass while the create/write actions appear to fail — that pattern is the signature of this simulator limitation, not a real permissions gap.
+
+The authoritative permissions test is the deploy itself: `deploy-workshop.sh` runs a real `terraform apply`, and any genuine permission gap surfaces there as a specific `AccessDenied` on that resource. The simulation creates nothing, so skipping it leaves no setup incomplete. Re-run the pre-flight with the IAM simulation skipped (add `--skip-quotas` as well if the quota section also reports denials in your event account):
+
+```bash
+bash infrastructure/scripts/check-prerequisites.sh --skip-iam-sim --skip-quotas
+```
+
+Self-paced attendees using their own account with `AdministratorAccess` (or `PowerUserAccess` + `IAMFullAccess`) should not skip these checks — there the failures are real and tell you which policy to attach.
+:::
 
 ## Verify CLI tools are installed
 

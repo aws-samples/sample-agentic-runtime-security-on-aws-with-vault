@@ -18,7 +18,7 @@ export VAULT_ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)
 ## Step 1 — Confirm pods are Running
 
 ```bash
-kubectl get pods -n vault
+kubectl get pods -n vault -l app.kubernetes.io/name=vault
 ```
 
 Expected — all three pods `Running`:
@@ -55,7 +55,7 @@ kubectl exec -n vault vault-0 -- \
   sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault operator raft list-peers"
 ```
 
-Expected — three peers, one leader:
+Expected — the three Vault nodes (the same `vault-0`, `vault-1`, `vault-2` pods from Step 1) form the Raft cluster: one `leader` and two `follower`s, all with `Voter` = `true`:
 
 ```
 Node       Address                        State       Voter

@@ -170,17 +170,17 @@ Each ephemeral role is created with login credentials scoped to the banking sche
 
 To confirm the native path, present a real user JWT to Vault via `X-Vault-Token` and watch Vault vend a credential in a **single** call — no login step.
 
-The Banking UI keeps the user's IVIA-issued JWT in an HttpOnly cookie named `id_token`. To grab it:
+The Banking UI keeps the user's IVIA-issued access JWT in an HttpOnly cookie named `access_token`. This is the token that carries the `act.sub = agent-uc2` actor claim Vault needs; the `id_token` does not carry it and Vault will reject it. To grab it:
 
 1. Sign in to the Banking UI as `oscar` or `jaime`.
 2. Open Chrome DevTools (F12) → **Application** tab.
 3. Storage → Cookies → click the workshop hostname.
-4. Find the row `id_token` and copy the **Value** column.
+4. Find the row `access_token` and copy the **Value** column.
 
 Then present it as the Vault token — the JWT **is** the credential:
 
 ```bash
-JWT_TOKEN="<paste-the-id_token-value>"; kubectl exec -n vault vault-0 -- sh -c "VAULT_TOKEN='${JWT_TOKEN}' vault read database/creds/uc2-personal-readonly"
+JWT_TOKEN="<paste-the-access_token-value>"; kubectl exec -n vault vault-0 -- sh -c "VAULT_TOKEN='${JWT_TOKEN}' vault read database/creds/uc2-personal-readonly"
 ```
 
 Expected output — a per-user JIT Postgres credential, issued directly against the presented OAuth JWT:
