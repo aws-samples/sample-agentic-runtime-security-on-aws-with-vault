@@ -31,6 +31,22 @@
 # Disable AWS CLI pager so commands don't block on `less`
 export AWS_PAGER=""
 
+# Shared Terraform provider plugin cache.
+#
+# The workshop runs `terraform init` across three roots (tier-1/2/3), each of
+# which would otherwise download its own copy of every provider. The
+# hashicorp/aws provider alone unpacks to ~700 MB, so three copies (~2 GB)
+# overflow small home volumes -- notably AWS CloudShell, whose home is a fixed
+# ~1 GB volume, producing `terraform init: no space left on device`. A shared
+# plugin cache on the larger TMPDIR volume ($TMPDIR, /tmp in CloudShell) is
+# populated once and symlinked into each root, so all three roots share a
+# single copy off the home volume. Only set when unset so a caller-supplied
+# TF_PLUGIN_CACHE_DIR (CI, Instruqt, etc.) is never overridden.
+if [ -z "${TF_PLUGIN_CACHE_DIR:-}" ]; then
+    export TF_PLUGIN_CACHE_DIR="${TMPDIR:-/tmp}/tf-plugin-cache"
+    mkdir -p "$TF_PLUGIN_CACHE_DIR"
+fi
+
 # Terminal capability probe (Plan 01-09 hardening)
 #
 # If the controlling terminal does not support color (tput colors < 8) OR

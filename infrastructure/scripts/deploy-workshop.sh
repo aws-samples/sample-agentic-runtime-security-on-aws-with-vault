@@ -270,7 +270,16 @@ _tf_apply_tier() {
         print_pass "${label} (dry-run)"
         return 0
     fi
+
     print_info "${label}: terraform init"
+    # Clear a stale/dangling provider dir before init. With a shared
+    # TF_PLUGIN_CACHE_DIR on an ephemeral volume (e.g. /tmp in CloudShell), a
+    # session reset can wipe the cache while .terraform/providers symlinks into
+    # it survive on the persistent home volume, making init fail with "cannot
+    # install package ... because it is a symlink". Removing the provider dir
+    # lets init repopulate from the shared cache cleanly. (No-op when the dir
+    # is absent or contains real copies.)
+    [ -n "${TF_PLUGIN_CACHE_DIR:-}" ] && rm -rf "${dir}/.terraform/providers" 2>/dev/null || true
     if ! terraform -chdir="${dir}" init -input=false >/dev/null; then
         _die "${label}: terraform init" "Re-run: terraform -chdir=${dir} init"
     fi
