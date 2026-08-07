@@ -310,6 +310,17 @@ step_generate_tfvars_and_init() {
 
     # --- terraform init all 3 roots (bare init, NEVER -upgrade) ---------------
     echo -e "${BLUE}  Running terraform init in all 3 roots (local state)...${NC}"
+    # When TF_PLUGIN_CACHE_DIR points at an ephemeral volume (e.g. /tmp in
+    # CloudShell), a session reset can wipe the cache while each root's
+    # .terraform/providers symlinks into it survive on the persistent home
+    # volume -- leaving dangling links that make `terraform init` fail with
+    # "cannot install package ... because it is a symlink". Clear those
+    # provider dirs first so init repopulates the shared cache cleanly.
+    if [ -n "${TF_PLUGIN_CACHE_DIR:-}" ]; then
+        rm -rf "$TIER1_DIR/.terraform/providers" \
+               "$TIER2_DIR/.terraform/providers" \
+               "$TIER3_DIR/.terraform/providers" 2>/dev/null || true
+    fi
     terraform -chdir="$TIER1_DIR" init -input=false
     terraform -chdir="$TIER2_DIR" init -input=false
     terraform -chdir="$TIER3_DIR" init -input=false
