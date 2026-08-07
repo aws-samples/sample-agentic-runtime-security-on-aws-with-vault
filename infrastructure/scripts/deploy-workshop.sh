@@ -180,6 +180,23 @@ done
 TFVARS="${INFRA_DIR}/terraform.tfvars"
 TFVARS_EXAMPLE="${INFRA_DIR}/terraform.tfvars.example"
 
+# Resolve a hostname to its IPv4 address(es) without depending on `dig`.
+# AWS CloudShell (and stock WSL2) do not ship `dig`/bind-utils, which silently
+# broke Step 7 ALB resolution. Try resolvers in order of availability:
+#   getent hosts (glibc — CloudShell/Linux/WSL2), then dig (macOS/if installed),
+#   then python3 socket (ultimate fallback). Prints one IP per line.
+_resolve_host_ips() {
+    local host="$1" out=""
+    out=$(getent ahostsv4 "$host" 2>/dev/null | awk '{print $1}' | sort -u)
+    [ -z "$out" ] && command -v dig >/dev/null 2>&1 && out=$(dig +short "$host" 2>/dev/null | grep -Eo '^[0-9.]+')
+    [ -z "$out" ] && command -v python3 >/dev/null 2>&1 && out=$(python3 -c 'import socket,sys
+try:
+    print("\n".join(sorted({r[4][0] for r in socket.getaddrinfo(sys.argv[1], None, socket.AF_INET)})))
+except Exception:
+    pass' "$host" 2>/dev/null)
+    printf '%s\n' "$out"
+}
+
 _resolve_tfvar() {
     local key="$1"
     local file=""
@@ -901,7 +918,7 @@ _run_acme_step() {
         LIVE_ALB_HOST=$(kubectl --context workshop get ingress -n verify-access ivia-wrp \
             -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
         if [[ -n "$LIVE_ALB_HOST" ]]; then
-            LIVE_ALB_IPS=$(dig +short "$LIVE_ALB_HOST" 2>/dev/null)
+            LIVE_ALB_IPS=$(_resolve_host_ips "$LIVE_ALB_HOST")
             if [[ -n "$LIVE_ALB_IPS" ]] && ! echo "$LIVE_ALB_IPS" | grep -qx "$ALB_IP"; then
                 LIVE_LIST=$(echo "$LIVE_ALB_IPS" | tr '\n' ',' | sed 's/,$//')
                 print_info "Step 7: ALB IP drift detected (.acme-state=${ALB_IP} no longer in live ALB set [${LIVE_LIST}]). Clearing stale .acme-state and forcing re-issuance."
@@ -975,11 +992,12 @@ MARKER
         return 1
     fi
 
-    # (2) Resolve ALB IP via dig (nip.io encodes the IP into the hostname).
-    ALB_IP=$(dig +short "$WRP_ALB" | head -1)
+    # (2) Resolve ALB IP (nip.io encodes the IP into the hostname). Uses a
+    # dig-free resolver (getent/python3 fallback) so it works in CloudShell.
+    ALB_IP=$(_resolve_host_ips "$WRP_ALB" | head -1)
     if [[ -z "$ALB_IP" ]]; then
         print_fail "Step 7: ALB IP resolution" \
-            "dig +short ${WRP_ALB} returned empty. Confirm the ALB has converged: aws elbv2 describe-load-balancers --region ${REGION}"
+            "Could not resolve an IP for ${WRP_ALB} (tried getent/dig/python3). Confirm the ALB has converged: aws elbv2 describe-load-balancers --region ${REGION}"
         return 1
     fi
     ALB_IP_DASHED=$(echo "$ALB_IP" | tr '.' '-')
