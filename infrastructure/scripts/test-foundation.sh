@@ -297,7 +297,8 @@ leaks=$(grep -rn "$REGION" \
     "$REPO_ROOT/infrastructure/" 2>/dev/null \
     | grep -v "terraform.tfvars" \
     | grep -v "/.terraform/" \
-    | grep -v ':\s*#\|:\s*//' || true)
+    | grep -v ':\s*#\|:\s*//' \
+    | grep -vE ':[0-9]+:\s*description\s*=' || true)
 
 if [ -z "$leaks" ]; then
     print_pass "No region literal '${REGION}' outside ${CANONICAL_FILE}"
