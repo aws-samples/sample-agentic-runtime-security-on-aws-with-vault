@@ -4,6 +4,36 @@ Scratch file for testing the `feat/21-tier2-preprovision-codebuild` branch. Dele
 
 ---
 
+## RUN THIS
+
+```bash
+cd /Users/oscar.medina/git-repos/agentic-runtime-security-aws && ./workshop/cfn-wrapper/sim-workshop-studio.sh --icr-key 'PASTE_ICR_KEY' --mmfa-secret 'PASTE_MMFA_SECRET'
+```
+
+## THEN TAIL THIS (second terminal)
+
+```bash
+aws logs tail /aws/codebuild/workshop-tier1 --follow --region us-east-1
+```
+
+## CHECK STATUS ANY TIME (third terminal, or after Ctrl-C)
+
+```bash
+cd /Users/oscar.medina/git-repos/agentic-runtime-security-aws && ./workshop/cfn-wrapper/sim-workshop-studio.sh --status
+```
+
+That is the whole test. The script does region, `WSParticipantRole`, `package-assets.sh`, the upload and the stack, pausing before each of its six steps. It also prints both tail commands and the console links itself, so you never need to come back here for them.
+
+The Vault license defaults to `~/Downloads/vault-ent.hclic` (1412 bytes, confirmed). Add `--license PATH` to use a different one.
+
+**The stack will sit at `CREATE_IN_PROGRESS` on `Tier1Deployment` for 35–45 minutes with no visible movement. That is correct.** CloudFormation is told nothing until the build's final callback, so judge progress by the CodeBuild log, never by stack events.
+
+Expected in the log, in order: tier-1 steps 1–4 → `Tier-1 deploy complete` → tier-2 steps 5–9 → `Gate: Tier-2 exit contract (Vault issuer_id = https://wrp.….nip.io)` → state staged → `Vault license file removed from the build container.` Expected end state: build `SUCCEEDED`, stack `CREATE_COMPLETE`.
+
+Everything below is reference — Parts 3 to 6 are the checks and failure injections to run *after* the deploy succeeds.
+
+---
+
 ## Before you start
 
 **The only things you must supply yourself are the three secret values.** Everything else — the participant role, the assets bucket, the stack — is created by the steps below.
@@ -68,47 +98,28 @@ Expected: comfortably under `4096`. If it is over, stop — the parameter approa
 
 ---
 
-## Part 1 — Deploy — ONE COMMAND
+## Part 1 — Reference for the deploy command at the top
 
-Everything Part 1 used to do by hand — region, the `WSParticipantRole` and its six policies, the assets bucket, `package-assets.sh`, the upload under a key prefix, the stack itself — is now `workshop/cfn-wrapper/sim-workshop-studio.sh`. It stops before every major step and waits for Enter, so you can look at state as it goes.
+### What the script stops at
 
-```bash
-cd /Users/oscar.medina/git-repos/agentic-runtime-security-aws
-./workshop/cfn-wrapper/sim-workshop-studio.sh \
-  --icr-key 'PASTE_YOUR_ICR_KEY' \
-  --mmfa-secret 'PASTE_YOUR_MMFA_SECRET'
-```
+| Step | What it does | What to look at |
+|---|---|---|
+| 1 | Preflight | account, tooling, license size, and **that no `cfn-sim-atevent` stack exists** |
+| 2 | `WSParticipantRole` | the six policies attach and are verified; a stale `WorkshopAthenaAudit` is removed so the build has to re-add it |
+| 3 | Package + upload | every `package-assets.sh` leak gate passes; buildspec and `deploy-workshop.sh` confirmed in S3 |
+| 4 | Create the stack | last stop before anything is provisioned |
+| 5 | Follow | polls stack status every 60s; reprints both tail commands and the console links |
+| 6 | Result | staged artifacts under `tier1/`, `tier2/`, `tier2-private/` |
 
-The Vault license defaults to `~/Downloads/vault-ent.hclic` (confirmed present, 1412 bytes). `~/Downloads/` also holds an older `vault.hclic` from Jul 22 — pass `--license ~/Downloads/vault.hclic` if that one is actually current.
+The deploy runs in the background, so **Ctrl-C at any prompt leaves it running.**
 
-To keep the secrets out of your shell history, export them instead and run the script bare:
+To keep the secrets out of your shell history, export them and run the script bare:
 
 ```bash
 read -rs ICR_ENTITLEMENT_KEY && export ICR_ENTITLEMENT_KEY
 read -rs IVIA_MMFA_PUSH_CLIENT_SECRET && export IVIA_MMFA_PUSH_CLIENT_SECRET
 ./workshop/cfn-wrapper/sim-workshop-studio.sh
 ```
-
-### What it stops at
-
-| Step | What it does | What to look at |
-|---|---|---|
-| 1 | Preflight | account, tooling, license size, and **that no `cfn-sim-atevent` stack exists** |
-| 2 | `WSParticipantRole` | the six policies attach; a stale `WorkshopAthenaAudit` is removed so the build has to re-add it |
-| 3 | Package + upload | every `package-assets.sh` leak gate passes; buildspec and `deploy-workshop.sh` confirmed in S3 |
-| 4 | Create the stack | last stop before anything is provisioned |
-| 5 | Follow | polls stack status every 60s |
-| 6 | Result | staged artifacts under `tier1/`, `tier2/`, `tier2-private/` |
-
-The deploy runs in the background, so **Ctrl-C at any prompt leaves it running.** Check on it any time from anywhere:
-
-```bash
-./workshop/cfn-wrapper/sim-workshop-studio.sh --status
-```
-
-Expected in the build log, in order: tier-1 steps 1–4 → `Tier-1 deploy complete` → tier-2 steps 5–9 → `Gate: Tier-2 exit contract (Vault issuer_id = https://wrp.….nip.io)` → state staged → `Vault license file removed from the build container.`
-
-Expected end state: build `SUCCEEDED`, stack `CREATE_COMPLETE`. Budget ~35–45 min.
 
 ### The one trap worth knowing
 
