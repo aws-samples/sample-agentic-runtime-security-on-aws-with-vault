@@ -169,25 +169,52 @@ aws s3 sync workshop/assets/ "s3://${SIM_BUCKET}/${SIM_PREFIX}" \
 
 ## Part 2 — Deploy (the happy path) — START HERE
 
+Run this from the repo root, on branch `feat/21-tier2-preprovision-codebuild`. **Self-contained — no variables from earlier sections needed.**
+
+Substitute only the two IBM values. The license is read from the file, already confirmed present at 1412 bytes:
+
 ```bash
+cd /Users/oscar.medina/git-repos/agentic-runtime-security-aws
+
 aws cloudformation deploy \
   --template-file workshop/static/cfn/bootstrap.yaml \
-  --stack-name "$SIM_STACK" \
-  --region "$SIM_REGION" \
+  --stack-name cfn-sim-atevent \
+  --region us-east-1 \
   --capabilities CAPABILITY_NAMED_IAM \
   --parameter-overrides \
-    TerraformSourceBucket="$SIM_BUCKET" \
-    AssetsKeyPrefix="$SIM_PREFIX" \
+    TerraformSourceBucket="cfn-sim-assets-865855451418-use1" \
+    AssetsKeyPrefix="agentic-runtime-security-aws/" \
     AcmeEmail="" \
-    IcrEntitlementKey="<your ICR key>" \
-    VaultEnterpriseLicense="$(cat ~/Downloads/vault-ent.hclic)" \
-    IviaMmfaPushClientSecret="<your MMFA secret>"
+    IcrEntitlementKey="PASTE_YOUR_ICR_KEY" \
+    IviaMmfaPushClientSecret="PASTE_YOUR_MMFA_SECRET" \
+    VaultEnterpriseLicense="$(cat ~/Downloads/vault-ent.hclic)"
+```
+
+> `~/Downloads/` also holds a `vault.hclic` (Jul 22) alongside `vault-ent.hclic` (Jul 23). The command uses `vault-ent.hclic`, which is the path `deploy-workshop.sh` defaults to — swap it if the other is the current Enterprise license.
+
+Then set these for Parts 3–6, which do use variables:
+
+```bash
+export SIM_REGION=us-east-1
+export SIM_STACK=cfn-sim-atevent
+export ACCT=865855451418
+export SIM_BUCKET="cfn-sim-assets-${ACCT}-use1"
+export SIM_PREFIX="agentic-runtime-security-aws/"
 ```
 
 Watch it (the stack stays `CREATE_IN_PROGRESS` until the build calls back):
 
 ```bash
-aws logs tail /aws/codebuild/workshop-tier1 --follow --region "$SIM_REGION"
+aws logs tail /aws/codebuild/workshop-tier1 --follow --region us-east-1
+```
+
+If the log group does not exist yet, the build has not started — give it a moment and retry, or find the build with:
+
+```bash
+aws codebuild list-builds-for-project --region us-east-1 --project-name \
+  "$(aws cloudformation describe-stacks --stack-name cfn-sim-atevent --region us-east-1 \
+     --query "Stacks[].Outputs[?OutputKey=='CodeBuildProjectName'].OutputValue|[]|[0]" --output text)" \
+  --query 'ids[0]' --output text
 ```
 
 Expected in the log, in order: tier-1 steps 1–4 → `Tier-1 deploy complete` → tier-2 steps 5–9 → `Gate: Tier-2 exit contract (Vault issuer_id = https://wrp.….nip.io)` → state staged → `Vault license file removed from the build container.`
