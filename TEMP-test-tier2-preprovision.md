@@ -68,131 +68,61 @@ Expected: comfortably under `4096`. If it is over, stop — the parameter approa
 
 ---
 
-## Part 1 — Simulation setup — ALREADY DONE
+## Part 1 — Deploy — ONE COMMAND
 
-All of Part 1 has been run for you. It needed none of your secrets. **Start at Part 2.** The commands are kept below for reference and re-runs.
-
-| | State |
-|---|---|
-| `WSParticipantRole` | Exists (created 2026-07-06), now carrying **exactly** the 6 managed policies `contentspec.yaml` lists — `AWSCloudShellFullAccess` was missing and has been attached. Its trust policy admits `aws_oscar.medina_test-developer`, and assuming it was verified end-to-end. |
-| Leftover inline policy | The July build's `WorkshopAthenaAudit` was **removed**, so the new build has to re-add it — its reappearance is now a real check rather than a pre-existing artifact. |
-| Assets bucket | `cfn-sim-assets-865855451418-use1` (us-east-1, SSE-AES256, public access blocked), 233 objects synced under prefix `agentic-runtime-security-aws/`. Verified the branch's new code is in the uploaded tree. |
-| Stale local state | Moved out of `infrastructure/` — see the note in "Before you start". |
-
-Two things were confirmed empirically while doing this, and they are the reason the security controls exist: as `WSParticipantRole` you **can** call `secretsmanager:ListSecrets`, and you **can** list every bucket in the account. So neither the KMS deny nor the S3 bucket-policy deny is decorative — without them that role reaches the secrets and the full Tier-2 state.
-
-Export these before Part 2:
-
-```bash
-export SIM_REGION=us-east-1
-export SIM_STACK=cfn-sim-atevent
-export ACCT=865855451418
-export SIM_BUCKET="cfn-sim-assets-${ACCT}-use1"
-export SIM_PREFIX="agentic-runtime-security-aws/"
-```
-
-**Re-run this after any code change**, or CodeBuild sources stale code:
-
-```bash
-bash workshop/scripts/package-assets.sh
-aws s3 sync workshop/assets/ "s3://${SIM_BUCKET}/${SIM_PREFIX}" \
-  --exclude 'cfn/*' --exclude 'terraform/infrastructure/.terraform/*'
-```
-
-<details>
-<summary>Reference — what Part 1 did, and why each piece matters</summary>
-
-Three things make this a real simulation rather than an approximation. Skipping any of them means you are not testing what an attendee will hit.
-
-### 1a. Region — use `us-east-1`
-
-`contentspec.yaml` pins `deployableRegions.required: [us-east-1]` with `maxAccessibleRegions: 1`. The old dev-sim recipe in `workshop/cfn-wrapper/README.md` used `us-west-2`; that diverges from what a real event does.
-
-```bash
-export SIM_REGION=us-east-1
-export SIM_STACK=cfn-sim-atevent
-export ACCT=$(aws sts get-caller-identity --query Account --output text)
-```
-
-### 1b. Create a `WSParticipantRole` — this is mandatory, not optional
-
-**The build will fail without it.** `buildspec.yml` grants the attendee role a scoped Athena policy with `aws iam put-role-policy`, which — unlike the two `aws eks` grants above it — has no `|| true` and runs under `set -e`. No role, failed build.
-
-It also has to carry **exactly** the six managed policies `contentspec.yaml` grants, or the security tests are meaningless: the whole point is proving that a role holding `SecretsManagerReadWrite` and `ReadOnlyAccess` still cannot read the secrets or the full Tier-2 state.
-
-```bash
-cat > /tmp/ws-trust.json <<EOF
-{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::${ACCT}:root"},"Action":"sts:AssumeRole"}]}
-EOF
-
-aws iam create-role --role-name WSParticipantRole \
-  --assume-role-policy-document file:///tmp/ws-trust.json \
-  --description "Simulated Workshop Studio participant role (dev-sim only)"
-
-for p in ReadOnlyAccess AWSCertificateManagerFullAccess AmazonBedrockFullAccess \
-         SecretsManagerReadWrite AmazonEC2ContainerRegistryPowerUser AWSCloudShellFullAccess; do
-  aws iam attach-role-policy --role-name WSParticipantRole \
-    --policy-arn "arn:aws:iam::aws:policy/${p}"
-done
-
-aws iam list-attached-role-policies --role-name WSParticipantRole \
-  --query 'AttachedPolicies[].PolicyName' --output table
-```
-
-Expected: all six listed.
-
-### 1c. Upload the assets under a key prefix
-
-Workshop Studio passes `AssetsKeyPrefix` (`{{.AssetsBucketPrefix}}`), so the assets sit under a prefix, not at the bucket root. Simulate that.
-
-```bash
-export SIM_BUCKET="cfn-sim-assets-${ACCT}-use1"
-export SIM_PREFIX="agentic-runtime-security-aws/"
-
-bash workshop/scripts/package-assets.sh
-
-aws s3api create-bucket --bucket "$SIM_BUCKET" --region "$SIM_REGION"
-aws s3api put-bucket-encryption --bucket "$SIM_BUCKET" --server-side-encryption-configuration \
-  '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
-aws s3api put-public-access-block --bucket "$SIM_BUCKET" \
-  --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
-
-aws s3 sync workshop/assets/ "s3://${SIM_BUCKET}/${SIM_PREFIX}" \
-  --exclude 'cfn/*' --exclude 'terraform/infrastructure/.terraform/*'
-```
-
-`package-assets.sh` rsyncs `infrastructure/` into `workshop/assets/terraform/` and runs secret-leak gates — it is what pulls the branch's script changes into what CodeBuild will run. **Re-run it after every code change** or you will test stale code.
-
-</details>
-
----
-
-## Part 2 — Deploy (the happy path) — START HERE
-
-Run this from the repo root, on branch `feat/21-tier2-preprovision-codebuild`. **Self-contained — no variables from earlier sections needed.**
-
-Substitute only the two IBM values. The license is read from the file, already confirmed present at 1412 bytes:
+Everything Part 1 used to do by hand — region, the `WSParticipantRole` and its six policies, the assets bucket, `package-assets.sh`, the upload under a key prefix, the stack itself — is now `workshop/cfn-wrapper/sim-workshop-studio.sh`. It stops before every major step and waits for Enter, so you can look at state as it goes.
 
 ```bash
 cd /Users/oscar.medina/git-repos/agentic-runtime-security-aws
-
-aws cloudformation deploy \
-  --template-file workshop/static/cfn/bootstrap.yaml \
-  --stack-name cfn-sim-atevent \
-  --region us-east-1 \
-  --capabilities CAPABILITY_NAMED_IAM \
-  --parameter-overrides \
-    TerraformSourceBucket="cfn-sim-assets-865855451418-use1" \
-    AssetsKeyPrefix="agentic-runtime-security-aws/" \
-    AcmeEmail="" \
-    IcrEntitlementKey="PASTE_YOUR_ICR_KEY" \
-    IviaMmfaPushClientSecret="PASTE_YOUR_MMFA_SECRET" \
-    VaultEnterpriseLicense="$(cat ~/Downloads/vault-ent.hclic)"
+./workshop/cfn-wrapper/sim-workshop-studio.sh \
+  --icr-key 'PASTE_YOUR_ICR_KEY' \
+  --mmfa-secret 'PASTE_YOUR_MMFA_SECRET'
 ```
 
-> `~/Downloads/` also holds a `vault.hclic` (Jul 22) alongside `vault-ent.hclic` (Jul 23). The command uses `vault-ent.hclic`, which is the path `deploy-workshop.sh` defaults to — swap it if the other is the current Enterprise license.
+The Vault license defaults to `~/Downloads/vault-ent.hclic` (confirmed present, 1412 bytes). `~/Downloads/` also holds an older `vault.hclic` from Jul 22 — pass `--license ~/Downloads/vault.hclic` if that one is actually current.
 
-Then set these for Parts 3–6, which do use variables:
+To keep the secrets out of your shell history, export them instead and run the script bare:
+
+```bash
+read -rs ICR_ENTITLEMENT_KEY && export ICR_ENTITLEMENT_KEY
+read -rs IVIA_MMFA_PUSH_CLIENT_SECRET && export IVIA_MMFA_PUSH_CLIENT_SECRET
+./workshop/cfn-wrapper/sim-workshop-studio.sh
+```
+
+### What it stops at
+
+| Step | What it does | What to look at |
+|---|---|---|
+| 1 | Preflight | account, tooling, license size, and **that no `cfn-sim-atevent` stack exists** |
+| 2 | `WSParticipantRole` | the six policies attach; a stale `WorkshopAthenaAudit` is removed so the build has to re-add it |
+| 3 | Package + upload | every `package-assets.sh` leak gate passes; buildspec and `deploy-workshop.sh` confirmed in S3 |
+| 4 | Create the stack | last stop before anything is provisioned |
+| 5 | Follow | polls stack status every 60s |
+| 6 | Result | staged artifacts under `tier1/`, `tier2/`, `tier2-private/` |
+
+The deploy runs in the background, so **Ctrl-C at any prompt leaves it running.** Check on it any time from anywhere:
+
+```bash
+./workshop/cfn-wrapper/sim-workshop-studio.sh --status
+```
+
+Expected in the build log, in order: tier-1 steps 1–4 → `Tier-1 deploy complete` → tier-2 steps 5–9 → `Gate: Tier-2 exit contract (Vault issuer_id = https://wrp.….nip.io)` → state staged → `Vault license file removed from the build container.`
+
+Expected end state: build `SUCCEEDED`, stack `CREATE_COMPLETE`. Budget ~35–45 min.
+
+### The one trap worth knowing
+
+**A stack UPDATE never re-runs the build.** `Tier1Deployment` carries `IgnoreUpdate: true`, so re-deploying over an existing stack updates the template and provisions nothing — it looks like success and stages nothing. This is exactly what happened on the Aug 4 stack. The script refuses to run when the stack already exists and tells you to delete it first; that refusal is the feature, not an obstacle.
+
+### Two things already confirmed empirically
+
+As `WSParticipantRole` you **can** call `secretsmanager:ListSecrets`, and you **can** list every bucket in the account. So neither the KMS deny nor the S3 bucket-policy deny is decorative — without them that role reaches the secrets and the full Tier-2 state.
+
+---
+
+## Part 2 — Variables for Parts 3–6
+
+Parts 3 onward use these:
 
 ```bash
 export SIM_REGION=us-east-1
@@ -201,25 +131,6 @@ export ACCT=865855451418
 export SIM_BUCKET="cfn-sim-assets-${ACCT}-use1"
 export SIM_PREFIX="agentic-runtime-security-aws/"
 ```
-
-Watch it (the stack stays `CREATE_IN_PROGRESS` until the build calls back):
-
-```bash
-aws logs tail /aws/codebuild/workshop-tier1 --follow --region us-east-1
-```
-
-If the log group does not exist yet, the build has not started — give it a moment and retry, or find the build with:
-
-```bash
-aws codebuild list-builds-for-project --region us-east-1 --project-name \
-  "$(aws cloudformation describe-stacks --stack-name cfn-sim-atevent --region us-east-1 \
-     --query "Stacks[].Outputs[?OutputKey=='CodeBuildProjectName'].OutputValue|[]|[0]" --output text)" \
-  --query 'ids[0]' --output text
-```
-
-Expected in the log, in order: tier-1 steps 1–4 → `Tier-1 deploy complete` → tier-2 steps 5–9 → `Gate: Tier-2 exit contract (Vault issuer_id = https://wrp.….nip.io)` → state staged → `Vault license file removed from the build container.`
-
-Expected end state: build `SUCCEEDED`, stack `CREATE_COMPLETE`. Budget ~35–45 min.
 
 ---
 
