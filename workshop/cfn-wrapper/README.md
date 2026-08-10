@@ -40,48 +40,34 @@ CloudFormation is unblocked **only** by the buildspec's `finally` callback: with
 
 ## Dev-account sim (manual test outside Workshop Studio)
 
-Mirrors the reference repo's manual-test recipe. Region `us-west-2`, account from `aws sts get-caller-identity`. The dev-sim uses a local bucket in the CodeBuild region (real WS exposes its own assets bucket — see the VERIFY-ON-REAL-WS note in `contentspec.yaml`).
+`sim-workshop-studio.sh` in this directory runs the whole simulation in one command. It stops before each major step so you can inspect state, and the deploy runs in the background so Ctrl-C at a prompt does not kill it.
 
 ```bash
-# 0. Regenerate the assets tree (syncs infrastructure/ -> assets/terraform/, secret-leak gated)
-bash workshop/scripts/package-assets.sh
+./workshop/cfn-wrapper/sim-workshop-studio.sh \
+  --icr-key '<icr-entitlement-key>' \
+  --mmfa-secret '<mmfa-push-secret>'
 
-# 1. Create a private SSE bucket and upload the assets (buildspec/ + terraform/) to its root
-ACCT=$(aws sts get-caller-identity --query Account --output text)
-BUCKET="cfn-sim-assets-${ACCT}-usw2"
-aws s3api create-bucket --bucket "$BUCKET" --region us-west-2 \
-  --create-bucket-configuration LocationConstraint=us-west-2
-aws s3api put-bucket-encryption --bucket "$BUCKET" --server-side-encryption-configuration \
-  '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
-aws s3 sync workshop/assets/ "s3://${BUCKET}/" \
-  --exclude 'cfn/*' --exclude 'terraform/infrastructure/.terraform/*'
-
-# 2. Deploy the CFN stack pointed at the bucket (AssetsKeyPrefix empty = bucket root).
-#    The three licensing parameters are REQUIRED (MinLength 1) — the stack will not
-#    create without them, which is deliberate: it fails here rather than 20 minutes
-#    into the build. AcmeEmail stays optional.
-aws cloudformation deploy \
-  --template-file workshop/static/cfn/bootstrap.yaml \
-  --stack-name cfn-sim-atevent \
-  --parameter-overrides \
-    AcmeEmail="you@real-domain.com" \
-    TerraformSourceBucket="$BUCKET" \
-    IcrEntitlementKey="$(cat ~/.ibm-icr-entitlement-key)" \
-    VaultEnterpriseLicense="$(cat ~/Downloads/vault-ent.hclic)" \
-    IviaMmfaPushClientSecret="$(cat ~/.ivia-mmfa-push-secret)" \
-  --capabilities CAPABILITY_NAMED_IAM \
-  --region us-west-2
-
-# 3. Watch the CodeBuild run (stack stays CREATE_IN_PROGRESS until the callback fires)
-aws logs tail /aws/codebuild/workshop-tier1 --follow --region us-west-2
-
-# 4. Clean up: delete the stack (this now tears down tier-2 then tier-1 via the
-#    delete build), then empty+delete the assets bucket.
-aws cloudformation delete-stack --stack-name cfn-sim-atevent --region us-west-2
-aws cloudformation wait stack-delete-complete --stack-name cfn-sim-atevent --region us-west-2
-aws s3 rb "s3://${BUCKET}" --force
+./workshop/cfn-wrapper/sim-workshop-studio.sh --status   # check on it from anywhere
 ```
 
-> **Re-running:** a stack **update** does not re-run the build — `IgnoreUpdate: true` makes `handle_update` a no-op. Each test iteration is a fresh create with a delete in between. To re-run against an already-deployed environment without disturbing the stack, use `aws codebuild start-build --project-name <CodeBuildProjectName output>`; with no `CFN_EVENT_RESPONSE_URL` the buildspec takes its dev-sim branch and sends no callback.
+The Vault license defaults to `~/Downloads/vault-ent.hclic`; override with `--license PATH`. All three secrets may instead come from `ICR_ENTITLEMENT_KEY`, `IVIA_MMFA_PUSH_CLIENT_SECRET` and `VAULT_ENTERPRISE_LICENSE_PATH`, which keeps them out of shell history. They reach CloudFormation through a mode-600 parameters file, never as command-line arguments — arguments are readable by every process on the machine via `ps`.
+
+The script does, in order: preflight (credentials, tooling, license size, and that no stack already exists) → create `WSParticipantRole` with the six managed policies `contentspec.yaml` grants → `package-assets.sh` + upload under the key prefix → create the stack → poll → report the staged artifacts.
+
+**Three things it gets right that a hand-rolled recipe usually does not**, and each one invalidates the test if wrong:
+
+- **Region `us-east-1`.** `contentspec.yaml` pins `deployableRegions.required: [us-east-1]` with `maxAccessibleRegions: 1`.
+- **`WSParticipantRole` must exist, with exactly those six policies.** `buildspec.yml`'s `aws iam put-role-policy` has no `|| true` and runs under `set -e`, so a missing role fails the build outright. And the policy set is the whole point of the security assertions: proving a role holding `SecretsManagerReadWrite` still cannot read the licensing secrets.
+- **Assets live under a key prefix**, because Workshop Studio passes `{{.AssetsBucketPrefix}}` — not at the bucket root.
+
+Teardown stays a separate, deliberate act:
+
+```bash
+aws cloudformation delete-stack --stack-name cfn-sim-atevent --region us-east-1
+aws cloudformation wait stack-delete-complete --stack-name cfn-sim-atevent --region us-east-1
+aws s3 rb "s3://cfn-sim-assets-<account>-useast1" --force
+```
+
+> **Re-running:** a stack **update** does not re-run the build — `IgnoreUpdate: true` makes `handle_update` a no-op, so re-deploying over a live stack updates the template and provisions nothing while reporting success. Each test iteration is a fresh create with a delete in between; the script refuses to run against an existing stack for exactly this reason. To re-run against an already-deployed environment without disturbing the stack, use `aws codebuild start-build --project-name <CodeBuildProjectName output>`; with no `CFN_EVENT_RESPONSE_URL` the buildspec takes its dev-sim branch and sends no callback.
 
 > The state-staging bucket the stack creates (`StateBucketName` output) is **retained** on stack delete (versioned). It holds the staged tier-1 state, the attendee-facing tier-2 artifacts under `tier2/`, and the full tier-2 state under `tier2-private/` — the last of which contains the licensing secrets in plaintext, so remove the bucket once you are done with it.
