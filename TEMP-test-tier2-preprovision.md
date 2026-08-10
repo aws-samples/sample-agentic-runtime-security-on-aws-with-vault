@@ -1,6 +1,41 @@
 # TEMP — Testing Tier-2 pre-provisioning (issue #21)
 
-Scratch file for testing the `feat/21-tier2-preprovision-codebuild` branch. Untracked — delete when done.
+Scratch file for testing the `feat/21-tier2-preprovision-codebuild` branch. Delete when done.
+
+---
+
+## Before you start
+
+**The only things you must supply yourself are the three secret values.** Everything else — the participant role, the assets bucket, the stack — is created by the steps below.
+
+| Need | Check |
+|---|---|
+| Vault Enterprise `.hclic` on disk | `wc -c ~/Downloads/vault-ent.hclic` → non-zero and under 4096 |
+| IBM Container Registry entitlement key | have it to hand |
+| IBM Verify MMFA push client secret | have it to hand |
+
+Already confirmed on this machine, no action needed: you are on `feat/21-tier2-preprovision-codebuild`; AWS credentials resolve to account `865855451418`; `terraform`, `aws`, `jq`, `kubectl`, `rsync` and `rsvg-convert` are all installed; and `package-assets.sh` runs clean with every leak gate passing.
+
+**You do NOT need Docker or Podman.** CodeBuild builds the Use Case images in privileged mode — that is a self-paced requirement, not an at-an-event one.
+
+### Clear the stale state from the environment you tore down
+
+`infrastructure/` still holds `terraform.tfstate`, `services/terraform.tfstate`, `workloads/terraform.tfstate` and three `terraform.tfvars` files dated 2026-08-04. They are gitignored and `package-assets.sh` strips them from the assets tree, so **they cannot affect the CodeBuild run**. They matter only in Part 4, where you walk page 31 as an attendee: if a state pull fails you would silently be looking at August's state instead of noticing.
+
+Move them aside rather than deleting, so you can put them back if you want them:
+
+```bash
+mkdir -p /tmp/old-workshop-state
+mv infrastructure/terraform.tfstate infrastructure/terraform.tfstate.backup \
+   infrastructure/services/terraform.tfstate infrastructure/workloads/terraform.tfstate \
+   infrastructure/services/terraform.tfvars infrastructure/workloads/terraform.tfvars \
+   /tmp/old-workshop-state/ 2>/dev/null
+ls /tmp/old-workshop-state/
+```
+
+Keep `infrastructure/terraform.tfvars` — `bootstrap.sh` reseeds it anyway, and page 31 overwrites it from S3.
+
+`~/vault-init.json` is already absent, so there is no stale Vault root token to confuse things.
 
 ---
 
