@@ -99,9 +99,12 @@ die()  { echo "  ${RED}✗ $1${NC}" >&2; [[ -n "${2:-}" ]] && echo "    ${YELLOW
 
 # Stop so the operator can inspect state before the next step mutates anything.
 # Reads from /dev/tty so a piped stdin does not silently skip every prompt.
+# Test that /dev/tty can actually be OPENED, not merely that it exists: under a
+# pipe or a detached job the node is present but unopenable, and a bare -e test
+# lets the read fail noisily instead of skipping the prompt.
 pause() {
     $AUTO_YES && return 0
-    [[ -e /dev/tty ]] || return 0
+    { : < /dev/tty; } 2>/dev/null || return 0
     echo
     read -r -p "  ${YELLOW}?${NC} $1 — Enter to continue, Ctrl-C to stop " _ < /dev/tty
 }
@@ -140,6 +143,7 @@ report() {
         fi
     fi
 
+    local staged_ok=0
     local state_bucket
     state_bucket=$(aws cloudformation describe-stacks --stack-name "$STACK" --region "$REGION" \
         --query "Stacks[].Outputs[?OutputKey=='StateBucketName'].OutputValue|[]|[0]" \
@@ -148,11 +152,26 @@ report() {
         info "State bucket: ${state_bucket}"
         aws s3 ls "s3://${state_bucket}/" --recursive 2>/dev/null | sed 's/^/      /'
         echo
-        info "Expect, when tier 2 has staged successfully:"
-        info "  tier1/         terraform.tfstate + terraform.tfvars"
-        info "  tier2/         outputs-only state, .acme-state, vault-init.json"
-        info "  tier2-private/ full tier-2 state (attendee is denied by bucket policy)"
-        info "Only tier1/ present means tier 2 did not stage — read the build log."
+
+        # Assert the artifacts, do not merely describe them. A CREATE_COMPLETE
+        # stack holding only tier1/ is exactly the silent-success this branch
+        # exists to eliminate — the build reported SUCCEEDED and staged nothing.
+        local missing=""
+        for prefix in tier1/ tier2/ tier2-private/; do
+            if [[ -z "$(aws s3 ls "s3://${state_bucket}/${prefix}" 2>/dev/null)" ]]; then
+                missing="${missing}${prefix} "
+            fi
+        done
+        if [[ -z "$missing" ]]; then
+            ok "all three prefixes staged: tier1/ tier2/ tier2-private/"
+            staged_ok=1
+        elif [[ "$final" == "CREATE_COMPLETE" ]]; then
+            echo "  ${RED}✗ Stack is CREATE_COMPLETE but these prefixes are EMPTY: ${missing}${NC}" >&2
+            echo "    ${YELLOW}Fix:${NC} the build reported success without staging. Read the build log —" >&2
+            echo "         this is the silent-success failure mode, not a cosmetic gap." >&2
+        else
+            info "Not yet staged: ${missing}(expected while the build is still running)"
+        fi
     fi
 
     if [[ "$final" == *FAILED* || "$final" == *ROLLBACK* ]]; then
@@ -165,7 +184,7 @@ report() {
         info "On a deliberate fault injection, a FAILED stack is the CORRECT result."
     fi
 
-    [[ "$final" == "CREATE_COMPLETE" ]]
+    [[ "$final" == "CREATE_COMPLETE" && "$staged_ok" -eq 1 ]]
 }
 
 if $STATUS_ONLY; then
@@ -247,9 +266,13 @@ step 2 "Simulated attendee role (WSParticipantRole)"
 # this can never drift from what a real event actually grants.
 POLICIES=$(grep -A20 'managedPolicies:' "${REPO_ROOT}/workshop/contentspec.yaml" \
     | grep -oE 'arn:aws:iam::aws:policy/[A-Za-z0-9]+' | sort -u)
-[[ -n "$POLICIES" ]] || die "Could not read managedPolicies from contentspec.yaml" \
-    "Check awsAccountConfig.participantRole.managedPolicies."
-info "contentspec grants $(echo "$POLICIES" | wc -l | tr -d ' ') managed policies"
+POLICY_COUNT=$(printf '%s\n' "$POLICIES" | grep -c . )
+# Assert the count. A regex that silently matched 5 of 6 would produce a role
+# that looks right and quietly weakens every security assertion downstream.
+[[ "$POLICY_COUNT" -eq 6 ]] || die \
+    "Parsed ${POLICY_COUNT} managed policies from contentspec.yaml, expected 6" \
+    "Either contentspec's participantRole changed (update this expectation deliberately) or the parse broke."
+info "contentspec grants ${POLICY_COUNT} managed policies"
 
 # Turn an assumed-role ARN into the underlying role ARN, so the trust policy
 # names a principal that still exists after this session's credentials expire.
@@ -273,11 +296,22 @@ else
     ok "WSParticipantRole created, trusting ${TRUST_ARN}"
 fi
 
-echo "$POLICIES" | while read -r arn; do
+while read -r arn; do
     [[ -z "$arn" ]] && continue
-    aws iam attach-role-policy --role-name WSParticipantRole --policy-arn "$arn" 2>/dev/null
-    echo "  ${GREEN}✓${NC} attached ${arn##*/}"
-done
+    aws iam attach-role-policy --role-name WSParticipantRole --policy-arn "$arn" 2>/dev/null \
+        || warn "attach returned non-zero for ${arn##*/} — the check below decides"
+done <<< "$POLICIES"
+
+# VERIFY, do not assume. This is the one step that must not lie: the security
+# assertions in Part 4 are meaningless unless the role really carries all six.
+ATTACHED=$(aws iam list-attached-role-policies --role-name WSParticipantRole \
+    --query 'AttachedPolicies[].PolicyArn' --output text 2>/dev/null | tr '\t' '\n' | sort -u)
+MISSING=$(comm -23 <(printf '%s\n' "$POLICIES") <(printf '%s\n' "$ATTACHED"))
+[[ -z "$MISSING" ]] || die \
+    "WSParticipantRole is missing $(printf '%s\n' "$MISSING" | grep -c .) of the 6 policies:
+         $(printf '%s\n' "$MISSING" | sed 's|.*/||' | tr '\n' ' ')" \
+    "Attach them by hand, or check your IAM permissions, then re-run."
+ok "all ${POLICY_COUNT} policies verified present on WSParticipantRole"
 
 # A WorkshopAthenaAudit inline policy left over from an earlier build would mask
 # whether THIS build's put-role-policy actually ran. A real event starts without it.
@@ -352,6 +386,10 @@ LOG="${LOG_DIR}/sim-deploy-$(date +%s).log"
 # Secrets go to CloudFormation through a mode-600 file, NEVER as command-line
 # arguments: arguments are world-readable through `ps` for the life of the call.
 # jq --rawfile reads the license verbatim, so embedded newlines survive intact.
+# The trap covers only the window before the deploy launches — dying at the
+# STEP 4 prompt must not leave the file behind. Once the background job owns the
+# file the trap is cleared, because an EXIT trap fires on Ctrl-C too and would
+# otherwise delete the file out from under a deploy that is still reading it.
 PARAMS_FILE="$(mktemp -t cfnparams)"
 chmod 600 "$PARAMS_FILE"
 trap 'rm -f "$PARAMS_FILE"' EXIT INT TERM
@@ -378,16 +416,22 @@ pause "About to CREATE the stack"
 
 # Backgrounded so Ctrl-C at any later prompt leaves the deploy running. A
 # background job in a non-interactive shell ignores SIGINT, so Ctrl-C reaches
-# only this script.
-nohup aws cloudformation deploy \
-    --template-file "${REPO_ROOT}/workshop/static/cfn/bootstrap.yaml" \
-    --stack-name "$STACK" \
-    --region "$REGION" \
-    --capabilities CAPABILITY_NAMED_IAM \
-    --no-fail-on-empty-changeset \
-    --parameter-overrides "file://${PARAMS_FILE}" \
-    > "$LOG" 2>&1 &
+# only this script. The subshell owns the parameters file and shreds it when the
+# CLI is finished with it, which is why the parent clears its trap below.
+(
+    aws cloudformation deploy \
+        --template-file "${REPO_ROOT}/workshop/static/cfn/bootstrap.yaml" \
+        --stack-name "$STACK" \
+        --region "$REGION" \
+        --capabilities CAPABILITY_NAMED_IAM \
+        --no-fail-on-empty-changeset \
+        --parameter-overrides "file://${PARAMS_FILE}"
+    _rc=$?
+    rm -f "$PARAMS_FILE"
+    exit "$_rc"
+) > "$LOG" 2>&1 &
 DEPLOY_PID=$!
+trap - EXIT INT TERM
 ok "Deploy running in the background (pid ${DEPLOY_PID})"
 echo
 echo "  ${YELLOW}Watch the deploy:${NC}  tail -f ${LOG}"
@@ -419,7 +463,6 @@ done
 
 wait "$DEPLOY_PID"
 DEPLOY_RC=$?
-rm -f "$PARAMS_FILE"
 
 #-------------------------------------------------------------------------------
 # STEP 6 — Result.

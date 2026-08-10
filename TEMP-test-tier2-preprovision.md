@@ -128,9 +128,11 @@ Parts 3 onward use these:
 export SIM_REGION=us-east-1
 export SIM_STACK=cfn-sim-atevent
 export ACCT=865855451418
-export SIM_BUCKET="cfn-sim-assets-${ACCT}-use1"
+export SIM_BUCKET="cfn-sim-assets-${ACCT}-useast1"
 export SIM_PREFIX="agentic-runtime-security-aws/"
 ```
+
+`SIM_BUCKET` must match what the script computes — it derives the suffix as `$(echo us-east-1 | tr -d '-')`, so `useast1`, not the old hand-abbreviated `use1`. Part 6's teardown deletes this bucket, so a mismatch there would leave it behind.
 
 ---
 
