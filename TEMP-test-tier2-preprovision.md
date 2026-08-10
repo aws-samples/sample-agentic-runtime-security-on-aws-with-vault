@@ -22,15 +22,14 @@ Already confirmed on this machine, no action needed: you are on `feat/21-tier2-p
 
 `infrastructure/` still holds `terraform.tfstate`, `services/terraform.tfstate`, `workloads/terraform.tfstate` and three `terraform.tfvars` files dated 2026-08-04. They are gitignored and `package-assets.sh` strips them from the assets tree, so **they cannot affect the CodeBuild run**. They matter only in Part 4, where you walk page 31 as an attendee: if a state pull fails you would silently be looking at August's state instead of noticing.
 
-Move them aside rather than deleting, so you can put them back if you want them:
+**Already done** — see the note below. If you ever need to repeat it, move them aside **preserving the directory structure**. A flat `mv` of all three into one directory silently overwrites them, because all three roots name their state file `terraform.tfstate`:
 
 ```bash
 mkdir -p /tmp/old-workshop-state
-mv infrastructure/terraform.tfstate infrastructure/terraform.tfstate.backup \
-   infrastructure/services/terraform.tfstate infrastructure/workloads/terraform.tfstate \
-   infrastructure/services/terraform.tfvars infrastructure/workloads/terraform.tfvars \
-   /tmp/old-workshop-state/ 2>/dev/null
-ls /tmp/old-workshop-state/
+rsync -a --remove-source-files --include='*/' \
+  --include='terraform.tfstate' --include='terraform.tfstate.backup' --include='terraform.tfvars' \
+  --exclude='*' infrastructure/ /tmp/old-workshop-state/
+find /tmp/old-workshop-state -type f
 ```
 
 Keep `infrastructure/terraform.tfvars` — `bootstrap.sh` reseeds it anyway, and page 31 overwrites it from S3.
@@ -69,7 +68,39 @@ Expected: comfortably under `4096`. If it is over, stop — the parameter approa
 
 ---
 
-## Part 1 — Set up a faithful Workshop Studio simulation
+## Part 1 — Simulation setup — ALREADY DONE
+
+All of Part 1 has been run for you. It needed none of your secrets. **Start at Part 2.** The commands are kept below for reference and re-runs.
+
+| | State |
+|---|---|
+| `WSParticipantRole` | Exists (created 2026-07-06), now carrying **exactly** the 6 managed policies `contentspec.yaml` lists — `AWSCloudShellFullAccess` was missing and has been attached. Its trust policy admits `aws_oscar.medina_test-developer`, and assuming it was verified end-to-end. |
+| Leftover inline policy | The July build's `WorkshopAthenaAudit` was **removed**, so the new build has to re-add it — its reappearance is now a real check rather than a pre-existing artifact. |
+| Assets bucket | `cfn-sim-assets-865855451418-use1` (us-east-1, SSE-AES256, public access blocked), 233 objects synced under prefix `agentic-runtime-security-aws/`. Verified the branch's new code is in the uploaded tree. |
+| Stale local state | Moved out of `infrastructure/` — see the note in "Before you start". |
+
+Two things were confirmed empirically while doing this, and they are the reason the security controls exist: as `WSParticipantRole` you **can** call `secretsmanager:ListSecrets`, and you **can** list every bucket in the account. So neither the KMS deny nor the S3 bucket-policy deny is decorative — without them that role reaches the secrets and the full Tier-2 state.
+
+Export these before Part 2:
+
+```bash
+export SIM_REGION=us-east-1
+export SIM_STACK=cfn-sim-atevent
+export ACCT=865855451418
+export SIM_BUCKET="cfn-sim-assets-${ACCT}-use1"
+export SIM_PREFIX="agentic-runtime-security-aws/"
+```
+
+**Re-run this after any code change**, or CodeBuild sources stale code:
+
+```bash
+bash workshop/scripts/package-assets.sh
+aws s3 sync workshop/assets/ "s3://${SIM_BUCKET}/${SIM_PREFIX}" \
+  --exclude 'cfn/*' --exclude 'terraform/infrastructure/.terraform/*'
+```
+
+<details>
+<summary>Reference — what Part 1 did, and why each piece matters</summary>
 
 Three things make this a real simulation rather than an approximation. Skipping any of them means you are not testing what an attendee will hit.
 
@@ -132,9 +163,11 @@ aws s3 sync workshop/assets/ "s3://${SIM_BUCKET}/${SIM_PREFIX}" \
 
 `package-assets.sh` rsyncs `infrastructure/` into `workshop/assets/terraform/` and runs secret-leak gates — it is what pulls the branch's script changes into what CodeBuild will run. **Re-run it after every code change** or you will test stale code.
 
+</details>
+
 ---
 
-## Part 2 — Deploy (the happy path)
+## Part 2 — Deploy (the happy path) — START HERE
 
 ```bash
 aws cloudformation deploy \
