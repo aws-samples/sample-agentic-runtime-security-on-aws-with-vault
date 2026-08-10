@@ -3,14 +3,24 @@ version: 0.2
 env:
   variables:
     # Injected by CFN template at project-level:
-    #   STATE_BUCKET        — S3 bucket for staging tier-1 state
-    #   ACME_EMAIL          — Let's Encrypt registration email
-    #   ATTENDEE_ROLE_NAME  — IAM role name for EKS access (default: WSParticipantRole)
+    #   STATE_BUCKET          — S3 bucket for staging tier-1 + tier-2 state
+    #   ACME_EMAIL            — Let's Encrypt registration email
+    #   ATTENDEE_ROLE_NAME    — IAM role name for EKS access (default: WSParticipantRole)
+    #   BUILD_SECRETS_KEY_ID  — CMK id used to SSE-KMS the full tier-2 state
+    # Injected by CFN as SECRETS_MANAGER-typed (resolved at build start, redacted
+    # in logs, never returned by batch-get-projects):
+    #   ICR_ENTITLEMENT_KEY            — tier-2 IVIA image pull
+    #   VAULT_ENTERPRISE_LICENSE       — tier-2 vault_server licence contents
+    #   IVIA_MMFA_PUSH_CLIENT_SECRET   — tier-2 IVIA MMFA push credential
     # Injected by Lambda at build-start (CodeBuildCallback=true):
     #   CFN_EVENT_DATA          — JSON with LogicalResourceId, RequestId, StackId
     #   CFN_EVENT_RESPONSE_URL  — URL to PUT the CFN custom resource response
     #   CFN_EVENT_TYPE          — "Create", "Update", or "Delete"
     TF_IN_AUTOMATION: "true"
+    # deploy-workshop.sh's preflight reads the Vault licence from a FILE, not an
+    # env var. pre_build materializes it here; the finally block shreds it.
+    # Set at env level because each buildspec list item is its own shell.
+    VAULT_ENTERPRISE_LICENSE_PATH: "/tmp/vault-ent.hclic"
 
 phases:
   install:
@@ -56,6 +66,29 @@ phases:
       - sed -i "s|^azs .*|azs = [\"${DEPLOY_REGION}a\", \"${DEPLOY_REGION}b\", \"${DEPLOY_REGION}c\"]|" "$INFRA_DIR/terraform.tfvars"
       - echo "Verifying acme_email + region are set:"
       - grep -E '^(acme_email|region|azs|kb_region) ' "$INFRA_DIR/terraform.tfvars"
+      # Assert the three tier-2 secrets arrived before spending ~17 minutes on
+      # tier 1 only to die at the tier-2 preflight. Presence only — never echo
+      # the values.
+      - |
+        missing=""
+        [ -n "${ICR_ENTITLEMENT_KEY:-}" ]          || missing="${missing} ICR_ENTITLEMENT_KEY"
+        [ -n "${VAULT_ENTERPRISE_LICENSE:-}" ]     || missing="${missing} VAULT_ENTERPRISE_LICENSE"
+        [ -n "${IVIA_MMFA_PUSH_CLIENT_SECRET:-}" ] || missing="${missing} IVIA_MMFA_PUSH_CLIENT_SECRET"
+        if [ -n "$missing" ]; then
+          echo "FATAL - missing required tier-2 secret(s):${missing}"
+          echo "        These are SECRETS_MANAGER-typed env vars set by the CloudFormation stack."
+          echo "        If you started this build directly with 'aws codebuild start-build',"
+          echo "        they still resolve from the project definition — check the stack created them."
+          exit 1
+        fi
+        echo "All three tier-2 secrets present."
+      # Materialize the Vault licence to the path deploy-workshop.sh expects.
+      # umask 077 so it is never group/world readable.
+      - |
+        umask 077
+        printf '%s' "$VAULT_ENTERPRISE_LICENSE" > "$VAULT_ENTERPRISE_LICENSE_PATH"
+        test -s "$VAULT_ENTERPRISE_LICENSE_PATH" || { echo "FATAL - Vault licence file empty after write"; exit 1; }
+        echo "Vault Enterprise licence materialized ($(wc -c < "$VAULT_ENTERPRISE_LICENSE_PATH") bytes)."
       - echo "Pre-build complete."
 
   build:
@@ -67,7 +100,46 @@ phases:
         cd "$CODEBUILD_SRC_DIR/terraform/infrastructure"
 
         if [ "$CFN_EVENT_TYPE" = "Delete" ]; then
-          echo "=== DELETE EVENT — tearing down tier-1 (BuildOnDelete) ==="
+          echo "=== DELETE EVENT — tearing down tier-2 then tier-1 (BuildOnDelete) ==="
+
+          # Tier 2 comes down FIRST, while the cluster still exists. Destroying
+          # the services root removes the IVIA/Vault PVCs (and the EBS volumes
+          # behind them) and the WRP Ingress (and its ALB). The tier-1 sweep
+          # below deletes the cluster itself, which would otherwise orphan those
+          # AWS resources with nothing left to reconcile them.
+          if aws s3 ls "s3://${STATE_BUCKET}/tier2-private/terraform.tfstate" >/dev/null 2>&1; then
+            echo "Restoring tier-1 + tier-2 state for the tier-2 destroy..."
+            # The staged tfvars are authoritative — pre_build regenerated a local
+            # copy with a fresh cluster_name that would not match the deployment.
+            aws s3 cp "s3://${STATE_BUCKET}/tier1/terraform.tfvars"         terraform.tfvars
+            aws s3 cp "s3://${STATE_BUCKET}/tier1/terraform.tfstate"        terraform.tfstate
+            aws s3 cp "s3://${STATE_BUCKET}/tier2-private/terraform.tfstate" services/terraform.tfstate
+            aws s3 cp "s3://${STATE_BUCKET}/tier2/.acme-state"              .acme-state || true
+
+            DEL_CLUSTER=$(grep '^cluster_name' terraform.tfvars | cut -d'"' -f2)
+            DEL_REGION=$(grep '^region' terraform.tfvars | cut -d'"' -f2)
+            echo "Configuring kubectl for ${DEL_CLUSTER} in ${DEL_REGION}..."
+            aws eks update-kubeconfig --name "$DEL_CLUSTER" --region "$DEL_REGION" --alias workshop || true
+
+            # services/ declares the three secrets as required variables with no
+            # defaults, so even a destroy needs them bound. TF_VAR_* keeps them
+            # off the command line and out of any file on disk.
+            export TF_VAR_icr_entitlement_key="$ICR_ENTITLEMENT_KEY"
+            export TF_VAR_ivia_mmfa_push_client_secret="$IVIA_MMFA_PUSH_CLIENT_SECRET"
+            export TF_VAR_vault_enterprise_license="$VAULT_ENTERPRISE_LICENSE"
+
+            terraform -chdir=services init -input=false
+            # Non-fatal: a partially-created tier 2 must not block the tier-1
+            # sweep, which is what actually guarantees the account is emptied.
+            if terraform -chdir=services destroy -auto-approve -input=false; then
+              echo "Tier-2 destroy complete."
+            else
+              echo "WARN - tier-2 destroy reported errors; continuing to the tier-1 sweep."
+            fi
+          else
+            echo "No staged tier-2 state at s3://${STATE_BUCKET}/tier2-private/ — skipping tier-2 destroy."
+          fi
+
           # State-independent sweep (tag + well-known-name). pre_build already wrote the
           # deploy region into terraform.tfvars, so teardown targets the right regions
           # (EKS/RDS/VPC in $DEPLOY_REGION, KB/AOSS in kb_region us-east-1).
@@ -96,6 +168,48 @@ phases:
         aws s3 cp terraform.tfvars  "s3://${STATE_BUCKET}/tier1/terraform.tfvars"
         echo "State staged to s3://${STATE_BUCKET}/tier1/"
 
+        echo "=== BUILD PHASE (Create/Update) — deploying tier-2 ==="
+        # Vault + IVIA + ACME + vault/ivia configure, then the tier-2 exit gate,
+        # which _die's if Vault's IVIA issuer_id is not the nip.io FQDN. Any
+        # failure here now exits non-zero, so `set -e` above aborts the phase and
+        # the post_build finally block reports FAILED to CloudFormation.
+        bash scripts/deploy-workshop.sh --tier 2 --image-source "${IMAGE_SOURCE:-ecr}"
+        echo "Tier-2 deploy complete (Vault + IVIA; issuer gate passed)."
+
+        echo "Staging tier-2 state to S3 (full private + outputs-only for attendees)..."
+        # The full state carries all three licensing secrets as plaintext resource
+        # attributes, because Terraform records every managed resource's
+        # attributes and tier 2 puts each secret in a kubernetes_secret. The
+        # Delete path needs this file to destroy tier 2, so it is staged under a
+        # prefix the bucket policy denies the attendee role, and encrypted with
+        # the build CMK on top.
+        aws s3 cp services/terraform.tfstate \
+          "s3://${STATE_BUCKET}/tier2-private/terraform.tfstate" \
+          --sse aws:kms --sse-kms-key-id "${BUILD_SECRETS_KEY_ID}"
+
+        # Attendees get an outputs-only copy. terraform_remote_state reads ONLY
+        # the outputs map, so tier 3 consumes this with no HCL change, while the
+        # secrets — which live exclusively in resources[] — never leave here.
+        jq '{version, terraform_version, serial, lineage, outputs, resources: [], check_results: null}' \
+          services/terraform.tfstate > /tmp/tier2-outputs-only.tfstate
+
+        # Refuse to stage a leaky artifact. These assertions are the thing
+        # standing between the attendee bucket and the Vault Enterprise licence.
+        jq -e '.resources == []'      /tmp/tier2-outputs-only.tfstate >/dev/null
+        jq -e '.outputs | length > 0' /tmp/tier2-outputs-only.tfstate >/dev/null
+        if grep -Eq 'dockerconfigjson|imc_client_secret|"license"' /tmp/tier2-outputs-only.tfstate; then
+          echo "FATAL - sanitized tier-2 state still contains secret-shaped keys; refusing to stage"
+          exit 1
+        fi
+        aws s3 cp /tmp/tier2-outputs-only.tfstate "s3://${STATE_BUCKET}/tier2/terraform.tfstate"
+
+        # .acme-state carries the nip.io hostnames (DEPLOY_ID, ALB_IP,
+        # NIP_FQDN_WRP, NIP_FQDN_BANKING, STABLE_ACM_ARN) that tier 3 reads for
+        # the banking-UI host. No secrets in it, and tier 3 cannot resolve its
+        # hostnames without it.
+        aws s3 cp .acme-state "s3://${STATE_BUCKET}/tier2/.acme-state"
+        echo "Tier-2 state staged to s3://${STATE_BUCKET}/tier2/ (attendee) and tier2-private/ (teardown)."
+
         echo "Granting ${ATTENDEE_ROLE_NAME} EKS cluster-admin access..."
         ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
         CLUSTER_NAME=$(grep '^cluster_name' terraform.tfvars | cut -d'"' -f2)
@@ -122,6 +236,16 @@ phases:
       - echo "=== POST_BUILD PHASE ==="
       - echo "Build status CODEBUILD_BUILD_SUCCEEDING=$CODEBUILD_BUILD_SUCCEEDING"
     finally:
+      # Shred BEFORE the callback: the callback command exits early in dev-sim
+      # mode, and the licence must not survive the build either way. Runs on
+      # success, on failure, and on the Delete path.
+      - |
+        echo "=== FINALLY (secret cleanup) ==="
+        if [ -f "$VAULT_ENTERPRISE_LICENSE_PATH" ]; then
+          shred -u "$VAULT_ENTERPRISE_LICENSE_PATH" 2>/dev/null || rm -f "$VAULT_ENTERPRISE_LICENSE_PATH"
+          echo "Vault licence file removed from the build container."
+        fi
+        rm -f /tmp/tier2-outputs-only.tfstate
       - echo "=== FINALLY (CFN Callback) ==="
       - |
         if [ -z "$CFN_EVENT_RESPONSE_URL" ]; then
@@ -130,10 +254,10 @@ phases:
         fi
         if [ "$CODEBUILD_BUILD_SUCCEEDING" = "1" ]; then
           STATUS="SUCCESS"
-          REASON="Tier-1 deployed successfully"
+          REASON="Tier-1 + tier-2 deployed successfully"
         else
           STATUS="FAILED"
-          REASON="Tier-1 deploy failed — check CodeBuild logs"
+          REASON="Tier-1/tier-2 deploy failed — check CodeBuild logs"
         fi
         PHYSICAL_ID="tier1-$(date +%s)"
         RESPONSE=$(echo "$CFN_EVENT_DATA" | jq --arg status "$STATUS" --arg reason "$REASON" --arg pid "$PHYSICAL_ID" \

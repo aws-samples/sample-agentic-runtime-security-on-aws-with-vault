@@ -121,6 +121,32 @@ Resources:
       VersioningConfiguration:
         Status: Enabled
 
+  # ─── S3: keep attendees out of the full tier-2 state ───────────────────────
+  # Terraform records every managed resource's attributes in state, so the tier-2
+  # state file contains the Vault licence, the ICR entitlement key (inside the
+  # dockerconfigjson pull secret) and the MMFA credential in plaintext. The Delete
+  # path needs that file to run `terraform destroy`, so it is staged here rather
+  # than discarded — under tier2-private/, which this policy closes off.
+  #
+  # The attendee role carries ReadOnlyAccess, which grants s3:Get*/List* on every
+  # bucket in the account; a prefix is not private by naming alone. Attendees read
+  # tier1/ and tier2/ (the sanitized outputs-only copy) as normal.
+  StateBucketPolicy:
+    Type: "AWS::S3::BucketPolicy"
+    Properties:
+      Bucket: !Ref StateBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyAttendeeAccessToFullTier2State
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource: !Sub "${StateBucket.Arn}/tier2-private/*"
+            Condition:
+              ArnEquals:
+                "aws:PrincipalArn": !Sub "arn:aws:iam::${AWS::AccountId}:role/${AttendeeRoleName}"
+
   # ─── IAM: CodeBuild execution role ──────────────────────────────────────────
   # INITIAL non-Admin role scoped to tier-1 service namespaces + IAM management
   # (tier-1 Terraform creates 10+ IAM roles; PowerUserAccess alone is insufficient).
@@ -227,13 +253,19 @@ Resources:
               AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
             Action: "kms:*"
             Resource: "*"
-          - Sid: AllowCodeBuildRoleToDecrypt
+          # Decrypt to read the secrets at build start; Encrypt/GenerateDataKey
+          # because the build also writes the full tier-2 state to S3 under
+          # SSE-KMS with this key.
+          - Sid: AllowCodeBuildRoleToUseTheKey
             Effect: Allow
             Principal:
               AWS: !GetAtt CodeBuildServiceRole.Arn
             Action:
               - "kms:Decrypt"
               - "kms:DescribeKey"
+              - "kms:Encrypt"
+              - "kms:GenerateDataKey*"
+              - "kms:ReEncrypt*"
             Resource: "*"
           # Explicit Deny beats every Allow, including the account-root statement
           # above and any IAM policy attached to the attendee role.
@@ -311,6 +343,11 @@ Resources:
           - Name: IMAGE_SOURCE
             Type: PLAINTEXT
             Value: !Ref ImageSource
+          # Key id, not key material — used to write the full tier-2 state to S3
+          # under SSE-KMS. Not sensitive.
+          - Name: BUILD_SECRETS_KEY_ID
+            Type: PLAINTEXT
+            Value: !Ref BuildSecretsKey
           # SECRETS_MANAGER type, NOT PLAINTEXT: CodeBuild resolves the value at
           # build start and batch-get-projects returns only the secret ARN. The
           # PLAINTEXT type used above for ACME_EMAIL returns the value verbatim
