@@ -10,14 +10,14 @@ env:
     # Injected by CFN as SECRETS_MANAGER-typed (resolved at build start, redacted
     # in logs, never returned by batch-get-projects):
     #   ICR_ENTITLEMENT_KEY            — tier-2 IVIA image pull
-    #   VAULT_ENTERPRISE_LICENSE       — tier-2 vault_server licence contents
+    #   VAULT_ENTERPRISE_LICENSE       — tier-2 vault_server license contents
     #   IVIA_MMFA_PUSH_CLIENT_SECRET   — tier-2 IVIA MMFA push credential
     # Injected by Lambda at build-start (CodeBuildCallback=true):
     #   CFN_EVENT_DATA          — JSON with LogicalResourceId, RequestId, StackId
     #   CFN_EVENT_RESPONSE_URL  — URL to PUT the CFN custom resource response
     #   CFN_EVENT_TYPE          — "Create", "Update", or "Delete"
     TF_IN_AUTOMATION: "true"
-    # deploy-workshop.sh's preflight reads the Vault licence from a FILE, not an
+    # deploy-workshop.sh's preflight reads the Vault license from a FILE, not an
     # env var. pre_build materializes it here; the finally block shreds it.
     # Set at env level because each buildspec list item is its own shell.
     VAULT_ENTERPRISE_LICENSE_PATH: "/tmp/vault-ent.hclic"
@@ -82,13 +82,13 @@ phases:
           exit 1
         fi
         echo "All three tier-2 secrets present."
-      # Materialize the Vault licence to the path deploy-workshop.sh expects.
+      # Materialize the Vault license to the path deploy-workshop.sh expects.
       # umask 077 so it is never group/world readable.
       - |
         umask 077
         printf '%s' "$VAULT_ENTERPRISE_LICENSE" > "$VAULT_ENTERPRISE_LICENSE_PATH"
-        test -s "$VAULT_ENTERPRISE_LICENSE_PATH" || { echo "FATAL - Vault licence file empty after write"; exit 1; }
-        echo "Vault Enterprise licence materialized ($(wc -c < "$VAULT_ENTERPRISE_LICENSE_PATH") bytes)."
+        test -s "$VAULT_ENTERPRISE_LICENSE_PATH" || { echo "FATAL - Vault license file empty after write"; exit 1; }
+        echo "Vault Enterprise license materialized ($(wc -c < "$VAULT_ENTERPRISE_LICENSE_PATH") bytes)."
       - echo "Pre-build complete."
 
   build:
@@ -194,7 +194,7 @@ phases:
           services/terraform.tfstate > /tmp/tier2-outputs-only.tfstate
 
         # Refuse to stage a leaky artifact. These assertions are the thing
-        # standing between the attendee bucket and the Vault Enterprise licence.
+        # standing between the attendee bucket and the Vault Enterprise license.
         jq -e '.resources == []'      /tmp/tier2-outputs-only.tfstate >/dev/null
         jq -e '.outputs | length > 0' /tmp/tier2-outputs-only.tfstate >/dev/null
         if grep -Eq 'dockerconfigjson|imc_client_secret|"license"' /tmp/tier2-outputs-only.tfstate; then
@@ -208,6 +208,16 @@ phases:
         # the banking-UI host. No secrets in it, and tier 3 cannot resolve its
         # hostnames without it.
         aws s3 cp .acme-state "s3://${STATE_BUCKET}/tier2/.acme-state"
+
+        # vault-init.json holds the root token and unseal keys for the
+        # attendee's OWN Vault. Eleven workshop pages read it (verify-vault, the
+        # Use Case 1/2/3 pages), and Step 6 wrote it inside this container — it
+        # would otherwise be destroyed with the build and the workshop would be
+        # unusable past tier 2. This is the attendee's credential, not an
+        # organizer licensing secret, so it goes to the attendee prefix under the
+        # bucket's default encryption rather than the build CMK they are denied.
+        test -s "${HOME}/vault-init.json" || { echo "FATAL - ${HOME}/vault-init.json missing after tier-2; attendees would have no Vault root token"; exit 1; }
+        aws s3 cp "${HOME}/vault-init.json" "s3://${STATE_BUCKET}/tier2/vault-init.json"
         echo "Tier-2 state staged to s3://${STATE_BUCKET}/tier2/ (attendee) and tier2-private/ (teardown)."
 
         echo "Granting ${ATTENDEE_ROLE_NAME} EKS cluster-admin access..."
@@ -237,13 +247,13 @@ phases:
       - echo "Build status CODEBUILD_BUILD_SUCCEEDING=$CODEBUILD_BUILD_SUCCEEDING"
     finally:
       # Shred BEFORE the callback: the callback command exits early in dev-sim
-      # mode, and the licence must not survive the build either way. Runs on
+      # mode, and the license must not survive the build either way. Runs on
       # success, on failure, and on the Delete path.
       - |
         echo "=== FINALLY (secret cleanup) ==="
         if [ -f "$VAULT_ENTERPRISE_LICENSE_PATH" ]; then
           shred -u "$VAULT_ENTERPRISE_LICENSE_PATH" 2>/dev/null || rm -f "$VAULT_ENTERPRISE_LICENSE_PATH"
-          echo "Vault licence file removed from the build container."
+          echo "Vault license file removed from the build container."
         fi
         rm -f /tmp/tier2-outputs-only.tfstate
       - echo "=== FINALLY (CFN Callback) ==="

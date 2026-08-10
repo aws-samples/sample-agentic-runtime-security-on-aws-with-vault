@@ -123,7 +123,7 @@ Resources:
 
   # ─── S3: keep attendees out of the full tier-2 state ───────────────────────
   # Terraform records every managed resource's attributes in state, so the tier-2
-  # state file contains the Vault licence, the ICR entitlement key (inside the
+  # state file contains the Vault license, the ICR entitlement key (inside the
   # dockerconfigjson pull secret) and the MMFA credential in plaintext. The Delete
   # path needs that file to run `terraform destroy`, so it is staged here rather
   # than discarded — under tier2-private/, which this policy closes off.
