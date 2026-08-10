@@ -142,9 +142,13 @@ APP_DEPLOYMENTS=(
 #-------------------------------------------------------------------------------
 # Usage
 #-------------------------------------------------------------------------------
+# Prints the header block as help text and exits with $1 (default 0).
+# Argument errors MUST pass a non-zero code: an unattended caller (CodeBuild)
+# treats exit 0 as "the deploy ran", so a typo'd or renamed flag would
+# otherwise report success having deployed nothing at all.
 usage() {
     awk 'NR>2 && /^#={3,}/{exit} NR>2 && /^#/{sub(/^# ?/,""); print}' "$0"
-    exit 0
+    exit "${1:-0}"
 }
 
 #-------------------------------------------------------------------------------
@@ -159,7 +163,7 @@ while [[ $# -gt 0 ]]; do
             TIER="$2"; shift
             case "$TIER" in
                 1|2|3) : ;;
-                *) echo "ERROR: --tier must be 1, 2, or 3 (got: '${TIER}')"; usage ;;
+                *) echo "ERROR: --tier must be 1, 2, or 3 (got: '${TIER}')" >&2; usage 1 ;;
             esac
             ;;
         --image-source)     IMAGE_SOURCE="$2"; shift ;;
@@ -169,7 +173,11 @@ while [[ $# -gt 0 ]]; do
         --skip-build)       SKIP_BUILD=true ;;
         --skip-acme)        SKIP_ACME=true ;;
         --dry-run)          DRY_RUN=true ;;
-        -*) echo "Unknown option: $1"; usage ;;
+        -*) echo "Unknown option: $1" >&2; usage 1 ;;
+        # No positional arguments are accepted. Rejecting them keeps a stray
+        # token (e.g. `--tier 2 extra`) from being silently ignored — this
+        # script takes flags only, and every caller passes flags only.
+        *)  echo "Unexpected argument: $1" >&2; usage 1 ;;
     esac
     shift
 done
