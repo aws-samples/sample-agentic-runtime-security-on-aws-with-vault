@@ -8,7 +8,8 @@ Description: >-
   secrets are supplied once by the organizer instead of being handed to every
   attendee. Attendees run tier-3 themselves as the hands-on lesson.
   Source pattern: CodeBuild sources workshop/assets/ from S3 (TerraformSourceBucket) —
-  no git clone, no public mirror. Template location: workshop/assets/cfn/bootstrap.yaml
+  no git clone, no public mirror. Template location: workshop/static/cfn/bootstrap.yaml
+  (as referenced by contentspec.yaml infrastructure.cloudformationTemplates).
 
 Parameters:
   AcmeEmail:
