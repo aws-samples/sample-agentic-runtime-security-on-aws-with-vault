@@ -17,6 +17,8 @@
 #   Step  7: ACME cert issuance + ACM sync + tier-2 module.ivia re-apply to nip.io
 #   Step  8: Configure Vault (vault-configure.sh) — reads tier-1 + tier-2 state
 #   Step  9: Configure IVIA (ivia-configure.sh)
+#   Gate   : Tier-2 exit contract — Vault issuer_id must be the nip.io FQDN
+#            (hard abort; catches a tripped Step-7 cert gate before tier 3)
 #   Step 10: terraform apply — tier 3 (infrastructure/workloads/) uc1/uc2/uc3 + roll
 #   Step 11: Post-tier-3 shared-ALB assertion + iviaop agent-uc2 redirect reconcile
 #   Step 12: Verify OpenLDAP user 'oscar' seeded by IVIA autoconf
@@ -400,7 +402,8 @@ _wait_for_port() {
 #
 # Step → tier mapping (also encoded by the main flow's _run_if_tier calls):
 #   steps 1-4  → tier 1   core infra + kubectl + images + LBC gate
-#   steps 5-9  → tier 2   vault + ivia + ACME + vault/ivia configure
+#   steps 5-9  → tier 2   vault + ivia + ACME + vault/ivia configure,
+#                         then _tier2_exit_gate (hard-aborts on a bad issuer_id)
 #   steps 10-14 → tier 3  workloads + ALB assert + LDAP + DB seed + KB ingest
 _run_if_tier() {
     local step_tier="$1"; shift
@@ -1264,6 +1267,93 @@ step_09_configure_ivia() {
 }
 
 #===============================================================================
+# TIER-2 EXIT GATE: Vault's IVIA issuer_id must be the public nip.io FQDN
+#
+# The one assertion that separates "tier 2 finished" from "tier 2 looked like it
+# finished". Step 7 issues the Let's Encrypt certificate behind a 900s readiness
+# gate; if that gate trips, _acme_apply_ivia never runs and IVIA stays bound to
+# its raw *.elb.amazonaws.com ingress host. Every pod still comes up and every
+# other check still passes, so nothing downstream notices — until Use Case 2's
+# OAuth flow fails, on workshop day, in every account at once.
+#
+# Asserts Vault's sys/config/oauth-resource-server/ivia issuer_id. That is the
+# tier-2 contract. It is deliberately NOT iviaop's OIDC discovery issuer, which
+# is EXPECTED to still read https://issuer-patched-at-root.invalid here: tier 2
+# ships provider.yml + clients.yml with placeholder hosts on purpose, and tier
+# 3's kubernetes_config_map_v1_data.iviaop_clients_patch overwrites them once the
+# banking-UI ALB exists (infrastructure/workloads/main.tf). These are two
+# different values; gating on the discovery issuer fails every healthy deploy.
+#
+# _die rather than print_fail: an unattended tier-2 pre-provision (#21) must
+# abort the CodeBuild build outright rather than hand out accounts that look
+# provisioned and break later.
+#===============================================================================
+_tier2_exit_gate() {
+    echo ""
+    echo -e "${YELLOW}> Gate: Tier-2 exit contract (Vault issuer_id)${NC}"
+
+    if [[ "$DRY_RUN" = true ]]; then
+        print_info "[DRY-RUN] Would assert Vault issuer_id == https://\${NIP_FQDN_WRP}"
+        print_pass "Gate: Tier-2 exit contract (dry-run)"
+        return 0
+    fi
+
+    # In scope from Step 7 on a full run; re-read from .acme-state on a partial
+    # or --skip-acme re-run.
+    if [[ -z "${NIP_FQDN_WRP:-}" ]] && [[ -f "$ACME_STATE_FILE" ]]; then
+        # shellcheck disable=SC1090
+        source "$ACME_STATE_FILE"
+    fi
+    if [[ -z "${NIP_FQDN_WRP:-}" ]]; then
+        _die "Gate: Tier-2 exit contract" \
+            "No NIP_FQDN_WRP — Step 7 never wrote ${ACME_STATE_FILE}, so the Let's Encrypt certificate was never issued. Re-run: bash ${BASH_SOURCE[0]} --tier 2"
+    fi
+    local expected="https://${NIP_FQDN_WRP}"
+
+    local root_token=""
+    if [[ -f "${HOME}/vault-init.json" ]]; then
+        root_token=$(jq -r '.root_token // empty' "${HOME}/vault-init.json" 2>/dev/null || echo "")
+    fi
+    if [[ -z "$root_token" ]]; then
+        _die "Gate: Tier-2 exit contract" \
+            "Root token not found in ~/vault-init.json — Vault was never initialized. Re-run: ${SCRIPT_DIR}/vault-init.sh"
+    fi
+
+    kubectl --context workshop port-forward svc/vault -n vault 8200:8200 >/dev/null 2>&1 &
+    VAULT_PF_PID=$!
+    if ! _wait_for_port 8200 30; then
+        kill "$VAULT_PF_PID" 2>/dev/null || true
+        VAULT_PF_PID=""
+        _die "Gate: Tier-2 exit contract" \
+            "Could not port-forward to Vault on :8200. Check: kubectl --context workshop get pods -n vault"
+    fi
+
+    # Same endpoint vault-configure.sh verifies against (reference contract).
+    local issuer
+    issuer=$(curl -sf -H "X-Vault-Token: ${root_token}" \
+        http://127.0.0.1:8200/v1/sys/config/oauth-resource-server/ivia 2>/dev/null \
+        | jq -r '.data.issuer_id // empty' 2>/dev/null || echo "")
+
+    if [[ -n "$VAULT_PF_PID" ]] && kill -0 "$VAULT_PF_PID" 2>/dev/null; then
+        kill "$VAULT_PF_PID" 2>/dev/null || true
+        VAULT_PF_PID=""
+    fi
+
+    if [[ -z "$issuer" ]]; then
+        _die "Gate: Tier-2 exit contract" \
+            "Vault returned no issuer_id for sys/config/oauth-resource-server/ivia — Step 8 (vault-configure.sh) did not bind IVIA. Re-run: ${SCRIPT_DIR}/vault-configure.sh"
+    fi
+
+    if [[ "$issuer" != "$expected" ]]; then
+        _die "Gate: Tier-2 exit contract" \
+            "Vault issuer_id is '${issuer}', expected '${expected}'. An *.elb.amazonaws.com value means Step 7's certificate gate tripped and the module.ivia re-apply onto nip.io was skipped — Use Case 2's OAuth flow will fail. Re-run: bash ${BASH_SOURCE[0]} --tier 2"
+    fi
+
+    print_pass "Gate: Tier-2 exit contract (Vault issuer_id = ${issuer})"
+    return 0
+}
+
+#===============================================================================
 # STEP 10: terraform apply — tier 3 (workloads: uc1/uc2/uc3 + iviaop patch)
 #
 # Creates the end-user app Deployments (images already in ECR from Step 3) +
@@ -1455,6 +1545,7 @@ _run_if_tier 2 step_06_initialize_vault
 _run_if_tier 2 step_07_acme_cert_issuance
 _run_if_tier 2 step_08_configure_vault
 _run_if_tier 2 step_09_configure_ivia
+_run_if_tier 2 _tier2_exit_gate
 _run_if_tier 3 step_10_apply_tier3
 _run_if_tier 3 step_11_post_tier3_reconcile
 _run_if_tier 3 step_12_verify_ldap_user
