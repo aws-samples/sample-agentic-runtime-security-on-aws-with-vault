@@ -254,13 +254,34 @@ if [[ "$IMAGE_SOURCE" = "ghcr" && -z "$GHCR_REGISTRY_BASE" ]]; then
 fi
 
 #-------------------------------------------------------------------------------
-# EXIT cleanup — kill port-forward on any exit, then emit our summary
+# EXIT cleanup — kill port-forward on any exit, emit our summary, then propagate
+# a non-zero status if any check failed.
+#
+# Propagation matters because not every failure path calls _die. The ordering
+# gates hard-abort, but a soft failure records print_fail + `return 1` and lets
+# the run continue (Step 7's certificate gate is the canonical case). A human
+# reads the red ✗ and re-runs; an unattended caller cannot. Without the exit
+# status below, CodeBuild sees SUCCEEDED and CloudFormation reaches
+# CREATE_COMPLETE over a broken deploy — discovered on workshop day, in every
+# pre-provisioned account at once.
 #-------------------------------------------------------------------------------
 _cleanup() {
+    # Must be the first statement: capture the status that triggered the trap
+    # before any command below overwrites $?.
+    local _rc=$?
+
     if [[ -n "$VAULT_PF_PID" ]] && kill -0 "$VAULT_PF_PID" 2>/dev/null; then
         kill "$VAULT_PF_PID" 2>/dev/null || true
     fi
-    print_summary
+
+    # print_summary returns 1 when FAILURES is non-empty. Promote a clean exit
+    # to 1 in that case. An already-non-zero status is preserved as-is, so
+    # _die's 1 and signal statuses (130 on SIGINT) survive unchanged.
+    if ! print_summary && [[ "$_rc" -eq 0 ]]; then
+        _rc=1
+    fi
+
+    exit "$_rc"
 }
 trap '_cleanup' EXIT
 
