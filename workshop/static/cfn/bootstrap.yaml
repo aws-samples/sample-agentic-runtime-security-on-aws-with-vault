@@ -3,8 +3,10 @@ AWSTemplateFormatVersion: "2010-09-09"
 
 Description: >-
   CloudFormation bootstrap for the Agentic Runtime Security on AWS workshop.
-  Provisions tier-1 (EKS foundation, 183 resources, ~17 min) via CodeBuild before
-  the attendee session opens. Attendees run tier-2/3 themselves as the hands-on lesson.
+  Provisions tier-1 (EKS foundation, ~17 min) AND tier-2 (Vault + IVIA, ~15 min)
+  via CodeBuild before the attendee session opens, so that the three licensing
+  secrets are supplied once by the organizer instead of being handed to every
+  attendee. Attendees run tier-3 themselves as the hands-on lesson.
   Source pattern: CodeBuild sources workshop/assets/ from S3 (TerraformSourceBucket) —
   no git clone, no public mirror. Template location: workshop/assets/cfn/bootstrap.yaml
 
@@ -19,6 +21,44 @@ Parameters:
       turned off expiration-notice emails and deleted stored account addresses on
       2025-06-04). The event organizer MAY set a real, reachable address (not
       *@example.com) if renewal/revocation notices are wanted.
+
+  # ─── Tier-2 licensing secrets ───────────────────────────────────────────────
+  # The three non-committable workshop inputs. Pre-provisioning tier 2 exists so
+  # that the organizer supplies them ONCE here instead of handing them to every
+  # attendee individually (#21). All three are NoEcho, are stored in Secrets
+  # Manager under a dedicated CMK the attendee role is explicitly denied on, and
+  # reach CodeBuild as SECRETS_MANAGER-typed environment variables — never as the
+  # PLAINTEXT type, whose values are returned verbatim by batch-get-projects.
+  IcrEntitlementKey:
+    Type: String
+    NoEcho: true
+    MinLength: 1
+    Description: >-
+      REQUIRED. IBM Container Registry entitlement key. Tier 2 builds the IVIA
+      image-pull secret from it (cp.icr.io); without a valid key every IVIA pod
+      lands in ImagePullBackOff. Obtain from the IBM Container Library.
+
+  VaultEnterpriseLicense:
+    Type: String
+    NoEcho: true
+    MinLength: 1
+    Description: >-
+      REQUIRED. Full contents of the Vault Enterprise .hclic license file (the
+      license string itself, not a path). Vault Enterprise will not start
+      without it, and the workshop needs the platform-standard / agentic-iam
+      features it carries.
+
+  IviaMmfaPushClientSecret:
+    Type: String
+    NoEcho: true
+    MinLength: 1
+    Description: >-
+      REQUIRED. IBM Verify MMFA push credential, used by Use Case 3's CIBA
+      mobile-push flow. Although tier 2's Terraform guards this on a count and
+      tolerates an empty value, deploy-workshop.sh's preflight does not — it
+      prompts for it and refuses an empty answer, so an unattended build must
+      have it. Required here to match that contract rather than fail 20 minutes
+      into the build.
 
   TerraformSourceBucket:
     Type: String
@@ -160,6 +200,82 @@ Resources:
                   - "iam:RemoveRoleFromInstanceProfile"
                 Resource: "*"
 
+  # ─── KMS: dedicated CMK for the organizer's licensing secrets ──────────────
+  # Deliberately NOT the workshop CMK in modules/audit: that key's policy opens
+  # kms:ViaService secretsmanager to attendees on purpose, so anything encrypted
+  # with it is attendee-readable. These three secrets must not be.
+  #
+  # The attendee role carries SecretsManagerReadWrite, which is enough to call
+  # GetSecretValue on any secret in the account. What stops it here is the key:
+  # without kms:Decrypt on this CMK the call fails. The explicit Deny is keyed on
+  # aws:PrincipalArn rather than naming the role as a Principal, because KMS
+  # validates policy principals exist and WSParticipantRole is absent in a
+  # dev-account simulation.
+  BuildSecretsKey:
+    Type: "AWS::KMS::Key"
+    Properties:
+      Description: !Sub "${AWS::StackName} — encrypts the organizer-supplied tier-2 licensing secrets"
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+          # Required base statement: without it the key is unmanageable and
+          # CloudFormation cannot create/encrypt the secrets or delete the key.
+          - Sid: EnableIAMPoliciesForAccountAdministration
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action: "kms:*"
+            Resource: "*"
+          - Sid: AllowCodeBuildRoleToDecrypt
+            Effect: Allow
+            Principal:
+              AWS: !GetAtt CodeBuildServiceRole.Arn
+            Action:
+              - "kms:Decrypt"
+              - "kms:DescribeKey"
+            Resource: "*"
+          # Explicit Deny beats every Allow, including the account-root statement
+          # above and any IAM policy attached to the attendee role.
+          - Sid: DenyAttendeeRole
+            Effect: Deny
+            Principal: "*"
+            Action: "kms:*"
+            Resource: "*"
+            Condition:
+              ArnEquals:
+                "aws:PrincipalArn": !Sub "arn:aws:iam::${AWS::AccountId}:role/${AttendeeRoleName}"
+
+  # ─── Secrets Manager: the three tier-2 licensing secrets ───────────────────
+  # These live for the lifetime of the stack rather than being deleted at the end
+  # of the create build: the stack's Delete path runs `terraform destroy` against
+  # the tier-2 root, which needs these variables defined. Confidentiality comes
+  # from BuildSecretsKey's Deny, not from deletion timing. They are removed with
+  # the stack.
+  IcrEntitlementKeySecret:
+    Type: "AWS::SecretsManager::Secret"
+    Properties:
+      Name: !Sub "${AWS::StackName}-icr-entitlement-key"
+      Description: "IBM Container Registry entitlement key — tier-2 IVIA image pull"
+      KmsKeyId: !Ref BuildSecretsKey
+      SecretString: !Ref IcrEntitlementKey
+
+  VaultEnterpriseLicenseSecret:
+    Type: "AWS::SecretsManager::Secret"
+    Properties:
+      Name: !Sub "${AWS::StackName}-vault-enterprise-license"
+      Description: "Vault Enterprise .hclic contents — tier-2 vault_server"
+      KmsKeyId: !Ref BuildSecretsKey
+      SecretString: !Ref VaultEnterpriseLicense
+
+  IviaMmfaPushSecret:
+    Type: "AWS::SecretsManager::Secret"
+    Properties:
+      Name: !Sub "${AWS::StackName}-ivia-mmfa-push-client-secret"
+      Description: "IBM Verify MMFA push credential — tier-2 IVIA (optional)"
+      KmsKeyId: !Ref BuildSecretsKey
+      SecretString: !Ref IviaMmfaPushClientSecret
+
   # ─── CodeBuild: tier-1 deploy project ──────────────────────────────────────
   # Source.Type=S3 (folder) — CodeBuild downloads the uploaded workshop/assets/ tree
   # from TerraformSourceBucket into $CODEBUILD_SRC_DIR. BuildSpec is read from
@@ -195,12 +311,28 @@ Resources:
           - Name: IMAGE_SOURCE
             Type: PLAINTEXT
             Value: !Ref ImageSource
+          # SECRETS_MANAGER type, NOT PLAINTEXT: CodeBuild resolves the value at
+          # build start and batch-get-projects returns only the secret ARN. The
+          # PLAINTEXT type used above for ACME_EMAIL returns the value verbatim
+          # to anyone who can describe the project.
+          - Name: ICR_ENTITLEMENT_KEY
+            Type: SECRETS_MANAGER
+            Value: !Ref IcrEntitlementKeySecret
+          - Name: VAULT_ENTERPRISE_LICENSE
+            Type: SECRETS_MANAGER
+            Value: !Ref VaultEnterpriseLicenseSecret
+          - Name: IVIA_MMFA_PUSH_CLIENT_SECRET
+            Type: SECRETS_MANAGER
+            Value: !Ref IviaMmfaPushSecret
       ServiceRole: !GetAtt CodeBuildServiceRole.Arn
       Source:
         Type: S3
         Location: !Sub "${TerraformSourceBucket}/${AssetsKeyPrefix}"
         BuildSpec: buildspec/buildspec.yml
-      TimeoutInMinutes: 60
+      # Tier 1 (~17 min) + tier 2 (~15 min) nominal, plus a worst case that adds
+      # Step 7's 900s ACME gate and a repair pass. 60 was sized for tier 1 alone
+      # and would now be reached on a merely slow run rather than a broken one.
+      TimeoutInMinutes: 180
       LogsConfig:
         CloudWatchLogs:
           Status: ENABLED
