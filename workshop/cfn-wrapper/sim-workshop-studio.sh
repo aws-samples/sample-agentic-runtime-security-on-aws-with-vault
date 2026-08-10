@@ -119,6 +119,10 @@ report() {
 
     if [[ "$final" == "NO_STACK" ]]; then
         warn "No stack named ${STACK} in ${REGION}."
+        local prior
+        prior=$(ls -t "${LOG_DIR}"/sim-deploy-*.log 2>/dev/null | head -1)
+        [[ -n "$prior" ]] && echo "      ${YELLOW}Last deploy log:${NC} tail -f ${prior}"
+        echo "      ${YELLOW}Console:${NC} https://console.aws.amazon.com/cloudformation/home?region=${REGION}#/stacks"
         return 1
     fi
 
@@ -142,6 +146,15 @@ report() {
             echo "      ${YELLOW}Log:${NC} aws logs tail /aws/codebuild/workshop-tier1 --follow --region ${REGION}"
         fi
     fi
+
+    # Surface the newest deploy log so --status is enough to find it in a fresh
+    # terminal, without having to remember the path printed back at STEP 4.
+    local newest
+    newest=$(ls -t "${LOG_DIR}"/sim-deploy-*.log 2>/dev/null | head -1)
+    [[ -n "$newest" ]] && echo "      ${YELLOW}Deploy log:${NC} tail -f ${newest}"
+
+    echo "      ${YELLOW}Console:${NC} CloudFormation  https://console.aws.amazon.com/cloudformation/home?region=${REGION}#/stacks"
+    echo "               CodeBuild       https://console.aws.amazon.com/codesuite/codebuild/projects?region=${REGION}"
 
     local staged_ok=0
     local state_bucket
@@ -437,6 +450,10 @@ echo
 echo "  ${YELLOW}Watch the deploy:${NC}  tail -f ${LOG}"
 echo "  ${YELLOW}Watch the build:${NC}   aws logs tail /aws/codebuild/workshop-tier1 --follow --region ${REGION}"
 echo "  ${YELLOW}Check any time:${NC}    ${BASH_SOURCE[0]} --status"
+echo
+echo "  ${YELLOW}AWS console:${NC}"
+echo "    CloudFormation  https://console.aws.amazon.com/cloudformation/home?region=${REGION}#/stacks"
+echo "    CodeBuild       https://console.aws.amazon.com/codesuite/codebuild/projects?region=${REGION}"
 
 #-------------------------------------------------------------------------------
 # STEP 5 — Follow it. Ctrl-C here is safe; the deploy keeps going.
@@ -446,6 +463,26 @@ step 5 "Follow the build"
 echo
 echo "  The line that matters, near the end of tier 2:"
 echo "    ${GREEN}PASS${NC} Gate: Tier-2 exit contract (Vault issuer_id = https://wrp.<id>.<ip>.nip.io)"
+echo
+# Pre-empt the obvious wrong conclusion. Everything happens inside CodeBuild and
+# CloudFormation is told nothing until the buildspec's finally block PUTs the
+# callback, so the stack looks frozen on Tier1Deployment for the whole run.
+warn "The CloudFormation console will show CREATE_IN_PROGRESS on Tier1Deployment and"
+warn "nothing else for 35-45 minutes. That is correct, not a hang — CloudFormation is"
+warn "not told anything until the build's final callback. Judge progress by the"
+warn "CodeBuild log, never by the stack events."
+echo
+# Re-print the watch commands here: by the time the build is worth watching, the
+# STEP 4 copy has scrolled away.
+echo "  ${YELLOW}Tail the build (this is the one to watch):${NC}"
+echo "    aws logs tail /aws/codebuild/workshop-tier1 --follow --region ${REGION}"
+echo
+echo "  ${YELLOW}Tail the deploy:${NC}"
+echo "    tail -f ${LOG}"
+echo
+echo "  ${YELLOW}AWS console:${NC}"
+echo "    CloudFormation  https://console.aws.amazon.com/cloudformation/home?region=${REGION}#/stacks"
+echo "    CodeBuild       https://console.aws.amazon.com/codesuite/codebuild/projects?region=${REGION}"
 echo
 info "Polling every 60s. Ctrl-C is safe — the deploy continues without this script."
 echo
