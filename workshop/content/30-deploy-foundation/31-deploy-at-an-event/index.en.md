@@ -47,8 +47,10 @@ Open `infrastructure/services/terraform.tfstate` and you'll see `"resources": []
 If `STATE_BUCKET` resolves to empty (for example, if the stack outputs aren't visible yet), list buckets and locate the state bucket by name, then rerun both `aws s3 cp` commands with that bucket name:
 
 ```bash
-aws s3 ls | grep -i bootstrap-statebucket
+aws s3 ls | grep -i statebucket
 ```
+
+The bucket is named `<stack-name>-statebucket-<suffix>`, and the stack name varies by event — match on `statebucket` rather than on any particular stack name.
 ::::
 
 #### Step 4 — Verify Tier 2 (Vault + IVIA)

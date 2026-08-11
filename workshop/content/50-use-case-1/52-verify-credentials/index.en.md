@@ -180,7 +180,13 @@ T+900s  Lease expiry fires — Vault runs: DROP ROLE IF EXISTS "v-kubernet-uc1-r
 Observe the active lease right after a query, then watch it disappear after 15 minutes:
 
 ```bash
-vault lease list database/creds/uc1-readonly
+vault list sys/leases/lookup/database/creds/uc1-readonly
+```
+
+Each key in that list is one live JIT credential. Look up any one of them to see its remaining TTL:
+
+```bash
+vault lease lookup database/creds/uc1-readonly/<key-from-the-list>
 ```
 
 Why this matters for OBJ-2: if the pod is compromised at T+800s, the attacker has at most 100 seconds of Postgres access before the credential self-destructs — no long-lived password to rotate, no rotation job to run.
