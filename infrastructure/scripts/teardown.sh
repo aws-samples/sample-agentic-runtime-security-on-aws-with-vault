@@ -201,6 +201,18 @@ KB_REGION="${KB_REGION:-us-east-1}"
 # `init -upgrade` — that silently bumps loosely-pinned modules and fabricates
 # drift). Skips cleanly when the root was never initialized / has empty state.
 #===============================================================================
+# `terraform init` that survives a corrupted provider cache. An interrupted
+# download leaves a FILE where a provider directory belongs, and every later init
+# dies with "mkdir .terraform/providers/...: file exists" — which is what made a
+# populated tier-3 state read as empty and get skipped (audit 2026-08-11).
+# .terraform/providers is a pure cache, so clearing it and re-initing is safe.
+_init_root() {
+    local dir="$1"
+    terraform -chdir="$dir" init -input=false >/dev/null 2>&1 && return 0
+    rm -rf "${dir}/.terraform/providers"
+    terraform -chdir="$dir" init -input=false >/dev/null 2>&1
+}
+
 _destroy_root() {
     local label="$1" dir="$2"
     if [ ! -d "$dir" ]; then
@@ -213,13 +225,34 @@ _destroy_root() {
     fi
     if [ ! -d "${dir}/.terraform" ]; then
         # Not yet initialized — try a bare init so destroy can read providers/state.
-        terraform -chdir="$dir" init -input=false >/dev/null 2>&1 || {
+        _init_root "$dir" || {
             print_info "${label}: no .terraform and init failed — skipping (nothing to destroy)"
             return 0
         }
     fi
-    local n
-    n=$(terraform -chdir="$dir" state list 2>/dev/null | wc -l | tr -d ' ')
+    # `state list` failing and `state list` returning nothing are NOT the same
+    # thing: a present-but-stale .terraform (lock file bumped, provider cache
+    # pruned) makes it exit non-zero with "Required plugins are not installed",
+    # and reading that as "empty" silently skips a root holding live resources.
+    # Re-init once, then believe an empty answer only when the command succeeded.
+    local n state_out state_rc=0
+    state_out=$(terraform -chdir="$dir" state list 2>&1) || state_rc=$?
+    if [ "$state_rc" -ne 0 ]; then
+        print_info "${label}: state unreadable — re-running init before deciding"
+        _init_root "$dir" || true
+        state_rc=0
+        state_out=$(terraform -chdir="$dir" state list 2>&1) || state_rc=$?
+    fi
+    if [ "$state_rc" -ne 0 ]; then
+        # Never skip on an unreadable state — fall through to destroy, which
+        # surfaces the real provider/backend error instead of hiding it.
+        print_warn "${label}: state STILL unreadable after init — attempting destroy anyway so the error is visible, not silently skipped"
+        print_warn "${label}: $(printf '%s' "$state_out" | grep -m1 -E 'Error|error:' || echo 'see terraform output below')"
+        terraform -chdir="$dir" destroy -auto-approve \
+            || print_warn "${label}: terraform destroy had errors — AWS sweep will catch residuals"
+        return 0
+    fi
+    n=$(printf '%s\n' "$state_out" | grep -c . || true)
     if [ "${n:-0}" -eq 0 ]; then
         print_info "${label}: state empty — nothing to destroy"
         return 0
