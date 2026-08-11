@@ -897,82 +897,78 @@ if [ "${NOPHONE_MODE}" = true ]; then
         print_fail "Check N8: AWS_REGION not resolved" \
             "Set AWS_REGION or add region to infrastructure/terraform.tfvars, then re-run."
     else
-        np_bucket=$(aws s3api list-buckets \
-            --query "Buckets[?contains(Name, 'workshop-logs') || contains(Name, 'workshop-audit')].Name | [0]" \
-            --output text 2>/dev/null || echo "")
-        if [ -z "${np_bucket}" ] || [ "${np_bucket}" = "None" ]; then
-            np_bucket=$(aws s3api list-buckets \
-                --query "Buckets[?contains(Name, 'agentic') && contains(Name, 'log')].Name | [0]" \
-                --output text 2>/dev/null || echo "")
-        fi
-
-        if [ -z "${np_bucket}" ] || [ "${np_bucket}" = "None" ]; then
-            print_fail "Check N8: could not resolve an S3 bucket for Athena results" \
-                "Fix: ensure the observability module is applied (workshop-logs bucket exists). Check: aws s3api list-buckets --query \"Buckets[?contains(Name,'workshop')]\""
-        else
-            np_results=""
-            np_rows=0
-            np_qid=""
-            np_attempt=1
-            np_attempts=10   # 10 attempts x 20s -> ~200s for fluent-bit + Firehose + Glue
-            while [ "${np_attempt}" -le "${np_attempts}" ]; do
-                print_info "Check N8 attempt ${np_attempt}/${np_attempts}: audit_correlation for request_id=${np_request_id}"
-                np_qid=$(aws athena start-query-execution \
-                    --query-string "SELECT * FROM audit_correlation WHERE request_id = '${np_request_id}'" \
-                    --work-group workshop \
-                    --query-execution-context "Database=${GLUE_DATABASE:-workshop_logs}" \
-                    --result-configuration "OutputLocation=s3://${np_bucket}/athena-results/" \
-                    --region "${AWS_REGION}" \
-                    --query 'QueryExecutionId' --output text 2>/dev/null || echo "")
-                if [ -z "${np_qid}" ] || [ "${np_qid}" = "None" ]; then
-                    sleep 20
-                    np_attempt=$((np_attempt + 1))
-                    continue
-                fi
-
-                np_state="RUNNING"
-                np_poll=0
-                while [ "${np_poll}" -lt 20 ]; do
-                    np_state=$(aws athena get-query-execution --query-execution-id "${np_qid}" \
-                        --region "${AWS_REGION}" --query 'QueryExecution.Status.State' --output text 2>/dev/null || echo "FAILED")
-                    case "${np_state}" in
-                    SUCCEEDED | FAILED | CANCELLED) break ;;
-                    esac
-                    sleep 3
-                    np_poll=$((np_poll + 1))
-                done
-
-                if [ "${np_state}" != "SUCCEEDED" ]; then
-                    np_rows="ERROR"
-                    break
-                fi
-
-                np_results=$(aws athena get-query-results --query-execution-id "${np_qid}" \
-                    --region "${AWS_REGION}" --output json 2>/dev/null || echo "")
-                np_rows=$(printf '%s' "${np_results}" | jq -r '(.ResultSet.Rows | length) - 1' 2>/dev/null || echo 0)
-                if [ "${np_rows:-0}" -ge 1 ] 2>/dev/null; then
-                    break
-                fi
-                np_rows=0
+        np_results=""
+        np_rows=0
+        np_qid=""
+        np_attempt=1
+        np_attempts=10   # 10 attempts x 20s -> ~200s for fluent-bit + Firehose + Glue
+        while [ "${np_attempt}" -le "${np_attempts}" ]; do
+            print_info "Check N8 attempt ${np_attempt}/${np_attempts}: audit_correlation for request_id=${np_request_id}"
+            # --work-group workshop is load-bearing: the attendee role is scoped
+            # to that workgroup, and it enforces its own encrypted result
+            # location, so no client-side --result-configuration is needed.
+            np_qid=$(aws athena start-query-execution \
+                --query-string "SELECT * FROM audit_correlation WHERE request_id = '${np_request_id}'" \
+                --work-group workshop \
+                --query-execution-context "Database=${GLUE_DATABASE:-workshop_logs}" \
+                --region "${AWS_REGION}" \
+                --query 'QueryExecutionId' --output text 2>/dev/null || echo "")
+            if [ -z "${np_qid}" ] || [ "${np_qid}" = "None" ]; then
                 sleep 20
                 np_attempt=$((np_attempt + 1))
+                continue
+            fi
+
+            np_state="RUNNING"
+            np_poll=0
+            while [ "${np_poll}" -lt 20 ]; do
+                np_state=$(aws athena get-query-execution --query-execution-id "${np_qid}" \
+                    --region "${AWS_REGION}" --query 'QueryExecution.Status.State' --output text 2>/dev/null || echo "FAILED")
+                case "${np_state}" in
+                SUCCEEDED | FAILED | CANCELLED) break ;;
+                esac
+                sleep 3
+                np_poll=$((np_poll + 1))
             done
 
-            if [ "${np_rows}" = "ERROR" ]; then
-                print_fail "Check N8: the Athena query did not succeed (state=${np_state})" \
-                    "Reason: $(aws athena get-query-execution --query-execution-id "${np_qid}" --region "${AWS_REGION}" --query 'QueryExecution.Status.StateChangeReason' --output text 2>/dev/null). Fix: confirm the audit_correlation VIEW exists (plain ./verify-uc3.sh Check 11 auto-creates it) and the Glue tables resolve."
-            elif [ "${np_rows:-0}" -ge 1 ] 2>/dev/null; then
-                # The row exists — render it with the workshop's own money-shot
-                # printer so this mode and the audit page show the same output.
-                echo ""
-                AWS_REGION="${AWS_REGION}" LOG_BUCKET="${np_bucket}" \
-                    bash "${SCRIPT_DIR}/show-audit-correlation.sh" "${np_request_id}" || true
-                echo ""
-                print_pass "Check N8: audit_correlation returned ${np_rows} row(s) for request_id=${np_request_id} — IVIA decision, Vault lease and the Postgres write all correlate on one id (three-plane capstone)"
-            else
-                print_fail "Check N8: audit_correlation returned ZERO rows for request_id=${np_request_id} after ~200s" \
-                    "The refund is written (Check N6) but the planes have not correlated. Fix: wait for fluent-bit + Firehose (60s buffer) + Glue, then re-run just this assertion: UC3_VERIFY_REQUEST_ID=${np_request_id} ./verify-uc3.sh"
+            if [ "${np_state}" != "SUCCEEDED" ]; then
+                np_rows="ERROR"
+                break
             fi
+
+            np_results=$(aws athena get-query-results --query-execution-id "${np_qid}" \
+                --region "${AWS_REGION}" --output json 2>/dev/null || echo "")
+            np_rows=$(printf '%s' "${np_results}" | jq -r '(.ResultSet.Rows | length) - 1' 2>/dev/null || echo 0)
+            if [ "${np_rows:-0}" -ge 1 ] 2>/dev/null; then
+                break
+            fi
+            np_rows=0
+            sleep 20
+            np_attempt=$((np_attempt + 1))
+        done
+
+        if [ "${np_rows}" = "ERROR" ]; then
+            print_fail "Check N8: the Athena query did not succeed (state=${np_state})" \
+                "Reason: $(aws athena get-query-execution --query-execution-id "${np_qid}" --region "${AWS_REGION}" --query 'QueryExecution.Status.StateChangeReason' --output text 2>/dev/null). Fix: confirm the audit_correlation VIEW exists (plain ./verify-uc3.sh Check 11 auto-creates it) and the Glue tables resolve."
+        elif [ "${np_rows:-0}" -ge 1 ] 2>/dev/null; then
+            # The row exists — render it with the workshop's own money-shot
+            # printer so this mode and the audit page show the same output.
+            echo ""
+            np_render_rc=0
+            AWS_REGION="${AWS_REGION}" \
+                bash "${SCRIPT_DIR}/show-audit-correlation.sh" "${np_request_id}" || np_render_rc=$?
+            echo ""
+            if [ "${np_render_rc}" -ne 0 ]; then
+                # Printing the row IS this mode's output — a green check above a
+                # missing table would be worse than no check at all.
+                print_fail "Check N8: the correlation row exists (${np_rows}) but show-audit-correlation.sh could not print it (exit ${np_render_rc})" \
+                    "Reproduce: AWS_REGION=${AWS_REGION} ${SCRIPT_DIR}/show-audit-correlation.sh ${np_request_id}"
+            else
+                print_pass "Check N8: audit_correlation returned ${np_rows} row(s) for request_id=${np_request_id} — IVIA decision, Vault lease and the Postgres write all correlate on one id (three-plane capstone)"
+            fi
+        else
+            print_fail "Check N8: audit_correlation returned ZERO rows for request_id=${np_request_id} after ~200s" \
+                "The refund is written (Check N6) but the planes have not correlated. Fix: wait for fluent-bit + Firehose (60s buffer) + Glue, then re-run just this assertion: UC3_VERIFY_REQUEST_ID=${np_request_id} ./verify-uc3.sh"
         fi
     fi
 
