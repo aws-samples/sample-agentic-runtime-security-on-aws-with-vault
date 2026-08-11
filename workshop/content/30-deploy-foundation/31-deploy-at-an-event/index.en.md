@@ -74,16 +74,28 @@ Expected — `Initialized true`, `Sealed false`, and an `+ent` build (Enterprise
 ```
 Initialized     true
 Sealed          false
-Version         1.20.x+ent
+Version         2.0.3+ent
 ```
 
-**All seven IVIA pods are running:**
+**The IVIA stack is running:**
 
 ```bash
 kubectl get pods -n verify-access
 ```
 
-Expected — seven pods `Running` and fully `Ready` (`iviaconfig`, `iviadsc`, `iviaop`, `iviaruntime`, `iviawrprp1`, `openldap`, `postgresql`).
+Expected — **seven pods `Running`** and fully `Ready` (`iviaconfig`, `iviadsc`, `iviaop`, `iviaruntime`, `iviawrprp1`, `openldap`, `postgresql`), **plus the `ivia-autoconf` Job showing `0/1 Completed`** — eight rows in total:
+
+```
+NAME                           READY   STATUS      RESTARTS      AGE
+ivia-autoconf-<hash>           0/1     Completed   0             38m
+iviaconfig-<hash>              1/1     Running     0             47m
+iviadsc-<hash>                 1/1     Running     4 (44m ago)   47m
+iviaop-<hash>                  1/1     Running     0             5m22s
+iviaruntime-<hash>             1/1     Running     0             33m
+iviawrprp1-<hash>              1/1     Running     0             32m
+openldap-<hash>                1/1     Running     0             47m
+postgresql-<hash>              1/1     Running     0             47m
+```
 
 **The Let's Encrypt certificate issued:**
 
@@ -116,7 +128,7 @@ bash infrastructure/scripts/deploy-workshop.sh --tier 3
 ```
 
 ::::alert{header="Tier 3 timing" type="info"}
-~5–10 min — workloads apply ~3 min, DB seed + KB ingest ~3 min.
+~4–8 min — workloads apply ~3 min, then OpenLDAP check, DB seed and Knowledge Base ingestion.
 ::::
 
 When Tier 3 reports success, continue with **[Configure kubectl](../32-configure-kubectl/)** — from here the remaining pages are identical for every attendee.
@@ -129,7 +141,9 @@ Raise it with your event organizer rather than trying to redeploy Tier 2 yoursel
 
 This should not happen. The account-setup build hard-fails on any Tier-2 fault, including a `nip.io` certificate that never went `Ready` and an `issuer_id` still pointing at an internal `*.elb.amazonaws.com` host, so a broken Tier 2 fails the CloudFormation stack instead of producing an account. If you are looking at a healthy-looking account with a failing check, that is worth telling the organizer about.
 
-Two things that look like failures and are not:
+Four things that look like failures and are not:
 
 - **IVIA's OIDC discovery `issuer` reads `https://issuer-patched-at-root.invalid`** — correct until Tier 3 runs, as noted in Step 4.
 - **`infrastructure/services/terraform.tfstate` has `"resources": []`** — correct; you are given an outputs-only copy so the licensing secrets stay out of your hands.
+- **`ivia-autoconf` shows `0/1 Completed`** — that is a finished Kubernetes **Job**, not a crashed pod. `0/1` means no container is running *because the work is done*.
+- **`iviadsc` shows several `RESTARTS`** — the pod restarts a few times while the IVIA stack converges during bring-up. It is healthy once `READY` shows `1/1`.

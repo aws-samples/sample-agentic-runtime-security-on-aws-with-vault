@@ -11,7 +11,7 @@ Run one script to confirm the entire platform layer is healthy before proceeding
 bash infrastructure/scripts/test-vault-verify.sh
 ```
 
-Expected — all 8 checks `PASS`:
+Expected — all 13 checks `PASS`:
 
 ```
   ✓ PASS Vault pods running (3 of 3)
@@ -19,13 +19,23 @@ Expected — all 8 checks `PASS`:
   ✓ PASS Vault Raft peers: 3
   ✓ PASS Vault audit device: enabled (1 device(s))
   ✓ PASS IVIA pods running (7 pod(s))
-  ✓ PASS IVIA OIDC discovery: issuer reachable (https://<wrp-alb-hostname>)
-  ✓ PASS cert-manager pods running (2 pod(s))
-  ✓ PASS AWS Load Balancer Controller running (1 pod(s))
+  ✓ PASS IVIA OIDC discovery: issuer reachable (https://wrp.<deploy-id>.<alb-ip-dashed>.nip.io)
+  ✓ PASS cert-manager pods running (N pod(s))
+  ✓ PASS AWS Load Balancer Controller running (N pod(s))
+  ✓ PASS Vault Enterprise edition (version=2.0.3+ent; sys/license/status responds)
+  ✓ PASS Secrets engines mounted: database/ + aws/ (platform-standard license present)
+  ✓ PASS Agent Registry responds — registration 'uc1-agent' resolvable by display-name
+  ✓ PASS OAuth resource server profile 'ivia' responds (feature active + profile applied)
+  ✓ PASS jwt/ auth mount is ABSENT — retired IVIA jwt backend removed (decision (e))
 
- ✓ 8 check(s) passed
+ ✓ 13 check(s) passed
 ===============================================================================
 ```
+
+The last five checks are the native-Vault surface this workshop is built on: an Enterprise
+build, the secrets engines, the **Agent Registry**, the **OAuth resource server** profile, and
+a positive assertion that the retired `jwt` auth backend is **gone**. That last one is a check
+that something does *not* exist — if a `jwt/` mount ever reappears, this fails.
 
 If any check fails, the script prints a `Fix:` hint inline. Address the issue and re-run.
 
@@ -40,4 +50,9 @@ If any check fails, the script prints a `Fix:` hint inline. Address the issue an
 | IVIA OIDC discovery: issuer reachable | `curl -sk https://iviaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration` | `issuer` field non-empty |
 | cert-manager pods running | `kubectl get pods -n cert-manager` | at least 1 pod `Running` |
 | AWS Load Balancer Controller running | `kubectl get pods -n kube-system -l app.kubernetes.io/name=aws-load-balancer-controller` | at least 1 pod `Running` |
+| Vault Enterprise edition | `kubectl exec vault-0 -- vault read sys/license/status` | version carries `+ent` and the endpoint responds |
+| Secrets engines mounted | `kubectl exec vault-0 -- vault secrets list` | `database/` and `aws/` both present |
+| Agent Registry responds | `vault read agent-registry/registration/display-name/uc1-agent` | registration resolves by display-name |
+| OAuth resource server profile `ivia` | `vault read sys/config/oauth-resource-server/ivia` | profile responds (feature active + applied) |
+| `jwt/` auth mount is ABSENT | `kubectl exec vault-0 -- vault auth list` | **no** `jwt/` row — the retired backend stays removed |
 ::::
