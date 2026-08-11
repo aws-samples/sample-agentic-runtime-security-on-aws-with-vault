@@ -22,8 +22,11 @@ Findings below are what the page said versus what actually came back.
 
 ## Completion tracker
 
-**32 of 38 fixed and committed. 5 found but not yet fixed (34–38). 1 needs your decision (28).**
-Nothing has been pushed; no PR exists.
+**39 of 40 fixed and committed. 1 needs your decision (28).** Nothing has been pushed; no PR exists.
+
+**Finding 39 is the most serious thing found in the whole walkthrough** — *Configure the OAuth
+Resource Server* Step 5 failed with a 403 for **every** attendee who followed it, because it
+named the wrong cookie. Proven both ways against one live browser session.
 
 Findings 31–33 were found by **executing every bash block on every page I touched**, not just
 the blocks I had edited. Findings 34–38 came from executing every Use Case 2 and Use Case 3
@@ -70,11 +73,13 @@ be automated — those are listed separately below, not counted as failures.
 | 31 | `52-verify-credentials` (expand) | **`vault lease list` is not a Vault command** — exits 1 with a usage dump. `vault lease` has only `lookup`/`renew`/`revoke` | ✅ Fixed | `1ec6f52` | ✅ `vault list sys/leases/lookup/…` + `vault lease lookup <id>` both exit 0 |
 | 32 | `31-deploy-at-an-event` | **Fallback bucket lookup matched nothing** — grepped `bootstrap-statebucket`; bucket is `<stack-name>-statebucket-<suffix>` | ✅ Fixed | `1ec6f52` | ✅ `aws s3 ls \| grep -i statebucket` returns the bucket |
 | 33 | `21-aws-account` | **Regression I introduced** — renaming the licensing headings changed their anchors and broke the deep link | ✅ Fixed | `1ec6f52` | n/a (link) |
-| 34 | **The Bypass Test** | **Documented script output is stale** — page shows 3 PASS lines, script emits 7 PASS + 1 WARN-skip; the `evil-actor` check the page presents as passing **does not run by default**; three checks that do run are undocumented | 🔴 **Not yet fixed** | — | ✅ `verify-uc3.sh --bypass` exit 0 — output does not match the page |
-| 35 | **Configure the OAuth Resource Server** Step 4 | Expected `creation_statements` shown as a 5-element JSON array with escaped quotes; the CLI prints **one** bracketed semicolon-separated string, unescaped | 🔴 **Not yet fixed** | — | ✅ `vault read database/roles/uc2-personal-readonly` exit 0 — shape differs |
-| 36 | **CIBA Out-of-Band Approval** | Verification section has 3 commands and **zero expected output**; 2 of the 3 return nothing until a real CIBA flow has run | 🔴 **Not yet fixed** | — | ✅ all 3 run (exit 0/1/0) — outputs recorded below |
-| 37 | **Scope Enforcement** Step 2.3 | Real `\dp` output contains `v-JWT Toke-…` role rows (Vault truncating the display name) that the page's expected block never shows — looks like corruption | 🔴 **Not yet fixed** | — | ✅ `\dp banking.accounts` exit 0 — extra row shape undocumented |
-| 38 | Every `kubectl run … psql` block (Use Case 2 + 3) | On a node that has not cached `postgres:16-alpine`, the **first** run prints only the attach banner and the pod-terminated line — the psql output is missing | 🔴 **Not yet fixed** | — | ✅ reproduced once, then 3/3 clean on re-run |
+| 34 | **The Bypass Test** | **Documented script output is stale** — page showed 3 PASS lines, script emits 7 PASS + 1 WARN-skip; the `evil-actor` check the page presented as passing **does not run by default**. Rewritten around Checks 14/16/17/18, real expected output, a Check column on the denials table, and an alert explaining why 19 skips | ✅ Fixed | `5e5d1f8` | ✅ `verify-uc3.sh --bypass` exit 0, **7 checks** — page now matches |
+| 35 | **Configure the OAuth Resource Server** Step 4 | Expected `creation_statements` shown as a 5-element JSON array with escaped quotes; the CLI prints **one** bracketed semicolon-separated string. Replaced with real output | ✅ Fixed | `057d7df` | ✅ `vault read database/roles/uc2-personal-readonly` exit 0 — matches |
+| 36 | **CIBA Out-of-Band Approval** | 3 commands, **zero expected output**. Added expected output for the pod check and endpoint probe; alert for the log grep (empty + exit 1 until the phone step); widened `--tail=50` → `--tail=-1 --since=30m` | ✅ Fixed | `69a80e3` | ✅ all 3 re-run — exit 0 / 0 / 1-empty as now documented |
+| 37 | **Scope Enforcement** Step 2.3 | `\dp` output contains `v-JWT Toke-…` rows the page never showed — looks like corruption, is actually the OBO issuance at the DB layer. Documented both prefixes | ✅ Fixed | `69a80e3` | ✅ `v-JWT Toke-uc2-pers-…-1786459642` observed live |
+| 38 | Every `kubectl run … psql` block (Use Case 2 + 3) | First run on a node that has not cached `postgres:16-alpine` loses the psql output to the attach race. Added a re-run note | ✅ Fixed | `69a80e3` | ✅ reproduced once, then 3/3 clean on re-run |
+| 39 | **Configure the OAuth Resource Server** Step 5 | **BLOCKER — 403 for every attendee.** Page said copy the `id_token` cookie; it carries no `act` claim so Vault resolves no agent and fails closed. Must be **`access_token`**. Also `lease_renewable` `true` → `false` | ✅ Fixed | `057d7df` | ✅ **both cookies tested from one browser session** — `id_token` → 403, `access_token` → exit 0, `username=v-JWT Toke-uc2-pers-…` exactly as documented |
+| 40 | **OAuth Login Flow** | Same defect in 3 places — 2 sequence-diagram Bearer arrows, step 8, and the claim-flow list all said the `id_token` is forwarded. It is the `access_token` | ✅ Fixed | `f9e8b14` | n/a (prose + diagram) — root cause confirmed in `api/chat/+server.ts` |
 
 
 **The one open item (28)** needs a fact I cannot get from here: whether the Workshop Studio
@@ -791,3 +796,61 @@ attendee hits it at most once per node. The page should tell them to simply re-r
 | **Enroll Your Device** | Requires a physical phone running IBM Verify and a QR scan. The URL-building command was executed and exits 0. |
 | **Test the Refund Flow** | Requires the browser chat plus a physical **Approve** tap. Its URL command was executed and exits 0; the `mmfa_push_fired` log grep returns nothing until the flow runs. |
 | **The Bypass Test**, Section 4 | Depends on a refund row, and refunds are only created by the CIBA flow. Confirmed live: `banking.refunds` is **empty for both personas**, so Step 4.1 exits 0 with `(0 rows)` and Step 4.2 has no `REFUND_ID` to use. The page already warns the IDs are per-run; it should also say the section is unreachable until the refund is done. |
+
+## 39. Configure the OAuth Resource Server, Step 5 — 403 for every attendee — BLOCKER
+
+The page told the attendee to copy the **`id_token`** cookie out of DevTools and present it to
+Vault as `X-Vault-Token`. That fails 100% of the time:
+
+```
+Code: 403. Errors:
+* permission denied
+```
+
+The token looks perfectly healthy — correct issuer, `sub=oscar`, 58 minutes left on it. The
+whole failure is one absent claim. Vault's Agent Registry resolves the acting agent from
+`act.sub`, and IVIA stamps `act` onto the **access token only** (`isvaop_pretoken`). An
+`id_token` has `sub` but no `act`, so no agent entity resolves, the on-behalf-of intersection
+has nothing to intersect, and Vault fails closed.
+
+Proven both directions from a single live browser session, same command, same page:
+
+| Cookie | `act.sub` | Result |
+|---|---|---|
+| `id_token` | absent | `403 permission denied` |
+| `access_token` | `agent-uc2` | exit 0 — `username=v-JWT Toke-uc2-pers-oEQHxtksjMikHtjLPnpe-1786459642` |
+
+The access-token run matched the page's documented expected output line for line, including the
+odd-looking `v-JWT Toke-` username — so **the only thing wrong with Step 5 was the cookie name.**
+One real diff surfaced alongside it: the page claimed `lease_renewable true`; the observed value
+is `false`.
+
+The application already had this right, and says so in a source comment
+(`applications/banking-app/ui/src/routes/api/chat/+server.ts`):
+
+> Forward the ACCESS token, not the id_token … The id_token carries no `act` claim, so
+> presenting it yields a null identity and Vault denies the database-creds read.
+
+**Fixed:** cookie name corrected in the prose, the numbered steps, the `JWT_TOKEN=` placeholder
+and the expected output, plus a warning alert explaining why the `id_token` cannot work — the
+403 is correct fail-closed behaviour, and that is worth teaching rather than hiding.
+
+## 40. OAuth Login Flow — the same error, three more times — WRONG
+
+The identical claim appears on the preceding page: the sequence diagram's two `Bearer id_token`
+arrows, walkthrough step 8 ("the UI's server-side proxy reads the `id_token` cookie and forwards
+it"), and the header of the claim-flow list. All corrected to `access_token`, with a sentence on
+why the `id_token` stops at the UI (display-only decoding of the user's name).
+
+---
+
+# What is left, after this pass
+
+**Nothing in Use Case 2 or Use Case 3 is untested except what needs a human.** Four steps, all
+recorded above as Human Needed: the browser sign-in behind *Configure the OAuth Resource
+Server* Step 5 (now executed, because you supplied both cookies), device enrollment, the refund
+browser flow, and *The Bypass Test* Section 4 which depends on it.
+
+The one open decision is still **finding 28** — whether the Workshop Studio CloudShell image
+ships the `vault` CLI. If it does not, the fix is to switch the affected pages to the
+`kubectl exec -n vault vault-0 -- vault …` form.
