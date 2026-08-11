@@ -195,7 +195,11 @@ Two role-name prefixes appear, and the difference tells you *how* each credentia
 - **`v-root-…`** — issued with the root token, i.e. by one of the inspection commands you have been running by hand.
 - **`v-JWT Toke-…`** — issued by presenting a real IVIA OAuth JWT, whose Vault display name is `JWT Token with JTI: <uuid>`. These are the on-behalf-of issuances: the MCP server serving a signed-in user, `verify-uc2.sh`, or your own Step 5 on the [Configure the OAuth Resource Server](../62-configure-oauth-resource-server/) page.
 
-The truncation is why it reads oddly. The name deliberately identifies the *token*, never the human `sub` — human attribution comes from correlating the lease with the IVIA OAuth plane, not from the Postgres role name. You may also see a `v-…-uc3-refu-…` row if you have run the Use Case 3 checks.
+The truncation is why it reads oddly. The name deliberately identifies the *token*, never the human `sub` — human attribution comes from correlating the lease with the IVIA OAuth plane, not from the Postgres role name.
+
+The middle segment is the Vault database role, truncated the same way: `uc2-pers` is `uc2-personal-banker`. If you have already run the Use Case 3 checks you may also see `v-…-uc3-read-…` (`uc3-readonly`) or `v-…-uc3-refu-…` (`uc3-refund-writer`) rows.
+
+Both of those Use Case 3 rows read `=r/vault_root` here, and the second one is worth a second look: `uc3-refund-writer` is the *write* role, but its write privileges are granted on `banking.refunds` only — on this table it holds plain `SELECT`, exactly like every other ephemeral role. A role's name describes what it is **for**; the ACL is what it can actually **do**, table by table.
 :::
 
 What to read from this output:
