@@ -12,25 +12,28 @@ region `us-east-1`, stack `cfn-sim-atevent`, cluster `ars-workshop`.
 |---|---|
 | `20-prerequisites` → `38-platform-health-check` | **Executed verbatim, every command** |
 | `50-use-case-1` (`51`, `52`) | **Executed verbatim, every command** |
-| `60-use-case-2` (`62`) Steps 1–4 | **Executed verbatim** |
-| `70-use-case-3` (`72`, `74`) | **Executed verbatim** (74's query mechanics; see below) |
-| `62` Step 5, `63`, `64`, `65` | **Blocked** — need a browser-captured `id_token` cookie |
-| `70-enroll-device`, `70-test-refund`, `71`, `73` | **Blocked** — need browser sign-in + a physical device enrollment |
+| Use Case 2 — all five pages | **Executed verbatim** — every command except the one `id_token` paste (see below) |
+| Use Case 3 — `72`, `73`, `74`, CIBA verification blocks | **Executed verbatim** |
 | `74` correlation payload | **Partially blocked** — mechanics verified, but the row needs a completed CIBA refund |
+| Human Needed (4 steps) | *Configure the OAuth Resource Server* Step 5 · *Enroll Your Device* · *Test the Refund Flow* browser half · *The Bypass Test* Section 4 |
 | `80-cleanup` | **Not run** — `teardown.sh --dry-run` only (see finding 6) |
 
 Findings below are what the page said versus what actually came back.
 
 ## Completion tracker
 
-**32 of 33 fixed and committed. 1 needs your decision.** Nothing has been pushed; no PR exists.
+**32 of 38 fixed and committed. 5 found but not yet fixed (34–38). 1 needs your decision (28).**
+Nothing has been pushed; no PR exists.
 
 Findings 31–33 were found by **executing every bash block on every page I touched**, not just
-the blocks I had edited. Two were commands that fail outright; one was a link I broke myself.
+the blocks I had edited. Findings 34–38 came from executing every Use Case 2 and Use Case 3
+command against the live cluster.
 
 The **Executed** column records a command actually run against the live cluster as
 `WSParticipantRole` **after** the edit, and marked OK only where it exited 0 and returned what
-the page now claims. `n/a` means the change was prose, a heading or a link, with no command to run.
+the page now claims. `n/a` means the change was prose, a heading or a link, with no command to
+run. **Human Needed** means the step requires a browser sign-in or a physical device and cannot
+be automated — those are listed separately below, not counted as failures.
 
 | # | Page / file | Change | Status | Commit | Executed |
 |---|---|---|---|---|---|
@@ -67,6 +70,11 @@ the page now claims. `n/a` means the change was prose, a heading or a link, with
 | 31 | `52-verify-credentials` (expand) | **`vault lease list` is not a Vault command** — exits 1 with a usage dump. `vault lease` has only `lookup`/`renew`/`revoke` | ✅ Fixed | `1ec6f52` | ✅ `vault list sys/leases/lookup/…` + `vault lease lookup <id>` both exit 0 |
 | 32 | `31-deploy-at-an-event` | **Fallback bucket lookup matched nothing** — grepped `bootstrap-statebucket`; bucket is `<stack-name>-statebucket-<suffix>` | ✅ Fixed | `1ec6f52` | ✅ `aws s3 ls \| grep -i statebucket` returns the bucket |
 | 33 | `21-aws-account` | **Regression I introduced** — renaming the licensing headings changed their anchors and broke the deep link | ✅ Fixed | `1ec6f52` | n/a (link) |
+| 34 | **The Bypass Test** | **Documented script output is stale** — page shows 3 PASS lines, script emits 7 PASS + 1 WARN-skip; the `evil-actor` check the page presents as passing **does not run by default**; three checks that do run are undocumented | 🔴 **Not yet fixed** | — | ✅ `verify-uc3.sh --bypass` exit 0 — output does not match the page |
+| 35 | **Configure the OAuth Resource Server** Step 4 | Expected `creation_statements` shown as a 5-element JSON array with escaped quotes; the CLI prints **one** bracketed semicolon-separated string, unescaped | 🔴 **Not yet fixed** | — | ✅ `vault read database/roles/uc2-personal-readonly` exit 0 — shape differs |
+| 36 | **CIBA Out-of-Band Approval** | Verification section has 3 commands and **zero expected output**; 2 of the 3 return nothing until a real CIBA flow has run | 🔴 **Not yet fixed** | — | ✅ all 3 run (exit 0/1/0) — outputs recorded below |
+| 37 | **Scope Enforcement** Step 2.3 | Real `\dp` output contains `v-JWT Toke-…` role rows (Vault truncating the display name) that the page's expected block never shows — looks like corruption | 🔴 **Not yet fixed** | — | ✅ `\dp banking.accounts` exit 0 — extra row shape undocumented |
+| 38 | Every `kubectl run … psql` block (Use Case 2 + 3) | On a node that has not cached `postgres:16-alpine`, the **first** run prints only the attach banner and the pod-terminated line — the psql output is missing | 🔴 **Not yet fixed** | — | ✅ reproduced once, then 3/3 clean on re-run |
 
 
 **The one open item (28)** needs a fact I cannot get from here: whether the Workshop Studio
@@ -638,3 +646,148 @@ Step 2 onward was executed verbatim as written.**
 page's own Step 2. Both used the page's exact query string.
 
 **No content file has been edited.** This document is a proposal list only.
+
+---
+
+# Part 6 — Use Case 2 and Use Case 3, every command executed (2026-08-11)
+
+Run as `arn:aws:sts::865855451418:assumed-role/WSParticipantRole/workshop-attendee-sim`
+against cluster `ars-workshop`, RDS `ars-workshop-pg` (**PostgreSQL 17.9**), Vault 3-node Raft
+with `vault-0` active.
+
+## What passed exactly as written
+
+| Page | Blocks | Result |
+|---|---|---|
+| **OAuth Login Flow** | Step 1 (banking URL), Step 3 (`kubectl logs banking-ui`) | both exit 0 |
+| **Configure the OAuth Resource Server** | Steps 1–4 (7 blocks) | all exit 0; 6 of 7 match the page character-for-character (see finding 35 for the 7th) |
+| **Verify Per-User Data Access** | Steps 1, 2, 3 + `verify-uc2.sh` | all exit 0, all outputs match — Oscar 2 rows, Jaime 2 rows, RLS policy identical, **20/20 checks** |
+| **Scope Enforcement (Layer 2)** | Steps 1.1, 1.2, 1.3, 2.1, 2.2, 2.3 | all match, including the `403` exit-code-2 note and `arwdDxtm` |
+| **Credential Revocation** | Steps 1–7 | all match; role created → revoked → gone → absent from leases → both Athena rows found |
+| **The Bypass Test** | Sections 2 and 3 | match exactly — `jaime 9` / `oscar 8`, INSERT `permission denied for table refunds` |
+| **CIBA Out-of-Band Approval** | pod check, CIBA endpoint probe | exit 0 |
+
+Two things I had flagged as suspect before running, both **cleared**:
+
+- **`arwdDxtm` on Scope Enforcement Step 2.3 is correct.** RDS runs PostgreSQL **17.9**, so the
+  `m` (MAINTAIN) privilege is real. The page's "Postgres 17 added `m`" narration is accurate.
+- **Scope Enforcement Step 1.3's hardcoded `vault-0` is correct**, and is *not* the same defect
+  as finding 22. Proven empirically: I ran the same denied read entered at `vault-1` and the
+  audit record landed on `vault-1`, not on the active node. A 403 is rejected at the ACL layer
+  on the receiving node before any request forwarding, so the record always lands on whichever
+  pod you `exec` into — and Step 1.2 execs into `vault-0`. Finding 22 was different because
+  there the issuance came from an agent pod hitting the load-balanced `vault` Service.
+
+## 34. The Bypass Test — the documented output is stale — WRONG
+
+`./verify-uc3.sh --bypass` exits 0, but what it prints bears little resemblance to the page.
+
+| | Page says | Script actually emits |
+|---|---|---|
+| Check count | `✓ checks passed` (no number) | `✓ 7 check(s) passed` + 1 `⚠ WARN` skip |
+| PASS lines | 3 | 7 |
+| Wrong-RAR subject | `sub=jaime` | `sub=oscar` |
+
+**The serious part:** the page's second bullet, its second PASS line, and the "Agent actor" row
+of the *Three Independent Denials* table all describe a wrong-actor test using
+`act.sub=evil-actor`. That check is **Check 19, and it SKIPS by default.** The script says why:
+production IVIA only ever signs `act.sub=uc3-actor`, so a wrong-actor token has to be supplied
+by an operator via `UC3_WRONG_ACTOR_TOKEN`, and it is explicitly *not required for green*. The
+page presents a check that never runs as one that passes.
+
+Three checks that **do** run are undocumented, including the strongest result on the page:
+
+- **Check 16** — the ALLOW case: a correctly-scoped delegated token *is* authorized. The page
+  only shows denials, so nothing demonstrates the positive path still works.
+- **Check 18** — cross-Use-Case ceiling isolation: an `agent-uc2` token for `oscar` is DENIED
+  `database/creds/uc3-refund-writer` because `uc2-agent-ceiling` omits the refund path, *even
+  though* `oscar`'s human baseline permits it. This is a genuine agent-confusion defence and it
+  is the real replacement for the `evil-actor` story the page tells.
+- **Check 15** — the delegated token carries a `jti` and `act.sub=uc3-actor`.
+
+**Change needed:** replace the expected-output block with the real one, rewrite the three
+bullets to describe Checks 14 / 17 / 18, retire the `evil-actor` narrative (or mark it clearly
+as operator-supplied and skipped by default), and fix the *Three Independent Denials* table's
+middle row to describe the ceiling intersection rather than an unregistered actor.
+
+## 35. Configure the OAuth Resource Server, Step 4 — expected output shape is wrong — WRONG
+
+The page shows `creation_statements` as a five-element JSON array with escaped inner quotes:
+
+```
+creation_statements    ["CREATE ROLE \"{{name}}\" WITH LOGIN PASSWORD '{{password}}' ...;",
+                        "ALTER ROLE \"{{name}}\" SET search_path TO banking,public;",
+                        ...]
+```
+
+The CLI actually prints **one** bracketed string, semicolon-separated, with no escaping:
+
+```
+creation_statements      [CREATE ROLE "{{name}}" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}'; ALTER ROLE "{{name}}" SET search_path TO banking,public; GRANT USAGE ON SCHEMA banking TO "{{name}}"; GRANT SELECT ON ALL TABLES IN SCHEMA banking TO "{{name}}"; ALTER DEFAULT PRIVILEGES IN SCHEMA banking GRANT SELECT ON TABLES TO "{{name}}";]
+```
+
+Everything else on that page — `auth list`, `secrets list`, the `agent-uc2` registration
+(`optional_authorization_details true` is correct here, unlike `uc1-agent` in finding 27), the
+ceiling and the human baseline — matches character-for-character.
+
+## 36. CIBA Out-of-Band Approval — three commands, no expected output — GAP
+
+The Verification section is the only place in Use Case 2 or 3 where commands ship with no
+expected output at all. Executed:
+
+```
+kubectl get pods -n banking-app -l app=uc3-agent
+NAME                         READY   STATUS    RESTARTS   AGE
+uc3-agent-7f5cd744d7-zwlzx   1/1     Running   0          11h
+
+kubectl exec -n vault vault-0 -- sh -c "wget -q -O - --no-check-certificate '…/openid-configuration'" | jq '.backchannel_authentication_endpoint'
+"https://wrp.c1m7cx.18-204-174-225.nip.io/isvaop/oauth2/ciba"
+```
+
+The middle block — `grep -E 'mmfa_push_fired|ciba_status_polled'` — **returns nothing and exits
+1** on a cluster where no CIBA flow has run (confirmed: 5,691 lines in the agent log, zero
+matches). The page should say so, because an empty result there reads as a broken deployment
+rather than "you haven't done the phone step yet."
+
+## 37. Scope Enforcement Step 2.3 — undocumented role-name shape — GAP
+
+The page's expected `\dp` block shows only `"v-root-uc2-pers-<random>-<timestamp>"` rows. Live
+output also contains rows like:
+
+```
+"v-JWT Toke-uc2-pers-UYmkDOvf5rKVHzdIavKf-1786457092"=r/vault_root
+"v-JWT Toke-uc3-refu-5xgFPChcTbZOy3pw4wDX-1786457391"=r/vault_root
+```
+
+`v-JWT Toke-` is Vault truncating the audit display name *JWT Token with JTI: …* into the role
+name — these are the credentials issued through the OBO path rather than by the root token. It
+looks like string corruption unless the page explains it, and it is actually the most
+interesting row on the page: it is the on-behalf-of issuance made visible at the database layer.
+
+## 38. First `kubectl run … psql` on an uncached node loses the output — WRONG (intermittent)
+
+The very first execution of *Scope Enforcement* Step 2.2 produced:
+
+```
+If you don't see a command prompt, try pressing enter.
+pod "pg-insert-attempt" deleted
+pod banking-app/pg-insert-attempt terminated (Error)
+```
+
+— no `ERROR:  permission denied for table accounts` line at all. The INSERT *was* correctly
+rejected (exit 1), but the evidence the page tells the attendee to look for was missing. Three
+immediate re-runs were clean and matched the page exactly.
+
+Cause is the `kubectl run -i` attach race: on a node that has not yet pulled
+`postgres:16-alpine`, the image pull delays container start and the attach can miss the stream.
+This affects **every** `kubectl run … psql` block across Use Case 2 and Use Case 3, and an
+attendee hits it at most once per node. The page should tell them to simply re-run the block.
+
+## Human Needed — four steps that cannot be automated
+
+| Step | Why |
+|---|---|
+| **Configure the OAuth Resource Server**, Step 5 | `JWT_TOKEN="<paste-the-id_token-value>"` — requires signing in through the browser and copying an HttpOnly cookie out of DevTools. The same code path is exercised headlessly by `verify-uc2.sh`'s *UC2 OBO allow* check, which passed (`username=v-JWT Toke-uc2-pers-…`). |
+| **Enroll Your Device** | Requires a physical phone running IBM Verify and a QR scan. The URL-building command was executed and exits 0. |
+| **Test the Refund Flow** | Requires the browser chat plus a physical **Approve** tap. Its URL command was executed and exits 0; the `mmfa_push_fired` log grep returns nothing until the flow runs. |
+| **The Bypass Test**, Section 4 | Depends on a refund row, and refunds are only created by the CIBA flow. Confirmed live: `banking.refunds` is **empty for both personas**, so Step 4.1 exits 0 with `(0 rows)` and Step 4.2 has no `REFUND_ID` to use. The page already warns the IDs are per-run; it should also say the section is unreachable until the refund is done. |
