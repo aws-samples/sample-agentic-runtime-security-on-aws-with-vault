@@ -12,10 +12,10 @@ region `us-east-1`, stack `cfn-sim-atevent`, cluster `ars-workshop`.
 |---|---|
 | `20-prerequisites` → `38-platform-health-check` | **Executed verbatim, every command** |
 | `50-use-case-1` (`51`, `52`) | **Executed verbatim, every command** |
-| Use Case 2 — all five pages | **Executed verbatim** — every command except the one `id_token` paste (see below) |
+| Use Case 2 — all five pages | **Executed verbatim, every command** — including Step 5, run with both cookies from a live browser session you supplied |
 | Use Case 3 — `72`, `73`, `74`, CIBA verification blocks | **Executed verbatim** |
 | `74` correlation payload | **Partially blocked** — mechanics verified, but the row needs a completed CIBA refund |
-| Human Needed (4 steps) | *Configure the OAuth Resource Server* Step 5 · *Enroll Your Device* · *Test the Refund Flow* browser half · *The Bypass Test* Section 4 |
+| Human Needed (3 steps) | *Enroll Your Device* · *Test the Refund Flow* browser half · *The Bypass Test* Section 4 (all one chain: no refund exists until the phone tap) |
 | `80-cleanup` | **Not run** — `teardown.sh --dry-run` only (see finding 6) |
 
 Findings below are what the page said versus what actually came back.
@@ -792,7 +792,7 @@ attendee hits it at most once per node. The page should tell them to simply re-r
 
 | Step | Why |
 |---|---|
-| **Configure the OAuth Resource Server**, Step 5 | `JWT_TOKEN="<paste-the-id_token-value>"` — requires signing in through the browser and copying an HttpOnly cookie out of DevTools. The same code path is exercised headlessly by `verify-uc2.sh`'s *UC2 OBO allow* check, which passed (`username=v-JWT Toke-uc2-pers-…`). |
+| ~~**Configure the OAuth Resource Server**, Step 5~~ | **No longer blocked — executed.** You supplied both the `id_token` and `access_token` from a live session, which is what exposed finding 39. |
 | **Enroll Your Device** | Requires a physical phone running IBM Verify and a QR scan. The URL-building command was executed and exits 0. |
 | **Test the Refund Flow** | Requires the browser chat plus a physical **Approve** tap. Its URL command was executed and exits 0; the `mmfa_push_fired` log grep returns nothing until the flow runs. |
 | **The Bypass Test**, Section 4 | Depends on a refund row, and refunds are only created by the CIBA flow. Confirmed live: `banking.refunds` is **empty for both personas**, so Step 4.1 exits 0 with `(0 rows)` and Step 4.2 has no `REFUND_ID` to use. The page already warns the IDs are per-run; it should also say the section is unreachable until the refund is done. |
