@@ -32,6 +32,18 @@ The ordering is the point: deleting the cluster first would strand the tier-2 AW
 
 The known risk of this design is that a delete-build which hangs blocks stack deletion, because CFN waits on the callback. The CodeBuild timeout is the intended backstop — see the timeout caveat below.
 
+### The teardown build has to take the concurrency slot from the failed build
+
+`ConcurrentBuildLimit` is **1**. When a deploy build fails, CloudFormation starts rolling back and fires the custom resource's Delete *while that build is still finalizing* — so `StartBuild` gets `AccountLimitExceededException` and the handler PUTs a `FAILED` callback. CloudFormation latches that immediately and permanently: `DELETE_FAILED` on the custom resource, `ROLLBACK_FAILED` on the stack, roughly three seconds after the build failed.
+
+Whether the infrastructure then survives comes down to luck. The handler re-raises after responding, and CloudFormation invokes custom resources asynchronously, so Lambda's built-in async retries fire the invocation again about a minute and three minutes later. Observed live on 2026-08-10: the first retry landed 57s after the failure, by which time the slot had freed, and the teardown build ran and succeeded — the environment *was* reclaimed. But CloudFormation had already recorded the failure, so the stack stayed `ROLLBACK_FAILED` and had to be deleted by hand. Had the failing build taken longer than the retry window to finalize, every attempt would have been rejected and the EKS/RDS/VPC that Terraform created inside CodeBuild would have been stranded with nothing left to reclaim them — they are not part of the CloudFormation resource graph.
+
+So the failure mode is: a stack that always strands itself in `ROLLBACK_FAILED`, and *sometimes* strands a live cluster with it.
+
+The Delete path therefore calls `_free_the_build_slot` first: it lists this project's builds, stops any that are not in a terminal state, waits for the slot, and only then starts teardown — with `StartBuild` additionally retried under exponential backoff in case of a race. Stopping the in-flight build is correct on Delete in both cases it arises: during a rollback the build has already sent its `FAILED` callback, and during an operator-initiated `delete-stack` mid-deploy the in-flight deploy is moot. Whatever it had half-built is reconciled by `teardown.sh`, which sweeps by tag and well-known name rather than from state.
+
+This costs three IAM actions beyond `StartBuild` (`ListBuildsForProject`, `BatchGetBuilds`, `StopBuild`). All four support resource-level permissions, so none of them is granted on `*` — `BatchGetBuilds`/`StopBuild` take the *build* resource type and are scoped to `build/<this-project>:*` (T-11-06).
+
 ## Timeout caveat (unverified)
 
 CloudFormation is unblocked **only** by the buildspec's `finally` callback: with `CodeBuildCallback: true` the trigger Lambda deliberately sends no `cfnresponse`. If CodeBuild kills a build on `TimeoutInMinutes`, whether `finally` still runs is **not verified**. If it does not, the stack hangs rather than failing.

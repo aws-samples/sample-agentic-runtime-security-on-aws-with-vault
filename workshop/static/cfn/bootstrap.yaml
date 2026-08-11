@@ -378,8 +378,8 @@ Resources:
 
   # ─── IAM: Lambda trigger execution role ────────────────────────────────────
   # Lambda role for the Custom::CodeBuildTrigger function.
-  # AWSLambdaBasicExecutionRole for CloudWatch Logs + StartBuild on THIS project only.
-  # Threat T-11-06: StartBuild scoped to single project ARN (not "*").
+  # AWSLambdaBasicExecutionRole for CloudWatch Logs + build control on THIS project only.
+  # Threat T-11-06: every action scoped to this project's ARN (never "*").
   CodeBuildTriggerExecutionRole:
     Type: "AWS::IAM::Role"
     Properties:
@@ -403,8 +403,22 @@ Resources:
                 Effect: Allow
                 Action:
                   - "codebuild:StartBuild"
+                  - "codebuild:ListBuildsForProject"
                 Resource:
                   - !GetAtt CodeBuildProject.Arn
+              # ConcurrentBuildLimit is 1, so a teardown build cannot start while a
+              # failed create build still holds the slot. The Delete path stops the
+              # in-flight build first (Lambda _free_the_build_slot). BatchGetBuilds and
+              # StopBuild take the *build* resource type, so they are scoped to build
+              # IDs of THIS project — the trailing ":*" matches only the build-id
+              # suffix of "<project-name>:<uuid>", never another project.
+              - Sid: FreeThisProjectsBuildSlot
+                Effect: Allow
+                Action:
+                  - "codebuild:BatchGetBuilds"
+                  - "codebuild:StopBuild"
+                Resource:
+                  - !Sub "arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:build/${CodeBuildProject}:*"
 
   # ─── Lambda: Custom::CodeBuildTrigger function ──────────────────────────────
   # Starts the CodeBuild project on CFN Create/Update/Delete.
@@ -451,12 +465,88 @@ Resources:
 
           import json
           import logging
+          import time
           import traceback
 
           import boto3
           import cfnresponse
 
           codebuild = boto3.client("codebuild")
+
+          # This project runs ConcurrentBuildLimit=1. When a deploy build fails,
+          # CloudFormation begins rolling back and fires the custom resource's Delete
+          # while that build is still finalizing, so StartBuild raises
+          # AccountLimitExceededException, the custom resource goes DELETE_FAILED and the
+          # stack lands in ROLLBACK_FAILED — with the Terraform-created infrastructure
+          # (EKS/RDS/VPC) still standing, because the teardown build never ran. Observed
+          # 2026-08-10 on the first live at-an-event failure. The Delete path therefore
+          # stops whatever is in flight and waits for the slot before starting teardown.
+          TERMINAL_BUILD_STATUSES = ("SUCCEEDED", "FAILED", "FAULT", "TIMED_OUT", "STOPPED")
+          MAX_BUILDS_INSPECTED = 5      # newest N; the slot can only be held by one
+          SLOT_POLL_SECONDS = 10
+          START_BUILD_RETRY_BASE_SECONDS = 5
+          START_BUILD_RETRY_MAX_SECONDS = 30
+          # Leave enough Lambda budget to still PUT a CFN response after giving up.
+          RESPONSE_RESERVE_MS = 60_000
+
+
+          def _in_flight_build_ids(project_name):
+              ids = codebuild.list_builds_for_project(
+                  projectName=project_name, sortOrder="DESCENDING",
+              ).get("ids", [])[:MAX_BUILDS_INSPECTED]
+              if not ids:
+                  return []
+              builds = codebuild.batch_get_builds(ids=ids).get("builds", [])
+              return [
+                  b["id"] for b in builds
+                  if b.get("buildStatus") not in TERMINAL_BUILD_STATUSES
+              ]
+
+
+          def _free_the_build_slot(project_name, context):
+              """Stop in-flight builds of this project and wait until none remain.
+
+              Best-effort: a failure here must not mask the teardown. StartBuild is
+              retried afterwards regardless, so the worst case is the pre-existing
+              behaviour rather than a new failure mode.
+              """
+              try:
+                  in_flight = _in_flight_build_ids(project_name)
+              except Exception:
+                  logging.warning("Could not list in-flight builds; will retry StartBuild instead")
+                  traceback.print_exc()
+                  return
+              for build_id in in_flight:
+                  logging.info("Stopping in-flight build %s to free the concurrency slot", build_id)
+                  try:
+                      codebuild.stop_build(id=build_id)
+                  except Exception:
+                      # Raced to terminal between list and stop — harmless.
+                      logging.warning("stop_build failed for %s (likely already terminal)", build_id)
+                      traceback.print_exc()
+              while context.get_remaining_time_in_millis() > RESPONSE_RESERVE_MS:
+                  try:
+                      if not _in_flight_build_ids(project_name):
+                          return
+                  except Exception:
+                      logging.warning("Poll for in-flight builds failed; retrying")
+                      traceback.print_exc()
+                  time.sleep(SLOT_POLL_SECONDS)
+              logging.warning("Gave up waiting for the CodeBuild concurrency slot")
+
+
+          def _start_build_with_retry(context, **kwargs):
+              """StartBuild, backing off while the project's single slot is still held."""
+              delay = START_BUILD_RETRY_BASE_SECONDS
+              while True:
+                  try:
+                      return codebuild.start_build(**kwargs)
+                  except codebuild.exceptions.AccountLimitExceededException:
+                      if context.get_remaining_time_in_millis() <= RESPONSE_RESERVE_MS:
+                          raise
+                      logging.warning("Concurrency limit hit; retrying StartBuild in %ss", delay)
+                      time.sleep(delay)
+                      delay = min(delay * 2, START_BUILD_RETRY_MAX_SECONDS)
 
 
           def _flag(value):
@@ -536,13 +626,19 @@ Resources:
 
 
           def handle_delete(event, context):
-              logging.info("**Received delete event - no-op")
+              logging.info("**Received delete event")
               res_config = event.get("ResourceProperties", {})
               build_on_delete = _flag(res_config.get("BuildOnDelete"))
               if build_on_delete:
                   codebuild_env_vars = get_cfn_env_var_overrides(event)
-                  codebuild.start_build(
-                      projectName=res_config["ProjectName"],
+                  project_name = res_config["ProjectName"]
+                  # On a rollback this Delete arrives while the failed build still holds
+                  # the project's only concurrency slot. Clear it before teardown, or the
+                  # stack strands its infrastructure in ROLLBACK_FAILED.
+                  _free_the_build_slot(project_name, context)
+                  _start_build_with_retry(
+                      context,
+                      projectName=project_name,
                       environmentVariablesOverride=codebuild_env_vars,
                   )
                   reason = "Deletion build initiated"
