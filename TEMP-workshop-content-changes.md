@@ -6,6 +6,33 @@ hand. Identity throughout:
 `arn:aws:sts::865855451418:assumed-role/WSParticipantRole/workshop-attendee-sim`,
 region `us-east-1`, stack `cfn-sim-atevent`, cluster `ars-workshop`.
 
+## Before you run anything — assume the attendee role
+
+`kubectl` will return `error: You must be logged in to the server (Unauthorized)` unless you are
+`WSParticipantRole`. It is the only human-usable role with an EKS access entry on `ars-workshop`
+— your `aws_oscar.medina_test-developer` role has none, so refreshing your own credentials does
+not help. The session lasts **1 hour**, so re-run this whenever the checks start failing.
+
+Check who you are:
+
+```
+aws sts get-caller-identity
+```
+
+Assume the role in your current shell, then confirm:
+
+```
+eval "$(aws sts assume-role --role-arn arn:aws:iam::865855451418:role/WSParticipantRole --role-session-name workshop-attendee --duration-seconds 3600 --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' --output text | awk '{print "export AWS_ACCESS_KEY_ID="$1"; export AWS_SECRET_ACCESS_KEY="$2"; export AWS_SESSION_TOKEN="$3}')" && export AWS_REGION=us-east-1 AWS_DEFAULT_REGION=us-east-1 && aws sts get-caller-identity
+```
+
+You are ready when the `Arn` reads
+`arn:aws:sts::865855451418:assumed-role/WSParticipantRole/workshop-attendee` and this returns
+node rows:
+
+```
+kubectl get nodes
+```
+
 ## Scope — what was and was not executed
 
 | Pages | Status |
