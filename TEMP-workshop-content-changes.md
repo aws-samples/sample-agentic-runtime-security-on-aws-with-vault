@@ -35,12 +35,19 @@ kubectl get nodes
 
 ## Scope — what was and was not executed
 
+26 of the workshop's 42 pages contain runnable command blocks. The other 16 — the introduction
+pages, the section index pages, *Summary*, *Resources* and *Credits* — are prose only, so there
+is nothing on them to execute.
+
 | Pages | Status |
 |---|---|
-| `20-prerequisites` → `38-platform-health-check` | **Executed verbatim, every command** |
-| `50-use-case-1` (`51`, `52`) | **Executed verbatim, every command** |
+| `20-prerequisites` (all 4 pages) | **Executed verbatim, every command** |
+| `30-deploy-foundation` — at-an-event path, `32-configure-kubectl`, and all six `33-verify-deployment` pages | **Executed verbatim, every command** |
+| **`31-deploy-self-paced`** | ⚠️ **NOT executed — 9 command blocks untested.** The whole walkthrough took the at-an-event path, so the self-paced deploy page was never exercised. Largest untested surface in the workshop |
+| `50-use-case-1` (`51`, `52`) | **Executed verbatim, every command** — `50-request-flow` is prose, no commands |
 | Use Case 2 — all five pages | **Executed verbatim, every command** — including Step 5, run with both cookies from a live browser session you supplied |
-| Use Case 3 — `72`, `73`, `74`, CIBA verification blocks | **Executed verbatim** |
+| Use Case 3 — `71`, `72`, `73`, `74` | **Executed verbatim** |
+| Use Case 3 — `70-enroll-device`, `70-test-refund` | **Command halves executed** (both URL-building blocks exit 0); the browser + phone halves are Human Needed below |
 | `74` correlation payload | **Partially blocked** — mechanics verified, but the row needs a completed CIBA refund |
 | Human Needed (3 steps) | *Enroll Your Device* · *Test the Refund Flow* browser half · *The Bypass Test* Section 4 (all one chain: no refund exists until the phone tap) |
 | `80-cleanup` | **Not run** — `teardown.sh --dry-run` only (see finding 6) |
@@ -71,22 +78,22 @@ be automated — those are listed separately below, not counted as failures.
 | 2 | http://localhost:8080/20-prerequisites/22-ivia-licensing/ | `20-prerequisites/22-ivia-licensing` | "(you supply this)" → "(self-paced: you supply this)" + at-an-event alert | ✅ Fixed | `b996107` | ✅ `openssl x509 … -noout -dates` |
 | 3 | http://localhost:8080/20-prerequisites/23-pre-flight-checks/ | `20-prerequisites/23-pre-flight-checks` | Gate install/quota sections as self-paced | ✅ Fixed | `b996107` | ✅ tools verify · quota query · `--dry-run` · runtime probe |
 | 4 | http://localhost:8080/30-deploy-foundation/ | `30-deploy-foundation/index` | "deploy the entire stack with one command" → split by path | ✅ Fixed | `b996107` | n/a (prose) |
-| 5 | http://localhost:8080/30-deploy-foundation/33-verify-deployment/333-verify-vault/ | `35-verify-vault` (intro) | Root token was pulled from S3 at an event, not written locally | ✅ Fixed | `b996107` | ✅ all 8 blocks on the page |
+| 5 | http://localhost:8080/30-deploy-foundation/33-verify-deployment/333-verify-vault/ | `333-verify-vault` (intro) | Root token was pulled from S3 at an event, not written locally | ✅ Fixed | `b996107` | ✅ all 8 blocks on the page |
 | 6 | http://localhost:8080/80-cleanup/ | `80-cleanup` | At-an-event alert: nothing to clean up; scope `teardown.sh` self-paced | ✅ Fixed | `b996107` | ✅ all 4 spot-checks (teardown itself **not** run) |
-| 7 | http://localhost:8080/30-deploy-foundation/33-verify-deployment/335-oidc-seam/ | `37-oidc-seam` line 6 | Named the `jwt` backend it contradicts 100 lines later | ✅ Fixed | `83da627` | n/a (prose) |
-| 8 | http://localhost:8080/30-deploy-foundation/33-verify-deployment/335-oidc-seam/ | `37-oidc-seam` Step 1 | Expected a `jwt/` mount that does not exist | ✅ Fixed | `83da627` | ✅ `vault auth list` — 2 mounts, no `jwt/` |
-| 9 | http://localhost:8080/30-deploy-foundation/33-verify-deployment/335-oidc-seam/ | `37-oidc-seam` Step 2 | 3 of 6 mounts shown; `agent-registry/` omitted | ✅ Fixed | `83da627` | ✅ `vault secrets list` — 6 mounts |
-| 10 | http://localhost:8080/30-deploy-foundation/33-verify-deployment/335-oidc-seam/ | `37-oidc-seam` Step 4 | `allowed_roles` missing `uc3-readonly` | ✅ Fixed | `83da627` | ✅ `vault read database/config/workshop-pg` — 4 roles |
-| 11 | http://localhost:8080/30-deploy-foundation/33-verify-deployment/335-oidc-seam/ | `37-oidc-seam` Step 5 | **Command errored (exit 5)** — added `--quiet` + `</dev/null` | ✅ Fixed | `83da627` | ✅ **exit 0** (was exit 5) |
-| 12 | http://localhost:8080/30-deploy-foundation/33-verify-deployment/335-oidc-seam/ | `37-oidc-seam` Step 5 | Expected issuer was ClusterIP; it is the public WRP host. `bound_issuer` → `issuer_id` | ✅ Fixed | `83da627` | ✅ returns the nip.io issuer |
+| 7 | http://localhost:8080/30-deploy-foundation/33-verify-deployment/335-oidc-seam/ | `335-oidc-seam` line 6 | Named the `jwt` backend it contradicts 100 lines later | ✅ Fixed | `83da627` | n/a (prose) |
+| 8 | http://localhost:8080/30-deploy-foundation/33-verify-deployment/335-oidc-seam/ | `335-oidc-seam` Step 1 | Expected a `jwt/` mount that does not exist | ✅ Fixed | `83da627` | ✅ `vault auth list` — 2 mounts, no `jwt/` |
+| 9 | http://localhost:8080/30-deploy-foundation/33-verify-deployment/335-oidc-seam/ | `335-oidc-seam` Step 2 | 3 of 6 mounts shown; `agent-registry/` omitted | ✅ Fixed | `83da627` | ✅ `vault secrets list` — 6 mounts |
+| 10 | http://localhost:8080/30-deploy-foundation/33-verify-deployment/335-oidc-seam/ | `335-oidc-seam` Step 4 | `allowed_roles` missing `uc3-readonly` | ✅ Fixed | `83da627` | ✅ `vault read database/config/workshop-pg` — 4 roles |
+| 11 | http://localhost:8080/30-deploy-foundation/33-verify-deployment/335-oidc-seam/ | `335-oidc-seam` Step 5 | **Command errored (exit 5)** — added `--quiet` + `</dev/null` | ✅ Fixed | `83da627` | ✅ **exit 0** (was exit 5) |
+| 12 | http://localhost:8080/30-deploy-foundation/33-verify-deployment/335-oidc-seam/ | `335-oidc-seam` Step 5 | Expected issuer was ClusterIP; it is the public WRP host. `bound_issuer` → `issuer_id` | ✅ Fixed | `83da627` | ✅ returns the nip.io issuer |
 | 13 | http://localhost:8080/30-deploy-foundation/31-deploy-at-an-event/ | `31-deploy-at-an-event` | Vault `1.20.x+ent` → `2.0.3+ent` | ✅ Fixed | `6865910` | ✅ `vault status \| grep` — `2.0.3+ent` |
 | 14 | http://localhost:8080/30-deploy-foundation/31-deploy-at-an-event/ | `31-deploy-at-an-event` | "seven pods" → 8 rows; autoconf Job + `iviadsc` restarts added to looks-broken-isn't list | ✅ Fixed | `6865910` | ✅ `kubectl get pods -n verify-access` — 8 rows |
 | 15 | http://localhost:8080/30-deploy-foundation/32-configure-kubectl/ | `32-configure-kubectl` | `<region>.compute.internal` → `ec2.internal` for us-east-1 | ✅ Fixed | `6865910` | ✅ `kubectl get nodes` — `ec2.internal` |
-| 16 | http://localhost:8080/30-deploy-foundation/33-verify-deployment/333-verify-vault/ | `35-verify-vault` Step 1 | "all three pods" → 4 rows (agent-injector) | ✅ Fixed | `6865910` | ✅ `kubectl get pods -n vault` — 4 rows |
-| 17 | http://localhost:8080/30-deploy-foundation/33-verify-deployment/333-verify-vault/ | `35-verify-vault` Step 5 | Removed impossible `Build Date`; fixed `agent_registry` type + columns | ✅ Fixed | `6865910` | ✅ version + `secrets list` |
-| 18 | http://localhost:8080/30-deploy-foundation/33-verify-deployment/334-verify-identity-access/ | `36-verify-identity-access` | `k8s-workshop-acme-*` → `k8s-workshopacme-*` | ✅ Fixed | `6865910` | ✅ `kubectl get ingress` — `k8s-workshopacme-…` |
-| 19 | http://localhost:8080/30-deploy-foundation/33-verify-deployment/336-platform-health-check/ | `38-platform-health-check` | **8 documented checks → 13**; dropped replica-dependent pod counts | ✅ Fixed | `6865910` | ✅ `test-vault-verify.sh` **exit 0, 13 passed** |
-| 20 | http://localhost:8080/30-deploy-foundation/33-verify-deployment/331-verify-infrastructure/ | `33-verify-infrastructure` | Added the OpenLDAP + Vault-native-surface sections | ✅ Fixed | `6865910` | ✅ `test-foundation.sh` — ALL passed, 0 FAIL/0 WARN |
+| 16 | http://localhost:8080/30-deploy-foundation/33-verify-deployment/333-verify-vault/ | `333-verify-vault` Step 1 | "all three pods" → 4 rows (agent-injector) | ✅ Fixed | `6865910` | ✅ `kubectl get pods -n vault` — 4 rows |
+| 17 | http://localhost:8080/30-deploy-foundation/33-verify-deployment/333-verify-vault/ | `333-verify-vault` Step 5 | Removed impossible `Build Date`; fixed `agent_registry` type + columns | ✅ Fixed | `6865910` | ✅ version + `secrets list` |
+| 18 | http://localhost:8080/30-deploy-foundation/33-verify-deployment/334-verify-identity-access/ | `334-verify-identity-access` | `k8s-workshop-acme-*` → `k8s-workshopacme-*` | ✅ Fixed | `6865910` | ✅ `kubectl get ingress` — `k8s-workshopacme-…` |
+| 19 | http://localhost:8080/30-deploy-foundation/33-verify-deployment/336-platform-health-check/ | `336-platform-health-check` | **8 documented checks → 13**; dropped replica-dependent pod counts | ✅ Fixed | `6865910` | ✅ `test-vault-verify.sh` **exit 0, 13 passed** |
+| 20 | http://localhost:8080/30-deploy-foundation/33-verify-deployment/331-verify-infrastructure/ | `331-verify-infrastructure` | Added the OpenLDAP + Vault-native-surface sections | ✅ Fixed | `6865910` | ✅ `test-foundation.sh` — ALL passed, 0 FAIL/0 WARN |
 | 21 | n/a — `infrastructure/scripts/bootstrap.sh` | `bootstrap.sh` | Next-steps told at-an-event attendees to deploy all 3 tiers | ✅ Fixed | `a49aa7b` | ✅ `bootstrap.sh --skip-prereq-gate --image-source ecr` re-run **exit 0**; both paths render; tree stayed clean |
 | 22 | http://localhost:8080/50-use-case-1/52-verify-credentials/ | `52-verify-credentials` Step 3 | **Returned nothing** — hardcoded `vault-0`; now reads all 3 Raft nodes | ✅ Fixed | `2580504` | ✅ returns the documented row (was empty) |
 | 23 | http://localhost:8080/50-use-case-1/52-verify-credentials/ | `52-verify-credentials` Step 3 | **`jq` parse error** on non-JSON lines; added `grep` + `--tail=-1` | ✅ Fixed | `2580504` | ✅ no parse error across the window |
@@ -124,7 +131,7 @@ that needs a browser or a phone.
    Five other pages still address an attendee who deploys Tier 2 themselves — including two
    prerequisite pages that send them to obtain licensing secrets they will never hold, and a
    cleanup page whose one command cannot work for them.
-2. **The `jwt` auth backend was retired (decision (e)) but `37-the-oidc-seam` still teaches
+2. **The `jwt` auth backend was retired (decision (e)) but `335-oidc-seam` still teaches
    it** — while asserting the opposite three paragraphs later. `test-vault-verify.sh` now
    actively asserts the mount is *absent*, so the page contradicts the tooling too.
 3. **Two Use Case 1 commands fail against a healthy system** — one because Vault is 3-node HA
@@ -219,7 +226,7 @@ Would …` lines. Settling it requires a real teardown, which was not run.
 
 ---
 
-# Part 2 — `37-the-oidc-seam` teaches a backend that no longer exists
+# Part 2 — `335-oidc-seam` teaches a backend that no longer exists
 
 This page is the most out-of-date in the workshop, and it **contradicts itself**.
 
@@ -290,7 +297,7 @@ jq: parse error: Invalid numeric literal at line 2, column 4
 ```
 
 Cause: the command omits `--quiet` and `</dev/null`, so `kubectl run`'s pod-lifecycle
-message (`pod "oidc-check" deleted`) lands in the `jq` pipe. **`36-verify-identity-access`
+message (`pod "oidc-check" deleted`) lands in the `jq` pipe. **`334-verify-identity-access`
 Step 4 runs the same curl correctly and documents exactly this** (line 102: "the `--quiet`
 flag keeps `kubectl run`'s pod-lifecycle messages out of the `jq` pipe").
 
@@ -326,7 +333,7 @@ None of these block an attendee, but each one makes a healthy system look broken
 
 ## 13. `31-deploy-at-an-event` line 77 — Vault version — WRONG
 
-Page `Version 1.20.x+ent`; live **`2.0.3+ent`**. `35-verify-vault` line 90 already says
+Page `Version 1.20.x+ent`; live **`2.0.3+ent`**. `333-verify-vault` line 90 already says
 `2.0.3+ent`, so page 31 contradicts reality *and* its sibling.
 
 ## 14. `31-deploy-at-an-event` lines 80–86 — "seven pods", output has eight rows — WRONG
@@ -352,7 +359,7 @@ apart — so it crash-looped four times during bring-up and then stabilised (`Re
 Do **not** describe this as "normal" in the page without establishing why it exits 1; say the
 pod restarts several times during bring-up and is healthy once `READY 1/1`.
 
-**`36-verify-identity-access` line 39 already handles the Job correctly** — it shows the
+**`334-verify-identity-access` line 39 already handles the Job correctly** — it shows the
 autoconf row and says "seven pods Running **and the autoconf job Completed**". Copy that
 wording to page 31 and add both to page 31's existing "looks like a failure, isn't" list.
 (Cosmetic: page 36 lists autoconf last; `kubectl` sorts alphabetically so it appears first.)
@@ -364,7 +371,7 @@ us-east-1 uses `ec2.internal`; `<region>.compute.internal` is every *other* regi
 contentspec pins `deployableRegions.required: [us-east-1]`, so the page is wrong for the only
 region it can run in.
 
-## 16. `35-verify-vault` Step 1 — "all three pods", output has four — WRONG
+## 16. `333-verify-vault` Step 1 — "all three pods", output has four — WRONG
 
 ```
 vault-0                                 1/1   Running   0   47m
@@ -376,7 +383,7 @@ vault-agent-injector-5b7dd85f5c-l848b   1/1   Running   0   47m   <-- unmentione
 **Change:** add the `vault-agent-injector` row. (Cosmetic: Step 3's peer list is ordered
 vault-0/1/2 on the page but returned 0/2/1 live — worth a "order varies" note.)
 
-## 17. `35-verify-vault` Step 5 — two mismatches — WRONG
+## 17. `333-verify-vault` Step 5 — two mismatches — WRONG
 
 - The `secrets list` expected block shows **3 columns**; actual has **4** (Accessor). Type
   reads `agent_registry` with an **underscore**, not `agent-registry`, and the description is
@@ -384,13 +391,13 @@ vault-0/1/2 on the page but returned 0/2/1 live — worth a "order varies" note.
 - The expected block shows a `Build Date` line, but the command is `vault status | grep -i
   version`, which cannot emit it. Live returns only `Version 2.0.3+ent`.
 
-## 18. `36-verify-identity-access` line 74 — ALB hostname shape — WRONG
+## 18. `334-verify-identity-access` line 74 — ALB hostname shape — WRONG
 
 Page: `k8s-workshop-acme-<hash>.<region>.elb.amazonaws.com`. Live:
 `k8s-workshopacme-61ec0da744-2132079147.us-east-1.elb.amazonaws.com` — **`workshopacme`, no
 hyphen**; the ALB name strips hyphens from the IngressGroup name.
 
-## 19. `38-platform-health-check` — documents 8 checks, script runs 13 — GAP
+## 19. `336-platform-health-check` — documents 8 checks, script runs 13 — GAP
 
 Live output:
 
@@ -422,7 +429,7 @@ Live output:
   rather than swapping one hardcoded number for another, drop the exact counts from the
   expected block (`cert-manager pods running (N pod(s))`).
 
-## 20. `33-verify-infrastructure` — expand list omits two whole sections — GAP
+## 20. `331-verify-infrastructure` — expand list omits two whole sections — GAP
 
 The expand (lines 26–34) lists EKS, RDS, Bedrock KB, audit log groups, region contract. The
 script also runs:
@@ -640,15 +647,15 @@ direction, but the real number is better.
   `issuer_id https://wrp.c1m7cx.18-204-174-225.nip.io` exactly matches
   `NIP_FQDN_WRP=wrp.c1m7cx.18-204-174-225.nip.io`.
 - **Outputs-only Tier-2 state** behaved exactly as the page's alert describes.
-- **`33-verify-infrastructure`** — `Foundation verification: ALL components passed`, and the
+- **`331-verify-infrastructure`** — `Foundation verification: ALL components passed`, and the
   KB id is surfaced in a "Next step" box at the end rather than left as a placeholder.
-- **`34-ingest-knowledge-base`** — re-running the trigger converged; all three data sources
+- **`332-ingest-knowledge-base`** — re-running the trigger converged; all three data sources
   returned `COMPLETE`, confirming the page's idempotency claim.
-- **`35-verify-vault`** Steps 2–4 and the three agent registrations (`agent-uc2`,
+- **`333-verify-vault`** Steps 2–4 and the three agent registrations (`agent-uc2`,
   `uc1-agent`, `uc3-actor`) — exact match.
-- **`36-verify-identity-access`** Steps 1–4 — all correct, including the autoconf-Job row and
+- **`334-verify-identity-access`** Steps 1–4 — all correct, including the autoconf-Job row and
   the internal-issuer explanation that page 37 gets wrong.
-- **`37-the-oidc-seam` Step 3** — exact match (`audiences [uc3-actor agent-uc2]`,
+- **`335-oidc-seam` Step 3** — exact match (`audiences [uc3-actor agent-uc2]`,
   `enabled true`, `issuer_id` = nip.io).
 - **`32-configure-kubectl`** — the dual self-paced/at-an-event authorization note (line 14)
   and the `Unauthorized` remediation (line 30) are both exactly right.
