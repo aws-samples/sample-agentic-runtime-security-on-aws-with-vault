@@ -809,8 +809,8 @@ resource "vault_generic_endpoint" "oauth_alias" {
   write_fields         = ["id"]
 
   data_json = jsonencode({
-    name         = each.key # human-readable alias name
-    external_id  = each.key # the OAuth claim value (sub / act.sub) native OBO
+    name        = each.key # human-readable alias name
+    external_id = each.key # the OAuth claim value (sub / act.sub) native OBO
     # resolves the entity BY. Vault matches the JWT sub/act.sub against the
     # alias external_id (scoped by issuer), NOT by name — a name-only alias
     # resolves via identity/lookup/entity but fails native OBO with "no alias
