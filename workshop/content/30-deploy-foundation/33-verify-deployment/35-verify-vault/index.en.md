@@ -10,7 +10,7 @@ Vault was deployed as a 3-node Raft HA cluster, initialized, and unsealed as par
 :::alert{header="Root token location" type="info"}
 The Vault root token lives at `~/vault-init.json`. How it got there depends on your path:
 
-- **At an event** — you pulled it from the state bucket in Step 3 of [Deploy — At an Event](../31-deploy-at-an-event/). `vault-init.sh` ran inside the account-setup build, not on your machine, so there is no local run to go looking for.
+- **At an event** — you pulled it from the state bucket in Step 3 of [Deploy — At an Event](../../31-deploy-at-an-event/). `vault-init.sh` ran inside the account-setup build, not on your machine, so there is no local run to go looking for.
 - **Self-paced** — `vault-init.sh` (run by `deploy-workshop.sh`) wrote it during Tier-2 initialization.
 
 Load it before running the authenticated checks below:

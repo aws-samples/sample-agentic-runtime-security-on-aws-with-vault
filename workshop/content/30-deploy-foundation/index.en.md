@@ -12,4 +12,6 @@ How much of that you deploy yourself depends on how you are running the workshop
 
 From [Configure kubectl](./32-configure-kubectl/) onward the pages are identical for both paths.
 
+Once the stack is up, [Verify Deployment](./33-verify-deployment/) is where you confirm it — six pages of read-only checks that work up the stack from the AWS foundation to the identity layer, each with the expected output printed next to the command.
+
 Complete the [Prerequisites module](../20-prerequisites/) first, then work through the sub-modules in the left nav in order.
