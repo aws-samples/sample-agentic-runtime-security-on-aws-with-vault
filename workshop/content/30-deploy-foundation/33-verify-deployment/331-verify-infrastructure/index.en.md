@@ -1,6 +1,6 @@
 ---
 title: 'Verify Infrastructure'
-weight: 33
+weight: 331
 ---
 
 Run the foundation verification script to confirm all modules deployed correctly. It checks EKS cluster status + nodes + addons, RDS status + pgaudit + encryption, Bedrock KB + data sources + retrieval, audit log groups with KMS, and the region contract.

@@ -9,12 +9,12 @@ Nothing here deploys or changes infrastructure. Each page is a set of read-only 
 
 | Page | What you confirm |
 |---|---|
-| [Verify Infrastructure](./33-verify-infrastructure/) | EKS, RDS, the Bedrock Knowledge Base, the audit log groups, OpenLDAP, and the Vault native surface — one script, one summary |
-| [Ingest Knowledge Base](./34-ingest-knowledge-base/) | All three Knowledge Base data sources finished ingesting (the deploy already ran this — here you confirm it, and re-trigger if needed) |
-| [Validate Vault](./35-verify-vault/) | Vault is initialized, unsealed, running as a 3-node Raft cluster on an Enterprise build, with the Agent Registry populated |
-| [Validate Identity Access](./36-verify-identity-access/) | The IBM Verify Identity Access stack is up, its autoconf Job completed, and the ALB is serving the trusted `nip.io` certificate |
-| [The OIDC Seam](./37-oidc-seam/) | Vault's OAuth resource server profile trusts IVIA — the join where an IVIA-issued JWT becomes a Vault-vended credential |
-| [Platform Health Check](./38-platform-health-check/) | One script re-checks the whole platform layer, including that the retired `jwt` auth backend is still absent |
+| [Verify Infrastructure](./331-verify-infrastructure/) | EKS, RDS, the Bedrock Knowledge Base, the audit log groups, OpenLDAP, and the Vault native surface — one script, one summary |
+| [Ingest Knowledge Base](./332-ingest-knowledge-base/) | All three Knowledge Base data sources finished ingesting (the deploy already ran this — here you confirm it, and re-trigger if needed) |
+| [Validate Vault](./333-verify-vault/) | Vault is initialized, unsealed, running as a 3-node Raft cluster on an Enterprise build, with the Agent Registry populated |
+| [Validate Identity Access](./334-verify-identity-access/) | The IBM Verify Identity Access stack is up, its autoconf Job completed, and the ALB is serving the trusted `nip.io` certificate |
+| [The OIDC Seam](./335-oidc-seam/) | Vault's OAuth resource server profile trusts IVIA — the join where an IVIA-issued JWT becomes a Vault-vended credential |
+| [Platform Health Check](./336-platform-health-check/) | One script re-checks the whole platform layer, including that the retired `jwt` auth backend is still absent |
 
 Work through them in order. If a check does not match, each page prints a `Fix:` hint next to the failure — and at an event, a Tier-2 check that fails is worth raising with your organizer rather than trying to redeploy yourself.
 

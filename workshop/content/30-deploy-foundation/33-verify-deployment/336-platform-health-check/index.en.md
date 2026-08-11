@@ -1,6 +1,6 @@
 ---
 title: 'Platform Health Check'
-weight: 38
+weight: 336
 ---
 
 Run one script to confirm the entire platform layer is healthy before proceeding to the use case modules.

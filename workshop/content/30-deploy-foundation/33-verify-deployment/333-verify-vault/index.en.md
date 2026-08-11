@@ -1,6 +1,6 @@
 ---
 title: 'Validate Vault'
-weight: 35
+weight: 333
 ---
 
 Vault was deployed as a 3-node Raft HA cluster, initialized, and unsealed as part of Tier 2 — during your account setup at an event, or by your own `deploy-workshop.sh` run when self-paced. Confirm it is healthy before proceeding.

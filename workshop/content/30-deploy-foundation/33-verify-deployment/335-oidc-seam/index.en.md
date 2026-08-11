@@ -1,6 +1,6 @@
 ---
 title: 'The OIDC Seam'
-weight: 37
+weight: 335
 ---
 
 The OIDC seam is where an IVIA-issued JWT becomes a Vault-vended dynamic credential. `deploy-workshop.sh` already wired Vault's **OAuth resource server** profile (`ivia`) to trust IVIA — confirm the wiring is correct before running use cases.
@@ -168,7 +168,7 @@ Expected — `issuer` matches the `issuer_id` from Step 3. Note the provider adv
 }
 ```
 
-This is intentional and is the same behaviour [Verify Identity Access](../36-verify-identity-access/) Step 4 describes: the provider always advertises the one public WRP issuer, which lets Vault validate IVIA tokens against a single `issuer_id` regardless of whether the caller reached it from inside or outside the cluster.
+This is intentional and is the same behaviour [Verify Identity Access](../334-verify-identity-access/) Step 4 describes: the provider always advertises the one public WRP issuer, which lets Vault validate IVIA tokens against a single `issuer_id` regardless of whether the caller reached it from inside or outside the cluster.
 
 :::expand{header="Platform Track — Why declarative IVIA configuration?"}
 

@@ -1,6 +1,6 @@
 ---
 title: 'Validate Identity Access'
-weight: 36
+weight: 334
 ---
 
 IBM Verify Identity Access (IVIA) runs as a self-contained seven-pod stack in the `verify-access` namespace. The autoconf Job configured it fully unattended — confirm all pods are healthy and OIDC is serving before continuing.
