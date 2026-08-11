@@ -172,6 +172,7 @@ The workshop content never shows attendees these. Use them to isolate problems, 
 | `test-vault-verify.sh` | After Vault unseal / re-init | Vault auth methods + secrets engines + policies present. |
 | `verify-uc1.sh` / `verify-uc2.sh` / `verify-uc3.sh` | Per use case | See the table below. |
 | `verify-uc3.sh --bypass` | Adversarial check | Forged HS256 JWT and a real IVIA token with the wrong `act.sub` / a mismatched `vault:path_access` RAR are both rejected by Vault — proves the agent-registry alias + per-request RAR actually gate access. |
+| `verify-uc3.sh --no-phone` | Admin with no IBM Verify app | Drives the whole UC3 refund live — enrols a throwaway virtual authenticator over the same OAuth + SCIM endpoints the IBM Verify app uses, signs the real user-presence challenge, asserts the refund row in RDS, then prints the three-plane Athena correlation for the refund it just produced. Nothing is stubbed: IVIA resolves the transaction on its own evidence and approval stays bound to the exact transaction the agent fired. Refuses to run if a real phone is enrolled, and never leaves a device behind. |
 | `show-audit-correlation.sh` | After a UC3 refund | Runs the three-plane Athena correlation query for a given `request_id` and prints the single forensic row. |
 | `sync-bedrock-kb.sh` | After corpus changes | Re-ingests the KB so retrieval matches the current corpus. |
 
