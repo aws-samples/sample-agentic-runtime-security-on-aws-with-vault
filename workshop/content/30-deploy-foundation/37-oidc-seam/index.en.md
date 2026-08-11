@@ -3,7 +3,15 @@ title: 'The OIDC Seam'
 weight: 37
 ---
 
-The OIDC seam is where an IVIA-issued JWT becomes a Vault-vended dynamic credential. `deploy-workshop.sh` already wired Vault's `jwt` auth backend to trust IVIA — confirm the wiring is correct before running use cases.
+The OIDC seam is where an IVIA-issued JWT becomes a Vault-vended dynamic credential. `deploy-workshop.sh` already wired Vault's **OAuth resource server** profile (`ivia`) to trust IVIA — confirm the wiring is correct before running use cases.
+
+:::alert{header="There is no jwt auth backend — and that is the point" type="info"}
+Vault Enterprise consumes the IVIA-issued OAuth JWT **directly**: the token is presented in the
+`X-Vault-Token` header and validated against the OAuth resource server profile. Earlier
+iterations of this workshop used a hand-rolled `jwt` auth backend with a `POST auth/jwt/login`
+round-trip; that backend has been **removed**. If you see no `jwt/` row in Step 1, the deploy is
+correct — its absence is asserted by `test-vault-verify.sh`.
+:::
 
 ## The OIDC Seam at Runtime
 
@@ -78,14 +86,13 @@ kubectl exec -n vault vault-0 -- \
   sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault auth list"
 ```
 
-Expected:
+Expected — **two** mounts only. There is deliberately **no `jwt/` row**:
 
 ```
-Path           Type          Accessor                Description
-----           ----          --------                -----------
-kubernetes/    kubernetes    auth_kubernetes_...     Kubernetes workload auth
-jwt/           jwt           auth_jwt_...            IVIA OIDC user auth
-token/         token         auth_token_...          token based credentials
+Path           Type          Accessor                    Description                Version
+----           ----          --------                    -----------                -------
+kubernetes/    kubernetes    auth_kubernetes_...         n/a                        n/a
+token/         token         auth_token_...              token based credentials    n/a
 ```
 
 ## Step 2 — Confirm secrets engines
@@ -95,14 +102,17 @@ kubectl exec -n vault vault-0 -- \
   sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault secrets list"
 ```
 
-Expected:
+Expected — six mounts. `agent-registry/` is the Enterprise engine this workshop exists to teach:
 
 ```
-Path          Type         Description
-----          ----         -----------
-aws/          aws          Dynamic IAM credentials
-database/     database     Dynamic PostgreSQL credentials
-sys/          system       system endpoints used for control, policy and debugging
+Path               Type              Accessor                   Description
+----               ----              --------                   -----------
+agent-registry/    agent_registry    agent-registry_...         agent registry
+aws/               aws               aws_...                    n/a
+cubbyhole/         cubbyhole         cubbyhole_...              per-token private secret storage
+database/          database          database_...               n/a
+identity/          identity          identity_...               identity store
+sys/               system            system_...                 system endpoints used for control, policy and debugging
 ```
 
 ## Step 3 — Confirm the OAuth resource server trusts IVIA
@@ -131,33 +141,34 @@ kubectl exec -n vault vault-0 -- \
   sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read database/config/workshop-pg"
 ```
 
-Expected — `allowed_roles` lists the three use case roles:
+Expected — `allowed_roles` lists the four use case roles:
 
 ```
 connection_details    map[username:vault_root ...]
-allowed_roles         uc1-readonly, uc2-personal-readonly, uc3-refund-writer
+allowed_roles         [uc1-readonly uc2-personal-readonly uc3-refund-writer uc3-readonly]
 ```
 
 ## Step 5 — Confirm IVIA OIDC discovery (cluster-internal)
 
 ```bash
-kubectl run oidc-check --image=curlimages/curl --rm -i --restart=Never \
-  -n verify-access -- \
-  curl -sk https://iviaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration \
-  | jq .
+kubectl run oidc-check --image=curlimages/curl --rm -i --restart=Never --quiet -n verify-access -- curl -sk https://iviaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration </dev/null | jq .
 ```
 
-Expected — `issuer` matches `bound_issuer` above:
+The `--quiet` flag and `</dev/null` are both required: without them `kubectl run`'s pod-lifecycle message lands in the `jq` pipe and the command fails with `jq: parse error: Invalid numeric literal`.
+
+Expected — `issuer` matches the `issuer_id` from Step 3. Note the provider advertises the **public WRP host**, not the cluster-internal address you just called:
 
 ```json
 {
-  "issuer": "https://iviaop.verify-access.svc.cluster.local:8436/oauth2",
-  "authorization_endpoint": "https://iviaop.verify-access.svc.cluster.local:8436/oauth2/authorize",
-  "token_endpoint": "https://iviaop.verify-access.svc.cluster.local:8436/oauth2/token",
-  "jwks_uri": "https://iviaop.verify-access.svc.cluster.local:8436/oauth2/jwks",
+  "issuer": "https://<NIP_FQDN_WRP from infrastructure/.acme-state>",
+  "authorization_endpoint": "https://<NIP_FQDN_WRP>/isvaop/oauth2/authorize",
+  "token_endpoint": "https://<NIP_FQDN_WRP>/isvaop/oauth2/token",
+  "jwks_uri": "https://<NIP_FQDN_WRP>/isvaop/oauth2/jwks",
   ...
 }
 ```
+
+This is intentional and is the same behaviour [Verify Identity Access](../36-verify-identity-access/) Step 4 describes: the provider always advertises the one public WRP issuer, which lets Vault validate IVIA tokens against a single `issuer_id` regardless of whether the caller reached it from inside or outside the cluster.
 
 :::expand{header="Platform Track — Why declarative IVIA configuration?"}
 
