@@ -22,7 +22,7 @@ Findings below are what the page said versus what actually came back.
 
 ## Completion tracker
 
-**39 of 40 fixed and committed. 1 needs your decision (28).** Nothing has been pushed; no PR exists.
+**40 of 41 fixed and committed. 1 needs your decision (28).** Nothing has been pushed; no PR exists.
 
 **Finding 39 is the most serious thing found in the whole walkthrough** — *Configure the OAuth
 Resource Server* Step 5 failed with a 403 for **every** attendee who followed it, because it
@@ -75,11 +75,12 @@ be automated — those are listed separately below, not counted as failures.
 | 33 | `21-aws-account` | **Regression I introduced** — renaming the licensing headings changed their anchors and broke the deep link | ✅ Fixed | `1ec6f52` | n/a (link) |
 | 34 | **The Bypass Test** | **Documented script output is stale** — page showed 3 PASS lines, script emits 7 PASS + 1 WARN-skip; the `evil-actor` check the page presented as passing **does not run by default**. Rewritten around Checks 14/16/17/18, real expected output, a Check column on the denials table, and an alert explaining why 19 skips | ✅ Fixed | `5e5d1f8` | ✅ `verify-uc3.sh --bypass` exit 0, **7 checks** — page now matches |
 | 35 | **Configure the OAuth Resource Server** Step 4 | Expected `creation_statements` shown as a 5-element JSON array with escaped quotes; the CLI prints **one** bracketed semicolon-separated string. Replaced with real output | ✅ Fixed | `057d7df` | ✅ `vault read database/roles/uc2-personal-readonly` exit 0 — matches |
-| 36 | **CIBA Out-of-Band Approval** | 3 commands, **zero expected output**. Added expected output for the pod check and endpoint probe; alert for the log grep (empty + exit 1 until the phone step); widened `--tail=50` → `--tail=-1 --since=30m` | ✅ Fixed | `69a80e3` | ✅ all 3 re-run — exit 0 / 0 / 1-empty as now documented |
+| 36 | **CIBA Out-of-Band Approval** | 3 commands, **zero expected output**. Added expected output for the pod check and endpoint probe; alert for the log grep (empty + exit 1 until the phone step); widened `--tail=50` → `--tail=-1 --since=30m` | ✅ Fixed | `69a80e3` | ✅ all 3 re-run — exit 0 / 0 / 1-empty as now documented. The rewritten `--tail=-1 --since=30m` was then re-tested **unpiped** (`kubectl … >/dev/null; echo $?` → **0**, 240 lines) to prove the flags are valid and the exit 1 comes from `grep`, not from kubectl rejecting them |
 | 37 | **Scope Enforcement** Step 2.3 | `\dp` output contains `v-JWT Toke-…` rows the page never showed — looks like corruption, is actually the OBO issuance at the DB layer. Documented both prefixes | ✅ Fixed | `69a80e3` | ✅ `v-JWT Toke-uc2-pers-…-1786459642` observed live |
 | 38 | Every `kubectl run … psql` block (Use Case 2 + 3) | First run on a node that has not cached `postgres:16-alpine` loses the psql output to the attach race. Added a re-run note | ✅ Fixed | `69a80e3` | ✅ reproduced once, then 3/3 clean on re-run |
 | 39 | **Configure the OAuth Resource Server** Step 5 | **BLOCKER — 403 for every attendee.** Page said copy the `id_token` cookie; it carries no `act` claim so Vault resolves no agent and fails closed. Must be **`access_token`**. Also `lease_renewable` `true` → `false` | ✅ Fixed | `057d7df` | ✅ **both cookies tested from one browser session** — `id_token` → 403, `access_token` → exit 0, `username=v-JWT Toke-uc2-pers-…` exactly as documented |
 | 40 | **OAuth Login Flow** | Same defect in 3 places — 2 sequence-diagram Bearer arrows, step 8, and the claim-flow list all said the `id_token` is forwarded. It is the `access_token` | ✅ Fixed | `f9e8b14` | n/a (prose + diagram) — root cause confirmed in `api/chat/+server.ts` |
+| 41 | **Scope Enforcement** — the finding-37 alert | The alert I added in `69a80e3` named the wrong Use Case 3 role: it said attendees may see `v-…-uc3-refu-…` on `banking.accounts`. Live ACL carries `v-root-uc3-read-…` (`uc3-readonly`). Both roles in fact hold `SELECT` on that table — `uc3-refund-writer`'s `INSERT`/`UPDATE` are scoped to `banking.refunds` alone. Names both, and turns the asymmetry into the point: the *write* role still reads `=r/` here | ✅ Fixed | `7c95828` | ✅ live `relacl` on `banking.accounts` + both roles' `creation_statements` from Vault config state |
 
 
 **The one open item (28)** needs a fact I cannot get from here: whether the Workshop Studio
