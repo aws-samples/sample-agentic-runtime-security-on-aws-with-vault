@@ -157,6 +157,10 @@ Discovery: `Workshop=agentic-runtime-security` tag + the well-known names this w
 
 Sweeps EKS pod-identity associations, node groups, cluster, RDS, AOSS, S3, Bedrock KB, Glue/Athena, CW log groups, KMS, IAM roles, EKS cluster IAM OIDC, and per-VPC: ELBs, endpoints, ENIs, SGs, NAT/EIP/IGW/subnets/RTs/VPC.
 
+**Local state.** A full nuke that verifies zero residuals also archives the three roots' `terraform.tfstate` files as `terraform.tfstate.pre-teardown-<epoch>`, so the next deploy starts from empty state exactly like an attendee's fresh clone. Without this, tier-1 state keeps `helm_release` entries whose provider dials the destroyed cluster and the next refresh dies on `Kubernetes cluster unreachable` before it can plan. The partial modes (`--keep-eks`, `--aws-only`, `--post-destroy-only`) never archive — the infrastructure they deliberately keep alive must stay tracked — and neither does a run whose verification found residuals, since that state is the only record of them.
+
+**Credentials.** Run it with a role that can delete IAM role policies, VPC endpoints, route-table associations, Glue tables and Athena named queries. `WSParticipantRole` cannot: a teardown under the attendee role fails ~44 deletes and leaves the environment half-destroyed. The at-an-event path avoids this because CloudFormation runs the same script under the CodeBuild service role.
+
 ### `e2e-validate.sh`
 
 Runs offline lint on every script in this directory. Used by admins before committing script changes:

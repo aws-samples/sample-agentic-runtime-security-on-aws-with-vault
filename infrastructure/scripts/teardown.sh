@@ -2214,6 +2214,41 @@ else
     print_info "Removed local Phase 07.8 ACME cache (.acme-state, .acme-rerun-marker)"
 fi
 
+# Local-only state cleanup: after a FULL nuke the three roots' state files list
+# resources that no longer exist. That is not merely untidy — tier-1 state holds
+# helm_release/kubernetes entries whose providers dial the destroyed cluster, so
+# the next deploy's refresh dies on "Kubernetes cluster unreachable" before it
+# can plan anything. A self-paced attendee starts from a fresh clone with NO
+# state, and a re-deploy here must start from the same place.
+#
+# Archived, never deleted: if this teardown was wrong about something, the state
+# is the only record of what it left behind. Gated twice — full mode only (the
+# partial modes deliberately keep infrastructure alive and MUST keep tracking
+# it), and only when verification found zero residuals.
+_reset_local_state() {
+    local stamp="$1" root f moved=0
+    for root in "$TIER1_DIR" "$TIER2_DIR" "$TIER3_DIR"; do
+        for f in "${root}/terraform.tfstate" "${root}/terraform.tfstate.backup"; do
+            [ -f "$f" ] || continue
+            mv "$f" "${f}.pre-teardown-${stamp}" && moved=$((moved + 1))
+        done
+    done
+    echo "$moved"
+}
+
+if [ "$DRY_RUN" = true ]; then
+    print_info "[DRY-RUN] Would archive the three roots' terraform.tfstate files"
+elif [ "$AWS_ONLY" = true ] || [ "$POST_DESTROY_ONLY" = true ] || [ "$KEEP_EKS" = true ]; then
+    : # partial mode — the surviving infrastructure must stay tracked
+elif [ "${VERIFY_FAILED:-}" = true ]; then
+    print_warn "Keeping local terraform state — verification found residuals and the state is the only record of them"
+else
+    _state_moved=$(_reset_local_state "$(date +%s)")
+    if [ "${_state_moved:-0}" -gt 0 ]; then
+        print_info "Archived ${_state_moved} local state file(s) as *.pre-teardown-* — the next deploy starts from empty state, like a fresh clone"
+    fi
+fi
+
 phase_header "Teardown Complete"
 if [ "$DRY_RUN" = true ]; then
     print_warn "DRY RUN — no changes were made"
