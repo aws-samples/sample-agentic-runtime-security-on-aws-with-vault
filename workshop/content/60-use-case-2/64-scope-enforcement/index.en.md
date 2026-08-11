@@ -174,7 +174,7 @@ kubectl run pg-grants --rm -i --restart=Never --image=postgres:16-alpine -n bank
     -c "\dp banking.accounts"
 ```
 
-Expected output — one `vault_root=arwdDxtm/vault_root` line followed by one row per **currently-active** Vault-vended credential (every active lease maps to one Postgres role, each granted `=r/vault_root`). The exact number of `v-…` rows depends on how many leases are still live — every issuance you made on pages 62 and 63 contributes one:
+Expected output — one `vault_root=arwdDxtm/vault_root` line followed by one row per **currently-active** Vault-vended credential (every active lease maps to one Postgres role, each granted `=r/vault_root`). The exact number of `v-…` rows depends on how many leases are still live — every issuance you made on the previous pages contributes one:
 
 ```
                                                                                           Access privileges
@@ -182,12 +182,21 @@ Expected output — one `vault_root=arwdDxtm/vault_root` line followed by one ro
 ---------+----------+-------+--------------------------------------------------------------------+-------------------+---------------------------------------------------------------------------------
  banking | accounts | table | vault_root=arwdDxtm/vault_root                                    +|                   | user_accounts (r):                                                             +
          |          |       | "v-root-uc2-pers-<random>-<timestamp>"=r/vault_root               +|                   |   (u): ((user_sub)::text = current_setting('app.current_user_sub'::text, true))
-         |          |       | "v-root-uc2-pers-<random>-<timestamp>"=r/vault_root               +|                   |
+         |          |       | "v-JWT Toke-uc2-pers-<random>-<timestamp>"=r/vault_root           +|                   |
          |          |       | "v-root-uc2-pers-<random>-<timestamp>"=r/vault_root                |                   |
 (1 row)
 
 pod "pg-grants" deleted
 ```
+
+:::alert{type="info" header="\"v-JWT Toke-\" is not corruption — it is the on-behalf-of path made visible"}
+Two role-name prefixes appear, and the difference tells you *how* each credential was obtained. Vault builds every ephemeral role name from the display name of the token that asked for it, truncated to 8 characters:
+
+- **`v-root-…`** — issued with the root token, i.e. by one of the inspection commands you have been running by hand.
+- **`v-JWT Toke-…`** — issued by presenting a real IVIA OAuth JWT, whose Vault display name is `JWT Token with JTI: <uuid>`. These are the on-behalf-of issuances: the MCP server serving a signed-in user, `verify-uc2.sh`, or your own Step 5 on the [Configure the OAuth Resource Server](../62-configure-oauth-resource-server/) page.
+
+The truncation is why it reads oddly. The name deliberately identifies the *token*, never the human `sub` — human attribution comes from correlating the lease with the IVIA OAuth plane, not from the Postgres role name. You may also see a `v-…-uc3-refu-…` row if you have run the Use Case 3 checks.
+:::
 
 What to read from this output:
 

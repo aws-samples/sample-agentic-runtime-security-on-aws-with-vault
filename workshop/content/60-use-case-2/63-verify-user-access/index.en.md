@@ -36,6 +36,17 @@ The credential issued above lives for **15 minutes** (`default_ttl`). If you tak
 
 Now spawn a transient `postgres:16-alpine` pod, run the SELECT as Oscar, and let it auto-delete (no psql binary lives in any workshop pod — this is the cluster-side equivalent of the MCP server's per-request connect → SET → SELECT pattern):
 
+:::alert{type="info" header="If the first run prints no query output, just run it again"}
+The **first** `kubectl run … psql` you execute on a given node has to pull the `postgres:16-alpine` image. That delay can outrun `kubectl`'s attach, and you get only:
+
+```
+If you don't see a command prompt, try pressing enter.
+pod "pg-client-oscar" deleted
+```
+
+— with the query results missing. The command ran fine; the output stream was simply missed. Re-run the same block and it prints normally. This applies to every `psql` block in Use Case 2 and Use Case 3, and you will hit it at most once per node.
+:::
+
 ```bash
 kubectl delete pod pg-client-oscar -n banking-app --ignore-not-found --now >/dev/null 2>&1
 kubectl run pg-client-oscar --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \

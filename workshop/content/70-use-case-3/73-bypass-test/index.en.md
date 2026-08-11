@@ -189,7 +189,13 @@ The Postgres GRANT layer rejects the INSERT before the RLS policy (or any constr
 
 RLS is not the only layer scoping refund reads. The `check_refund_status` tool adds an explicit **owner predicate** — it `JOIN banking.accounts` and requires `a.user_sub = <authenticated_sub>` — so a `refund_id` you do not own returns the **same** empty result as a non-existent one. The agent reports `{"error": "Refund <id> not found"}` either way, leaking nothing about another user's refunds. This section proves that predicate at the database layer with the `uc3-readonly` credential from Step 2.1, running the exact query the agent runs (`uc3-agent/app/agent.py`, `check_refund_status`).
 
-Refunds are **created by you** during the CIBA approval flow (page 71) — they are never seeded — so the IDs below are examples from one run; **yours will differ.**
+Refunds are **created by you** during the CIBA approval flow — they are never seeded — so the IDs below are examples from one run; **yours will differ.**
+
+:::alert{type="warning" header="This section needs a completed refund first"}
+`banking.refunds` starts **empty**. If you have not yet finished [Test the Refund Flow](../70-test-refund/) — including the physical **Approve** tap on your enrolled device — Step 4.1 below runs correctly but returns `(0 rows)` for both personas, and Step 4.2 has no `REFUND_ID` to use.
+
+That is not a failure. Go and complete the refund, then come back to this section.
+:::
 
 #### Step 4.1 — Find a refund you created
 
