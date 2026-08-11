@@ -38,49 +38,49 @@ the page now claims. `n/a` means the change was prose, a heading or a link, with
 run. **Human Needed** means the step requires a browser sign-in or a physical device and cannot
 be automated — those are listed separately below, not counted as failures.
 
-| # | Page / file | Change | Status | Commit | Executed |
-|---|---|---|---|---|---|
-| 1 | `20-prerequisites/21-at-an-event` | Tier 1 **and** Tier 2 pre-provisioned; work begins at Tier 3; drop the "have your key + licence ready" instruction; 17–22 min → ~40 min | ✅ Fixed | `b996107` | n/a (prose) |
-| 2 | `20-prerequisites/22-ivia-licensing` | "(you supply this)" → "(self-paced: you supply this)" + at-an-event alert | ✅ Fixed | `b996107` | ✅ `openssl x509 … -noout -dates` |
-| 3 | `20-prerequisites/23-pre-flight-checks` | Gate install/quota sections as self-paced | ✅ Fixed | `b996107` | ✅ tools verify · quota query · `--dry-run` · runtime probe |
-| 4 | `30-deploy-foundation/index` | "deploy the entire stack with one command" → split by path | ✅ Fixed | `b996107` | n/a (prose) |
-| 5 | `35-verify-vault` (intro) | Root token was pulled from S3 at an event, not written locally | ✅ Fixed | `b996107` | ✅ all 8 blocks on the page |
-| 6 | `80-cleanup` | At-an-event alert: nothing to clean up; scope `teardown.sh` self-paced | ✅ Fixed | `b996107` | ✅ all 4 spot-checks (teardown itself **not** run) |
-| 7 | `37-oidc-seam` line 6 | Named the `jwt` backend it contradicts 100 lines later | ✅ Fixed | `83da627` | n/a (prose) |
-| 8 | `37-oidc-seam` Step 1 | Expected a `jwt/` mount that does not exist | ✅ Fixed | `83da627` | ✅ `vault auth list` — 2 mounts, no `jwt/` |
-| 9 | `37-oidc-seam` Step 2 | 3 of 6 mounts shown; `agent-registry/` omitted | ✅ Fixed | `83da627` | ✅ `vault secrets list` — 6 mounts |
-| 10 | `37-oidc-seam` Step 4 | `allowed_roles` missing `uc3-readonly` | ✅ Fixed | `83da627` | ✅ `vault read database/config/workshop-pg` — 4 roles |
-| 11 | `37-oidc-seam` Step 5 | **Command errored (exit 5)** — added `--quiet` + `</dev/null` | ✅ Fixed | `83da627` | ✅ **exit 0** (was exit 5) |
-| 12 | `37-oidc-seam` Step 5 | Expected issuer was ClusterIP; it is the public WRP host. `bound_issuer` → `issuer_id` | ✅ Fixed | `83da627` | ✅ returns the nip.io issuer |
-| 13 | `31-deploy-at-an-event` | Vault `1.20.x+ent` → `2.0.3+ent` | ✅ Fixed | `6865910` | ✅ `vault status \| grep` — `2.0.3+ent` |
-| 14 | `31-deploy-at-an-event` | "seven pods" → 8 rows; autoconf Job + `iviadsc` restarts added to looks-broken-isn't list | ✅ Fixed | `6865910` | ✅ `kubectl get pods -n verify-access` — 8 rows |
-| 15 | `32-configure-kubectl` | `<region>.compute.internal` → `ec2.internal` for us-east-1 | ✅ Fixed | `6865910` | ✅ `kubectl get nodes` — `ec2.internal` |
-| 16 | `35-verify-vault` Step 1 | "all three pods" → 4 rows (agent-injector) | ✅ Fixed | `6865910` | ✅ `kubectl get pods -n vault` — 4 rows |
-| 17 | `35-verify-vault` Step 5 | Removed impossible `Build Date`; fixed `agent_registry` type + columns | ✅ Fixed | `6865910` | ✅ version + `secrets list` |
-| 18 | `36-verify-identity-access` | `k8s-workshop-acme-*` → `k8s-workshopacme-*` | ✅ Fixed | `6865910` | ✅ `kubectl get ingress` — `k8s-workshopacme-…` |
-| 19 | `38-platform-health-check` | **8 documented checks → 13**; dropped replica-dependent pod counts | ✅ Fixed | `6865910` | ✅ `test-vault-verify.sh` **exit 0, 13 passed** |
-| 20 | `33-verify-infrastructure` | Added the OpenLDAP + Vault-native-surface sections | ✅ Fixed | `6865910` | ✅ `test-foundation.sh` — ALL passed, 0 FAIL/0 WARN |
-| 21 | `bootstrap.sh` | Next-steps told at-an-event attendees to deploy all 3 tiers | ✅ Fixed | `a49aa7b` | ✅ `bootstrap.sh --skip-prereq-gate --image-source ecr` re-run **exit 0**; both paths render; tree stayed clean |
-| 22 | `52-verify-credentials` Step 3 | **Returned nothing** — hardcoded `vault-0`; now reads all 3 Raft nodes | ✅ Fixed | `2580504` | ✅ returns the documented row (was empty) |
-| 23 | `52-verify-credentials` Step 3 | **`jq` parse error** on non-JSON lines; added `grep` + `--tail=-1` | ✅ Fixed | `2580504` | ✅ no parse error across the window |
-| 24 | `52-verify-credentials` Step 2 | Stale answer text + "schema public is empty" gloss | ✅ Fixed | `2580504` | ✅ `/query` returns `vault_authenticated: true` |
-| 25 | `52-verify-credentials` Step 5 | 9 checks → 10; `v-kubernet-` → `v-root-` | ✅ Fixed | `2580504` | ✅ `verify-uc1.sh` — **10 checks passed** |
-| 26 | `51-configure-vault-auth` Step 1 | `serviceaccount_uid` → `serviceaccount_name`; `policies` → `token_policies` | ✅ Fixed | `2580504` | ✅ `vault read auth/kubernetes/role/uc1` |
-| 27 | `51-configure-vault-auth` Step 5 | `optional_authorization_details` `true` → `false` (confirmed against Terraform) | ✅ Fixed | `2580504` | ✅ `vault read agent-registry/…/uc1-agent` |
-| 28 | Pages 51, 62, 72 | **`vault` CLI assumed but `--skip-prereq-gate` never installs it** | ⏸️ **Needs your decision** | — | ❌ not resolvable locally — needs the CloudShell image |
-| 29 | `74-three-plane-audit` | Named all five `workshop_logs` catalog objects | ✅ Fixed | `d729c3f` | ✅ `SHOW TABLES` + both helper queries |
-| 30 | `31-deploy-at-an-event` | Tier 3 "~5–10 min" → "~4–8 min" (measured 3m34s) | ✅ Fixed | `6865910` | n/a (prose) |
-| 31 | `52-verify-credentials` (expand) | **`vault lease list` is not a Vault command** — exits 1 with a usage dump. `vault lease` has only `lookup`/`renew`/`revoke` | ✅ Fixed | `1ec6f52` | ✅ `vault list sys/leases/lookup/…` + `vault lease lookup <id>` both exit 0 |
-| 32 | `31-deploy-at-an-event` | **Fallback bucket lookup matched nothing** — grepped `bootstrap-statebucket`; bucket is `<stack-name>-statebucket-<suffix>` | ✅ Fixed | `1ec6f52` | ✅ `aws s3 ls \| grep -i statebucket` returns the bucket |
-| 33 | `21-aws-account` | **Regression I introduced** — renaming the licensing headings changed their anchors and broke the deep link | ✅ Fixed | `1ec6f52` | n/a (link) |
-| 34 | **The Bypass Test** | **Documented script output is stale** — page showed 3 PASS lines, script emits 7 PASS + 1 WARN-skip; the `evil-actor` check the page presented as passing **does not run by default**. Rewritten around Checks 14/16/17/18, real expected output, a Check column on the denials table, and an alert explaining why 19 skips | ✅ Fixed | `5e5d1f8` | ✅ `verify-uc3.sh --bypass` exit 0, **7 checks** — page now matches |
-| 35 | **Configure the OAuth Resource Server** Step 4 | Expected `creation_statements` shown as a 5-element JSON array with escaped quotes; the CLI prints **one** bracketed semicolon-separated string. Replaced with real output | ✅ Fixed | `057d7df` | ✅ `vault read database/roles/uc2-personal-readonly` exit 0 — matches |
-| 36 | **CIBA Out-of-Band Approval** | 3 commands, **zero expected output**. Added expected output for the pod check and endpoint probe; alert for the log grep (empty + exit 1 until the phone step); widened `--tail=50` → `--tail=-1 --since=30m` | ✅ Fixed | `69a80e3` | ✅ all 3 re-run — exit 0 / 0 / 1-empty as now documented. The rewritten `--tail=-1 --since=30m` was then re-tested **unpiped** (`kubectl … >/dev/null; echo $?` → **0**, 240 lines) to prove the flags are valid and the exit 1 comes from `grep`, not from kubectl rejecting them |
-| 37 | **Scope Enforcement** Step 2.3 | `\dp` output contains `v-JWT Toke-…` rows the page never showed — looks like corruption, is actually the OBO issuance at the DB layer. Documented both prefixes | ✅ Fixed | `69a80e3` | ✅ `v-JWT Toke-uc2-pers-…-1786459642` observed live |
-| 38 | Every `kubectl run … psql` block (Use Case 2 + 3) | First run on a node that has not cached `postgres:16-alpine` loses the psql output to the attach race. Added a re-run note | ✅ Fixed | `69a80e3` | ✅ reproduced once, then 3/3 clean on re-run |
-| 39 | **Configure the OAuth Resource Server** Step 5 | **BLOCKER — 403 for every attendee.** Page said copy the `id_token` cookie; it carries no `act` claim so Vault resolves no agent and fails closed. Must be **`access_token`**. Also `lease_renewable` `true` → `false` | ✅ Fixed | `057d7df` | ✅ **both cookies tested from one browser session** — `id_token` → 403, `access_token` → exit 0, `username=v-JWT Toke-uc2-pers-…` exactly as documented |
-| 40 | **OAuth Login Flow** | Same defect in 3 places — 2 sequence-diagram Bearer arrows, step 8, and the claim-flow list all said the `id_token` is forwarded. It is the `access_token` | ✅ Fixed | `f9e8b14` | n/a (prose + diagram) — root cause confirmed in `api/chat/+server.ts` |
-| 41 | **Scope Enforcement** — the finding-37 alert | The alert I added in `69a80e3` named the wrong Use Case 3 role: it said attendees may see `v-…-uc3-refu-…` on `banking.accounts`. Live ACL carries `v-root-uc3-read-…` (`uc3-readonly`). Both roles in fact hold `SELECT` on that table — `uc3-refund-writer`'s `INSERT`/`UPDATE` are scoped to `banking.refunds` alone. Names both, and turns the asymmetry into the point: the *write* role still reads `=r/` here | ✅ Fixed | `7c95828` | ✅ live `relacl` on `banking.accounts` + both roles' `creation_statements` from Vault config state |
+| # | Page URL (local preview) | Page / file | Change | Status | Commit | Executed |
+|---|---|---|---|---|---|---|
+| 1 | http://localhost:8080/20-prerequisites/21-at-an-event/ | `20-prerequisites/21-at-an-event` | Tier 1 **and** Tier 2 pre-provisioned; work begins at Tier 3; drop the "have your key + licence ready" instruction; 17–22 min → ~40 min | ✅ Fixed | `b996107` | n/a (prose) |
+| 2 | http://localhost:8080/20-prerequisites/22-ivia-licensing/ | `20-prerequisites/22-ivia-licensing` | "(you supply this)" → "(self-paced: you supply this)" + at-an-event alert | ✅ Fixed | `b996107` | ✅ `openssl x509 … -noout -dates` |
+| 3 | http://localhost:8080/20-prerequisites/23-pre-flight-checks/ | `20-prerequisites/23-pre-flight-checks` | Gate install/quota sections as self-paced | ✅ Fixed | `b996107` | ✅ tools verify · quota query · `--dry-run` · runtime probe |
+| 4 | http://localhost:8080/30-deploy-foundation/ | `30-deploy-foundation/index` | "deploy the entire stack with one command" → split by path | ✅ Fixed | `b996107` | n/a (prose) |
+| 5 | http://localhost:8080/30-deploy-foundation/33-verify-deployment/333-verify-vault/ | `35-verify-vault` (intro) | Root token was pulled from S3 at an event, not written locally | ✅ Fixed | `b996107` | ✅ all 8 blocks on the page |
+| 6 | http://localhost:8080/80-cleanup/ | `80-cleanup` | At-an-event alert: nothing to clean up; scope `teardown.sh` self-paced | ✅ Fixed | `b996107` | ✅ all 4 spot-checks (teardown itself **not** run) |
+| 7 | http://localhost:8080/30-deploy-foundation/33-verify-deployment/335-oidc-seam/ | `37-oidc-seam` line 6 | Named the `jwt` backend it contradicts 100 lines later | ✅ Fixed | `83da627` | n/a (prose) |
+| 8 | http://localhost:8080/30-deploy-foundation/33-verify-deployment/335-oidc-seam/ | `37-oidc-seam` Step 1 | Expected a `jwt/` mount that does not exist | ✅ Fixed | `83da627` | ✅ `vault auth list` — 2 mounts, no `jwt/` |
+| 9 | http://localhost:8080/30-deploy-foundation/33-verify-deployment/335-oidc-seam/ | `37-oidc-seam` Step 2 | 3 of 6 mounts shown; `agent-registry/` omitted | ✅ Fixed | `83da627` | ✅ `vault secrets list` — 6 mounts |
+| 10 | http://localhost:8080/30-deploy-foundation/33-verify-deployment/335-oidc-seam/ | `37-oidc-seam` Step 4 | `allowed_roles` missing `uc3-readonly` | ✅ Fixed | `83da627` | ✅ `vault read database/config/workshop-pg` — 4 roles |
+| 11 | http://localhost:8080/30-deploy-foundation/33-verify-deployment/335-oidc-seam/ | `37-oidc-seam` Step 5 | **Command errored (exit 5)** — added `--quiet` + `</dev/null` | ✅ Fixed | `83da627` | ✅ **exit 0** (was exit 5) |
+| 12 | http://localhost:8080/30-deploy-foundation/33-verify-deployment/335-oidc-seam/ | `37-oidc-seam` Step 5 | Expected issuer was ClusterIP; it is the public WRP host. `bound_issuer` → `issuer_id` | ✅ Fixed | `83da627` | ✅ returns the nip.io issuer |
+| 13 | http://localhost:8080/30-deploy-foundation/31-deploy-at-an-event/ | `31-deploy-at-an-event` | Vault `1.20.x+ent` → `2.0.3+ent` | ✅ Fixed | `6865910` | ✅ `vault status \| grep` — `2.0.3+ent` |
+| 14 | http://localhost:8080/30-deploy-foundation/31-deploy-at-an-event/ | `31-deploy-at-an-event` | "seven pods" → 8 rows; autoconf Job + `iviadsc` restarts added to looks-broken-isn't list | ✅ Fixed | `6865910` | ✅ `kubectl get pods -n verify-access` — 8 rows |
+| 15 | http://localhost:8080/30-deploy-foundation/32-configure-kubectl/ | `32-configure-kubectl` | `<region>.compute.internal` → `ec2.internal` for us-east-1 | ✅ Fixed | `6865910` | ✅ `kubectl get nodes` — `ec2.internal` |
+| 16 | http://localhost:8080/30-deploy-foundation/33-verify-deployment/333-verify-vault/ | `35-verify-vault` Step 1 | "all three pods" → 4 rows (agent-injector) | ✅ Fixed | `6865910` | ✅ `kubectl get pods -n vault` — 4 rows |
+| 17 | http://localhost:8080/30-deploy-foundation/33-verify-deployment/333-verify-vault/ | `35-verify-vault` Step 5 | Removed impossible `Build Date`; fixed `agent_registry` type + columns | ✅ Fixed | `6865910` | ✅ version + `secrets list` |
+| 18 | http://localhost:8080/30-deploy-foundation/33-verify-deployment/334-verify-identity-access/ | `36-verify-identity-access` | `k8s-workshop-acme-*` → `k8s-workshopacme-*` | ✅ Fixed | `6865910` | ✅ `kubectl get ingress` — `k8s-workshopacme-…` |
+| 19 | http://localhost:8080/30-deploy-foundation/33-verify-deployment/336-platform-health-check/ | `38-platform-health-check` | **8 documented checks → 13**; dropped replica-dependent pod counts | ✅ Fixed | `6865910` | ✅ `test-vault-verify.sh` **exit 0, 13 passed** |
+| 20 | http://localhost:8080/30-deploy-foundation/33-verify-deployment/331-verify-infrastructure/ | `33-verify-infrastructure` | Added the OpenLDAP + Vault-native-surface sections | ✅ Fixed | `6865910` | ✅ `test-foundation.sh` — ALL passed, 0 FAIL/0 WARN |
+| 21 | n/a — `infrastructure/scripts/bootstrap.sh` | `bootstrap.sh` | Next-steps told at-an-event attendees to deploy all 3 tiers | ✅ Fixed | `a49aa7b` | ✅ `bootstrap.sh --skip-prereq-gate --image-source ecr` re-run **exit 0**; both paths render; tree stayed clean |
+| 22 | http://localhost:8080/50-use-case-1/52-verify-credentials/ | `52-verify-credentials` Step 3 | **Returned nothing** — hardcoded `vault-0`; now reads all 3 Raft nodes | ✅ Fixed | `2580504` | ✅ returns the documented row (was empty) |
+| 23 | http://localhost:8080/50-use-case-1/52-verify-credentials/ | `52-verify-credentials` Step 3 | **`jq` parse error** on non-JSON lines; added `grep` + `--tail=-1` | ✅ Fixed | `2580504` | ✅ no parse error across the window |
+| 24 | http://localhost:8080/50-use-case-1/52-verify-credentials/ | `52-verify-credentials` Step 2 | Stale answer text + "schema public is empty" gloss | ✅ Fixed | `2580504` | ✅ `/query` returns `vault_authenticated: true` |
+| 25 | http://localhost:8080/50-use-case-1/52-verify-credentials/ | `52-verify-credentials` Step 5 | 9 checks → 10; `v-kubernet-` → `v-root-` | ✅ Fixed | `2580504` | ✅ `verify-uc1.sh` — **10 checks passed** |
+| 26 | http://localhost:8080/50-use-case-1/51-configure-vault-auth/ | `51-configure-vault-auth` Step 1 | `serviceaccount_uid` → `serviceaccount_name`; `policies` → `token_policies` | ✅ Fixed | `2580504` | ✅ `vault read auth/kubernetes/role/uc1` |
+| 27 | http://localhost:8080/50-use-case-1/51-configure-vault-auth/ | `51-configure-vault-auth` Step 5 | `optional_authorization_details` `true` → `false` (confirmed against Terraform) | ✅ Fixed | `2580504` | ✅ `vault read agent-registry/…/uc1-agent` |
+| 28 | http://localhost:8080/50-use-case-1/51-configure-vault-auth/<br>http://localhost:8080/60-use-case-2/62-configure-oauth-resource-server/<br>http://localhost:8080/70-use-case-3/72-configure-rar-ceiling/ | Pages 51, 62, 72 | **`vault` CLI assumed but `--skip-prereq-gate` never installs it** | ⏸️ **Needs your decision** | — | ❌ not resolvable locally — needs the CloudShell image |
+| 29 | http://localhost:8080/70-use-case-3/74-three-plane-audit/ | `74-three-plane-audit` | Named all five `workshop_logs` catalog objects | ✅ Fixed | `d729c3f` | ✅ `SHOW TABLES` + both helper queries |
+| 30 | http://localhost:8080/30-deploy-foundation/31-deploy-at-an-event/ | `31-deploy-at-an-event` | Tier 3 "~5–10 min" → "~4–8 min" (measured 3m34s) | ✅ Fixed | `6865910` | n/a (prose) |
+| 31 | http://localhost:8080/50-use-case-1/52-verify-credentials/ | `52-verify-credentials` (expand) | **`vault lease list` is not a Vault command** — exits 1 with a usage dump. `vault lease` has only `lookup`/`renew`/`revoke` | ✅ Fixed | `1ec6f52` | ✅ `vault list sys/leases/lookup/…` + `vault lease lookup <id>` both exit 0 |
+| 32 | http://localhost:8080/30-deploy-foundation/31-deploy-at-an-event/ | `31-deploy-at-an-event` | **Fallback bucket lookup matched nothing** — grepped `bootstrap-statebucket`; bucket is `<stack-name>-statebucket-<suffix>` | ✅ Fixed | `1ec6f52` | ✅ `aws s3 ls \| grep -i statebucket` returns the bucket |
+| 33 | http://localhost:8080/20-prerequisites/21-aws-account/ | `21-aws-account` | **Regression I introduced** — renaming the licensing headings changed their anchors and broke the deep link | ✅ Fixed | `1ec6f52` | n/a (link) |
+| 34 | http://localhost:8080/70-use-case-3/73-bypass-test/ | **The Bypass Test** | **Documented script output is stale** — page showed 3 PASS lines, script emits 7 PASS + 1 WARN-skip; the `evil-actor` check the page presented as passing **does not run by default**. Rewritten around Checks 14/16/17/18, real expected output, a Check column on the denials table, and an alert explaining why 19 skips | ✅ Fixed | `5e5d1f8` | ✅ `verify-uc3.sh --bypass` exit 0, **7 checks** — page now matches |
+| 35 | http://localhost:8080/60-use-case-2/62-configure-oauth-resource-server/ | **Configure the OAuth Resource Server** Step 4 | Expected `creation_statements` shown as a 5-element JSON array with escaped quotes; the CLI prints **one** bracketed semicolon-separated string. Replaced with real output | ✅ Fixed | `057d7df` | ✅ `vault read database/roles/uc2-personal-readonly` exit 0 — matches |
+| 36 | http://localhost:8080/70-use-case-3/71-ciba-approval-flow/ | **CIBA Out-of-Band Approval** | 3 commands, **zero expected output**. Added expected output for the pod check and endpoint probe; alert for the log grep (empty + exit 1 until the phone step); widened `--tail=50` → `--tail=-1 --since=30m` | ✅ Fixed | `69a80e3` | ✅ all 3 re-run — exit 0 / 0 / 1-empty as now documented. The rewritten `--tail=-1 --since=30m` was then re-tested **unpiped** (`kubectl … >/dev/null; echo $?` → **0**, 240 lines) to prove the flags are valid and the exit 1 comes from `grep`, not from kubectl rejecting them |
+| 37 | http://localhost:8080/60-use-case-2/64-scope-enforcement/ | **Scope Enforcement** Step 2.3 | `\dp` output contains `v-JWT Toke-…` rows the page never showed — looks like corruption, is actually the OBO issuance at the DB layer. Documented both prefixes | ✅ Fixed | `69a80e3` | ✅ `v-JWT Toke-uc2-pers-…-1786459642` observed live |
+| 38 | http://localhost:8080/60-use-case-2/63-verify-user-access/<br>http://localhost:8080/60-use-case-2/64-scope-enforcement/<br>http://localhost:8080/60-use-case-2/65-credential-revocation/<br>http://localhost:8080/70-use-case-3/73-bypass-test/ | Every `kubectl run … psql` block (Use Case 2 + 3) | First run on a node that has not cached `postgres:16-alpine` loses the psql output to the attach race. Added a re-run note | ✅ Fixed | `69a80e3` | ✅ reproduced once, then 3/3 clean on re-run |
+| 39 | http://localhost:8080/60-use-case-2/62-configure-oauth-resource-server/ | **Configure the OAuth Resource Server** Step 5 | **BLOCKER — 403 for every attendee.** Page said copy the `id_token` cookie; it carries no `act` claim so Vault resolves no agent and fails closed. Must be **`access_token`**. Also `lease_renewable` `true` → `false` | ✅ Fixed | `057d7df` | ✅ **both cookies tested from one browser session** — `id_token` → 403, `access_token` → exit 0, `username=v-JWT Toke-uc2-pers-…` exactly as documented |
+| 40 | http://localhost:8080/60-use-case-2/61-oauth-pkce-flow/ | **OAuth Login Flow** | Same defect in 3 places — 2 sequence-diagram Bearer arrows, step 8, and the claim-flow list all said the `id_token` is forwarded. It is the `access_token` | ✅ Fixed | `f9e8b14` | n/a (prose + diagram) — root cause confirmed in `api/chat/+server.ts` |
+| 41 | http://localhost:8080/60-use-case-2/64-scope-enforcement/ | **Scope Enforcement** — the finding-37 alert | The alert I added in `69a80e3` named the wrong Use Case 3 role: it said attendees may see `v-…-uc3-refu-…` on `banking.accounts`. Live ACL carries `v-root-uc3-read-…` (`uc3-readonly`). Both roles in fact hold `SELECT` on that table — `uc3-refund-writer`'s `INSERT`/`UPDATE` are scoped to `banking.refunds` alone. Names both, and turns the asymmetry into the point: the *write* role still reads `=r/` here | ✅ Fixed | `7c95828` | ✅ live `relacl` on `banking.accounts` + both roles' `creation_statements` from Vault config state |
 
 
 **The one open item (28)** needs a fact I cannot get from here: whether the Workshop Studio
@@ -663,15 +663,15 @@ with `vault-0` active.
 
 ## What passed exactly as written
 
-| Page | Blocks | Result |
-|---|---|---|
-| **OAuth Login Flow** | Step 1 (banking URL), Step 3 (`kubectl logs banking-ui`) | both exit 0 |
-| **Configure the OAuth Resource Server** | Steps 1–4 (7 blocks) | all exit 0; 6 of 7 match the page character-for-character (see finding 35 for the 7th) |
-| **Verify Per-User Data Access** | Steps 1, 2, 3 + `verify-uc2.sh` | all exit 0, all outputs match — Oscar 2 rows, Jaime 2 rows, RLS policy identical, **20/20 checks** |
-| **Scope Enforcement (Layer 2)** | Steps 1.1, 1.2, 1.3, 2.1, 2.2, 2.3 | all match, including the `403` exit-code-2 note and `arwdDxtm` |
-| **Credential Revocation** | Steps 1–7 | all match; role created → revoked → gone → absent from leases → both Athena rows found |
-| **The Bypass Test** | Sections 2 and 3 | match exactly — `jaime 9` / `oscar 8`, INSERT `permission denied for table refunds` |
-| **CIBA Out-of-Band Approval** | pod check, CIBA endpoint probe | exit 0 |
+| Page | Page URL (local preview) | Blocks | Result |
+|---|---|---|---|
+| **OAuth Login Flow** | http://localhost:8080/60-use-case-2/61-oauth-pkce-flow/ | Step 1 (banking URL), Step 3 (`kubectl logs banking-ui`) | both exit 0 |
+| **Configure the OAuth Resource Server** | http://localhost:8080/60-use-case-2/62-configure-oauth-resource-server/ | Steps 1–4 (7 blocks) | all exit 0; 6 of 7 match the page character-for-character (see finding 35 for the 7th) |
+| **Verify Per-User Data Access** | http://localhost:8080/60-use-case-2/63-verify-user-access/ | Steps 1, 2, 3 + `verify-uc2.sh` | all exit 0, all outputs match — Oscar 2 rows, Jaime 2 rows, RLS policy identical, **20/20 checks** |
+| **Scope Enforcement (Layer 2)** | http://localhost:8080/60-use-case-2/64-scope-enforcement/ | Steps 1.1, 1.2, 1.3, 2.1, 2.2, 2.3 | all match, including the `403` exit-code-2 note and `arwdDxtm` |
+| **Credential Revocation** | http://localhost:8080/60-use-case-2/65-credential-revocation/ | Steps 1–7 | all match; role created → revoked → gone → absent from leases → both Athena rows found |
+| **The Bypass Test** | http://localhost:8080/70-use-case-3/73-bypass-test/ | Sections 2 and 3 | match exactly — `jaime 9` / `oscar 8`, INSERT `permission denied for table refunds` |
+| **CIBA Out-of-Band Approval** | http://localhost:8080/70-use-case-3/71-ciba-approval-flow/ | pod check, CIBA endpoint probe | exit 0 |
 
 Two things I had flagged as suspect before running, both **cleared**:
 
@@ -791,12 +791,12 @@ attendee hits it at most once per node. The page should tell them to simply re-r
 
 ## Human Needed — four steps that cannot be automated
 
-| Step | Why |
-|---|---|
-| ~~**Configure the OAuth Resource Server**, Step 5~~ | **No longer blocked — executed.** You supplied both the `id_token` and `access_token` from a live session, which is what exposed finding 39. |
-| **Enroll Your Device** | Requires a physical phone running IBM Verify and a QR scan. The URL-building command was executed and exits 0. |
-| **Test the Refund Flow** | Requires the browser chat plus a physical **Approve** tap. Its URL command was executed and exits 0; the `mmfa_push_fired` log grep returns nothing until the flow runs. |
-| **The Bypass Test**, Section 4 | Depends on a refund row, and refunds are only created by the CIBA flow. Confirmed live: `banking.refunds` is **empty for both personas**, so Step 4.1 exits 0 with `(0 rows)` and Step 4.2 has no `REFUND_ID` to use. The page already warns the IDs are per-run; it should also say the section is unreachable until the refund is done. |
+| Step | Page URL (local preview) | Why |
+|---|---|---|
+| ~~**Configure the OAuth Resource Server**, Step 5~~ | http://localhost:8080/60-use-case-2/62-configure-oauth-resource-server/ | **No longer blocked — executed.** You supplied both the `id_token` and `access_token` from a live session, which is what exposed finding 39. |
+| **Enroll Your Device** | http://localhost:8080/70-use-case-3/70-enroll-device/ | Requires a physical phone running IBM Verify and a QR scan. The URL-building command was executed and exits 0. |
+| **Test the Refund Flow** | http://localhost:8080/70-use-case-3/70-test-refund/ | Requires the browser chat plus a physical **Approve** tap. Its URL command was executed and exits 0; the `mmfa_push_fired` log grep returns nothing until the flow runs. |
+| **The Bypass Test**, Section 4 | http://localhost:8080/70-use-case-3/73-bypass-test/ | Depends on a refund row, and refunds are only created by the CIBA flow. Confirmed live: `banking.refunds` is **empty for both personas**, so Step 4.1 exits 0 with `(0 rows)` and Step 4.2 has no `REFUND_ID` to use. The page already warns the IDs are per-run; it should also say the section is unreachable until the refund is done. |
 
 ## 39. Configure the OAuth Resource Server, Step 5 — 403 for every attendee — BLOCKER
 
