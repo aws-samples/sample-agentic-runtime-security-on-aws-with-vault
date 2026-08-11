@@ -54,7 +54,7 @@ the page now claims. `n/a` means the change was prose, a heading or a link, with
 | 18 | `36-verify-identity-access` | `k8s-workshop-acme-*` → `k8s-workshopacme-*` | ✅ Fixed | `6865910` | ✅ `kubectl get ingress` — `k8s-workshopacme-…` |
 | 19 | `38-platform-health-check` | **8 documented checks → 13**; dropped replica-dependent pod counts | ✅ Fixed | `6865910` | ✅ `test-vault-verify.sh` **exit 0, 13 passed** |
 | 20 | `33-verify-infrastructure` | Added the OpenLDAP + Vault-native-surface sections | ✅ Fixed | `6865910` | ✅ `test-foundation.sh` — ALL passed, 0 FAIL/0 WARN |
-| 21 | `bootstrap.sh` | Next-steps told at-an-event attendees to deploy all 3 tiers | ✅ Fixed | `a49aa7b` | ⚠️ `bash -n` clean; full run was earlier this session (exit 0), not re-run after the text edit |
+| 21 | `bootstrap.sh` | Next-steps told at-an-event attendees to deploy all 3 tiers | ✅ Fixed | `a49aa7b` | ✅ `bootstrap.sh --skip-prereq-gate --image-source ecr` re-run **exit 0**; both paths render; tree stayed clean |
 | 22 | `52-verify-credentials` Step 3 | **Returned nothing** — hardcoded `vault-0`; now reads all 3 Raft nodes | ✅ Fixed | `2580504` | ✅ returns the documented row (was empty) |
 | 23 | `52-verify-credentials` Step 3 | **`jq` parse error** on non-JSON lines; added `grep` + `--tail=-1` | ✅ Fixed | `2580504` | ✅ no parse error across the window |
 | 24 | `52-verify-credentials` Step 2 | Stale answer text + "schema public is empty" gloss | ✅ Fixed | `2580504` | ✅ `/query` returns `vault_authenticated: true` |
