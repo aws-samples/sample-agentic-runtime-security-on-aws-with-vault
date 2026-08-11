@@ -23,40 +23,51 @@ Findings below are what the page said versus what actually came back.
 
 ## Completion tracker
 
-**29 of 30 fixed and committed. 1 needs your decision.** Nothing has been pushed; no PR exists.
+**32 of 33 fixed and committed. 1 needs your decision.** Nothing has been pushed; no PR exists.
 
-| # | Page / file | Change | Status | Commit |
-|---|---|---|---|---|
-| 1 | `20-prerequisites/21-at-an-event` | Tier 1 **and** Tier 2 pre-provisioned; work begins at Tier 3; drop the "have your key + licence ready" instruction; 17–22 min → ~40 min | ✅ Fixed | `b996107` |
-| 2 | `20-prerequisites/22-ivia-licensing` | "(you supply this)" → "(self-paced: you supply this)" + at-an-event alert | ✅ Fixed | `b996107` |
-| 3 | `20-prerequisites/23-pre-flight-checks` | Gate install/quota sections as self-paced | ✅ Fixed | `b996107` |
-| 4 | `30-deploy-foundation/index` | "deploy the entire stack with one command" → split by path | ✅ Fixed | `b996107` |
-| 5 | `35-verify-vault` (intro) | Root token was pulled from S3 at an event, not written locally | ✅ Fixed | `b996107` |
-| 6 | `80-cleanup` | At-an-event alert: nothing to clean up; scope `teardown.sh` self-paced | ✅ Fixed | `b996107` |
-| 7 | `37-oidc-seam` line 6 | Named the `jwt` backend it contradicts 100 lines later | ✅ Fixed | `83da627` |
-| 8 | `37-oidc-seam` Step 1 | Expected a `jwt/` mount that does not exist | ✅ Fixed | `83da627` |
-| 9 | `37-oidc-seam` Step 2 | 3 of 6 mounts shown; `agent-registry/` omitted | ✅ Fixed | `83da627` |
-| 10 | `37-oidc-seam` Step 4 | `allowed_roles` missing `uc3-readonly` | ✅ Fixed | `83da627` |
-| 11 | `37-oidc-seam` Step 5 | **Command errored (exit 5)** — added `--quiet` + `</dev/null` | ✅ Fixed | `83da627` |
-| 12 | `37-oidc-seam` Step 5 | Expected issuer was ClusterIP; it is the public WRP host. `bound_issuer` → `issuer_id` | ✅ Fixed | `83da627` |
-| 13 | `31-deploy-at-an-event` | Vault `1.20.x+ent` → `2.0.3+ent` | ✅ Fixed | `6865910` |
-| 14 | `31-deploy-at-an-event` | "seven pods" → 8 rows; autoconf Job + `iviadsc` restarts added to looks-broken-isn't list | ✅ Fixed | `6865910` |
-| 15 | `32-configure-kubectl` | `<region>.compute.internal` → `ec2.internal` for us-east-1 | ✅ Fixed | `6865910` |
-| 16 | `35-verify-vault` Step 1 | "all three pods" → 4 rows (agent-injector) | ✅ Fixed | `6865910` |
-| 17 | `35-verify-vault` Step 5 | Removed impossible `Build Date`; fixed `agent_registry` type + columns | ✅ Fixed | `6865910` |
-| 18 | `36-verify-identity-access` | `k8s-workshop-acme-*` → `k8s-workshopacme-*` | ✅ Fixed | `6865910` |
-| 19 | `38-platform-health-check` | **8 documented checks → 13**; dropped replica-dependent pod counts | ✅ Fixed | `6865910` |
-| 20 | `33-verify-infrastructure` | Added the OpenLDAP + Vault-native-surface sections | ✅ Fixed | `6865910` |
-| 21 | `bootstrap.sh` | Next-steps told at-an-event attendees to deploy all 3 tiers | ✅ Fixed | `a49aa7b` |
-| 22 | `52-verify-credentials` Step 3 | **Returned nothing** — hardcoded `vault-0`; now reads all 3 Raft nodes | ✅ Fixed | `2580504` |
-| 23 | `52-verify-credentials` Step 3 | **`jq` parse error** on non-JSON lines; added `grep` + `--tail=-1` | ✅ Fixed | `2580504` |
-| 24 | `52-verify-credentials` Step 2 | Stale answer text + "schema public is empty" gloss | ✅ Fixed | `2580504` |
-| 25 | `52-verify-credentials` Step 5 | 9 checks → 10; `v-kubernet-` → `v-root-` | ✅ Fixed | `2580504` |
-| 26 | `51-configure-vault-auth` Step 1 | `serviceaccount_uid` → `serviceaccount_name`; `policies` → `token_policies` | ✅ Fixed | `2580504` |
-| 27 | `51-configure-vault-auth` Step 5 | `optional_authorization_details` `true` → `false` (confirmed against Terraform) | ✅ Fixed | `2580504` |
-| 28 | Pages 51, 62, 72 | **`vault` CLI assumed but `--skip-prereq-gate` never installs it** | ⏸️ **Needs your decision** | — |
-| 29 | `74-three-plane-audit` | Named all five `workshop_logs` catalog objects | ✅ Fixed | `d729c3f` |
-| 30 | `31-deploy-at-an-event` | Tier 3 "~5–10 min" → "~4–8 min" (measured 3m34s) | ✅ Fixed | `6865910` |
+Findings 31–33 were found by **executing every bash block on every page I touched**, not just
+the blocks I had edited. Two were commands that fail outright; one was a link I broke myself.
+
+The **Executed** column records a command actually run against the live cluster as
+`WSParticipantRole` **after** the edit, and marked OK only where it exited 0 and returned what
+the page now claims. `n/a` means the change was prose, a heading or a link, with no command to run.
+
+| # | Page / file | Change | Status | Commit | Executed |
+|---|---|---|---|---|---|
+| 1 | `20-prerequisites/21-at-an-event` | Tier 1 **and** Tier 2 pre-provisioned; work begins at Tier 3; drop the "have your key + licence ready" instruction; 17–22 min → ~40 min | ✅ Fixed | `b996107` | n/a (prose) |
+| 2 | `20-prerequisites/22-ivia-licensing` | "(you supply this)" → "(self-paced: you supply this)" + at-an-event alert | ✅ Fixed | `b996107` | ✅ `openssl x509 … -noout -dates` |
+| 3 | `20-prerequisites/23-pre-flight-checks` | Gate install/quota sections as self-paced | ✅ Fixed | `b996107` | ✅ tools verify · quota query · `--dry-run` · runtime probe |
+| 4 | `30-deploy-foundation/index` | "deploy the entire stack with one command" → split by path | ✅ Fixed | `b996107` | n/a (prose) |
+| 5 | `35-verify-vault` (intro) | Root token was pulled from S3 at an event, not written locally | ✅ Fixed | `b996107` | ✅ all 8 blocks on the page |
+| 6 | `80-cleanup` | At-an-event alert: nothing to clean up; scope `teardown.sh` self-paced | ✅ Fixed | `b996107` | ✅ all 4 spot-checks (teardown itself **not** run) |
+| 7 | `37-oidc-seam` line 6 | Named the `jwt` backend it contradicts 100 lines later | ✅ Fixed | `83da627` | n/a (prose) |
+| 8 | `37-oidc-seam` Step 1 | Expected a `jwt/` mount that does not exist | ✅ Fixed | `83da627` | ✅ `vault auth list` — 2 mounts, no `jwt/` |
+| 9 | `37-oidc-seam` Step 2 | 3 of 6 mounts shown; `agent-registry/` omitted | ✅ Fixed | `83da627` | ✅ `vault secrets list` — 6 mounts |
+| 10 | `37-oidc-seam` Step 4 | `allowed_roles` missing `uc3-readonly` | ✅ Fixed | `83da627` | ✅ `vault read database/config/workshop-pg` — 4 roles |
+| 11 | `37-oidc-seam` Step 5 | **Command errored (exit 5)** — added `--quiet` + `</dev/null` | ✅ Fixed | `83da627` | ✅ **exit 0** (was exit 5) |
+| 12 | `37-oidc-seam` Step 5 | Expected issuer was ClusterIP; it is the public WRP host. `bound_issuer` → `issuer_id` | ✅ Fixed | `83da627` | ✅ returns the nip.io issuer |
+| 13 | `31-deploy-at-an-event` | Vault `1.20.x+ent` → `2.0.3+ent` | ✅ Fixed | `6865910` | ✅ `vault status \| grep` — `2.0.3+ent` |
+| 14 | `31-deploy-at-an-event` | "seven pods" → 8 rows; autoconf Job + `iviadsc` restarts added to looks-broken-isn't list | ✅ Fixed | `6865910` | ✅ `kubectl get pods -n verify-access` — 8 rows |
+| 15 | `32-configure-kubectl` | `<region>.compute.internal` → `ec2.internal` for us-east-1 | ✅ Fixed | `6865910` | ✅ `kubectl get nodes` — `ec2.internal` |
+| 16 | `35-verify-vault` Step 1 | "all three pods" → 4 rows (agent-injector) | ✅ Fixed | `6865910` | ✅ `kubectl get pods -n vault` — 4 rows |
+| 17 | `35-verify-vault` Step 5 | Removed impossible `Build Date`; fixed `agent_registry` type + columns | ✅ Fixed | `6865910` | ✅ version + `secrets list` |
+| 18 | `36-verify-identity-access` | `k8s-workshop-acme-*` → `k8s-workshopacme-*` | ✅ Fixed | `6865910` | ✅ `kubectl get ingress` — `k8s-workshopacme-…` |
+| 19 | `38-platform-health-check` | **8 documented checks → 13**; dropped replica-dependent pod counts | ✅ Fixed | `6865910` | ✅ `test-vault-verify.sh` **exit 0, 13 passed** |
+| 20 | `33-verify-infrastructure` | Added the OpenLDAP + Vault-native-surface sections | ✅ Fixed | `6865910` | ✅ `test-foundation.sh` — ALL passed, 0 FAIL/0 WARN |
+| 21 | `bootstrap.sh` | Next-steps told at-an-event attendees to deploy all 3 tiers | ✅ Fixed | `a49aa7b` | ⚠️ `bash -n` clean; full run was earlier this session (exit 0), not re-run after the text edit |
+| 22 | `52-verify-credentials` Step 3 | **Returned nothing** — hardcoded `vault-0`; now reads all 3 Raft nodes | ✅ Fixed | `2580504` | ✅ returns the documented row (was empty) |
+| 23 | `52-verify-credentials` Step 3 | **`jq` parse error** on non-JSON lines; added `grep` + `--tail=-1` | ✅ Fixed | `2580504` | ✅ no parse error across the window |
+| 24 | `52-verify-credentials` Step 2 | Stale answer text + "schema public is empty" gloss | ✅ Fixed | `2580504` | ✅ `/query` returns `vault_authenticated: true` |
+| 25 | `52-verify-credentials` Step 5 | 9 checks → 10; `v-kubernet-` → `v-root-` | ✅ Fixed | `2580504` | ✅ `verify-uc1.sh` — **10 checks passed** |
+| 26 | `51-configure-vault-auth` Step 1 | `serviceaccount_uid` → `serviceaccount_name`; `policies` → `token_policies` | ✅ Fixed | `2580504` | ✅ `vault read auth/kubernetes/role/uc1` |
+| 27 | `51-configure-vault-auth` Step 5 | `optional_authorization_details` `true` → `false` (confirmed against Terraform) | ✅ Fixed | `2580504` | ✅ `vault read agent-registry/…/uc1-agent` |
+| 28 | Pages 51, 62, 72 | **`vault` CLI assumed but `--skip-prereq-gate` never installs it** | ⏸️ **Needs your decision** | — | ❌ not resolvable locally — needs the CloudShell image |
+| 29 | `74-three-plane-audit` | Named all five `workshop_logs` catalog objects | ✅ Fixed | `d729c3f` | ✅ `SHOW TABLES` + both helper queries |
+| 30 | `31-deploy-at-an-event` | Tier 3 "~5–10 min" → "~4–8 min" (measured 3m34s) | ✅ Fixed | `6865910` | n/a (prose) |
+| 31 | `52-verify-credentials` (expand) | **`vault lease list` is not a Vault command** — exits 1 with a usage dump. `vault lease` has only `lookup`/`renew`/`revoke` | ✅ Fixed | `1ec6f52` | ✅ `vault list sys/leases/lookup/…` + `vault lease lookup <id>` both exit 0 |
+| 32 | `31-deploy-at-an-event` | **Fallback bucket lookup matched nothing** — grepped `bootstrap-statebucket`; bucket is `<stack-name>-statebucket-<suffix>` | ✅ Fixed | `1ec6f52` | ✅ `aws s3 ls \| grep -i statebucket` returns the bucket |
+| 33 | `21-aws-account` | **Regression I introduced** — renaming the licensing headings changed their anchors and broke the deep link | ✅ Fixed | `1ec6f52` | n/a (link) |
+
 
 **The one open item (28)** needs a fact I cannot get from here: whether the Workshop Studio
 CloudShell image ships the `vault` CLI. If it does, nothing to do. If it does not, the fix is
