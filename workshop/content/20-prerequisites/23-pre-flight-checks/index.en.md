@@ -3,13 +3,19 @@ title: 'Run Pre-flight Checks'
 weight: 23
 ---
 
-## CLI tools
+::::alert{header="At an event: you do not run the pre-flight script" type="info"}
+Your account was provisioned with Tier 1 and Tier 2 already deployed, which means the service quotas below were **already consumed during account setup** — there is nothing to request. The deploy page deliberately passes `bootstrap.sh --skip-prereq-gate` for exactly this reason.
+
+The one thing worth doing is confirming your CloudShell session has the CLI tools the later pages use — run the **Verify CLI tools** command below. Everything else on this page is *self-paced*.
+::::
+
+## Self-paced: CLI tools
 
 The workshop expects these versions: kubectl 1.34.x, helm 3.12+, terraform 1.10+, vault 1.21.x, aws CLI v2, jq, and yq.
 
 The pre-flight script installs them all and verifies your AWS account in one step. Manual install steps are intentionally omitted — running the script is the documented path. Windows users: use WSL2 (Linux subsystem).
 
-## Run the pre-flight script
+## Self-paced: run the pre-flight script
 
 The pre-flight script auto-installs all CLI tools, then verifies Bedrock model access, AWS service quotas, and IAM permissions in one shot. It continues past individual failures and emits a consolidated summary with copy-paste remediation for each failure.
 
@@ -24,13 +30,15 @@ Available flags:
 
 ## Verify CLI tools are installed
 
-After the script completes, confirm the key tools:
+Confirm the key tools — self-paced, after the script completes; at an event, to check what your CloudShell session already has:
 
 ```bash
 terraform version && kubectl version --client && helm version --short && vault version && aws --version
 ```
 
-## Service quotas
+If any tool is missing at an event, tell your organizer before continuing — the later pages read Vault directly with the `vault` CLI.
+
+## Self-paced: service quotas
 
 The script also verifies these service quotas in your deploy Region:
 

@@ -5,7 +5,15 @@ weight: 80
 
 Run the teardown script to destroy all workshop resources and verify no chargeable resources remain.
 
-## 1. Run the teardown script
+::::alert{header="At an event: there is nothing for you to clean up" type="info"}
+**Do not run the teardown script.** Your temporary account and everything in it are reclaimed by AWS after the event, and the CloudFormation stack that provisioned your account runs its own teardown build on delete — that is what actually removes the environment.
+
+Running `teardown.sh` yourself would not work as intended in any case: the Tier-2 state you pulled is an **outputs-only** copy (`"resources": []`), so a `terraform destroy` against it reconciles nothing — the Vault and IVIA volumes and the WRP load balancer would be left untouched while the script reported success on that phase.
+
+The rest of this page is *self-paced*: it describes how to tear down a workshop you deployed on your own AWS account.
+::::
+
+## 1. Self-paced: run the teardown script
 
 From the repo root, run:
 

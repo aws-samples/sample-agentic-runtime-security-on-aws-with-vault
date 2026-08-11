@@ -3,12 +3,17 @@ title: 'Validate Vault'
 weight: 35
 ---
 
-Vault was deployed as a 3-node Raft HA cluster, initialized, and unsealed by `terraform apply` plus `deploy-workshop.sh`. Confirm it is healthy before proceeding.
+Vault was deployed as a 3-node Raft HA cluster, initialized, and unsealed as part of Tier 2 — during your account setup at an event, or by your own `deploy-workshop.sh` run when self-paced. Confirm it is healthy before proceeding.
 
 ![Vault authorization flow — ephemeral, per-request credentials across Use Cases 1, 2, and 3](/static/images/vault-authorization-flow.png)
 
 :::alert{header="Root token location" type="info"}
-`vault-init.sh` (run by `deploy-workshop.sh`) wrote the Vault root token to `~/vault-init.json` during initialization. Load it before running the authenticated checks below:
+The Vault root token lives at `~/vault-init.json`. How it got there depends on your path:
+
+- **At an event** — you pulled it from the state bucket in Step 3 of [Deploy — At an Event](../31-deploy-at-an-event/). `vault-init.sh` ran inside the account-setup build, not on your machine, so there is no local run to go looking for.
+- **Self-paced** — `vault-init.sh` (run by `deploy-workshop.sh`) wrote it during Tier-2 initialization.
+
+Load it before running the authenticated checks below:
 
 ```bash
 export VAULT_ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)
