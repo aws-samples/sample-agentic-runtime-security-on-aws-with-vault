@@ -40,9 +40,11 @@ for DS in $(aws bedrock-agent list-data-sources \
     --knowledge-base-id "$KB_ID" \
     --data-source-id "$DS" \
     --region us-east-1 \
-    --query 'ingestionJobSummaries[0].[status,startedAt]' \
+    --query 'sort_by(ingestionJobSummaries, &startedAt)[-1].[status,startedAt]' \
     --output text
 done
 ```
 
-**Expected output:** every line shows `COMPLETE` with a recent timestamp. If any data source returns `FAILED`, check that the corpus S3 objects uploaded successfully (`aws s3 ls s3://<corpus-bucket>/`) and the KB role has `s3:GetObject` on the bucket.
+`sort_by(...)[-1]` matters here: `list-ingestion-jobs` does **not** return newest-first, so plain `[0]` can hand you a job from a previous run. On a page whose whole point is "re-trigger, then confirm", that would show you a stale `COMPLETE` while the sync you just started is still running.
+
+**Expected output:** every line shows `COMPLETE` with a timestamp from the sync you just started. If any data source returns `FAILED`, check that the corpus S3 objects uploaded successfully (`aws s3 ls s3://<corpus-bucket>/`) and the KB role has `s3:GetObject` on the bucket.

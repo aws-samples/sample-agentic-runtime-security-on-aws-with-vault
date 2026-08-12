@@ -21,13 +21,14 @@ export VAULT_ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)
 kubectl get pods -n vault
 ```
 
-Expected — all three pods `Running`:
+Expected — the three Raft nodes `Running`, plus the Vault Agent Injector that ships with the Helm chart:
 
 ```
-NAME      READY   STATUS    RESTARTS   AGE
-vault-0   1/1     Running   0          5m
-vault-1   1/1     Running   0          4m
-vault-2   1/1     Running   0          4m
+NAME                                    READY   STATUS    RESTARTS   AGE
+vault-0                                 1/1     Running   0          16h
+vault-1                                 1/1     Running   0          16h
+vault-2                                 1/1     Running   0          16h
+vault-agent-injector-5b7dd85f5c-zfrbm   1/1     Running   0          16h
 ```
 
 ## Step 2 — Confirm KMS auto-unseal
@@ -55,7 +56,7 @@ kubectl exec -n vault vault-0 -- \
   sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault operator raft list-peers"
 ```
 
-Expected — three peers, one leader:
+Expected — three peers, exactly one `leader` (the follower rows can appear in any order):
 
 ```
 Node       Address                        State       Voter
@@ -87,8 +88,7 @@ kubectl exec -n vault vault-0 -- vault status | grep -i version
 Expected — the `+ent` suffix marks an Enterprise build:
 
 ```
-Version             2.0.3+ent
-Build Date          2026-...
+Version                  2.0.3+ent
 ```
 
 Agent Registry mount present alongside the database and AWS secrets engines:
@@ -97,12 +97,12 @@ Agent Registry mount present alongside the database and AWS secrets engines:
 kubectl exec -n vault vault-0 -- sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault secrets list" | grep -E 'agent-registry|database|aws'
 ```
 
-Expected — `agent-registry/`, `aws/`, and `database/` all listed:
+Expected — `agent-registry/`, `aws/`, and `database/` all listed (columns are Path, Type, Accessor, Description — the Agent Registry's type is `agent_registry` with an underscore):
 
 ```
-agent-registry/    agent-registry    n/a
-aws/               aws               n/a
-database/          database          n/a
+agent-registry/    agent_registry    agent-registry_0f95efab    agent registry
+aws/               aws               aws_f9d9c477               n/a
+database/          database          database_f6e29cda          n/a
 ```
 
 If `agent-registry/` is missing, the Enterprise license does not carry the `agentic-iam` feature that unlocks the Agent Registry + OAuth resource server — re-check the license and re-run `deploy-workshop.sh`.

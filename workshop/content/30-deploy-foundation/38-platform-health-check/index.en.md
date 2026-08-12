@@ -11,7 +11,7 @@ Run one script to confirm the entire platform layer is healthy before proceeding
 bash infrastructure/scripts/test-vault-verify.sh
 ```
 
-Expected — all 8 checks `PASS`:
+Expected — all 13 checks `PASS`. The last five are the Vault Enterprise checks: they prove your licence actually carries the features this workshop teaches, and that the retired `jwt` auth backend is gone:
 
 ```
   ✓ PASS Vault pods running (3 of 3)
@@ -19,11 +19,17 @@ Expected — all 8 checks `PASS`:
   ✓ PASS Vault Raft peers: 3
   ✓ PASS Vault audit device: enabled (1 device(s))
   ✓ PASS IVIA pods running (7 pod(s))
-  ✓ PASS IVIA OIDC discovery: issuer reachable (https://<wrp-alb-hostname>)
-  ✓ PASS cert-manager pods running (2 pod(s))
-  ✓ PASS AWS Load Balancer Controller running (1 pod(s))
+  ✓ PASS IVIA OIDC discovery: issuer reachable (https://<NIP_FQDN_WRP>)
+  ✓ PASS cert-manager pods running (3 pod(s))
+  ✓ PASS AWS Load Balancer Controller running (2 pod(s))
+  ✓ PASS Vault Enterprise edition (version=2.0.3+ent; sys/license/status responds)
+  ✓ PASS Secrets engines mounted: database/ + aws/ (platform-standard license present; pki-only absent)
+  ✓ PASS Agent Registry responds — registration 'uc1-agent' resolvable by display-name (agentic-iam present)
+  ✓ PASS OAuth resource server profile 'ivia' responds (feature active + profile applied)
+  ✓ PASS jwt/ auth mount is ABSENT — retired IVIA jwt backend removed (decision (e) cutover proof)
 
- ✓ 8 check(s) passed
+===============================================================================
+ ✓ 13 check(s) passed
 ===============================================================================
 ```
 
@@ -40,4 +46,9 @@ If any check fails, the script prints a `Fix:` hint inline. Address the issue an
 | IVIA OIDC discovery: issuer reachable | `curl -sk https://iviaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration` | `issuer` field non-empty |
 | cert-manager pods running | `kubectl get pods -n cert-manager` | at least 1 pod `Running` |
 | AWS Load Balancer Controller running | `kubectl get pods -n kube-system -l app.kubernetes.io/name=aws-load-balancer-controller` | at least 1 pod `Running` |
+| Vault Enterprise edition | `vault status` + `vault read sys/license/status` | `version` ends in `+ent` and the licence endpoint responds |
+| Secrets engines mounted | `vault secrets list` | both `database/` and `aws/` present — proves a platform-standard licence, not pki-only |
+| Agent Registry responds | `vault read agent-registry/registration/display-name/uc1-agent` | registration resolvable — proves the `agentic-iam` feature is licensed |
+| OAuth resource server profile `ivia` responds | `vault read sys/config/oauth-resource-server/ivia` | profile readable — the feature is active and the profile applied |
+| `jwt/` auth mount is ABSENT | `vault auth list -format=json` | `jwt/` **not** present — proof the retired IVIA jwt backend was removed in the native cutover |
 ::::

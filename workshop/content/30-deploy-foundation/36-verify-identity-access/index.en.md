@@ -87,8 +87,10 @@ The browser and mobile app validate against the nip.io FQDN (`NIP_FQDN_WRP`), no
 
 Browser flows reach the OIDC Provider through the WRP `/isvaop` junction:
 
+Note there is no `-k` here. The alert above claims the nip.io FQDN carries a browser-trusted Let's Encrypt certificate — skipping verification would leave that claim untested, so this command verifies the chain. If it succeeds, the certificate really is trusted:
+
 ```bash
-curl -sk "https://$WRP_HOST/isvaop/oauth2/.well-known/openid-configuration" | jq .issuer
+curl -s "https://$WRP_HOST/isvaop/oauth2/.well-known/openid-configuration" | jq .issuer
 ```
 
 Expected:
@@ -96,6 +98,8 @@ Expected:
 ```
 "https://<NIP_FQDN_WRP>"
 ```
+
+A `curl: (60) SSL certificate problem` here means Step 7's ACME issuance did not complete — check `kubectl get certificate workshop-le-tls -n cert-manager` shows `READY=True`.
 
 ## Step 4 — Confirm internal OIDC discovery
 
@@ -105,7 +109,7 @@ Vault and agent workloads reach the OIDC Provider via its ClusterIP service. Ver
 kubectl run oidc-check --image=curlimages/curl --rm -i --restart=Never --quiet -n verify-access -- curl -sk https://iviaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration </dev/null | jq .issuer
 ```
 
-Expected — the **same** issuer as Step 3, even reached over ClusterIP. The provider always advertises the one public WRP issuer, which lets Vault validate IVIA tokens against a single `bound_issuer`:
+Expected — the **same** issuer as Step 3, even reached over ClusterIP. The provider always advertises the one public WRP issuer, which lets Vault validate IVIA tokens against a single `issuer_id` on its OAuth resource server profile:
 
 ```
 "https://<NIP_FQDN_WRP>"
