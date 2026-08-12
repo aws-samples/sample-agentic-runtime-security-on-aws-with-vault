@@ -1166,7 +1166,13 @@ step_08_configure_vault() {
         print_pass "Step 8: Configure Vault (dry-run)"
     else
         if _run_subscript "Step 8: vault-configure" "${SCRIPT_DIR}/vault-configure.sh"; then
-            # Best-effort confirm kubernetes/ + jwt/ are enabled (warn-only).
+            # Best-effort confirm the post-cutover auth surface (warn-only):
+            # kubernetes/ PRESENT and jwt/ ABSENT. The IVIA jwt auth backend was
+            # retired in the native Agent Registry cutover (locked decision (e))
+            # — UC2/UC3 present the OAuth JWT via X-Vault-Token against the
+            # oauth-resource-server profile, so nothing mounts jwt/ any more.
+            # This gate used to REQUIRE jwt/ and could therefore never pass;
+            # it now mirrors test-vault-verify.sh Check 13.
             kubectl --context workshop port-forward svc/vault -n vault 8200:8200 \
                 >/dev/null 2>&1 &
             VAULT_PF_PID=$!
@@ -1180,10 +1186,12 @@ step_08_configure_vault() {
                         vault auth list -format=json 2>/dev/null || echo '{}')
                     K8S_ENABLED=$(echo "$AUTH_LIST" | jq -r 'keys[] | select(. == "kubernetes/")' 2>/dev/null || echo "")
                     JWT_ENABLED=$(echo "$AUTH_LIST" | jq -r 'keys[] | select(. == "jwt/")' 2>/dev/null || echo "")
-                    if [[ -n "$K8S_ENABLED" ]] && [[ -n "$JWT_ENABLED" ]]; then
-                        print_pass "Step 8: Configure Vault (kubernetes/ and jwt/ auth methods enabled)"
+                    if [[ -z "$K8S_ENABLED" ]]; then
+                        print_warn "Step 8: kubernetes/ auth method not visible — vault-configure reported success; inspect manually if tier-3 pods 403"
+                    elif [[ -n "$JWT_ENABLED" ]]; then
+                        print_warn "Step 8: retired jwt/ auth mount is STILL present — the native cutover is incomplete. Disable it: kubectl exec -n vault vault-0 -- vault auth disable jwt"
                     else
-                        print_warn "Step 8: Vault auth methods not both visible (kubernetes=${K8S_ENABLED:-MISSING} jwt=${JWT_ENABLED:-MISSING}) — vault-configure reported success; inspect manually if tier-3 pods 403"
+                        print_pass "Step 8: Configure Vault (kubernetes/ auth enabled, retired jwt/ mount absent)"
                     fi
                 else
                     print_warn "Step 8: Could not verify Vault auth — root token not found in ~/vault-init.json"
@@ -1213,16 +1221,29 @@ step_09_configure_ivia() {
         print_pass "Step 9: Configure IVIA (dry-run)"
     else
         if _run_subscript "Step 9: ivia-configure" "${SCRIPT_DIR}/ivia-configure.sh"; then
+            # Step 7 has just rolled iviaruntime + iviawrprp1, so the OIDC
+            # provider is normally still coming up when we get here. A single
+            # curl after a fixed 3s sleep warned on a healthy deploy every time;
+            # retry with backoff instead and only warn once the endpoint has
+            # genuinely had time to answer.
             IVIA_HEALTH=""
             if kubectl --context workshop get pods -n verify-access --no-headers 2>/dev/null | grep -q Running; then
                 kubectl --context workshop port-forward \
                     svc/iviaop -n verify-access 8436:8436 \
                     >/dev/null 2>&1 &
                 _IVIA_PF_PID=$!
-                sleep 3
-                IVIA_HEALTH=$(curl -sk \
-                    "https://localhost:8436/oauth2/.well-known/openid-configuration" \
-                    2>/dev/null | jq -r '.issuer // empty' 2>/dev/null || echo "")
+                # NOT _wait_for_port here — that helper probes Vault's
+                # /v1/sys/health and can never succeed against IVIA. Retry the
+                # real OIDC discovery call instead; the first attempts double as
+                # the wait for the port-forward to come up.
+                for _ivia_try in $(seq 1 12); do
+                    IVIA_HEALTH=$(curl -sk --max-time 10 \
+                        "https://localhost:8436/oauth2/.well-known/openid-configuration" \
+                        2>/dev/null | jq -r '.issuer // empty' 2>/dev/null || echo "")
+                    [[ -n "$IVIA_HEALTH" ]] && break
+                    print_info "Step 9: IVIA OIDC endpoint not answering yet (attempt ${_ivia_try}/12) — retrying in 10s"
+                    sleep 10
+                done
                 kill "$_IVIA_PF_PID" 2>/dev/null || true
             fi
             if [[ -n "$IVIA_HEALTH" ]]; then
