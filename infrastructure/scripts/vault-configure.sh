@@ -541,35 +541,67 @@ phase_ivia_verify() {
   local IVIA_LMI_ENDPOINT="iviaconfig.verify-access.svc.cluster.local"
   ok "IVIA LMI endpoint (in-cluster): ${IVIA_LMI_ENDPOINT}:9443"
 
-  info "Verifying OIDC discovery..."
+  # There are TWO issuer values in this workshop and only one of them is
+  # authoritative HERE:
+  #
+  #   (a) Vault's oauth-resource-server profile `issuer_id` — the value Vault
+  #       actually validates UC2/UC3 tokens against. Written by this script's
+  #       own Phase 2 apply from the tier-2 ivia_issuer output, so by the time
+  #       Phase 3 runs it MUST already be the real ACME'd nip.io FQDN. This is
+  #       what we gate on.
+  #
+  #   (b) iviaop's own OIDC discovery document — serves the pre-ACME
+  #       `.invalid` placeholder until TIER 3 patches it. This script runs at
+  #       deploy Step 8, i.e. during tier 2, so a placeholder here is EXPECTED
+  #       and is not evidence that ACME failed. Gating on it produced a false
+  #       "ACME did not complete. Re-run Step 7" on healthy deploys.
+  #
+  # (.invalid is an RFC 6761 reserved TLD — never a real issuer.)
+  info "Verifying Vault's configured OAuth issuer..."
+  local vault_issuer=""
+  local pf_pid=""
+  # Local port 18200, not 8200: Phase 2's forward has already been torn down and
+  # an attendee may well have their own `port-forward ... 8200` open by now.
+  # Binding a distinct port keeps this read from failing on a port clash and
+  # emitting a warning that has nothing to do with the issuer.
+  kubectl port-forward svc/vault 18200:8200 -n vault &>/dev/null &
+  pf_pid=$!
+  sleep 3
+  if kill -0 "$pf_pid" 2>/dev/null; then
+    vault_issuer=$(curl -sf -H "X-Vault-Token: ${VAULT_TOKEN}" \
+      http://127.0.0.1:18200/v1/sys/config/oauth-resource-server/ivia \
+      2>/dev/null | jq -r '.data.issuer_id // empty' 2>/dev/null || echo "")
+    kill "$pf_pid" 2>/dev/null || true
+  fi
+
+  if [[ -z "$vault_issuer" ]]; then
+    warn "Could not read Vault's oauth-resource-server issuer_id"
+    warn "  Check: vault read sys/config/oauth-resource-server/ivia"
+    record "ivia_verify" "WARN"
+  elif [[ "$vault_issuer" == *".invalid"* ]]; then
+    warn "Vault's OAuth issuer_id is a pre-ACME placeholder: ${vault_issuer}"
+    warn "  Vault validates UC2/UC3 tokens against this value, so a placeholder"
+    warn "  here means ACME (deploy Step 7) did not complete. Re-run Step 7:"
+    warn "    bash infrastructure/scripts/deploy-workshop.sh --tier 2 --skip-vault-init"
+    record "ivia_verify" "WARN"
+  else
+    ok "Vault OAuth issuer_id: ${vault_issuer}"
+    record "ivia_verify" "PASS"
+  fi
+
+  # iviaop discovery — informational only (see (b) above).
   local issuer
   issuer=$(kubectl exec -n verify-access deploy/iviawrprp1 -- \
     curl -sk --max-time 15 \
     https://localhost:9443/isvaop/oauth2/.well-known/openid-configuration \
     2>/dev/null | jq -r '.issuer // empty' 2>/dev/null || echo "")
 
-  if [[ -n "$issuer" ]]; then
-    # A `.invalid` issuer is the pre-ACME placeholder IVIA serves until deploy
-    # Step 7 (ACME) re-applies module.ivia onto the real nip.io FQDN. This Phase 3
-    # runs at Step 8 — AFTER Step 7 — so on a full deploy the issuer must already
-    # be the real FQDN. A placeholder here is NOT a benign green check: it means
-    # ACME did not complete (or was skipped via --skip-acme). Surface it as WARN,
-    # never OK/PASS, so the misleading issuer is visible without masking a real
-    # ACME failure. (.invalid is an RFC 6761 reserved TLD — never a real issuer.)
-    if [[ "$issuer" == *".invalid"* ]]; then
-      warn "OIDC issuer is a pre-ACME placeholder: ${issuer}"
-      warn "  Expected ONLY if ACME (deploy Step 7) was skipped or has not run yet."
-      warn "  On a full deploy the issuer must be the real nip.io FQDN by Step 8 —"
-      warn "  a placeholder here means ACME did not complete. Re-run Step 7:"
-      warn "    bash infrastructure/scripts/deploy-workshop.sh --tier 2 --skip-vault-init"
-      record "ivia_verify" "WARN"
-    else
-      ok "OIDC issuer: ${issuer}"
-      record "ivia_verify" "PASS"
-    fi
+  if [[ -z "$issuer" ]]; then
+    info "iviaop OIDC discovery not responding yet — IVIA may still be initializing (informational)"
+  elif [[ "$issuer" == *".invalid"* ]]; then
+    info "iviaop discovery issuer: ${issuer} (placeholder — expected until tier 3 patches it)"
   else
-    warn "OIDC discovery not responding — IVIA may still be initializing"
-    record "ivia_verify" "WARN"
+    info "iviaop discovery issuer: ${issuer}"
   fi
 }
 
