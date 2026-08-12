@@ -34,14 +34,19 @@ export RDS_HOST=$(kubectl get configmap banking-mcp-config -n banking-app -o jso
 The credential issued above lives for **15 minutes** (`default_ttl`). If you take longer than that before running the psql command in Step 1.2 / Step 2, you will see `psql: error: FATAL: password authentication failed`. Re-run the whole block above — `PG_USER` and `PG_PASS` get re-exported automatically.
 :::
 
-Now spawn a transient `postgres:16-alpine` pod, run the SELECT as Oscar, and let it auto-delete (no psql binary lives in any workshop pod — this is the cluster-side equivalent of the MCP server's per-request connect → SET → SELECT pattern):
+Now spawn a transient `postgres:16-alpine` pod and run the SELECT as Oscar (no psql binary lives in any workshop pod — this is the cluster-side equivalent of the MCP server's per-request connect → SET → SELECT pattern).
+
+The pod runs detached and its output is read back with `kubectl logs`. The obvious form — `kubectl run --rm -i` — races: when the pod finishes before the client attaches, the output is lost and you get `If you don't see a command prompt, try pressing enter.` followed by a deleted pod and nothing else. On this step an empty result looks exactly like a correct answer, so the race has to be removed rather than worked around.
 
 ```bash
 kubectl delete pod pg-client-oscar -n banking-app --ignore-not-found --now >/dev/null 2>&1
-kubectl run pg-client-oscar --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
+kubectl run pg-client-oscar --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${PG_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop \
-    -c "SET app.current_user_sub = 'oscar'; SELECT account_number, balance FROM banking.accounts;"
+    -c "SET app.current_user_sub = 'oscar'; SELECT account_number, balance FROM banking.accounts;" >/dev/null
+kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-client-oscar -n banking-app --timeout=120s >/dev/null
+kubectl logs pg-client-oscar -n banking-app
+kubectl delete pod pg-client-oscar -n banking-app --now >/dev/null 2>&1
 ```
 
 Expected output — only Oscar's rows:
@@ -53,8 +58,6 @@ SET
  OVI-CHK-100001 |  4250.00
  OVI-SAV-100002 | 18750.50
 (2 rows)
-
-pod "pg-client-oscar" deleted
 ```
 
 ## Step 2 — Switch to Jaime, confirm data isolation
@@ -69,10 +72,13 @@ Run the same manual query with `app.current_user_sub = 'jaime'` (you can reuse t
 
 ```bash
 kubectl delete pod pg-client-jaime -n banking-app --ignore-not-found --now >/dev/null 2>&1
-kubectl run pg-client-jaime --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
+kubectl run pg-client-jaime --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${PG_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop \
-    -c "SET app.current_user_sub = 'jaime'; SELECT account_number, balance FROM banking.accounts;"
+    -c "SET app.current_user_sub = 'jaime'; SELECT account_number, balance FROM banking.accounts;" >/dev/null
+kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-client-jaime -n banking-app --timeout=120s >/dev/null
+kubectl logs pg-client-jaime -n banking-app
+kubectl delete pod pg-client-jaime -n banking-app --now >/dev/null 2>&1
 ```
 
 Expected output — only Jaime's rows:
@@ -84,8 +90,6 @@ SET
  OVI-CHK-200001 |  7830.25
  OVI-SAV-200002 | 32100.00
 (2 rows)
-
-pod "pg-client-jaime" deleted
 ```
 
 ## Step 3 — Inspect the Row-Level Security policy
@@ -102,13 +106,16 @@ MASTER_USER=$(echo "${SECRET_JSON}" | jq -r '.username')
 MASTER_PASS=$(echo "${SECRET_JSON}" | jq -r '.password')
 
 kubectl delete pod pg-client-policy -n banking-app --ignore-not-found --now >/dev/null 2>&1
-kubectl run pg-client-policy --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
+kubectl run pg-client-policy --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${MASTER_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${MASTER_USER}" -d workshop \
     -c "SELECT polname, polcmd, polroles, pg_get_expr(polqual, polrelid) AS policy_expr
         FROM pg_policy
         JOIN pg_class ON pg_class.oid = pg_policy.polrelid
-        WHERE pg_class.relname = 'accounts';"
+        WHERE pg_class.relname = 'accounts';" >/dev/null
+kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-client-policy -n banking-app --timeout=120s >/dev/null
+kubectl logs pg-client-policy -n banking-app
+kubectl delete pod pg-client-policy -n banking-app --now >/dev/null 2>&1
 ```
 
 Expected output:
@@ -118,8 +125,6 @@ Expected output:
 ---------------+--------+----------+--------------------------------------------------------------------------
  user_accounts | r      | {0}      | ((user_sub)::text = current_setting('app.current_user_sub'::text, true))
 (1 row)
-
-pod "pg-client-policy" deleted
 ```
 
 The `policy_expr` column shows the RLS predicate (PostgreSQL has normalised the column reference to `(user_sub)::text` and the setting name to `'app.current_user_sub'::text` — same semantic). Every `SELECT` on `banking.accounts` is automatically filtered by this predicate. If `app.current_user_sub` is not set, `current_setting(..., true)` returns `NULL` and no rows are returned — a safe default. The `polroles = {0}` value is Postgres's convention in `pg_policy` for "applies to every role" — the policy is not scoped to a specific role list, so any non-superuser role that touches the table is subject to it (the master `vault_root` role bypasses RLS because it is a superuser, which is why Step 3 reads `pg_policy` successfully).

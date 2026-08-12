@@ -71,9 +71,9 @@ sequenceDiagram
     rect rgba(186, 230, 255, 0.3)
     Note over User,RDS: Banking query — identity propagation
     User->>UI: "What are my accounts?"
-    UI->>Agent: POST /chat + Authorization: Bearer id_token
+    UI->>Agent: POST /chat + Authorization: Bearer access_token
     Agent->>Agent: Extract JWT from header
-    Agent->>MCP: JSON-RPC tools/call get_accounts<br/>Authorization: Bearer id_token
+    Agent->>MCP: JSON-RPC tools/call get_accounts<br/>Authorization: Bearer access_token
     MCP->>MCP: Decode JWT → read sub claim (for RLS only)
 
     MCP->>Vault: GET /v1/database/creds/uc2-personal-readonly<br/>X-Vault-Token: IVIA JWT (no login round-trip)
@@ -110,7 +110,7 @@ sequenceDiagram
 5. The Banking UI's `/callback` handler validates that the returned `state` matches the `pkce` cookie, then POSTs to the OIDC Provider's `/oauth2/token` endpoint over the in-cluster Kubernetes Service URL (`https://iviaop.verify-access.svc.cluster.local:8436`) — bypassing the WebSEAL ALB. The POST carries HTTP Basic auth (`agent-uc2:<client_secret>`) plus the `code` and `code_verifier`.
 6. The OIDC Provider verifies the code, checks the PKCE proof against the original challenge, runs the post-token mapping rule, and returns an `access_token` plus `id_token` (JWTs with the `sub` claim).
 7. The Banking UI stores the tokens in httpOnly cookies (`access_token`, `id_token`, optional `refresh_token`) and 302s the browser to `/dashboard`.
-8. When the user asks a banking question, the UI's server-side proxy reads the `id_token` cookie and forwards it to the Banking Agent as a Bearer token.
+8. When the user asks a banking question, the UI's server-side proxy reads the **`access_token`** cookie and forwards it to the Banking Agent as a Bearer token. The `access_token` is the one that matters downstream: it carries the `act` claim naming the agent actor, which is what Vault resolves in step 11. The `id_token` is an authentication receipt about the user and is never presented to Vault.
 9. The Banking Agent forwards the JWT unchanged to the MCP Server for each tool invocation.
 10. The MCP Server presents the JWT **directly** to Vault as the `X-Vault-Token` header on a single `GET database/creds/uc2-personal-readonly` read — there is no `auth/jwt/login` round-trip and no intermediate Vault token. Vault's OAuth resource server validates the signature against IVIA's JWKS endpoint.
 11. Vault resolves the human `sub` and the agent actor `act.sub = agent-uc2` (against the Agent Registry) and applies the On-Behalf-Of intersection `uc2-human-baseline ∩ uc2-agent-ceiling`.
@@ -118,7 +118,7 @@ sequenceDiagram
 13. The MCP Server opens a Postgres connection, sets `app.current_user_sub` to the JWT's `sub` claim, and executes `SELECT` queries. PostgreSQL Row-Level Security filters results to the authenticated user's rows only.
 14. The credential expires at TTL; Vault revokes the Postgres role automatically.
 
-The `sub` claim in the `id_token` (e.g. `oscar`) flows to:
+The `sub` claim in the `access_token` (e.g. `oscar`) flows to:
 
 1. The **Banking UI** — identifies the logged-in user for display.
 2. The **Strands agent** — forwarded in the `Authorization: Bearer` header to the MCP server.
@@ -152,24 +152,14 @@ Click **Login**. WebSEAL performs an LDAP bind against OpenLDAP and, on success,
 This workshop uses OpenLDAP as the user registry, with two pre-provisioned users (Oscar and Jaime) created by the `verify_access` Terraform module. WebSEAL authenticates them via LDAP bind. The IVIA OIDC Provider then issues JWTs that the MCP Server uses to obtain user-scoped database credentials from Vault.
 :::
 
-## Step 3 — Inspect the Banking UI logs
-
-The Banking UI logs the OAuth code exchange outcome. View the logs:
-
-```bash
-kubectl logs -n banking-app -l app=banking-ui --tail=30
-```
-
-You will not see credentials in these logs — only the outcome of the token exchange. Credentials never reach the Banking UI; they are entered on the WebSEAL login page and validated by WebSEAL via LDAP bind.
-
-## Step 4 — Confirm personalized dashboard data
+## Step 3 — Confirm personalized dashboard data
 
 After login, the dashboard shows Oscar's accounts and transactions. Observe:
 
 - The balance figures are specific to Oscar — RLS is filtering the `banking.accounts` table by `sub = 'oscar'`.
 - The agent responds to natural-language queries about Oscar's financial data.
 
-## Step 5 — Switch users: sign in as Jaime
+## Step 4 — Switch users: sign in as Jaime
 
 To act as a different user, open a **new Incognito / Private browser window** and go to the Banking UI URL again. Sign in as:
 

@@ -54,11 +54,16 @@ MASTER_USER=$(echo "${SECRET_JSON}" | jq -r '.username')
 MASTER_PASS=$(echo "${SECRET_JSON}" | jq -r '.password')
 
 kubectl delete pod pg-role-before -n banking-app --ignore-not-found --now >/dev/null 2>&1
-kubectl run pg-role-before --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
+kubectl run pg-role-before --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${MASTER_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${MASTER_USER}" -d workshop \
-    -c "SELECT rolname FROM pg_roles WHERE rolname='${PG_USER}';"
+    -c "SELECT rolname FROM pg_roles WHERE rolname='${PG_USER}';" >/dev/null
+kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-role-before -n banking-app --timeout=120s >/dev/null
+kubectl logs pg-role-before -n banking-app
+kubectl delete pod pg-role-before -n banking-app --now >/dev/null 2>&1
 ```
+
+The pod runs detached and its output is read back with `kubectl logs`. `kubectl run --rm -i` would race — if the pod finishes before the client attaches, the rows are lost — and on this pair of steps a lost result is indistinguishable from the answer you are looking for.
 
 Expected output — exactly one row, your fresh ephemeral role:
 
@@ -67,8 +72,6 @@ Expected output — exactly one row, your fresh ephemeral role:
 -------------------------------------------------
  v-root-uc2-pers-IwaMUs8kxzRLvjsvSjwO-1780000048
 (1 row)
-
-pod "pg-role-before" deleted
 ```
 
 ## Step 3 — Revoke the lease (the production code path)
@@ -94,20 +97,21 @@ Re-run the role check. The lease's ephemeral Postgres role should be gone:
 
 ```bash
 kubectl delete pod pg-role-after -n banking-app --ignore-not-found --now >/dev/null 2>&1
-kubectl run pg-role-after --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
+kubectl run pg-role-after --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${MASTER_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${MASTER_USER}" -d workshop \
-    -c "SELECT rolname FROM pg_roles WHERE rolname='${PG_USER}';"
+    -c "SELECT rolname FROM pg_roles WHERE rolname='${PG_USER}';" >/dev/null
+kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-role-after -n banking-app --timeout=120s >/dev/null
+kubectl logs pg-role-after -n banking-app
+kubectl delete pod pg-role-after -n banking-app --now >/dev/null 2>&1
 ```
 
-Expected output:
+Expected output — `(0 rows)` must actually be printed. Blank output here means the command did not run, not that the role is gone:
 
 ```
  rolname
 ---------
 (0 rows)
-
-pod "pg-role-after" deleted
 ```
 
 Zero rows. The ephemeral role has been dropped. Any open Postgres connection that was using this credential is now broken at its next query — `password authentication failed`. **This is the credential-revocation enforcement payoff: the moment the lease is revoked, the database access it granted is physically impossible.** No grace period, no rollback path, no orphan role left behind.

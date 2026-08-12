@@ -170,17 +170,17 @@ Each ephemeral role is created with login credentials scoped to the banking sche
 
 To confirm the native path, present a real user JWT to Vault via `X-Vault-Token` and watch Vault vend a credential in a **single** call — no login step.
 
-The Banking UI keeps the user's IVIA-issued JWT in an HttpOnly cookie named `id_token`. To grab it:
+The Banking UI sets **two** HttpOnly cookies after sign-in — `access_token` and `id_token`. You need the **`access_token`**: it is the OAuth access token, and it is the only one that carries the `act` claim naming the agent actor. To grab it:
 
 1. Sign in to the Banking UI as `oscar` or `jaime`.
 2. Open Chrome DevTools (F12) → **Application** tab.
 3. Storage → Cookies → click the workshop hostname.
-4. Find the row `id_token` and copy the **Value** column.
+4. Find the row `access_token` and copy the **Value** column.
 
 Then present it as the Vault token — the JWT **is** the credential:
 
 ```bash
-JWT_TOKEN="<paste-the-id_token-value>"; kubectl exec -n vault vault-0 -- sh -c "VAULT_TOKEN='${JWT_TOKEN}' vault read database/creds/uc2-personal-readonly"
+JWT_TOKEN="<paste-the-access_token-value>"; kubectl exec -n vault vault-0 -- sh -c "VAULT_TOKEN='${JWT_TOKEN}' vault read database/creds/uc2-personal-readonly"
 ```
 
 Expected output — a per-user JIT Postgres credential, issued directly against the presented OAuth JWT:
@@ -190,10 +190,14 @@ Key                Value
 ---                -----
 lease_id           database/creds/uc2-personal-readonly/<opaque>
 lease_duration     15m
-lease_renewable    true
+lease_renewable    false
 password           <ephemeral>
 username           v-JWT Toke-uc2-pers-<random>-<timestamp>
 ```
+
+:::alert{header="Grabbed the wrong cookie? You will see 403" type="info"}
+`Code: 403. errors: * permission denied` here almost always means you copied `id_token` instead of `access_token`. The id_token is an *authentication* receipt about the user — it has no `act` claim, so Vault cannot resolve which agent is acting on their behalf, and it fails closed. That is the delegation model working: no named actor, no credential.
+:::
 
 There is no `vault write auth/jwt/login` in that sequence. Vault validated the OAuth JWT against the resource server profile, resolved `sub` (the human) and `act.sub = agent-uc2` (the agent actor), applied `uc2-human-baseline ∩ uc2-agent-ceiling`, and vended the credential — all in the one `database/creds` read. The `username` is derived from the presented token's Vault display name (`JWT Token with JTI:…`, truncated to 8 chars) — it identifies the token/agent, never the human `sub`; human attribution is recovered by correlating the lease with the IVIA OAuth plane. The MCP Server uses exactly this credential for the user's session.
 
