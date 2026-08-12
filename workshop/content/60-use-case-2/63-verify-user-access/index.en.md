@@ -36,7 +36,7 @@ The credential issued above lives for **15 minutes** (`default_ttl`). If you tak
 
 Now spawn a transient `postgres:16-alpine` pod and run the SELECT as Oscar (no psql binary lives in any workshop pod — this is the cluster-side equivalent of the MCP server's per-request connect → SET → SELECT pattern).
 
-The pod runs detached and its output is read back with `kubectl logs`. The obvious form — `kubectl run --rm -i` — races: when the pod finishes before the client attaches, the output is lost and you get `If you don't see a command prompt, try pressing enter.` followed by a deleted pod and nothing else. On this step an empty result looks exactly like a correct answer, so the race has to be removed rather than worked around.
+The pod runs detached and its output is read back with `kubectl logs`. The obvious form — `kubectl run --rm -i` — races: when the pod finishes before the client attaches, the output is lost and you get `If you don't see a command prompt, try pressing enter.` followed by a deleted pod and nothing else. On this step an empty result looks exactly like a correct answer, so the race has to be removed rather than worked around. The loop waits for either terminal phase, `Succeeded` or `Failed`, so a failure — an expired credential, a denied statement — shows you the error immediately instead of stalling.
 
 ```bash
 kubectl delete pod pg-client-oscar -n banking-app --ignore-not-found --now >/dev/null 2>&1
@@ -44,7 +44,12 @@ kubectl run pg-client-oscar --restart=Never --image=postgres:16-alpine -n bankin
   --env="PGPASSWORD=${PG_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop \
     -c "SET app.current_user_sub = 'oscar'; SELECT account_number, balance FROM banking.accounts;" >/dev/null
-kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-client-oscar -n banking-app --timeout=120s >/dev/null
+for _ in $(seq 60); do
+  case "$(kubectl get pod pg-client-oscar -n banking-app -o jsonpath='{.status.phase}' 2>/dev/null)" in
+    Succeeded|Failed) break ;;
+  esac
+  sleep 2
+done
 kubectl logs pg-client-oscar -n banking-app
 kubectl delete pod pg-client-oscar -n banking-app --now >/dev/null 2>&1
 ```
@@ -76,7 +81,12 @@ kubectl run pg-client-jaime --restart=Never --image=postgres:16-alpine -n bankin
   --env="PGPASSWORD=${PG_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop \
     -c "SET app.current_user_sub = 'jaime'; SELECT account_number, balance FROM banking.accounts;" >/dev/null
-kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-client-jaime -n banking-app --timeout=120s >/dev/null
+for _ in $(seq 60); do
+  case "$(kubectl get pod pg-client-jaime -n banking-app -o jsonpath='{.status.phase}' 2>/dev/null)" in
+    Succeeded|Failed) break ;;
+  esac
+  sleep 2
+done
 kubectl logs pg-client-jaime -n banking-app
 kubectl delete pod pg-client-jaime -n banking-app --now >/dev/null 2>&1
 ```
@@ -113,7 +123,12 @@ kubectl run pg-client-policy --restart=Never --image=postgres:16-alpine -n banki
         FROM pg_policy
         JOIN pg_class ON pg_class.oid = pg_policy.polrelid
         WHERE pg_class.relname = 'accounts';" >/dev/null
-kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-client-policy -n banking-app --timeout=120s >/dev/null
+for _ in $(seq 60); do
+  case "$(kubectl get pod pg-client-policy -n banking-app -o jsonpath='{.status.phase}' 2>/dev/null)" in
+    Succeeded|Failed) break ;;
+  esac
+  sleep 2
+done
 kubectl logs pg-client-policy -n banking-app
 kubectl delete pod pg-client-policy -n banking-app --now >/dev/null 2>&1
 ```

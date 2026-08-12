@@ -134,7 +134,7 @@ The credential issued above lives for **15 minutes** (`default_ttl`). If you tak
 
 No workshop pod has the `psql` binary pre-installed, so spawn a transient `postgres:16-alpine` pod that connects to RDS as the Vault-vended ephemeral role and attempts the INSERT. The `${PG_USER}`, `${PG_PASS}`, and `${RDS_HOST}` references resolve from the exports you just ran in Step 2.1.
 
-The pod runs detached and its output is read back with `kubectl logs`. The obvious form — `kubectl run --rm -i` — races: when the pod finishes before the client attaches, the output is lost and you get `If you don't see a command prompt, try pressing enter.` followed by a deleted pod and nothing else. On this step an empty result looks exactly like a correct answer, so the race has to be removed rather than worked around.
+The pod runs detached and its output is read back with `kubectl logs`. The obvious form — `kubectl run --rm -i` — races: when the pod finishes before the client attaches, the output is lost and you get `If you don't see a command prompt, try pressing enter.` followed by a deleted pod and nothing else. On this step an empty result looks exactly like a correct answer, so the race has to be removed rather than worked around. The loop waits for either terminal phase, `Succeeded` or `Failed`, so a failure — an expired credential, a denied statement — shows you the error immediately instead of stalling.
 
 ```bash
 kubectl delete pod pg-insert-attempt -n banking-app --ignore-not-found --now >/dev/null 2>&1
@@ -143,12 +143,17 @@ kubectl run pg-insert-attempt --restart=Never --image=postgres:16-alpine -n bank
   --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop \
     -c "INSERT INTO banking.accounts (user_sub, account_number, balance)
          VALUES ('attacker@example.com', 'FAKE-001', 999999.00);" >/dev/null
-kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/pg-insert-attempt -n banking-app --timeout=120s >/dev/null
+for _ in $(seq 60); do
+  case "$(kubectl get pod pg-insert-attempt -n banking-app -o jsonpath='{.status.phase}' 2>/dev/null)" in
+    Succeeded|Failed) break ;;
+  esac
+  sleep 2
+done
 kubectl logs pg-insert-attempt -n banking-app
 kubectl delete pod pg-insert-attempt -n banking-app --now >/dev/null 2>&1
 ```
 
-Note the wait is for phase `Failed`, not `Succeeded` — `psql` exits non-zero on a SQL error, so the pod is *expected* to end in `Failed`. That failure is the passing result: the INSERT was rejected.
+The loop waits for the pod to reach **either** terminal phase before reading its log. That matters here: `psql` exits non-zero on a SQL error, so this pod is *expected* to end in `Failed` — and it also matters on the steps that expect success, because an expired credential ends them in `Failed` too and you need to see the password error, not a timeout.
 
 ```
 ERROR:  permission denied for table accounts
@@ -175,7 +180,12 @@ kubectl run pg-grants --restart=Never --image=postgres:16-alpine -n banking-app 
   --env="PGPASSWORD=${MASTER_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${MASTER_USER}" -d workshop \
     -c "\dp banking.accounts" >/dev/null
-kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-grants -n banking-app --timeout=120s >/dev/null
+for _ in $(seq 60); do
+  case "$(kubectl get pod pg-grants -n banking-app -o jsonpath='{.status.phase}' 2>/dev/null)" in
+    Succeeded|Failed) break ;;
+  esac
+  sleep 2
+done
 kubectl logs pg-grants -n banking-app
 kubectl delete pod pg-grants -n banking-app --now >/dev/null 2>&1
 ```

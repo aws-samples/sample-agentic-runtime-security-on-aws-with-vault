@@ -122,7 +122,12 @@ kubectl run pg-rls-test --restart=Never --image=postgres:16-alpine -n banking-ap
     SELECT 'jaime' AS acting_as, count(*) AS tx_count FROM banking.transactions;
     SELECT set_config('app.current_user_sub','oscar',false);
     SELECT 'oscar' AS acting_as, count(*) AS tx_count FROM banking.transactions;" >/dev/null
-kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-rls-test -n banking-app --timeout=120s >/dev/null
+for _ in $(seq 60); do
+  case "$(kubectl get pod pg-rls-test -n banking-app -o jsonpath='{.status.phase}' 2>/dev/null)" in
+    Succeeded|Failed) break ;;
+  esac
+  sleep 2
+done
 kubectl logs pg-rls-test -n banking-app
 kubectl delete pod pg-rls-test -n banking-app --now >/dev/null 2>&1
 ```
@@ -166,7 +171,12 @@ kubectl run pg-insert-uc3 --restart=Never --image=postgres:16-alpine -n banking-
   --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop \
     -c "INSERT INTO banking.refunds (account_id, transaction_id, amount, approved_by, request_id)
          VALUES ('00000000-0000-0000-0000-000000000000', '00000000-0000-0000-0000-000000000000', 1.00, 'least-priv-test', gen_random_uuid());" >/dev/null
-kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/pg-insert-uc3 -n banking-app --timeout=120s >/dev/null
+for _ in $(seq 60); do
+  case "$(kubectl get pod pg-insert-uc3 -n banking-app -o jsonpath='{.status.phase}' 2>/dev/null)" in
+    Succeeded|Failed) break ;;
+  esac
+  sleep 2
+done
 kubectl logs pg-insert-uc3 -n banking-app
 kubectl delete pod pg-insert-uc3 -n banking-app --now >/dev/null 2>&1
 ```
@@ -177,7 +187,7 @@ Expected output:
 ERROR:  permission denied for table refunds
 ```
 
-Note the wait is for phase `Failed`, not `Succeeded` — `psql` exits non-zero on a SQL error, so the pod is *expected* to end in `Failed`. That non-zero exit **is** the INSERT being correctly rejected.
+The loop waits for **either** terminal phase before reading the log. `psql` exits non-zero on a SQL error, so this pod is expected to end in `Failed` — and that non-zero exit **is** the INSERT being correctly rejected.
 
 The Postgres GRANT layer rejects the INSERT before the RLS policy (or any constraint) is even evaluated. This confirms that a bug in the agent code that accidentally attempted a write would fail closed at the database layer — Vault's `uc3-readonly` role has no write capability.
 
@@ -200,7 +210,12 @@ kubectl run pg-find-refund --restart=Never --image=postgres:16-alpine -n banking
     SELECT 'oscar' AS persona, refund_id, amount::float AS amount FROM banking.refunds;
     SELECT set_config('app.current_user_sub','jaime',false);
     SELECT 'jaime' AS persona, refund_id, amount::float AS amount FROM banking.refunds;" >/dev/null
-kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-find-refund -n banking-app --timeout=120s >/dev/null
+for _ in $(seq 60); do
+  case "$(kubectl get pod pg-find-refund -n banking-app -o jsonpath='{.status.phase}' 2>/dev/null)" in
+    Succeeded|Failed) break ;;
+  esac
+  sleep 2
+done
 kubectl logs pg-find-refund -n banking-app
 kubectl delete pod pg-find-refund -n banking-app --now >/dev/null 2>&1
 ```
@@ -246,7 +261,12 @@ kubectl run pg-owner-test --restart=Never --image=postgres:16-alpine -n banking-
       FROM banking.refunds r
       JOIN banking.accounts a ON a.id = r.account_id
      WHERE r.refund_id = '${REFUND_ID}' AND a.user_sub = '${OWNER}';" >/dev/null
-kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-owner-test -n banking-app --timeout=120s >/dev/null
+for _ in $(seq 60); do
+  case "$(kubectl get pod pg-owner-test -n banking-app -o jsonpath='{.status.phase}' 2>/dev/null)" in
+    Succeeded|Failed) break ;;
+  esac
+  sleep 2
+done
 kubectl logs pg-owner-test -n banking-app
 kubectl delete pod pg-owner-test -n banking-app --now >/dev/null 2>&1
 ```

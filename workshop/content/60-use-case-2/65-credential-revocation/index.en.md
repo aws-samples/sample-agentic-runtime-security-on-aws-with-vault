@@ -58,7 +58,12 @@ kubectl run pg-role-before --restart=Never --image=postgres:16-alpine -n banking
   --env="PGPASSWORD=${MASTER_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${MASTER_USER}" -d workshop \
     -c "SELECT rolname FROM pg_roles WHERE rolname='${PG_USER}';" >/dev/null
-kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-role-before -n banking-app --timeout=120s >/dev/null
+for _ in $(seq 60); do
+  case "$(kubectl get pod pg-role-before -n banking-app -o jsonpath='{.status.phase}' 2>/dev/null)" in
+    Succeeded|Failed) break ;;
+  esac
+  sleep 2
+done
 kubectl logs pg-role-before -n banking-app
 kubectl delete pod pg-role-before -n banking-app --now >/dev/null 2>&1
 ```
@@ -101,7 +106,12 @@ kubectl run pg-role-after --restart=Never --image=postgres:16-alpine -n banking-
   --env="PGPASSWORD=${MASTER_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${MASTER_USER}" -d workshop \
     -c "SELECT rolname FROM pg_roles WHERE rolname='${PG_USER}';" >/dev/null
-kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-role-after -n banking-app --timeout=120s >/dev/null
+for _ in $(seq 60); do
+  case "$(kubectl get pod pg-role-after -n banking-app -o jsonpath='{.status.phase}' 2>/dev/null)" in
+    Succeeded|Failed) break ;;
+  esac
+  sleep 2
+done
 kubectl logs pg-role-after -n banking-app
 kubectl delete pod pg-role-after -n banking-app --now >/dev/null 2>&1
 ```
