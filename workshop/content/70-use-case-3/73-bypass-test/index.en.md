@@ -5,9 +5,9 @@ weight: 73
 
 ## Where Enforcement Now Lives: at Vault, per request
 
-Vault Enterprise's OAuth resource server enforces the delegation itself. When the delegated JWT is presented via `X-Vault-Token`, Vault resolves the agent actor from `act.sub` and narrows the token per request from the `vault:path_access` RAR. Two forged-token attacks fail **at Vault** — before any credential is issued:
+Vault Enterprise's OAuth resource server enforces the delegation itself. When the delegated JWT is presented via `X-Vault-Token`, Vault resolves the agent actor from `act.sub`, intersects that agent's ceiling with the human's baseline, and narrows the result per request from the `vault:path_access` RAR. Two attacks with genuine, IVIA-signed tokens fail **at Vault** — before any credential is issued:
 
-- **Wrong actor** — a token whose `act.sub` names an agent Vault does not have registered fails closed: no agent entity resolves, so the on-behalf-of authorization is denied.
+- **Wrong agent** — a real token for the same human, delegated to a *different registered* agent (`agent-uc2`), is denied the refund path. `agent-uc2`'s ceiling omits it, so the intersection is empty **even though the human's own baseline permits it**.
 - **Wrong RAR path** — a token whose `vault:path_access` RAR names a path *other than* the one being requested is denied **even though the human baseline and the agent ceiling both permit the target path**. The per-request RAR is a hard, in-Vault narrowing.
 
 ## Run the Bypass Test
@@ -16,23 +16,31 @@ Vault Enterprise's OAuth resource server enforces the delegation itself. When th
 cd infrastructure/scripts && ./verify-uc3.sh --bypass
 ```
 
-The script runs **genuine negative tests**, each classified by the *reason* Vault rejected the request — so the test can never silently pass on an infrastructure error:
+The script first mints a **real** delegated token for `oscar` (PKCE login plus an RFC 8693 token exchange), then runs its checks against it — so every denial is attributable to the one thing that was changed, and the test can never silently pass on an infrastructure error. It ends with **7 PASS and 1 WARN**; the WARN is expected and explained below.
 
-- **Untrusted-signer control:** forges an HS256 JWT (PyJWT, in a temporary pod) and presents it. Vault trusts only IVIA's RS256 JWKS via the resource server profile, so the token dies at the signature layer.
-- **Wrong-actor control:** presents a genuine IVIA-signed delegated token whose `act.sub` names an unregistered agent (`evil-actor`). The signature and issuer pass, but no agent entity resolves for `evil-actor`, so Vault denies the on-behalf-of authorization.
-- **Wrong-RAR-path control (the money shot):** presents a genuine delegated token that resolves `sub = jaime` and `act.sub = uc3-actor` correctly, but carries a `vault:path_access` RAR pointing at the **wrong path**. Vault denies the request even though baseline ∩ ceiling permit `database/creds/uc3-refund-writer` — the RAR did not name it, so Vault narrowed the token away from it.
+- **Check 14 — untrusted signer:** forges an HS256 JWT whose claims are *identical* to the allowed token (same `iss`, `aud`, `sub`, `act.sub`, RAR) so that only the signature differs. Vault trusts only IVIA's RS256 JWKS, so the token dies at the signature layer.
+- **Check 15 — token shape:** confirms the real delegated token carries a non-empty `jti` and `act.sub=uc3-actor`, the claims the next two checks depend on.
+- **Check 16 — the positive control:** the same real token, with a RAR naming the path it is asking for, **is allowed** and vends a credential. Without this, the denials below would prove nothing — a broken deploy denies everything.
+- **Check 17 — wrong RAR path (the money shot):** the same real token, presented to `database/creds/uc3-readonly`, which its RAR does not name. Denied with `RAR_NO_MATCH` even though the entity ACL and the agent ceiling both permit that path.
+- **Check 18 — wrong agent:** a genuine UC2 login for the *same human* (`sub=oscar`, `act.sub=agent-uc2`) is denied `database/creds/uc3-refund-writer`. `agent-uc2`'s ceiling omits the refund path, so the intersection with oscar's baseline is empty. This is cross-use-case isolation, proven with a real token.
+- **Check 19 — wrong actor (optional, skipped by default):** would present a token whose `act.sub` names an *unregistered* agent. Production IVIA will only ever sign `act.sub=uc3-actor`, so such a token cannot be minted here — it has to be supplied by an operator via `UC3_WRONG_ACTOR_TOKEN`. The check WARN-skips without it. **This is expected, not a failure:** Check 18 already proves that delegation to the wrong agent fails closed.
 
-**Representative output** — each control is a `403 permission denied` at Vault, classified by why:
+**Expected output** — 7 PASS and the Check 19 WARN:
 
 ```
   ℹ INFO Use Case 3 — CIBA Privileged verification — BYPASS TEST MODE
 
-  ✓ PASS Untrusted-signer control: Vault rejected the HS256 self-forged JWT at the signature layer (trusts only IVIA's RS256 JWKS) — an attacker cannot forge their way in
-  ✓ PASS Wrong-actor control: real IVIA-signed token with act.sub=evil-actor DENIED — no registered agent entity resolves, on-behalf-of authorization fails closed
-  ✓ PASS Wrong-RAR-path control: real delegated token (sub=jaime, act.sub=uc3-actor) DENIED — its vault:path_access RAR named a different path, so Vault narrowed the token away from database/creds/uc3-refund-writer even though baseline ∩ ceiling permit it
+  ✓ PASS Self-mint: minted a real IVIA-issued delegated token + subject token for 'oscar'
+  ✓ PASS Bypass Check 14 PASSED: Vault rejected the HS256 forgery whose claims match the ALLOWED delegated token (iss/aud/sub/act.sub/RAR identical) — only the signature differs ...
+  ✓ PASS Bypass Check 15: REAL delegated token carries a jti claim (sub=oscar, jti=...)
+  ✓ PASS Bypass Check 15: REAL delegated token carries act.sub=uc3-actor (OBO actor claim Vault resolves)
+  ✓ PASS Bypass Check 16 PASSED: the delegated token ... was ALLOWED to read database/creds/uc3-refund-writer ...
+  ✓ PASS Bypass Check 17 PASSED: the delegated token (RAR path=database/creds/uc3-refund-writer) was DENIED reading database/creds/uc3-readonly with RAR_NO_MATCH even though the entity ACL + agent ceiling permit it ...
+  ✓ PASS Bypass Check 18 PASSED: the agent-uc2 UC2 token (sub=oscar, act.sub=agent-uc2) was DENIED reading database/creds/uc3-refund-writer — agent-uc2's ceiling omits the refund path ...
+  ⚠ WARN Bypass Check 19: SKIPPED — no UC3_WRONG_ACTOR_TOKEN supplied ... production IVIA cannot mint a wrong-actor token (it only signs act.sub=uc3-actor), so it is operator-supplied and NOT required for green (Check 18 already proves delegation is mandatory).
 
 ===============================================================================
- ✓ checks passed
+ ✓ 7 check(s) passed
 ===============================================================================
 ```
 
@@ -41,14 +49,14 @@ The script runs **genuine negative tests**, each classified by the *reason* Vaul
 | Layer | Mechanism | What It Enforces |
 |---|---|---|
 | JWT signature | JWKS validation against IVIA's RS256 public keys (resource server profile) | Only IVIA-signed tokens are accepted — HS256 self-signed tokens are always rejected |
-| Agent actor | `act.sub` resolved against the Agent Registry | Only a token naming a **registered** agent (`uc3-actor`) authorizes on-behalf-of; an unknown actor fails closed |
+| Agent actor | `act.sub` resolved against the Agent Registry, then that agent's ceiling intersected with the human baseline | A token delegated to a **different** registered agent is denied the refund path — `agent-uc2`'s ceiling omits it, so the intersection is empty even though the human's baseline permits it (Check 18) |
 | Per-request RAR | `vault:path_access` path must match the requested path | Evaluated in Vault at the point of use: a delegated token whose RAR names a different path is denied **even though baseline ∩ ceiling permit the target** |
 
 The RAR-path control is the one that proves enforcement moved *into* Vault: the human baseline and the agent ceiling both allow `database/creds/uc3-refund-writer`, yet Vault still denies the request when the per-request `vault:path_access` RAR does not name that exact path. Vault — not IVIA, not the agent — is the interpreter of the RAR.
 
 ### Threat Model
 
-**What this protects against:** A rogue agent pod that obtains a user's delegated token cannot repurpose it. If its `act.sub` names an unregistered agent, no agent entity resolves and Vault fails closed; if it carries a `vault:path_access` RAR for a different path, Vault narrows the token away from the refund-writer credential. A self-forged token is rejected even earlier, at RS256 signature validation. No DB credentials are ever issued.
+**What this protects against:** A rogue agent pod that obtains a user's delegated token cannot repurpose it. If the token was delegated to a different agent, that agent's ceiling does not include the refund path and the intersection with the human's baseline is empty (Check 18); if it carries a `vault:path_access` RAR for a different path, Vault narrows the token away from the refund-writer credential (Check 17). A self-forged token is rejected even earlier, at RS256 signature validation (Check 14). No DB credentials are ever issued.
 
 **What this does NOT protect against:** A compromised agent-uc3 pod with its service account JWT intact could initiate a CIBA flow and present the resulting delegated token to Vault. Mitigations for pod compromise (e.g., falco runtime rules, IRSA session policy restrictions) are out of scope for this workshop but represent the next layer of defense.
 
@@ -107,13 +115,16 @@ Spawn **one** transient `postgres:16-alpine` pod. In a single `psql` session, se
 
 ```bash
 kubectl delete pod pg-rls-test -n banking-app --ignore-not-found --now >/dev/null 2>&1
-kubectl run pg-rls-test --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
+kubectl run pg-rls-test --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${PG_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop -c "
     SELECT set_config('app.current_user_sub','jaime',false);
     SELECT 'jaime' AS acting_as, count(*) AS tx_count FROM banking.transactions;
     SELECT set_config('app.current_user_sub','oscar',false);
-    SELECT 'oscar' AS acting_as, count(*) AS tx_count FROM banking.transactions;"
+    SELECT 'oscar' AS acting_as, count(*) AS tx_count FROM banking.transactions;" >/dev/null
+kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-rls-test -n banking-app --timeout=120s >/dev/null
+kubectl logs pg-rls-test -n banking-app
+kubectl delete pod pg-rls-test -n banking-app --now >/dev/null 2>&1
 ```
 
 **Expected output** — each `set_config` line echoes the `sub` it just activated, and the two `tx_count` rows differ (Jaime owns 9 transactions, Oscar owns 8):
@@ -150,21 +161,23 @@ The `INSERT` below names **only real `banking.refunds` columns** (`account_id, t
 
 ```bash
 kubectl delete pod pg-insert-uc3 -n banking-app --ignore-not-found --now >/dev/null 2>&1
-kubectl run pg-insert-uc3 --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
+kubectl run pg-insert-uc3 --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${PG_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop \
     -c "INSERT INTO banking.refunds (account_id, transaction_id, amount, approved_by, request_id)
-         VALUES ('00000000-0000-0000-0000-000000000000', '00000000-0000-0000-0000-000000000000', 1.00, 'least-priv-test', gen_random_uuid());"
+         VALUES ('00000000-0000-0000-0000-000000000000', '00000000-0000-0000-0000-000000000000', 1.00, 'least-priv-test', gen_random_uuid());" >/dev/null
+kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/pg-insert-uc3 -n banking-app --timeout=120s >/dev/null
+kubectl logs pg-insert-uc3 -n banking-app
+kubectl delete pod pg-insert-uc3 -n banking-app --now >/dev/null 2>&1
 ```
 
 Expected output:
 
 ```
 ERROR:  permission denied for table refunds
-pod "pg-insert-uc3" deleted
 ```
 
-`psql` exits non-zero, so `kubectl` may also print `pod "banking-app/pg-insert-uc3" terminated (Error)` — that is expected; the non-zero exit **is** the INSERT being correctly rejected.
+Note the wait is for phase `Failed`, not `Succeeded` — `psql` exits non-zero on a SQL error, so the pod is *expected* to end in `Failed`. That non-zero exit **is** the INSERT being correctly rejected.
 
 The Postgres GRANT layer rejects the INSERT before the RLS policy (or any constraint) is even evaluated. This confirms that a bug in the agent code that accidentally attempted a write would fail closed at the database layer — Vault's `uc3-readonly` role has no write capability.
 
@@ -180,13 +193,16 @@ A refund is visible only to its owner (RLS), so list refunds under each persona 
 
 ```bash
 kubectl delete pod pg-find-refund -n banking-app --ignore-not-found --now >/dev/null 2>&1
-kubectl run pg-find-refund --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
+kubectl run pg-find-refund --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${PG_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop -c "
     SELECT set_config('app.current_user_sub','oscar',false);
     SELECT 'oscar' AS persona, refund_id, amount::float AS amount FROM banking.refunds;
     SELECT set_config('app.current_user_sub','jaime',false);
-    SELECT 'jaime' AS persona, refund_id, amount::float AS amount FROM banking.refunds;"
+    SELECT 'jaime' AS persona, refund_id, amount::float AS amount FROM banking.refunds;" >/dev/null
+kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-find-refund -n banking-app --timeout=120s >/dev/null
+kubectl logs pg-find-refund -n banking-app
+kubectl delete pod pg-find-refund -n banking-app --now >/dev/null 2>&1
 ```
 
 **Example output** — one refund created as each persona (what you see depends on what you approved on page 71):
@@ -217,7 +233,7 @@ Run the exact owner-predicate JOIN `check_refund_status` executes — first as t
 
 ```bash
 kubectl delete pod pg-owner-test -n banking-app --ignore-not-found --now >/dev/null 2>&1
-kubectl run pg-owner-test --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
+kubectl run pg-owner-test --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${PG_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop -c "
     SELECT set_config('app.current_user_sub','${ATTACKER}',false);
@@ -229,7 +245,10 @@ kubectl run pg-owner-test --rm -i --restart=Never --image=postgres:16-alpine -n 
     SELECT 'owner read' AS test, r.refund_id, r.amount::float AS amount
       FROM banking.refunds r
       JOIN banking.accounts a ON a.id = r.account_id
-     WHERE r.refund_id = '${REFUND_ID}' AND a.user_sub = '${OWNER}';"
+     WHERE r.refund_id = '${REFUND_ID}' AND a.user_sub = '${OWNER}';" >/dev/null
+kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-owner-test -n banking-app --timeout=120s >/dev/null
+kubectl logs pg-owner-test -n banking-app
+kubectl delete pod pg-owner-test -n banking-app --now >/dev/null 2>&1
 ```
 
 **Expected output** — the hostile cross-owner read returns **0 rows**; the owner read returns the single row (this example used `OWNER=oscar`, `ATTACKER=jaime`, the $45 refund):
