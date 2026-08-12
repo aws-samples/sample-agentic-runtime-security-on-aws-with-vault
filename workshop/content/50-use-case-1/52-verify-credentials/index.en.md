@@ -157,11 +157,22 @@ T+900s  Lease expiry fires — Vault runs: DROP ROLE IF EXISTS "v-kubernet-uc1-r
         Any open connection using that credential fails on its next query
 ```
 
-Observe the active lease right after a query, then watch it disappear after 15 minutes:
+Observe the active leases right after a query, then watch them disappear after 15 minutes. Leases are listed through `sys/leases/lookup` — `vault lease` only has `lookup`, `renew` and `revoke` subcommands, so `vault lease list` exits with the CLI usage text rather than a listing. The [Credential Revocation](../../60-use-case-2/65-credential-revocation/) page uses this same form:
 
 ```bash
-vault lease list database/creds/uc1-readonly
+vault list sys/leases/lookup/database/creds/uc1-readonly
 ```
+
+Expected — one key per live credential; the suffix matches the `lease_id` tail from Step 3:
+
+```
+Keys
+----
+T8oQy2nNmNHDO5oxNbLCQzhP
+U8AYazSUPHYOemVtly4upqVL
+```
+
+If every lease has already expired, Vault prints `No value found at sys/leases/lookup/database/creds/uc1-readonly` and exits 2 — that is the CLI's convention for an empty list, not an error.
 
 Why this matters for OBJ-2: if the pod is compromised at T+800s, the attacker has at most 100 seconds of Postgres access before the credential self-destructs — no long-lived password to rotate, no rotation job to run.
 :::
