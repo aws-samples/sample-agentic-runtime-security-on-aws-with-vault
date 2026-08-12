@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
 #-------------------------------------------------------------------------------
-# capture-uc2-jwt.sh — headlessly capture a real IVIA-issued id_token JWT for a
+# capture-uc2-jwt.sh — headlessly capture a real IVIA-issued access_token JWT for a
 # workshop LDAP user, so the Use Case 2 demo beat can run page-62 Step 5 verbatim
 # without a manual browser sign-in.
 #
 # This mirrors exactly what the attendee does in the browser (sign in as the user
 # at the IVIA WebSEAL login page → OAuth Authorization Code + PKCE), but driven
-# with curl so the demo is reproducible. The id_token is the same value the
-# attendee copies from the banking-UI HttpOnly `id_token` cookie via DevTools.
+# with curl so the demo is reproducible. The access_token is the same value the
+# attendee copies from the banking-UI HttpOnly `access_token` cookie via DevTools.
+#
+# It must be the access_token, NOT the id_token: only the access_token carries the
+# `act` claim naming the agent actor, and without it Vault cannot resolve the
+# on-behalf-of pair and returns 403.
 #
 # Why the token exchange goes through a port-forward and not the WRP ALB: WebSEAL
 # strips the inbound Authorization header on its /isvaop junction, so a Basic-auth
@@ -18,8 +22,8 @@
 # Identity is NOT defaulted: the username is a required argument and the password
 # a required env var — no auth-relevant value falls back to a hardcoded default.
 #
-# Writes demo/out/uc2-jwt.env (gitignored) with JWT_TOKEN=<id_token>. The id_token
-# TTL is ~1h — run this immediately before rendering the UC2 beat.
+# Writes demo/out/uc2-jwt.env (gitignored) with JWT_TOKEN=<access_token>. The
+# token TTL is ~1h — run this immediately before rendering the UC2 beat.
 #
 # Usage:
 #   UC2_DEMO_PASSWORD='...' bash demo/capture-uc2-jwt.sh oscar
@@ -78,9 +82,9 @@ TOK="$(curl -sk -u "${CID}:${CSEC}" -X POST "https://localhost:${LPORT}/oauth2/t
   --data-urlencode "code=${CODE}" \
   --data-urlencode "redirect_uri=${RU}" \
   --data-urlencode "code_verifier=${CV}")"
-ID_TOKEN="$(printf '%s' "$TOK" | jq -r '.id_token // empty')"
-[ -n "$ID_TOKEN" ] || { echo "token exchange did not return an id_token. response:" >&2; printf '%s\n' "$TOK" | head -c 400 >&2; exit 1; }
+ACCESS_TOKEN="$(printf '%s' "$TOK" | jq -r '.access_token // empty')"
+[ -n "$ACCESS_TOKEN" ] || { echo "token exchange did not return an access_token. response:" >&2; printf '%s\n' "$TOK" | head -c 400 >&2; exit 1; }
 
-printf 'JWT_TOKEN=%s\n' "$ID_TOKEN" > demo/out/uc2-jwt.env
-SUB="$(printf '%s' "$ID_TOKEN" | cut -d. -f2 | tr '_-' '/+' | { read -r p; printf '%s' "${p}$(printf '%*s' $(( (4 - ${#p} % 4) % 4 )) '' | tr ' ' '=')"; } | base64 -d 2>/dev/null | jq -r '.sub' 2>/dev/null || echo '?')"
-echo "DONE -> demo/out/uc2-jwt.env  (id_token for sub='${SUB}', ~1h TTL)"
+printf 'JWT_TOKEN=%s\n' "$ACCESS_TOKEN" > demo/out/uc2-jwt.env
+SUB="$(printf '%s' "$ACCESS_TOKEN" | cut -d. -f2 | tr '_-' '/+' | { read -r p; printf '%s' "${p}$(printf '%*s' $(( (4 - ${#p} % 4) % 4 )) '' | tr ' ' '=')"; } | base64 -d 2>/dev/null | jq -r '.sub' 2>/dev/null || echo '?')"
+echo "DONE -> demo/out/uc2-jwt.env  (access_token for sub='${SUB}', ~1h TTL)"
