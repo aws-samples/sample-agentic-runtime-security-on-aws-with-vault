@@ -919,7 +919,10 @@ _run_acme_step() {
             -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
         if [[ -n "$LIVE_ALB_HOST" ]]; then
             LIVE_ALB_IPS=$(_resolve_host_ips "$LIVE_ALB_HOST")
-            if [[ -n "$LIVE_ALB_IPS" ]] && ! echo "$LIVE_ALB_IPS" | grep -qx "$ALB_IP"; then
+            # Herestring, not a pipe: a SIGPIPE-induced 141 under pipefail
+            # would invert through the `!` and make this claim ALB drift on a
+            # stable ALB — deleting .acme-state and forcing a needless re-issue.
+            if [[ -n "$LIVE_ALB_IPS" ]] && ! grep -qx "$ALB_IP" <<<"$LIVE_ALB_IPS"; then
                 LIVE_LIST=$(echo "$LIVE_ALB_IPS" | tr '\n' ',' | sed 's/,$//')
                 print_info "Step 7: ALB IP drift detected (.acme-state=${ALB_IP} no longer in live ALB set [${LIVE_LIST}]). Clearing stale .acme-state and forcing re-issuance."
                 rm -f "$ACME_STATE_FILE"
@@ -940,7 +943,7 @@ _run_acme_step() {
             --certificate-arn "$STABLE_ACM_ARN" \
             --region "$REGION" \
             --query 'Certificate.Issuer' --output text 2>/dev/null || echo "")
-        if echo "$CURRENT_ISSUER" | grep -q "Let's Encrypt"; then
+        if [[ "$CURRENT_ISSUER" == *"Let's Encrypt"* ]]; then
             print_info "Step 7: ACME cert already Let's Encrypt-trusted; skipping issuance + import (D-12 idempotency floor) but running catch-up tier-2 module.ivia apply"
             _acme_apply_ivia || return 1
             _reconcile_mmfa_authenticator_client
@@ -1061,9 +1064,9 @@ EOF
     local _cert_deadline=$(( $(date +%s) + 900 ))   # 15 min hard ceiling
     local _cert_ready=false _cert_recovery_rounds=0
     while [[ $(date +%s) -lt ${_cert_deadline} ]]; do
-        if kubectl --context workshop get certificate workshop-le-tls -n cert-manager \
-                -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null \
-                | grep -q "^True$"; then
+        _cert_ready_status=$(kubectl --context workshop get certificate workshop-le-tls -n cert-manager \
+                -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)
+        if [[ "$_cert_ready_status" == "True" ]]; then
             _cert_ready=true
             break
         fi
@@ -1227,7 +1230,14 @@ step_09_configure_ivia() {
             # retry with backoff instead and only warn once the endpoint has
             # genuinely had time to answer.
             IVIA_HEALTH=""
-            if kubectl --context workshop get pods -n verify-access --no-headers 2>/dev/null | grep -q Running; then
+            # NOT `kubectl ... | grep -q Running`: under `set -o pipefail`
+            # (line 87) `grep -q` exits on its first match and SIGPIPEs kubectl
+            # mid-write, so the pipeline reports 141 and this guard evaluates
+            # FALSE on a perfectly healthy namespace. That is what produced the
+            # "Could not verify IVIA OIDC health endpoint" WARN on green deploys
+            # — the retry loop below never ran at all. Capture first, then match.
+            _ivia_pods=$(kubectl --context workshop get pods -n verify-access --no-headers 2>/dev/null || true)
+            if grep -q Running <<<"$_ivia_pods"; then
                 kubectl --context workshop port-forward \
                     svc/iviaop -n verify-access 8436:8436 \
                     >/dev/null 2>&1 &
@@ -1370,9 +1380,13 @@ step_12_verify_ldap_user() {
         print_pass "Step 12: OpenLDAP user check (dry-run)"
     else
         LDAP_PW=$(kubectl --context workshop get secret openldap-creds -n verify-access -o jsonpath='{.data.admin_password}' 2>/dev/null | base64 --decode 2>/dev/null || echo "")
-        if [ -n "${LDAP_PW}" ] && kubectl --context workshop exec -n verify-access deploy/openldap -- \
+        LDAP_OSCAR=""
+        if [ -n "${LDAP_PW}" ]; then
+            LDAP_OSCAR=$(kubectl --context workshop exec -n verify-access deploy/openldap -- \
                 ldapsearch -x -H ldapi:/// -D "cn=admin,dc=ibm,dc=com" -w "${LDAP_PW}" \
-                -b "dc=ibm,dc=com" "(cn=oscar)" dn 2>/dev/null | grep -q '^dn:'; then
+                -b "dc=ibm,dc=com" "(cn=oscar)" dn 2>/dev/null || true)
+        fi
+        if grep -q '^dn:' <<<"$LDAP_OSCAR"; then
             print_pass "Step 12: OpenLDAP user 'oscar' present (seeded by IVIA autoconf)"
         else
             print_warn "Step 12: OpenLDAP user 'oscar' NOT found — re-run the tier-2 apply or inspect ivia-autoconf job logs"

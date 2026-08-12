@@ -205,6 +205,7 @@ cleanup() {
   info "Cleaning up port-forwards..."
   [[ -n "${VAULT_PF_PID:-}" ]] && kill "$VAULT_PF_PID" 2>/dev/null || true
   [[ -n "${IVIA_PF_PID:-}" ]] && kill "$IVIA_PF_PID" 2>/dev/null || true
+  [[ -n "${VAULT_ISSUER_PF_PID:-}" ]] && kill "$VAULT_ISSUER_PF_PID" 2>/dev/null || true
   wait 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -433,10 +434,17 @@ TFVARS
   rm -f "$apply_log"
 
   # Verify
+  #
+  # Each gate below captures its output into a variable and matches with a
+  # herestring rather than piping into `grep -q`. Under `set -uo pipefail`,
+  # `grep -q` exits on its first match and SIGPIPEs the upstream `jq`, so the
+  # pipeline reports 141 and the gate reads FALSE even when the mount/policy is
+  # present — a license-gate FAIL on a correctly licensed Vault.
   info "Verifying Vault configuration..."
   local verify_pass=true
 
-  if curl -sf -H "X-Vault-Token: ${VAULT_TOKEN}" http://127.0.0.1:8200/v1/sys/auth | jq -r 'keys[]' | grep -q 'kubernetes/'; then
+  _vc_auth=$(curl -sf -H "X-Vault-Token: ${VAULT_TOKEN}" http://127.0.0.1:8200/v1/sys/auth 2>/dev/null | jq -r 'keys[]' 2>/dev/null || true)
+  if grep -q 'kubernetes/' <<<"${_vc_auth}"; then
     ok "Kubernetes auth backend: enabled"
   else
     fail "Kubernetes auth backend: not found"
@@ -458,14 +466,16 @@ TFVARS
   #                                  platform-standard) is present.
   #   - oauth profile responds    → proves the feature is active + profile applied.
   # (Auth engines kubernetes/pki are module-independent — always available.)
-  if curl -sf -H "X-Vault-Token: ${VAULT_TOKEN}" http://127.0.0.1:8200/v1/sys/mounts | jq -r 'keys[]' | grep -q 'database/'; then
+  _vc_mounts_db=$(curl -sf -H "X-Vault-Token: ${VAULT_TOKEN}" http://127.0.0.1:8200/v1/sys/mounts 2>/dev/null | jq -r 'keys[]' 2>/dev/null || true)
+  if grep -q 'database/' <<<"${_vc_mounts_db}"; then
     ok "License gate: database/ secrets engine mounted (pki-only absent)"
   else
     fail "License gate: database/ secrets engine NOT mounted — license appears pki-only. ${LICENSE_REMEDIATION}"
     verify_pass=false
   fi
 
-  if curl -sf -H "X-Vault-Token: ${VAULT_TOKEN}" http://127.0.0.1:8200/v1/sys/mounts | jq -r 'keys[]' | grep -q 'aws/'; then
+  _vc_mounts_aws=$(curl -sf -H "X-Vault-Token: ${VAULT_TOKEN}" http://127.0.0.1:8200/v1/sys/mounts 2>/dev/null | jq -r 'keys[]' 2>/dev/null || true)
+  if grep -q 'aws/' <<<"${_vc_mounts_aws}"; then
     ok "License gate: aws/ secrets engine mounted (pki-only absent)"
   else
     fail "License gate: aws/ secrets engine NOT mounted — license appears pki-only. ${LICENSE_REMEDIATION}"
@@ -493,7 +503,8 @@ TFVARS
     verify_pass=false
   fi
 
-  if curl -sf -H "X-Vault-Token: ${VAULT_TOKEN}" http://127.0.0.1:8200/v1/sys/policy | jq -r '.policies[]' | grep -q 'uc1-readonly'; then
+  _vc_policies=$(curl -sf -H "X-Vault-Token: ${VAULT_TOKEN}" http://127.0.0.1:8200/v1/sys/policy 2>/dev/null | jq -r '.policies[]' 2>/dev/null || true)
+  if grep -q 'uc1-readonly' <<<"${_vc_policies}"; then
     ok "Policy uc1-readonly: exists"
   else
     fail "Policy uc1-readonly: not found"
@@ -559,20 +570,34 @@ phase_ivia_verify() {
   # (.invalid is an RFC 6761 reserved TLD — never a real issuer.)
   info "Verifying Vault's configured OAuth issuer..."
   local vault_issuer=""
-  local pf_pid=""
   # Local port 18200, not 8200: Phase 2's forward has already been torn down and
   # an attendee may well have their own `port-forward ... 8200` open by now.
   # Binding a distinct port keeps this read from failing on a port clash and
   # emitting a warning that has nothing to do with the issuer.
+  #
+  # Same idempotency treatment Phase 2 gives 8200: an earlier run interrupted
+  # between the fork and the kill below leaves an orphan holding 18200, the new
+  # forward then fails to bind, and this phase WARNs about an issuer it never
+  # actually read. Clear the port first, and register the PID in a script-scoped
+  # variable so the EXIT trap reaps it even if we are interrupted mid-read.
+  STALE_ISSUER_PF=$(lsof -tiTCP:18200 -sTCP:LISTEN 2>/dev/null || true)
+  if [[ -n "$STALE_ISSUER_PF" ]]; then
+    info "Port 18200 already bound (PID(s): $(echo "$STALE_ISSUER_PF" | tr '\n' ' ')) — killing stale port-forward"
+    # shellcheck disable=SC2086
+    kill $STALE_ISSUER_PF 2>/dev/null || true
+    sleep 1
+  fi
+
   kubectl port-forward svc/vault 18200:8200 -n vault &>/dev/null &
-  pf_pid=$!
+  VAULT_ISSUER_PF_PID=$!
   sleep 3
-  if kill -0 "$pf_pid" 2>/dev/null; then
+  if kill -0 "$VAULT_ISSUER_PF_PID" 2>/dev/null; then
     vault_issuer=$(curl -sf -H "X-Vault-Token: ${VAULT_TOKEN}" \
       http://127.0.0.1:18200/v1/sys/config/oauth-resource-server/ivia \
       2>/dev/null | jq -r '.data.issuer_id // empty' 2>/dev/null || echo "")
-    kill "$pf_pid" 2>/dev/null || true
   fi
+  kill "$VAULT_ISSUER_PF_PID" 2>/dev/null || true
+  VAULT_ISSUER_PF_PID=""
 
   if [[ -z "$vault_issuer" ]]; then
     warn "Could not read Vault's oauth-resource-server issuer_id"
