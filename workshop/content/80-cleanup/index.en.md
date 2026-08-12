@@ -55,6 +55,23 @@ bash infrastructure/scripts/teardown.sh --dry-run
 
 The script runs a built-in audit, but you can run these spot-checks manually to confirm nothing chargeable remains.
 
+:::alert{header="Run this first — a region-less check reports success even when the cluster is still up" type="warning"}
+The EKS and RDS checks below are **regional**. If your AWS CLI default region is not the region you deployed into, `describe-cluster` answers for the wrong region and returns `ResourceNotFoundException` — which is the exact output this page calls proof of a successful teardown. You would be told everything is gone while a live cluster and database are still running.
+
+Pin the deploy region first. `terraform.tfvars` is read rather than `terraform output` because teardown archives the Terraform state, so the outputs are gone by the time you run these checks — the tfvars file is not touched:
+
+```bash
+export AWS_REGION=$(awk -F'"' '/^[[:space:]]*region[[:space:]]*=/{print $2}' infrastructure/terraform.tfvars)
+echo "checking region: ${AWS_REGION}"
+```
+
+Expected — the region you deployed into, **not** your shell's default:
+
+```
+checking region: us-east-1
+```
+:::
+
 **EKS cluster gone:**
 ```bash
 aws eks describe-cluster --name ars-workshop
@@ -68,6 +85,8 @@ aws rds describe-db-instances \
   --output text
 ```
 Expected: empty output
+
+The two checks above are regional and depend on the `AWS_REGION` you exported. The S3 and IAM checks below query global endpoints, so they are correct regardless.
 
 **S3 buckets gone:**
 ```bash
