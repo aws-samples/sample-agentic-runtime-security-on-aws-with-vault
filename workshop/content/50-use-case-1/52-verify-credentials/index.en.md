@@ -56,24 +56,22 @@ The response surfaces the Vault authentication state:
 
 The SQL-shaped question in Step 2 made the agent call Vault for a Just-In-Time database credential. Read the audit log for that issuance event:
 
+Vault runs as a **three-node Raft cluster** and each node writes its own audit entries to its own stdout. The agent reached Vault through `svc/vault`, which load-balances across all three — so the entry can be on any of them, and reading only `vault-0` returns nothing about two times in three (with exit code 0, so it looks like the credential was never issued). Read all three:
+
 ```bash
-kubectl logs -n vault vault-0 --since=15m \
-  | jq -c 'select(.type=="response" and .request.path=="database/creds/uc1-readonly")
-           | {time, path: .request.path,
-              display_name: .auth.display_name,
-              lease_id: .response.secret.lease_id}' \
-  | tail -1
+for p in vault-0 vault-1 vault-2; do
+  kubectl logs -n vault $p --since=15m \
+    | jq -c 'select(.type=="response" and .request.path=="database/creds/uc1-readonly")
+             | {time, path: .request.path,
+                display_name: .auth.display_name,
+                lease_id: .response.secret.lease_id}'
+done | tail -1
 ```
 
 Expected:
 
 ```json
-{
-  "time": "2026-06-18T21:20:56Z",
-  "path": "database/creds/uc1-readonly",
-  "display_name": "kubernetes-uc1-uc1-retriever-sa",
-  "lease_id": "database/creds/uc1-readonly/FTDIUF5OVChJxHpUfKOHoaZz"
-}
+{"time":"2026-08-12T20:36:27.313650573Z","path":"database/creds/uc1-readonly","display_name":"kubernetes-uc1-uc1-retriever-sa","lease_id":"database/creds/uc1-readonly/T8oQy2nNmNHDO5oxNbLCQzhP"}
 ```
 
 `display_name` is `kubernetes-uc1-uc1-retriever-sa` — the Vault Kubernetes mount, the role, and the ServiceAccount that authenticated. `lease_id` is unique per issuance — every `query_database` call produces a fresh one, which is the audit-trail proof that credentials are JIT (not reused). This entry is the first link in the audit-correlation chain that Use Case 3 completes end-to-end. The 15-minute TTL comes from the `default_ttl = 900` on `vault_database_secret_backend_role.uc1_readonly` (visible via `vault read database/roles/uc1-readonly` from the previous page).
@@ -108,7 +106,7 @@ The `403 Forbidden` is the passing result — the UC1 token can mint its own `da
 bash infrastructure/scripts/verify-uc1.sh
 ```
 
-The script runs nine checks and prints a pass/fail summary:
+The script runs ten checks and prints a pass/fail summary:
 
 | Check | What it validates |
 |---|---|
@@ -119,6 +117,7 @@ The script runs nine checks and prints a pass/fail summary:
 | JIT STS creds | `aws/sts/bedrock-reader` issues an access key + session token |
 | Agent /health | the agent reports `healthy` |
 | ENFC-01 | the `uc1-readonly` policy does not grant the UC3 refund path |
+| Agent Registry | registration `uc1-agent` resolves by display-name — the registry identity from Step 5 of the previous page |
 | Audit device | a Vault audit device is enabled |
 | /query end-to-end | a real query returns a KB-grounded answer (not "couldn't find it") |
 
@@ -128,15 +127,18 @@ Expected summary:
 ✓ PASS UC1 agent pod Running (1 pod(s) in uc1)
 ✓ PASS UC1 ServiceAccount uc1-retriever-sa exists
 ✓ PASS Vault role uc1 bound to uc1-retriever-sa
-✓ PASS JIT DB creds issuance: username=v-kubernet-uc1-read-...
-✓ PASS JIT STS creds issuance: access_key=ASIA...
+✓ PASS JIT DB creds issuance: username=v-root-uc1-read-KCkqzWHdR26Cy3T4eTyP-1786567026
+✓ PASS JIT STS creds issuance: access_key=ASIA4TGI...
 ✓ PASS Agent /health endpoint: healthy
 ✓ PASS ENFC-01: uc1-readonly policy does not grant UC3 (uc3-refund-writer) path access
+✓ PASS UC1 Agent Registry: registration 'uc1-agent' resolvable by display-name (registry identity; ceiling INERT — k8s uc1-readonly is the floor)
 ✓ PASS Vault audit device: enabled (1 device(s))
 ✓ PASS Agent /query end-to-end: KB retrieve + Nova Pro answer returned
 
- ✓ 9 check(s) passed
+ ✓ 10 check(s) passed
 ```
+
+The credential in that fourth line is prefixed `v-root-` rather than `v-kubernet-` because the verify script issues it with the root token to test the path directly. The agent's own credentials — the ones in the Step 3 audit entry — carry the `kubernetes-uc1-uc1-retriever-sa` display name.
 
 If a check fails, the script prints a copy-paste `Fix hint`. The `/query end-to-end` check fails (not falsely passes) if the Knowledge Base is empty — its fix hint points to `./sync-bedrock-kb.sh`.
 
