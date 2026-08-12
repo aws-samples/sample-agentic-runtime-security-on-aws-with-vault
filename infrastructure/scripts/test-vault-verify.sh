@@ -163,7 +163,7 @@ if [ -n "${ivia_issuer}" ]; then
     print_pass "IVIA OIDC discovery: issuer reachable (${ivia_issuer})"
 else
     print_fail "IVIA OIDC discovery" \
-        "OIDC discovery URL returned no issuer. Check IVIA pod logs: kubectl logs -n ${IVIA_NAMESPACE} -l app=iviaop. Ensure iviaop Service exists: kubectl get svc -n ${IVIA_NAMESPACE}"
+        "OIDC discovery URL returned no issuer. Check IVIA pod logs: kubectl logs -n ${IVIA_NAMESPACE} -l app=iviaop --tail=-1 (--tail=-1 is required: with -l, kubectl logs shows only the last 10 lines by default). Ensure iviaop Service exists: kubectl get svc -n ${IVIA_NAMESPACE}"
 fi
 
 #-------------------------------------------------------------------------------

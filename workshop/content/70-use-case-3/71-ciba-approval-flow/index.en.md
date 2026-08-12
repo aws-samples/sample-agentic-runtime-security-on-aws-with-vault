@@ -158,7 +158,7 @@ kubectl get pods -n banking-app -l app=uc3-agent
 
 ```bash
 # Watch the mobile-push flow in the agent logs (push fired, then check-status polls)
-kubectl logs -n banking-app -l app=uc3-agent --since=10m | grep -E 'mmfa_push_fired|ciba_status_polled'
+kubectl logs -n banking-app -l app=uc3-agent --since=10m --tail=-1 | grep -E 'mmfa_push_fired|ciba_status_polled'
 ```
 
 ```bash

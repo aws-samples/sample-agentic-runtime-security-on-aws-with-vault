@@ -53,10 +53,10 @@ kubectl wait --for=condition=complete job \
 If — and only if — `kubectl get pods -n verify-access` shows the autoconf Job with `STATUS=Error`, inspect the log to find the failure:
 
 ```bash
-kubectl logs -n verify-access -l app.kubernetes.io/name=ivia-autoconf
+kubectl logs -n verify-access -l app.kubernetes.io/name=ivia-autoconf --tail=-1
 ```
 
-Look for the `API FAILURE SUMMARY` at the bottom. To retry, remove the failed Job from Terraform state and re-apply:
+`--tail=-1` is required: with a label selector (`-l`) `kubectl logs` defaults to showing only the last **10** lines, which is not enough to read the summary block. Look for the `API FAILURE SUMMARY` at the bottom of the output. To retry, remove the failed Job from Terraform state and re-apply:
 
 ```bash
 terraform -chdir=infrastructure state rm 'module.ivia.kubernetes_job_v1.ivia_autoconf'
