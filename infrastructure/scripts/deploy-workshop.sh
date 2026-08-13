@@ -257,10 +257,20 @@ fi
 # EXIT cleanup — kill port-forward on any exit, then emit our summary
 #-------------------------------------------------------------------------------
 _cleanup() {
+    # MUST be the first statement: capture the status the shell was exiting with
+    # before any command in this trap overwrites $?.
+    local rc=$?
     if [[ -n "$VAULT_PF_PID" ]] && kill -0 "$VAULT_PF_PID" 2>/dev/null; then
         kill "$VAULT_PF_PID" 2>/dev/null || true
     fi
-    print_summary
+    # print_summary returns 1 when any step recorded a failure. Without the
+    # explicit `exit`, a trap that does not exit leaves the shell exiting with
+    # the status of the script's LAST COMMAND -- the "Deploy Complete" echo,
+    # always 0. That made the deploy print "✗ 1 check(s) failed" and still exit
+    # 0, so every caller gating on the exit code was told the deploy succeeded.
+    # Proven on a fresh tier-2 rebuild: Step 9 FAILed and TIER2_FRESH_EXIT=0.
+    print_summary || rc=1
+    exit "$rc"
 }
 trap '_cleanup' EXIT
 
