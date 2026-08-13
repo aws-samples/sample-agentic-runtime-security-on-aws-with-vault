@@ -187,6 +187,28 @@ phases:
           "s3://${STATE_BUCKET}/tier2-private/terraform.tfstate" \
           --sse aws:kms --sse-kms-key-id "${BUILD_SECRETS_KEY_ID}"
 
+        # vault-config is a FOURTH terraform root (Step 8 / vault-configure.sh),
+        # and its state must be staged too or tier 2 stops being re-runnable.
+        # Without it, a later `deploy-workshop.sh --tier 2` starts Step 8 from an
+        # EMPTY state against a fully-configured Vault: vault-configure's
+        # self-heal reads every live mount as orphaned and UNMOUNTS the working
+        # kubernetes/ auth backend, then terraform re-Creates identity entities
+        # that already exist — and the vault provider panics on the nil response
+        # (resource_identity_entity.go:146, "interface {} is nil, not string").
+        # Reproduced live 2026-08-13.
+        #
+        # Goes to tier2-private/ under the build CMK, not the attendee prefix: it
+        # records the RDS connection (with password) for the database engine plus
+        # every Vault policy and role.
+        if [ -s vault-config/terraform.tfstate ]; then
+          aws s3 cp vault-config/terraform.tfstate \
+            "s3://${STATE_BUCKET}/tier2-private/vault-config.tfstate" \
+            --sse aws:kms --sse-kms-key-id "${BUILD_SECRETS_KEY_ID}"
+        else
+          echo "FATAL - vault-config/terraform.tfstate missing after tier-2; Step 8 would not be re-runnable"
+          exit 1
+        fi
+
         # Attendees get an outputs-only copy. terraform_remote_state reads ONLY
         # the outputs map, so tier 3 consumes this with no HCL change, while the
         # secrets — which live exclusively in resources[] — never leave here.
