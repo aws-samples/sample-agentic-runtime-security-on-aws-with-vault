@@ -1184,10 +1184,10 @@ step_07_acme_cert_issuance() {
 #===============================================================================
 # STEP 8: Configure Vault (vault-configure.sh) — reads tier-1 + tier-2 state
 #
-# Creates the kubernetes/ + jwt/ auth backends, database/ + sts/ secrets
-# engines, policies, and the uc1/uc2/uc3 roles the tier-3 pods authenticate
-# with. MUST run before the tier-3 apply (Step 10) or the pods 403 on startup.
-# Binds the JWT bound_issuer to tier-2's ivia_issuer (now nip.io after Step 7).
+# Creates the kubernetes/ auth backend, database/ + sts/ secrets engines,
+# policies, and the uc1/uc2/uc3 roles the tier-3 pods authenticate with. MUST
+# run before the tier-3 apply (Step 10) or the pods 403 on startup. Binds the
+# oauth-resource-server issuer_id to tier-2's ivia_issuer (nip.io after Step 7).
 #===============================================================================
 step_08_configure_vault() {
     echo ""
@@ -1198,34 +1198,41 @@ step_08_configure_vault() {
         print_pass "Step 8: Configure Vault (dry-run)"
     else
         if _run_subscript "Step 8: vault-configure" "${SCRIPT_DIR}/vault-configure.sh"; then
-            # Best-effort confirm kubernetes/ + jwt/ are enabled (warn-only).
-            kubectl --context workshop port-forward svc/vault -n vault 8200:8200 \
-                >/dev/null 2>&1 &
-            VAULT_PF_PID=$!
-            if _wait_for_port 8200 30; then
-                ROOT_TOKEN=""
-                if [[ -f "${HOME}/vault-init.json" ]]; then
-                    ROOT_TOKEN=$(jq -r '.root_token // empty' "${HOME}/vault-init.json" 2>/dev/null || echo "")
-                fi
-                if [[ -n "$ROOT_TOKEN" ]]; then
-                    AUTH_LIST=$(VAULT_ADDR="http://localhost:8200" VAULT_TOKEN="$ROOT_TOKEN" \
-                        vault auth list -format=json 2>/dev/null || echo '{}')
+            # Best-effort confirm the kubernetes/ auth backend is enabled (warn-only).
+            #
+            # Reads via `kubectl exec` into a live Vault server pod, NOT via a
+            # port-forward: a tunnel is one long-lived connection shared by every
+            # read, and when it dies the `vault` CLI error was swallowed by
+            # `|| echo '{}'` — reporting EVERY backend missing at once and blaming
+            # a healthy Vault. Each exec is its own connection, so there is no
+            # tunnel to lose. Same fix as vault-configure.sh's gates.
+            #
+            # Only kubernetes/ is asserted. The IVIA jwt/ backend was retired in
+            # the native Agent Registry cutover — vault-configure.sh dropped its
+            # own jwt check for that reason, and requiring it here warned on every
+            # healthy deploy.
+            ROOT_TOKEN=""
+            if [[ -f "${HOME}/vault-init.json" ]]; then
+                ROOT_TOKEN=$(jq -r '.root_token // empty' "${HOME}/vault-init.json" 2>/dev/null || echo "")
+            fi
+            if [[ -n "$ROOT_TOKEN" ]]; then
+                VAULT_SRV_POD=$(kubectl --context workshop get pods -n vault \
+                    -l app.kubernetes.io/name=vault,component=server --no-headers 2>/dev/null \
+                    | awk '$2=="1/1" && $3=="Running" {print $1; exit}')
+                if [[ -n "$VAULT_SRV_POD" ]]; then
+                    AUTH_LIST=$(kubectl --context workshop exec -n vault "$VAULT_SRV_POD" -- \
+                        sh -c "VAULT_TOKEN='${ROOT_TOKEN}' vault auth list -format=json" 2>/dev/null || echo '{}')
                     K8S_ENABLED=$(echo "$AUTH_LIST" | jq -r 'keys[] | select(. == "kubernetes/")' 2>/dev/null || echo "")
-                    JWT_ENABLED=$(echo "$AUTH_LIST" | jq -r 'keys[] | select(. == "jwt/")' 2>/dev/null || echo "")
-                    if [[ -n "$K8S_ENABLED" ]] && [[ -n "$JWT_ENABLED" ]]; then
-                        print_pass "Step 8: Configure Vault (kubernetes/ and jwt/ auth methods enabled)"
+                    if [[ -n "$K8S_ENABLED" ]]; then
+                        print_pass "Step 8: Configure Vault (kubernetes/ auth method enabled)"
                     else
-                        print_warn "Step 8: Vault auth methods not both visible (kubernetes=${K8S_ENABLED:-MISSING} jwt=${JWT_ENABLED:-MISSING}) — vault-configure reported success; inspect manually if tier-3 pods 403"
+                        print_warn "Step 8: Vault kubernetes/ auth method not visible — vault-configure reported success; inspect manually if tier-3 pods 403: kubectl --context workshop exec -n vault ${VAULT_SRV_POD} -- vault auth list"
                     fi
                 else
-                    print_warn "Step 8: Could not verify Vault auth — root token not found in ~/vault-init.json"
+                    print_warn "Step 8: Could not verify Vault auth — no Running vault server pod found"
                 fi
             else
-                print_warn "Step 8: Could not verify Vault auth via port-forward"
-            fi
-            if [[ -n "$VAULT_PF_PID" ]] && kill -0 "$VAULT_PF_PID" 2>/dev/null; then
-                kill "$VAULT_PF_PID" 2>/dev/null || true
-                VAULT_PF_PID=""
+                print_warn "Step 8: Could not verify Vault auth — root token not found in ~/vault-init.json"
             fi
         else
             _die "Step 8: vault-configure" "tier-3 pods authenticate to Vault with the roles this step creates. Re-run: ${SCRIPT_DIR}/vault-configure.sh"
