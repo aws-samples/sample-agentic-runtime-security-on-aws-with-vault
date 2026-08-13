@@ -54,20 +54,29 @@ while [[ $# -gt 0 ]]; do
         --help|-h)    usage ;;
         --dry-run)    DRY_RUN=true; shift ;;
         --region)
-            export WORKSHOP_REGION="${2:?--region requires a value}"
+            CLI_REGION="${2:?--region requires a value}"
             shift 2
             ;;
         *)  print_fail "Unknown option: $1. Use --help for usage."; exit 1 ;;
     esac
 done
 
-REGION="${WORKSHOP_REGION:-}"
-if [[ -z "$REGION" ]]; then
-    REGION=$(aws configure get region 2>/dev/null || echo "")
+#-------------------------------------------------------------------------------
+# Region resolution (no hardcoded region strings)
+#
+# Mirrors build-uc3-agent.sh / build-banking-app.sh. This script used to fall
+# back to `aws configure get region`, which is the attendee's CLI default and
+# has nothing to do with where they deployed: deploy to us-east-1 with a CLI
+# default of us-west-2 and the build pushed to the wrong region's ECR, then
+# died on "ECR repository not found — run 'terraform apply' first" against a
+# stack that had applied cleanly. resolve_region reads terraform.tfvars, which
+# is the deploy region of record.
+#-------------------------------------------------------------------------------
+if ! resolve_region "${CLI_REGION:-${WORKSHOP_REGION:-}}"; then
+    print_fail "Region resolution failed — set WORKSHOP_REGION, --region flag, or terraform.tfvars"
+    exit 1
 fi
-if [[ -z "$REGION" ]]; then
-    print_fail "Cannot determine AWS region. Set WORKSHOP_REGION or use --region."; exit 1
-fi
+REGION="${RESOLVED_REGION}"
 print_info "Region: ${REGION}"
 
 print_info "Resolving AWS account ID..."
