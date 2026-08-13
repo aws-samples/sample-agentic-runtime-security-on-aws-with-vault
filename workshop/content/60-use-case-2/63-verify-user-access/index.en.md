@@ -168,7 +168,7 @@ The script checks all Use Case 2 success criteria:
 | DB read works | SELECT from `banking.accounts` with `app.current_user_sub = 'oscar'` returns ≥ 2 rows |
 | ENFC-02 enforced | INSERT with JIT creds returns `ERROR: permission denied for table` |
 | ENFC-03 enforced | Egress curl from MCP pod to external URL times out (NetworkPolicy blocks) |
-| Agent /health | Banking Agent returns `{"status":"healthy"}` |
+| Agent /health | Banking Agent's `/health` reports it is up (`{"status":"ok","service":"banking-agent",…}`) |
 | IVIA JWKS reachable | JWKS endpoint returns at least one signing key |
 | Active lease exists | At least one active lease for `uc2-personal-readonly` |
 | OAuth discovery | IVIA OIDC Provider `/.well-known/openid-configuration` reachable via the WRP ALB |
