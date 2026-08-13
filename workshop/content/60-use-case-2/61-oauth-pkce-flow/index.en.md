@@ -127,6 +127,10 @@ The `sub` claim in the `id_token` (e.g. `oscar`) flows to:
 
 ## Step 1 — Get the Banking UI URL
 
+:::alert{header="Use an incognito / private browser window" type="info"}
+Open the Banking UI in a fresh incognito / private window. Stale WebSEAL/IVIA session cookies from a previous login can prevent a clean sign-in, and this workshop has you log in as more than one user. Open a new incognito window for each user (Oscar, then Jaime) so each login starts from a clean session.
+:::
+
 At the end of `bash infrastructure/scripts/deploy-workshop.sh`, the script prints `NIP_FQDN_BANKING` — the banking-UI nip.io URL backed by a Let's Encrypt certificate served on the shared workshop ALB. Print the full HTTPS URL (read back from `infrastructure/.acme-state`) and open it in your browser:
 
 ```bash
@@ -154,13 +158,13 @@ This workshop uses OpenLDAP as the user registry, with two pre-provisioned users
 
 ## Step 3 — Inspect the Banking UI logs
 
-The Banking UI logs the OAuth code exchange outcome. View the logs:
+View the Banking UI pod logs to confirm it is running and serving:
 
 ```bash
 kubectl logs -n banking-app -l app=banking-ui --tail=30
 ```
 
-You will not see credentials in these logs — only the outcome of the token exchange. Credentials never reach the Banking UI; they are entered on the WebSEAL login page and validated by WebSEAL via LDAP bind.
+Credentials never reach the Banking UI — they are entered on the WebSEAL login page and validated by WebSEAL via LDAP bind. The OAuth code-for-token exchange happens between the browser and IVIA/WebSEAL, so its detail is not in these UI logs; the authoritative record of the downstream credential issuance is the Vault audit log (queried via Athena in [Credential Revocation](../65-credential-revocation/)).
 
 ## Step 4 — Confirm personalized dashboard data
 

@@ -141,9 +141,9 @@ allowed_roles         uc1-readonly, uc2-personal-readonly, uc3-refund-writer
 ## Step 5 — Confirm IVIA OIDC discovery (cluster-internal)
 
 ```bash
-kubectl run oidc-check --image=curlimages/curl --rm -i --restart=Never \
+kubectl run oidc-check --image=curlimages/curl --rm -i --restart=Never --quiet \
   -n verify-access -- \
-  curl -sk https://iviaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration \
+  curl -sk https://iviaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration </dev/null \
   | jq .
 ```
 
