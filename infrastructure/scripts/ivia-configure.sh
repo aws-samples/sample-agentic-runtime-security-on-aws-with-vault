@@ -97,12 +97,28 @@ fi
 
 # --- 3. OIDC discovery via WRP exec curl (CONTEXT exit gate) ---
 print_info "Fetching OIDC discovery via kubectl exec deploy/${WRP_DEPLOY}..."
-resp=$(kubectl exec -n "${IVIA_NS}" "deploy/${WRP_DEPLOY}" -- \
-  curl -sk --max-time 15 \
-  https://localhost:9443/isvaop/oauth2/.well-known/openid-configuration)
+# The pod passing its Kubernetes readiness probe does NOT mean the WRP's 9443
+# listener is already serving the /isvaop junction. On a freshly cycled pod the
+# TLS handshake is refused for a while and curl exits 35 (SSL connect error) --
+# under `set -e` that transient aborts the whole script mid-gate. Retry with
+# backoff (24 x 5s = 120s) and only fail once the endpoint has genuinely had
+# time to answer. Mirrors the retry deploy-workshop.sh Step 9 already does
+# around its own IVIA OIDC probe.
+#
+# The `|| resp=""` is required: without it `set -e` kills the script on the
+# first transient instead of letting the loop retry.
+resp=""
+for _oidc_try in $(seq 1 24); do
+  resp=$(kubectl exec -n "${IVIA_NS}" "deploy/${WRP_DEPLOY}" -- \
+    curl -sk --max-time 15 \
+    https://localhost:9443/isvaop/oauth2/.well-known/openid-configuration 2>/dev/null) || resp=""
+  [ -n "${resp}" ] && break
+  print_info "OIDC discovery not answering yet (attempt ${_oidc_try}/24) — retrying in 5s"
+  sleep 5
+done
 
 if [ -z "${resp}" ]; then
-  print_error "Empty response from OIDC discovery endpoint"
+  print_error "Empty response from OIDC discovery endpoint after 120s"
   exit 1
 fi
 
