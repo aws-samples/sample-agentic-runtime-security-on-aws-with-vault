@@ -635,8 +635,28 @@ phase_ivia_verify() {
     record "ivia_verify" "PASS"
   fi
 
-  # iviaop discovery — informational only (see (b) above).
-  local issuer
+  # iviaop discovery — see (b) above. A `.invalid` placeholder here is EXPECTED
+  # until tier 3 runs, so this must not warn during tier 2. But once tier 3 HAS
+  # performed the flip and the issuer is STILL a placeholder, that is a genuine
+  # fault and staying silent hides it.
+  #
+  # The flip is done by kubernetes_config_map_v1_data.iviaop_clients_patch
+  # (infrastructure/workloads/main.tf), which `depends_on = [module.uc2_app]` —
+  # it needs the banking-UI ALB that only tier 3 creates. So "has the flip run?"
+  # is answered by that resource being present in tier-3 state.
+  #
+  # Presence of the RESOURCE, not merely of the state FILE: a `terraform init` or
+  # a partially-failed apply leaves a state file behind with the patch absent, and
+  # gating on the file would then report a real tier-2 placeholder as a tier-3
+  # failure. Absent/unreadable state is treated as "tier 3 has not run", which is
+  # the no-false-alarm direction.
+  local issuer tier3_state tier3_flip_applied=false
+  tier3_state="${VAULT_CONFIG_DIR}/../workloads/terraform.tfstate"
+  if [[ -f "$tier3_state" ]] && \
+     [[ "$(jq -r '[.resources[]? | select(.type=="kubernetes_config_map_v1_data" and .name=="iviaop_clients_patch")] | length' "$tier3_state" 2>/dev/null || echo 0)" -gt 0 ]]; then
+    tier3_flip_applied=true
+  fi
+
   issuer=$(kubectl exec -n verify-access deploy/iviawrprp1 -- \
     curl -sk --max-time 15 \
     https://localhost:9443/isvaop/oauth2/.well-known/openid-configuration \
@@ -645,7 +665,16 @@ phase_ivia_verify() {
   if [[ -z "$issuer" ]]; then
     info "iviaop OIDC discovery not responding yet — IVIA may still be initializing (informational)"
   elif [[ "$issuer" == *".invalid"* ]]; then
-    info "iviaop discovery issuer: ${issuer} (placeholder — expected until tier 3 patches it)"
+    if [[ "$tier3_flip_applied" == true ]]; then
+      warn "iviaop discovery issuer is STILL a placeholder after tier 3: ${issuer}"
+      warn "  Tier 3 applied iviaop_clients_patch, so the issuer should already be"
+      warn "  the real nip.io FQDN. Check that iviaop actually restarted to reload"
+      warn "  the patched ConfigMap (it reads provider.yml/clients.yml only at startup):"
+      warn "    kubectl rollout restart deploy/iviaop -n verify-access"
+      record "ivia_verify" "WARN"
+    else
+      info "iviaop discovery issuer: ${issuer} (placeholder — expected; tier 3 patches it)"
+    fi
   else
     info "iviaop discovery issuer: ${issuer}"
   fi
