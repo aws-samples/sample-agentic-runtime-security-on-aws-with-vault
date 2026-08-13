@@ -549,20 +549,36 @@ phase_ivia_verify() {
     2>/dev/null | jq -r '.issuer // empty' 2>/dev/null || echo "")
 
   if [[ -n "$issuer" ]]; then
-    # A `.invalid` issuer is the pre-ACME placeholder IVIA serves until deploy
-    # Step 7 (ACME) re-applies module.ivia onto the real nip.io FQDN. This Phase 3
-    # runs at Step 8 — AFTER Step 7 — so on a full deploy the issuer must already
-    # be the real FQDN. A placeholder here is NOT a benign green check: it means
-    # ACME did not complete (or was skipped via --skip-acme). Surface it as WARN,
-    # never OK/PASS, so the misleading issuer is visible without masking a real
-    # ACME failure. (.invalid is an RFC 6761 reserved TLD — never a real issuer.)
+    # A `.invalid` issuer is the placeholder IVIA serves until the OIDC issuer is
+    # flipped to the real nip.io FQDN. Two things must both happen for the flip:
+    #   1. deploy Step 7 (ACME) issues the cert + re-applies module.ivia, AND
+    #   2. TIER 3 applies kubernetes_config_map_v1_data.iviaop_clients_patch
+    #      (infrastructure/workloads/main.tf) + restarts iviaop — the patch needs
+    #      the banking-UI ALB hostname that only exists after Tier 3's uc2_app,
+    #      so the issuer flip is DEFERRED to Tier 3 by design (circular-dep break,
+    #      documented in modules/verify_access/main.tf).
+    # Therefore a `.invalid` issuer at the end of Tier 2 is EXPECTED, not a
+    # failure: it is patched during Tier 3. Only treat it as a real problem (WARN)
+    # once Tier 3 has actually run (its state exists) and the issuer is STILL a
+    # placeholder. (.invalid is an RFC 6761 reserved TLD — never a real issuer.)
+    local _tier3_state="${VAULT_CONFIG_DIR}/../workloads/terraform.tfstate"
     if [[ "$issuer" == *".invalid"* ]]; then
-      warn "OIDC issuer is a pre-ACME placeholder: ${issuer}"
-      warn "  Expected ONLY if ACME (deploy Step 7) was skipped or has not run yet."
-      warn "  On a full deploy the issuer must be the real nip.io FQDN by Step 8 —"
-      warn "  a placeholder here means ACME did not complete. Re-run Step 7:"
-      warn "    bash infrastructure/scripts/deploy-workshop.sh --tier 2 --skip-vault-init"
-      record "ivia_verify" "WARN"
+      if [[ -f "$_tier3_state" ]]; then
+        # Tier 3 has applied but the issuer never flipped — this IS a real fault.
+        warn "OIDC issuer is still a placeholder after Tier 3: ${issuer}"
+        warn "  Tier 3 ran (workloads state present) but the issuer was not flipped"
+        warn "  to the real nip.io FQDN. Investigate ACME (deploy Step 7) and the"
+        warn "  iviaop_clients_patch / iviaop rollout, then re-run Step 7:"
+        warn "    bash infrastructure/scripts/deploy-workshop.sh --tier 2 --skip-vault-init"
+        record "ivia_verify" "WARN"
+      else
+        # Tier 3 has NOT run yet — placeholder is the expected pre-patch state.
+        info "OIDC issuer is the pre-Tier-3 placeholder: ${issuer}"
+        info "  This is EXPECTED after Tier 2. The real nip.io issuer is patched in"
+        info "  during Tier 3 (iviaop_clients_patch + iviaop rollout, which need the"
+        info "  banking-UI ALB created in Tier 3). Proceed to Tier 3 — nothing to fix here."
+        record "ivia_verify" "PASS"
+      fi
     else
       ok "OIDC issuer: ${issuer}"
       record "ivia_verify" "PASS"
