@@ -20,7 +20,19 @@ bash infrastructure/scripts/check-prerequisites.sh
 Available flags:
   - `--interactive` — prompt before each install AND before each check section
   - `--dry-run` — print install plan without executing
+  - `--skip-quotas` — skip the service-quota probes
+  - `--skip-iam-sim` — skip the IAM permission simulation
   - `--help` — usage
+
+:::alert{header="IAM permission failures that are not real failures" type="info"}
+The IAM section uses `iam:SimulatePrincipalPolicy`, which evaluates a principal's *attached* policies. It cannot see grants that arrive through a Service Control Policy or a permissions boundary, so in accounts built that way the simulator reports `implicitDeny` for actions your principal can genuinely perform. The script says as much itself and continues past them.
+
+The authoritative test is the `terraform apply` that follows — if the deploy succeeds, the simulated denials were false. Re-run with `--skip-iam-sim` (and `--skip-quotas` where the quota API is blocked outright) to skip probes that cannot return a meaningful answer in your account:
+
+```bash
+bash infrastructure/scripts/check-prerequisites.sh --skip-iam-sim --skip-quotas
+```
+:::
 
 ## Verify CLI tools are installed
 

@@ -9,7 +9,11 @@ In this module you log in as Oscar and then as Jaime and confirm that each user 
 
 ## Step 1 — Log in as Oscar, inspect accounts
 
-Open the Banking UI URL in your browser and log in as `oscar`. Navigate to the **Accounts** page. You should see accounts belonging to Oscar only.
+Open the Banking UI URL in your browser and log in as `oscar`. The Banking UI is a chat interface — there is no separate Accounts page. Ask it for the data, either by typing a question or clicking the **Show my account balances** starter button:
+
+> What are my account balances?
+
+You should see accounts belonging to Oscar only.
 
 To confirm from the cluster, run a query using Vault-vended credentials with Oscar's RLS session variable set.
 
@@ -67,7 +71,11 @@ SET
 
 ## Step 2 — Switch to Jaime, confirm data isolation
 
-Open a **new Incognito / Private browser window**, go to the Banking UI URL, and sign in as `jaime` (password `WorkshopUser1!`). Navigate to the **Accounts** page. You should see Jaime's accounts only — no rows from Oscar's data.
+Open a **new Incognito / Private browser window**, go to the Banking UI URL, and sign in as `jaime` (password `WorkshopUser1!`). Ask the chat the same question you asked as Oscar:
+
+> What are my account balances?
+
+You should see Jaime's accounts only — no rows from Oscar's data.
 
 :::alert{type="info" header="Why a second window here?"}
 **Logout** fully signs you out: the Banking UI clears its session cookies and redirects to IVIA's `/pkmslogout`, which ends the WebSEAL single sign-on session too — so logging out and back in as Jaime in the *same* window gives you a clean credential prompt. We open a **separate Incognito / Private window** here only so your Oscar session stays live in the first window for a side-by-side comparison.

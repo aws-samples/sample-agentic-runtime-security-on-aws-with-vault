@@ -133,6 +133,10 @@ At the end of `bash infrastructure/scripts/deploy-workshop.sh`, the script print
 echo "https://$(grep '^NIP_FQDN_BANKING=' infrastructure/.acme-state | cut -d= -f2)/"
 ```
 
+:::alert{header="Open it in a fresh Incognito / Private window" type="info"}
+Start this sign-in in a new Incognito / Private window. A WebSEAL or IVIA session cookie left over from an earlier visit — a previous run, or a deploy you already had open — is presented before you get a credential prompt, so the login either skips silently or fails in a way that looks like a broken OAuth flow. A fresh window guarantees the PKCE exchange you are about to trace starts from no session at all. You will open a second one later to sign in as Jaime.
+:::
+
 :::alert{header="HTTPS with HTTP redirect — trusted Let's Encrypt cert" type="info"}
 The Banking UI ALB listens on both HTTP (port 80) and HTTPS (port 443). HTTP requests are automatically redirected to HTTPS (ssl-redirect annotation). The certificate is a Let's Encrypt-issued cert bound to the nip.io FQDN and imported into ACM. You should see a lock icon in your browser address bar — the cert is trusted by every major OS/browser out of the box. If you see a "Your connection is not private" warning, this is a regression — re-run `bash infrastructure/scripts/deploy-workshop.sh` to re-issue the cert.
 :::
