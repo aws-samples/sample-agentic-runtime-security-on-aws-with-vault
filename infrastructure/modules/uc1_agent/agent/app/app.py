@@ -106,8 +106,25 @@ async def health() -> dict[str, Any]:
 
     Returns Vault authentication status so Kubernetes can surface auth failures
     in pod readiness without requiring a full query round-trip.
+
+    The probe re-authenticates the same way a real request does. Inspecting only
+    the cached token reported "degraded" once its finite TTL elapsed — on an
+    agent that was fully serviceable, because /query calls ensure_authenticated()
+    and silently re-logs in. So the probe now exercises that same path: a merely
+    stale token re-logs in and reports healthy, while a Vault that is genuinely
+    unreachable or a broken role fails the login and reports degraded.
+
+    Always answers HTTP 200 — the status field carries the verdict. Raising here
+    would fail the liveness probe and restart-loop the pod whenever Vault is
+    briefly unavailable, which fixes nothing.
     """
-    authenticated = _vault.is_authenticated() if _vault else False
+    authenticated = False
+    if _vault:
+        try:
+            _vault.ensure_authenticated()
+            authenticated = _vault.is_authenticated()
+        except Exception:  # noqa: BLE001 — probe must never raise; see docstring
+            logger.warning("health_vault_reauth_failed", exc_info=True)
     status = "healthy" if authenticated else "degraded"
     return {
         "status": status,
