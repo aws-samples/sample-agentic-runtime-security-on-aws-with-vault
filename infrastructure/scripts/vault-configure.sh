@@ -201,11 +201,49 @@ activate_oauth_resource_server() {
   return 1
 }
 
+# ---- Vault verification reads run through `kubectl exec`, never the tunnel ----
+#
+# The port-forward is one long-lived tunnel shared by an entire phase. When it
+# dies mid-verification, every remaining read fails with curl exit 7 ("could not
+# connect") and this script reports the dead tunnel as a wrong Enterprise
+# license. A real deploy failed exactly that way — see
+# infrastructure/scripts/logs/tier2-alias-cleared-1786604400.log lines 523-525,
+# where the gates called the agent-registry, the oauth profile and uc1-readonly
+# missing seconds after terraform had refreshed those very objects over the same
+# tunnel. curl tells the two apart even though the script cannot: a dead tunnel
+# gives exit 7, while every genuine Vault fault (bad token, missing path, wrong
+# license) gives 22.
+#
+# `kubectl exec` opens a fresh connection per read, so one failure cannot cascade
+# into the rest of the gates. It is also the pattern test-vault-verify.sh already
+# uses — it passed 13/13 on a cluster where these gates were failing. The tunnel
+# is kept only for `terraform apply`, which genuinely needs a local endpoint.
+#
+# Reads are safe on any Ready pod: Raft standbys request-forward to the active
+# node and answer all of these paths with 200 (measured on vault-0/1/2).
+VAULT_EXEC_POD=""
+vault_pod() {
+  if [[ -z "$VAULT_EXEC_POD" ]] || ! kubectl get pod -n vault "$VAULT_EXEC_POD" &>/dev/null; then
+    VAULT_EXEC_POD=$(kubectl get pods -n vault -l app.kubernetes.io/name=vault,component=server \
+      --no-headers 2>/dev/null | awk '$2=="1/1" && $3=="Running" {print $1; exit}')
+  fi
+  [[ -n "$VAULT_EXEC_POD" ]] || return 1
+  printf '%s' "$VAULT_EXEC_POD"
+}
+
+# vault_exec <vault-cli-command> — run a Vault CLI read inside a Vault pod.
+# The token is passed as a per-command environment assignment so it never lands
+# in the pod's process list under a separate `vault login`.
+vault_exec() {
+  local pod
+  pod="$(vault_pod)" || return 1
+  kubectl exec -n vault "$pod" -- sh -c "VAULT_TOKEN='${VAULT_TOKEN}' $1"
+}
+
 cleanup() {
   info "Cleaning up port-forwards..."
   [[ -n "${VAULT_PF_PID:-}" ]] && kill "$VAULT_PF_PID" 2>/dev/null || true
   [[ -n "${IVIA_PF_PID:-}" ]] && kill "$IVIA_PF_PID" 2>/dev/null || true
-  [[ -n "${VAULT_ISSUER_PF_PID:-}" ]] && kill "$VAULT_ISSUER_PF_PID" 2>/dev/null || true
   wait 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -435,6 +473,10 @@ TFVARS
 
   # Verify
   #
+  # Reads go through vault_exec (kubectl exec), NOT the port-forward above — see
+  # the helper's comment for why a shared tunnel turns one transport failure into
+  # a phantom license error.
+  #
   # Each gate below captures its output into a variable and matches with a
   # herestring rather than piping into `grep -q`. Under `set -uo pipefail`,
   # `grep -q` exits on its first match and SIGPIPEs the upstream `jq`, so the
@@ -443,7 +485,7 @@ TFVARS
   info "Verifying Vault configuration..."
   local verify_pass=true
 
-  _vc_auth=$(curl -sf -H "X-Vault-Token: ${VAULT_TOKEN}" http://127.0.0.1:8200/v1/sys/auth 2>/dev/null | jq -r 'keys[]' 2>/dev/null || true)
+  _vc_auth=$(vault_exec "vault auth list -format=json" 2>/dev/null | jq -r 'keys[]' 2>/dev/null || true)
   if grep -q 'kubernetes/' <<<"${_vc_auth}"; then
     ok "Kubernetes auth backend: enabled"
   else
@@ -466,7 +508,7 @@ TFVARS
   #                                  platform-standard) is present.
   #   - oauth profile responds    → proves the feature is active + profile applied.
   # (Auth engines kubernetes/pki are module-independent — always available.)
-  _vc_mounts_db=$(curl -sf -H "X-Vault-Token: ${VAULT_TOKEN}" http://127.0.0.1:8200/v1/sys/mounts 2>/dev/null | jq -r 'keys[]' 2>/dev/null || true)
+  _vc_mounts_db=$(vault_exec "vault secrets list -format=json" 2>/dev/null | jq -r 'keys[]' 2>/dev/null || true)
   if grep -q 'database/' <<<"${_vc_mounts_db}"; then
     ok "License gate: database/ secrets engine mounted (pki-only absent)"
   else
@@ -474,7 +516,7 @@ TFVARS
     verify_pass=false
   fi
 
-  _vc_mounts_aws=$(curl -sf -H "X-Vault-Token: ${VAULT_TOKEN}" http://127.0.0.1:8200/v1/sys/mounts 2>/dev/null | jq -r 'keys[]' 2>/dev/null || true)
+  _vc_mounts_aws=$(vault_exec "vault secrets list -format=json" 2>/dev/null | jq -r 'keys[]' 2>/dev/null || true)
   if grep -q 'aws/' <<<"${_vc_mounts_aws}"; then
     ok "License gate: aws/ secrets engine mounted (pki-only absent)"
   else
@@ -485,8 +527,8 @@ TFVARS
   # agent-registry responds → agentic-iam / platform-standard present. Read back
   # the uc1-agent registration the apply just reconciled (agent-registry/
   # registration/display-name/<name> — 09-DISCOVERY confirmed path).
-  if curl -sf -H "X-Vault-Token: ${VAULT_TOKEN}" \
-       http://127.0.0.1:8200/v1/agent-registry/registration/display-name/uc1-agent >/dev/null 2>&1; then
+  if vault_exec "vault read -format=json agent-registry/registration/display-name/uc1-agent" \
+       >/dev/null 2>&1; then
     ok "License gate: agent-registry responds (agentic-iam / platform-standard present)"
   else
     fail "License gate: agent-registry did not respond — license lacks platform-standard/agentic-iam. ${LICENSE_REMEDIATION}"
@@ -495,15 +537,14 @@ TFVARS
 
   # oauth-resource-server config profile 'ivia' responds → feature active +
   # profile reconciled (sys/config/oauth-resource-server/<name> — reference contract).
-  if curl -sf -H "X-Vault-Token: ${VAULT_TOKEN}" \
-       http://127.0.0.1:8200/v1/sys/config/oauth-resource-server/ivia >/dev/null 2>&1; then
+  if vault_exec "vault read sys/config/oauth-resource-server/ivia" >/dev/null 2>&1; then
     ok "License gate: oauth-resource-server profile 'ivia' responds (feature active)"
   else
     fail "License gate: oauth-resource-server profile 'ivia' did not respond — activation/license issue. ${LICENSE_REMEDIATION}"
     verify_pass=false
   fi
 
-  _vc_policies=$(curl -sf -H "X-Vault-Token: ${VAULT_TOKEN}" http://127.0.0.1:8200/v1/sys/policy 2>/dev/null | jq -r '.policies[]' 2>/dev/null || true)
+  _vc_policies=$(vault_exec "vault policy list -format=json" 2>/dev/null | jq -r '.[]' 2>/dev/null || true)
   if grep -q 'uc1-readonly' <<<"${_vc_policies}"; then
     ok "Policy uc1-readonly: exists"
   else
@@ -570,34 +611,14 @@ phase_ivia_verify() {
   # (.invalid is an RFC 6761 reserved TLD — never a real issuer.)
   info "Verifying Vault's configured OAuth issuer..."
   local vault_issuer=""
-  # Local port 18200, not 8200: Phase 2's forward has already been torn down and
-  # an attendee may well have their own `port-forward ... 8200` open by now.
-  # Binding a distinct port keeps this read from failing on a port clash and
-  # emitting a warning that has nothing to do with the issuer.
-  #
-  # Same idempotency treatment Phase 2 gives 8200: an earlier run interrupted
-  # between the fork and the kill below leaves an orphan holding 18200, the new
-  # forward then fails to bind, and this phase WARNs about an issuer it never
-  # actually read. Clear the port first, and register the PID in a script-scoped
-  # variable so the EXIT trap reaps it even if we are interrupted mid-read.
-  STALE_ISSUER_PF=$(lsof -tiTCP:18200 -sTCP:LISTEN 2>/dev/null || true)
-  if [[ -n "$STALE_ISSUER_PF" ]]; then
-    info "Port 18200 already bound (PID(s): $(echo "$STALE_ISSUER_PF" | tr '\n' ' ')) — killing stale port-forward"
-    # shellcheck disable=SC2086
-    kill $STALE_ISSUER_PF 2>/dev/null || true
-    sleep 1
-  fi
-
-  kubectl port-forward svc/vault 18200:8200 -n vault &>/dev/null &
-  VAULT_ISSUER_PF_PID=$!
-  sleep 3
-  if kill -0 "$VAULT_ISSUER_PF_PID" 2>/dev/null; then
-    vault_issuer=$(curl -sf -H "X-Vault-Token: ${VAULT_TOKEN}" \
-      http://127.0.0.1:18200/v1/sys/config/oauth-resource-server/ivia \
-      2>/dev/null | jq -r '.data.issuer_id // empty' 2>/dev/null || echo "")
-  fi
-  kill "$VAULT_ISSUER_PF_PID" 2>/dev/null || true
-  VAULT_ISSUER_PF_PID=""
+  # Read via vault_exec, not a port-forward. This used to open a second tunnel on
+  # 18200 purely to read one field, and inherited every failure mode of the first:
+  # a tunnel that never bound (stale listener) or died mid-read produced
+  # "Could not read Vault's oauth-resource-server issuer_id" — a warning about
+  # ACME on a deploy where ACME was fine. kubectl exec needs no local port, so
+  # there is no port to clash over and no orphan to reap.
+  vault_issuer=$(vault_exec "vault read -format=json sys/config/oauth-resource-server/ivia" \
+    2>/dev/null | jq -r '.data.issuer_id // empty' 2>/dev/null || echo "")
 
   if [[ -z "$vault_issuer" ]]; then
     warn "Could not read Vault's oauth-resource-server issuer_id"
