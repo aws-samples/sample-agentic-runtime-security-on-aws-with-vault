@@ -18,18 +18,19 @@ export VAULT_ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)
 ## Step 1 — Confirm pods are Running
 
 ```bash
-kubectl get pods -n vault
+kubectl get pods -n vault -l app.kubernetes.io/name=vault
 ```
 
-Expected — the three Raft nodes `Running`, plus the Vault Agent Injector that ships with the Helm chart:
+Expected — the three Raft nodes `Running`:
 
 ```
-NAME                                    READY   STATUS    RESTARTS   AGE
-vault-0                                 1/1     Running   0          16h
-vault-1                                 1/1     Running   0          16h
-vault-2                                 1/1     Running   0          16h
-vault-agent-injector-5b7dd85f5c-zfrbm   1/1     Running   0          16h
+NAME      READY   STATUS    RESTARTS   AGE
+vault-0   1/1     Running   0          12h
+vault-1   1/1     Running   0          12h
+vault-2   1/1     Running   0          12h
 ```
+
+The label selector is what keeps this to the three server pods. Without it, `kubectl get pods -n vault` also returns the `vault-agent-injector` pod that ships with the Helm chart — a fourth `Running` pod that is expected, and not part of the Raft cluster.
 
 ## Step 2 — Confirm KMS auto-unseal
 
@@ -56,7 +57,7 @@ kubectl exec -n vault vault-0 -- \
   sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault operator raft list-peers"
 ```
 
-Expected — three peers, exactly one `leader` (the follower rows can appear in any order):
+Expected — the three Vault nodes (the same `vault-0`, `vault-1`, `vault-2` pods from Step 1) form the Raft cluster: exactly one `leader` and two `follower`s, all with `Voter` = `true`. The follower rows can appear in any order:
 
 ```
 Node       Address                        State       Voter

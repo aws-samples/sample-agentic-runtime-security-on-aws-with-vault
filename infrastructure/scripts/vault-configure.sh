@@ -640,10 +640,15 @@ phase_ivia_verify() {
   # performed the flip and the issuer is STILL a placeholder, that is a genuine
   # fault and staying silent hides it.
   #
-  # The flip is done by kubernetes_config_map_v1_data.iviaop_clients_patch
-  # (infrastructure/workloads/main.tf), which `depends_on = [module.uc2_app]` —
-  # it needs the banking-UI ALB that only tier 3 creates. So "has the flip run?"
-  # is answered by that resource being present in tier-3 state.
+  # TWO things must both happen before the issuer becomes the real FQDN:
+  #   1. deploy Step 7 (ACME) issues the cert and re-applies module.ivia, AND
+  #   2. tier 3 applies kubernetes_config_map_v1_data.iviaop_clients_patch
+  #      (infrastructure/workloads/main.tf) and restarts iviaop.
+  # The patch carries `depends_on = [module.uc2_app]` because it needs the
+  # banking-UI ALB hostname that only tier 3 creates, so the flip is DEFERRED to
+  # tier 3 BY DESIGN — a circular-dependency break documented in
+  # modules/verify_access/main.tf. So "has the flip run?" is answered by that
+  # resource being present in tier-3 state.
   #
   # Presence of the RESOURCE, not merely of the state FILE: a `terraform init` or
   # a partially-failed apply leaves a state file behind with the patch absent, and

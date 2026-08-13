@@ -127,6 +127,10 @@ The `sub` claim in the `access_token` (e.g. `oscar`) flows to:
 
 ## Step 1 — Get the Banking UI URL
 
+:::alert{header="Use an incognito / private browser window" type="info"}
+Open the Banking UI in a fresh incognito / private window. Stale WebSEAL/IVIA session cookies from a previous login can prevent a clean sign-in, and this workshop has you log in as more than one user. Open a new incognito window for each user (Oscar, then Jaime) so each login starts from a clean session.
+:::
+
 At the end of `bash infrastructure/scripts/deploy-workshop.sh`, the script prints `NIP_FQDN_BANKING` — the banking-UI nip.io URL backed by a Let's Encrypt certificate served on the shared workshop ALB. Print the full HTTPS URL (read back from `infrastructure/.acme-state`) and open it in your browser:
 
 ```bash
@@ -156,14 +160,24 @@ Click **Login**. WebSEAL performs an LDAP bind against OpenLDAP and, on success,
 This workshop uses OpenLDAP as the user registry, with two pre-provisioned users (Oscar and Jaime) created by the `verify_access` Terraform module. WebSEAL authenticates them via LDAP bind. The IVIA OIDC Provider then issues JWTs that the MCP Server uses to obtain user-scoped database credentials from Vault.
 :::
 
-## Step 3 — Confirm personalized dashboard data
+## Step 3 — Inspect the Banking UI logs
+
+View the Banking UI pod logs to confirm it is running and serving:
+
+```bash
+kubectl logs -n banking-app -l app=banking-ui --tail=30
+```
+
+Credentials never reach the Banking UI — they are entered on the WebSEAL login page and validated by WebSEAL via LDAP bind. The OAuth code-for-token exchange happens between the browser and IVIA/WebSEAL, so its detail is not in these UI logs; the authoritative record of the downstream credential issuance is the Vault audit log (queried via Athena in [Credential Revocation](../65-credential-revocation/)).
+
+## Step 4 — Confirm personalized dashboard data
 
 After login, the dashboard shows Oscar's accounts and transactions. Observe:
 
 - The balance figures are specific to Oscar — RLS is filtering the `banking.accounts` table by `sub = 'oscar'`.
 - The agent responds to natural-language queries about Oscar's financial data.
 
-## Step 4 — Switch users: sign in as Jaime
+## Step 5 — Switch users: sign in as Jaime
 
 To act as a different user, open a **new Incognito / Private browser window** and go to the Banking UI URL again. Sign in as:
 

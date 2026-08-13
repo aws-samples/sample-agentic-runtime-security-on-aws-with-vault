@@ -170,7 +170,7 @@ Each ephemeral role is created with login credentials scoped to the banking sche
 
 To confirm the native path, present a real user JWT to Vault via `X-Vault-Token` and watch Vault vend a credential in a **single** call — no login step.
 
-The Banking UI sets **two** HttpOnly cookies after sign-in — `access_token` and `id_token`. You need the **`access_token`**: it is the OAuth access token, and it is the only one that carries the `act` claim naming the agent actor. To grab it:
+The Banking UI sets **two** HttpOnly cookies after sign-in — `access_token` and `id_token`. You need the **`access_token`**: it is the one carrying the `act.sub = agent-uc2` actor claim Vault resolves. The `id_token` does not carry it, and Vault will reject it. To grab it:
 
 1. Sign in to the Banking UI as `oscar` or `jaime`.
 2. Open Chrome DevTools (F12) → **Application** tab.
