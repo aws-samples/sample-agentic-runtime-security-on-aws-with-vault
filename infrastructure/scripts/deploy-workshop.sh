@@ -1257,7 +1257,18 @@ step_09_configure_ivia() {
                 kill "$_IVIA_PF_PID" 2>/dev/null || true
             fi
             if [[ -n "$IVIA_HEALTH" ]]; then
-                print_pass "Step 9: Configure IVIA (OIDC issuer: ${IVIA_HEALTH})"
+                # On a FIRST deploy the discovery doc still serves the RFC-2606
+                # .invalid placeholder from modules/verify_access/main.tf:1094 —
+                # kubernetes_config_map_v1_data.iviaop_clients_patch (tier 3 root,
+                # workloads/main.tf) is what overwrites it, and that has not run
+                # yet at Step 9. Reporting the bare placeholder next to a PASS
+                # reads like a broken deploy; say what it is instead. On a re-run
+                # (tier 3 already applied) this branch reports the real host.
+                if [[ "$IVIA_HEALTH" == *.invalid ]]; then
+                    print_pass "Step 9: Configure IVIA (OIDC issuer: ${IVIA_HEALTH} — expected placeholder on a first deploy; tier 3 Step 10 patches it to the nip.io host)"
+                else
+                    print_pass "Step 9: Configure IVIA (OIDC issuer: ${IVIA_HEALTH})"
+                fi
             else
                 print_warn "Step 9: Could not verify IVIA OIDC health endpoint (IVIA may still be starting)"
             fi
