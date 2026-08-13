@@ -154,9 +154,11 @@ Check the CIBA mobile-push + token exchange path is working:
 kubectl get pods -n banking-app -l app=uc3-agent
 ```
 
-```bash
-# Watch the mobile-push flow in the agent logs (push fired, then check-status polls)
-kubectl logs -n banking-app -l app=uc3-agent --tail=50 | grep -E 'mmfa_push_fired|ciba_status_polled'
+Expected — one pod, `1/1 Running`:
+
+```
+NAME                         READY   STATUS    RESTARTS   AGE
+uc3-agent-<hash>             1/1     Running   0          11h
 ```
 
 ```bash
@@ -166,3 +168,20 @@ kubectl exec -n vault vault-0 -- sh -c \
   'https://iviaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration'" \
   | jq '.backchannel_authentication_endpoint'
 ```
+
+Expected — the backchannel endpoint on your `nip.io` WRP host. The probe itself travels the in-cluster ClusterIP path; the *value* it returns is the public issuer, which is the correct advertised endpoint:
+
+```
+"https://wrp.<deploy-id>.<alb-ip-dashed>.nip.io/isvaop/oauth2/ciba"
+```
+
+```bash
+# Watch the mobile-push flow in the agent logs (push fired, then check-status polls)
+kubectl logs -n banking-app -l app=uc3-agent --tail=-1 --since=30m | grep -E 'mmfa_push_fired|ciba_status_polled'
+```
+
+::::alert{header="This one returns nothing until you have done the phone step" type="info"}
+`mmfa_push_fired` and `ciba_status_polled` are written **only** when a refund flow actually fires a push. If you have not yet completed [Test the Refund Flow](../70-test-refund/) with a tap on your enrolled device, this command prints nothing and exits `1`. That is expected — it is not a broken deployment.
+
+Run it again *after* your refund completes and you will see the push and the poll cycle. `--since=30m` bounds the window: the agent logs continuously, so a small `--tail` can scroll the events out of view.
+::::

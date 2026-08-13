@@ -8,42 +8,37 @@
 #   ./show-audit-correlation.sh [REQUEST_ID]
 #
 # Defaults (override via env or arg):
-#   REQUEST_ID  arg $1, else $UC3_REQUEST_ID, else the reference refund.
-#   AWS_REGION  env, else us-west-2.
-#   LOG_BUCKET  env, else auto-resolved (workshop-logs), else agenticlife-workshop-logs.
+#   REQUEST_ID        arg $1, else $UC3_REQUEST_ID, else the reference refund.
+#   AWS_REGION        env, else us-west-2.
+#   ATHENA_WORKGROUP  env, else 'workshop'.
 #
 # Examples:
 #   ./show-audit-correlation.sh
 #   ./show-audit-correlation.sh 1234abcd-....-....
-#   AWS_REGION=us-west-2 LOG_BUCKET=my-bucket ./show-audit-correlation.sh
+#   AWS_REGION=us-west-2 ./show-audit-correlation.sh
 #-------------------------------------------------------------------------------
 set -euo pipefail
 
 REQUEST_ID="${1:-${UC3_REQUEST_ID:-dc79a13e-4175-49a6-acb8-26f20b2020c7}}"
 AWS_REGION="${AWS_REGION:-us-west-2}"
 DATABASE="${GLUE_DATABASE:-workshop_logs}"
-
-# Resolve an S3 results bucket if not provided.
-if [ -z "${LOG_BUCKET:-}" ]; then
-  LOG_BUCKET=$(aws s3api list-buckets \
-    --query "Buckets[?contains(Name,'workshop-logs')].Name | [0]" \
-    --output text 2>/dev/null || echo "")
-  if [ -z "${LOG_BUCKET}" ] || [ "${LOG_BUCKET}" = "None" ]; then
-    LOG_BUCKET="agenticlife-workshop-logs"
-  fi
-fi
+# The attendee's role is scoped to the 'workshop' workgroup — the same one the
+# audit page runs in. Omitting it silently falls back to 'primary' and the query
+# is refused with AccessDeniedException on athena:StartQueryExecution.
+WORKGROUP="${ATHENA_WORKGROUP:-workshop}"
 
 echo "Region:     ${AWS_REGION}"
 echo "Database:   ${DATABASE}"
-echo "Results:    s3://${LOG_BUCKET}/athena-results/"
+echo "Workgroup:  ${WORKGROUP}"
 echo "request_id: ${REQUEST_ID}"
 echo
 
-# 1) Start the query.
+# 1) Start the query. The workgroup enforces its own encrypted result location,
+#    so a client-side --result-configuration would be ignored.
 QUERY_ID=$(aws athena start-query-execution \
   --query-string "SELECT * FROM audit_correlation WHERE request_id = '${REQUEST_ID}' LIMIT 1" \
+  --work-group "${WORKGROUP}" \
   --query-execution-context "Database=${DATABASE}" \
-  --result-configuration "OutputLocation=s3://${LOG_BUCKET}/athena-results/" \
   --region "${AWS_REGION}" \
   --query 'QueryExecutionId' --output text)
 echo "QueryExecutionId: ${QUERY_ID}"

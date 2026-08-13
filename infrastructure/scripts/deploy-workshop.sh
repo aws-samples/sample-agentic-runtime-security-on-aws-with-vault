@@ -17,6 +17,8 @@
 #   Step  7: ACME cert issuance + ACM sync + tier-2 module.ivia re-apply to nip.io
 #   Step  8: Configure Vault (vault-configure.sh) — reads tier-1 + tier-2 state
 #   Step  9: Configure IVIA (ivia-configure.sh)
+#   Gate   : Tier-2 exit contract — Vault issuer_id must be the nip.io FQDN
+#            (hard abort; catches a tripped Step-7 cert gate before tier 3)
 #   Step 10: terraform apply — tier 3 (infrastructure/workloads/) uc1/uc2/uc3 + roll
 #   Step 11: Post-tier-3 shared-ALB assertion + iviaop agent-uc2 redirect reconcile
 #   Step 12: Verify OpenLDAP user 'oscar' seeded by IVIA autoconf
@@ -142,9 +144,13 @@ APP_DEPLOYMENTS=(
 #-------------------------------------------------------------------------------
 # Usage
 #-------------------------------------------------------------------------------
+# Prints the header block as help text and exits with $1 (default 0).
+# Argument errors MUST pass a non-zero code: an unattended caller (CodeBuild)
+# treats exit 0 as "the deploy ran", so a typo'd or renamed flag would
+# otherwise report success having deployed nothing at all.
 usage() {
     awk 'NR>2 && /^#={3,}/{exit} NR>2 && /^#/{sub(/^# ?/,""); print}' "$0"
-    exit 0
+    exit "${1:-0}"
 }
 
 #-------------------------------------------------------------------------------
@@ -159,7 +165,7 @@ while [[ $# -gt 0 ]]; do
             TIER="$2"; shift
             case "$TIER" in
                 1|2|3) : ;;
-                *) echo "ERROR: --tier must be 1, 2, or 3 (got: '${TIER}')"; usage ;;
+                *) echo "ERROR: --tier must be 1, 2, or 3 (got: '${TIER}')" >&2; usage 1 ;;
             esac
             ;;
         --image-source)     IMAGE_SOURCE="$2"; shift ;;
@@ -169,7 +175,11 @@ while [[ $# -gt 0 ]]; do
         --skip-build)       SKIP_BUILD=true ;;
         --skip-acme)        SKIP_ACME=true ;;
         --dry-run)          DRY_RUN=true ;;
-        -*) echo "Unknown option: $1"; usage ;;
+        -*) echo "Unknown option: $1" >&2; usage 1 ;;
+        # No positional arguments are accepted. Rejecting them keeps a stray
+        # token (e.g. `--tier 2 extra`) from being silently ignored — this
+        # script takes flags only, and every caller passes flags only.
+        *)  echo "Unexpected argument: $1" >&2; usage 1 ;;
     esac
     shift
 done
@@ -254,13 +264,34 @@ if [[ "$IMAGE_SOURCE" = "ghcr" && -z "$GHCR_REGISTRY_BASE" ]]; then
 fi
 
 #-------------------------------------------------------------------------------
-# EXIT cleanup — kill port-forward on any exit, then emit our summary
+# EXIT cleanup — kill port-forward on any exit, emit our summary, then propagate
+# a non-zero status if any check failed.
+#
+# Propagation matters because not every failure path calls _die. The ordering
+# gates hard-abort, but a soft failure records print_fail + `return 1` and lets
+# the run continue (Step 7's certificate gate is the canonical case). A human
+# reads the red ✗ and re-runs; an unattended caller cannot. Without the exit
+# status below, CodeBuild sees SUCCEEDED and CloudFormation reaches
+# CREATE_COMPLETE over a broken deploy — discovered on workshop day, in every
+# pre-provisioned account at once.
 #-------------------------------------------------------------------------------
 _cleanup() {
+    # Must be the first statement: capture the status that triggered the trap
+    # before any command below overwrites $?.
+    local _rc=$?
+
     if [[ -n "$VAULT_PF_PID" ]] && kill -0 "$VAULT_PF_PID" 2>/dev/null; then
         kill "$VAULT_PF_PID" 2>/dev/null || true
     fi
-    print_summary
+
+    # print_summary returns 1 when FAILURES is non-empty. Promote a clean exit
+    # to 1 in that case. An already-non-zero status is preserved as-is, so
+    # _die's 1 and signal statuses (130 on SIGINT) survive unchanged.
+    if ! print_summary && [[ "$_rc" -eq 0 ]]; then
+        _rc=1
+    fi
+
+    exit "$_rc"
 }
 trap '_cleanup' EXIT
 
@@ -371,7 +402,8 @@ _wait_for_port() {
 #
 # Step → tier mapping (also encoded by the main flow's _run_if_tier calls):
 #   steps 1-4  → tier 1   core infra + kubectl + images + LBC gate
-#   steps 5-9  → tier 2   vault + ivia + ACME + vault/ivia configure
+#   steps 5-9  → tier 2   vault + ivia + ACME + vault/ivia configure,
+#                         then _tier2_exit_gate (hard-aborts on a bad issuer_id)
 #   steps 10-14 → tier 3  workloads + ALB assert + LDAP + DB seed + KB ingest
 _run_if_tier() {
     local step_tier="$1"; shift
@@ -1152,10 +1184,10 @@ step_07_acme_cert_issuance() {
 #===============================================================================
 # STEP 8: Configure Vault (vault-configure.sh) — reads tier-1 + tier-2 state
 #
-# Creates the kubernetes/ + jwt/ auth backends, database/ + sts/ secrets
-# engines, policies, and the uc1/uc2/uc3 roles the tier-3 pods authenticate
-# with. MUST run before the tier-3 apply (Step 10) or the pods 403 on startup.
-# Binds the JWT bound_issuer to tier-2's ivia_issuer (now nip.io after Step 7).
+# Creates the kubernetes/ auth backend, database/ + sts/ secrets engines,
+# policies, and the uc1/uc2/uc3 roles the tier-3 pods authenticate with. MUST
+# run before the tier-3 apply (Step 10) or the pods 403 on startup. Binds the
+# oauth-resource-server issuer_id to tier-2's ivia_issuer (nip.io after Step 7).
 #===============================================================================
 step_08_configure_vault() {
     echo ""
@@ -1166,34 +1198,41 @@ step_08_configure_vault() {
         print_pass "Step 8: Configure Vault (dry-run)"
     else
         if _run_subscript "Step 8: vault-configure" "${SCRIPT_DIR}/vault-configure.sh"; then
-            # Best-effort confirm kubernetes/ + jwt/ are enabled (warn-only).
-            kubectl --context workshop port-forward svc/vault -n vault 8200:8200 \
-                >/dev/null 2>&1 &
-            VAULT_PF_PID=$!
-            if _wait_for_port 8200 30; then
-                ROOT_TOKEN=""
-                if [[ -f "${HOME}/vault-init.json" ]]; then
-                    ROOT_TOKEN=$(jq -r '.root_token // empty' "${HOME}/vault-init.json" 2>/dev/null || echo "")
-                fi
-                if [[ -n "$ROOT_TOKEN" ]]; then
-                    AUTH_LIST=$(VAULT_ADDR="http://localhost:8200" VAULT_TOKEN="$ROOT_TOKEN" \
-                        vault auth list -format=json 2>/dev/null || echo '{}')
+            # Best-effort confirm the kubernetes/ auth backend is enabled (warn-only).
+            #
+            # Reads via `kubectl exec` into a live Vault server pod, NOT via a
+            # port-forward: a tunnel is one long-lived connection shared by every
+            # read, and when it dies the `vault` CLI error was swallowed by
+            # `|| echo '{}'` — reporting EVERY backend missing at once and blaming
+            # a healthy Vault. Each exec is its own connection, so there is no
+            # tunnel to lose. Same fix as vault-configure.sh's gates.
+            #
+            # Only kubernetes/ is asserted. The IVIA jwt/ backend was retired in
+            # the native Agent Registry cutover — vault-configure.sh dropped its
+            # own jwt check for that reason, and requiring it here warned on every
+            # healthy deploy.
+            ROOT_TOKEN=""
+            if [[ -f "${HOME}/vault-init.json" ]]; then
+                ROOT_TOKEN=$(jq -r '.root_token // empty' "${HOME}/vault-init.json" 2>/dev/null || echo "")
+            fi
+            if [[ -n "$ROOT_TOKEN" ]]; then
+                VAULT_SRV_POD=$(kubectl --context workshop get pods -n vault \
+                    -l app.kubernetes.io/name=vault,component=server --no-headers 2>/dev/null \
+                    | awk '$2=="1/1" && $3=="Running" {print $1; exit}')
+                if [[ -n "$VAULT_SRV_POD" ]]; then
+                    AUTH_LIST=$(kubectl --context workshop exec -n vault "$VAULT_SRV_POD" -- \
+                        sh -c "VAULT_TOKEN='${ROOT_TOKEN}' vault auth list -format=json" 2>/dev/null || echo '{}')
                     K8S_ENABLED=$(echo "$AUTH_LIST" | jq -r 'keys[] | select(. == "kubernetes/")' 2>/dev/null || echo "")
-                    JWT_ENABLED=$(echo "$AUTH_LIST" | jq -r 'keys[] | select(. == "jwt/")' 2>/dev/null || echo "")
-                    if [[ -n "$K8S_ENABLED" ]] && [[ -n "$JWT_ENABLED" ]]; then
-                        print_pass "Step 8: Configure Vault (kubernetes/ and jwt/ auth methods enabled)"
+                    if [[ -n "$K8S_ENABLED" ]]; then
+                        print_pass "Step 8: Configure Vault (kubernetes/ auth method enabled)"
                     else
-                        print_warn "Step 8: Vault auth methods not both visible (kubernetes=${K8S_ENABLED:-MISSING} jwt=${JWT_ENABLED:-MISSING}) — vault-configure reported success; inspect manually if tier-3 pods 403"
+                        print_warn "Step 8: Vault kubernetes/ auth method not visible — vault-configure reported success; inspect manually if tier-3 pods 403: kubectl --context workshop exec -n vault ${VAULT_SRV_POD} -- vault auth list"
                     fi
                 else
-                    print_warn "Step 8: Could not verify Vault auth — root token not found in ~/vault-init.json"
+                    print_warn "Step 8: Could not verify Vault auth — no Running vault server pod found"
                 fi
             else
-                print_warn "Step 8: Could not verify Vault auth via port-forward"
-            fi
-            if [[ -n "$VAULT_PF_PID" ]] && kill -0 "$VAULT_PF_PID" 2>/dev/null; then
-                kill "$VAULT_PF_PID" 2>/dev/null || true
-                VAULT_PF_PID=""
+                print_warn "Step 8: Could not verify Vault auth — root token not found in ~/vault-init.json"
             fi
         else
             _die "Step 8: vault-configure" "tier-3 pods authenticate to Vault with the roles this step creates. Re-run: ${SCRIPT_DIR}/vault-configure.sh"
@@ -1232,6 +1271,93 @@ step_09_configure_ivia() {
             fi
         fi
     fi
+}
+
+#===============================================================================
+# TIER-2 EXIT GATE: Vault's IVIA issuer_id must be the public nip.io FQDN
+#
+# The one assertion that separates "tier 2 finished" from "tier 2 looked like it
+# finished". Step 7 issues the Let's Encrypt certificate behind a 900s readiness
+# gate; if that gate trips, _acme_apply_ivia never runs and IVIA stays bound to
+# its raw *.elb.amazonaws.com ingress host. Every pod still comes up and every
+# other check still passes, so nothing downstream notices — until Use Case 2's
+# OAuth flow fails, on workshop day, in every account at once.
+#
+# Asserts Vault's sys/config/oauth-resource-server/ivia issuer_id. That is the
+# tier-2 contract. It is deliberately NOT iviaop's OIDC discovery issuer, which
+# is EXPECTED to still read https://issuer-patched-at-root.invalid here: tier 2
+# ships provider.yml + clients.yml with placeholder hosts on purpose, and tier
+# 3's kubernetes_config_map_v1_data.iviaop_clients_patch overwrites them once the
+# banking-UI ALB exists (infrastructure/workloads/main.tf). These are two
+# different values; gating on the discovery issuer fails every healthy deploy.
+#
+# _die rather than print_fail: an unattended tier-2 pre-provision (#21) must
+# abort the CodeBuild build outright rather than hand out accounts that look
+# provisioned and break later.
+#===============================================================================
+_tier2_exit_gate() {
+    echo ""
+    echo -e "${YELLOW}> Gate: Tier-2 exit contract (Vault issuer_id)${NC}"
+
+    if [[ "$DRY_RUN" = true ]]; then
+        print_info "[DRY-RUN] Would assert Vault issuer_id == https://\${NIP_FQDN_WRP}"
+        print_pass "Gate: Tier-2 exit contract (dry-run)"
+        return 0
+    fi
+
+    # In scope from Step 7 on a full run; re-read from .acme-state on a partial
+    # or --skip-acme re-run.
+    if [[ -z "${NIP_FQDN_WRP:-}" ]] && [[ -f "$ACME_STATE_FILE" ]]; then
+        # shellcheck disable=SC1090
+        source "$ACME_STATE_FILE"
+    fi
+    if [[ -z "${NIP_FQDN_WRP:-}" ]]; then
+        _die "Gate: Tier-2 exit contract" \
+            "No NIP_FQDN_WRP — Step 7 never wrote ${ACME_STATE_FILE}, so the Let's Encrypt certificate was never issued. Re-run: bash ${BASH_SOURCE[0]} --tier 2"
+    fi
+    local expected="https://${NIP_FQDN_WRP}"
+
+    local root_token=""
+    if [[ -f "${HOME}/vault-init.json" ]]; then
+        root_token=$(jq -r '.root_token // empty' "${HOME}/vault-init.json" 2>/dev/null || echo "")
+    fi
+    if [[ -z "$root_token" ]]; then
+        _die "Gate: Tier-2 exit contract" \
+            "Root token not found in ~/vault-init.json — Vault was never initialized. Re-run: ${SCRIPT_DIR}/vault-init.sh"
+    fi
+
+    kubectl --context workshop port-forward svc/vault -n vault 8200:8200 >/dev/null 2>&1 &
+    VAULT_PF_PID=$!
+    if ! _wait_for_port 8200 30; then
+        kill "$VAULT_PF_PID" 2>/dev/null || true
+        VAULT_PF_PID=""
+        _die "Gate: Tier-2 exit contract" \
+            "Could not port-forward to Vault on :8200. Check: kubectl --context workshop get pods -n vault"
+    fi
+
+    # Same endpoint vault-configure.sh verifies against (reference contract).
+    local issuer
+    issuer=$(curl -sf -H "X-Vault-Token: ${root_token}" \
+        http://127.0.0.1:8200/v1/sys/config/oauth-resource-server/ivia 2>/dev/null \
+        | jq -r '.data.issuer_id // empty' 2>/dev/null || echo "")
+
+    if [[ -n "$VAULT_PF_PID" ]] && kill -0 "$VAULT_PF_PID" 2>/dev/null; then
+        kill "$VAULT_PF_PID" 2>/dev/null || true
+        VAULT_PF_PID=""
+    fi
+
+    if [[ -z "$issuer" ]]; then
+        _die "Gate: Tier-2 exit contract" \
+            "Vault returned no issuer_id for sys/config/oauth-resource-server/ivia — Step 8 (vault-configure.sh) did not bind IVIA. Re-run: ${SCRIPT_DIR}/vault-configure.sh"
+    fi
+
+    if [[ "$issuer" != "$expected" ]]; then
+        _die "Gate: Tier-2 exit contract" \
+            "Vault issuer_id is '${issuer}', expected '${expected}'. An *.elb.amazonaws.com value means Step 7's certificate gate tripped and the module.ivia re-apply onto nip.io was skipped — Use Case 2's OAuth flow will fail. Re-run: bash ${BASH_SOURCE[0]} --tier 2"
+    fi
+
+    print_pass "Gate: Tier-2 exit contract (Vault issuer_id = ${issuer})"
+    return 0
 }
 
 #===============================================================================
@@ -1426,6 +1552,7 @@ _run_if_tier 2 step_06_initialize_vault
 _run_if_tier 2 step_07_acme_cert_issuance
 _run_if_tier 2 step_08_configure_vault
 _run_if_tier 2 step_09_configure_ivia
+_run_if_tier 2 _tier2_exit_gate
 _run_if_tier 3 step_10_apply_tier3
 _run_if_tier 3 step_11_post_tier3_reconcile
 _run_if_tier 3 step_12_verify_ldap_user

@@ -353,7 +353,12 @@ step_summary() {
     fi
     echo -e "  - terraform init in all 3 roots (local state)"
     echo
-    echo -e "${GREEN}Next steps (deploy one tier at a time):${NC}"
+    echo -e "${GREEN}Next steps — AT AN EVENT (tiers 1-2 pre-provisioned for you):${NC}"
+    echo -e "  You are NOT asked for any licensing secret; your organizer supplied them at account setup."
+    echo -e "  1. Pull the pre-provisioned state (Step 3 on the 'Deploy — At an Event' page)"
+    echo -e "  2. Workloads (Use Cases 1-3):     ${BLUE}./infrastructure/scripts/deploy-workshop.sh --tier 3${NC}"
+    echo
+    echo -e "${GREEN}Next steps — SELF-PACED (deploy one tier at a time):${NC}"
     echo -e "  Each tier prompts for the inputs it needs — no manual tfvars edit (Tier 1: Let's Encrypt email · Tier 2: ICR entitlement key + IVIA MMFA secret)."
     echo -e "  1. Core infra (VPC/EKS/RDS/KB):   ${BLUE}./infrastructure/scripts/deploy-workshop.sh --tier 1${NC}"
     echo -e "  2. Vault + IVIA:                  ${BLUE}./infrastructure/scripts/deploy-workshop.sh --tier 2${NC}"

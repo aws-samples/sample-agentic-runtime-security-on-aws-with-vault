@@ -201,6 +201,45 @@ activate_oauth_resource_server() {
   return 1
 }
 
+# ---- Vault verification reads run through `kubectl exec`, never the tunnel ----
+#
+# The port-forward is one long-lived tunnel shared by an entire phase. When it
+# dies mid-verification, every remaining read fails with curl exit 7 ("could not
+# connect") and this script reports the dead tunnel as a wrong Enterprise
+# license. A real deploy failed exactly that way — see
+# infrastructure/scripts/logs/tier2-alias-cleared-1786604400.log lines 523-525,
+# where the gates called the agent-registry, the oauth profile and uc1-readonly
+# missing seconds after terraform had refreshed those very objects over the same
+# tunnel. curl tells the two apart even though the script cannot: a dead tunnel
+# gives exit 7, while every genuine Vault fault (bad token, missing path, wrong
+# license) gives 22.
+#
+# `kubectl exec` opens a fresh connection per read, so one failure cannot cascade
+# into the rest of the gates. It is also the pattern test-vault-verify.sh already
+# uses — it passed 13/13 on a cluster where these gates were failing. The tunnel
+# is kept only for `terraform apply`, which genuinely needs a local endpoint.
+#
+# Reads are safe on any Ready pod: Raft standbys request-forward to the active
+# node and answer all of these paths with 200 (measured on vault-0/1/2).
+VAULT_EXEC_POD=""
+vault_pod() {
+  if [[ -z "$VAULT_EXEC_POD" ]] || ! kubectl get pod -n vault "$VAULT_EXEC_POD" &>/dev/null; then
+    VAULT_EXEC_POD=$(kubectl get pods -n vault -l app.kubernetes.io/name=vault,component=server \
+      --no-headers 2>/dev/null | awk '$2=="1/1" && $3=="Running" {print $1; exit}')
+  fi
+  [[ -n "$VAULT_EXEC_POD" ]] || return 1
+  printf '%s' "$VAULT_EXEC_POD"
+}
+
+# vault_exec <vault-cli-command> — run a Vault CLI read inside a Vault pod.
+# The token is passed as a per-command environment assignment so it never lands
+# in the pod's process list under a separate `vault login`.
+vault_exec() {
+  local pod
+  pod="$(vault_pod)" || return 1
+  kubectl exec -n vault "$pod" -- sh -c "VAULT_TOKEN='${VAULT_TOKEN}' $1"
+}
+
 cleanup() {
   info "Cleaning up port-forwards..."
   [[ -n "${VAULT_PF_PID:-}" ]] && kill "$VAULT_PF_PID" 2>/dev/null || true
@@ -433,10 +472,21 @@ TFVARS
   rm -f "$apply_log"
 
   # Verify
+  #
+  # Reads go through vault_exec (kubectl exec), NOT the port-forward above — see
+  # the helper's comment for why a shared tunnel turns one transport failure into
+  # a phantom license error.
+  #
+  # Each gate below captures its output into a variable and matches with a
+  # herestring rather than piping into `grep -q`. Under `set -uo pipefail`,
+  # `grep -q` exits on its first match and SIGPIPEs the upstream `jq`, so the
+  # pipeline reports 141 and the gate reads FALSE even when the mount/policy is
+  # present — a license-gate FAIL on a correctly licensed Vault.
   info "Verifying Vault configuration..."
   local verify_pass=true
 
-  if curl -sf -H "X-Vault-Token: ${VAULT_TOKEN}" http://127.0.0.1:8200/v1/sys/auth | jq -r 'keys[]' | grep -q 'kubernetes/'; then
+  _vc_auth=$(vault_exec "vault auth list -format=json" 2>/dev/null | jq -r 'keys[]' 2>/dev/null || true)
+  if grep -q 'kubernetes/' <<<"${_vc_auth}"; then
     ok "Kubernetes auth backend: enabled"
   else
     fail "Kubernetes auth backend: not found"
@@ -458,14 +508,16 @@ TFVARS
   #                                  platform-standard) is present.
   #   - oauth profile responds    → proves the feature is active + profile applied.
   # (Auth engines kubernetes/pki are module-independent — always available.)
-  if curl -sf -H "X-Vault-Token: ${VAULT_TOKEN}" http://127.0.0.1:8200/v1/sys/mounts | jq -r 'keys[]' | grep -q 'database/'; then
+  _vc_mounts_db=$(vault_exec "vault secrets list -format=json" 2>/dev/null | jq -r 'keys[]' 2>/dev/null || true)
+  if grep -q 'database/' <<<"${_vc_mounts_db}"; then
     ok "License gate: database/ secrets engine mounted (pki-only absent)"
   else
     fail "License gate: database/ secrets engine NOT mounted — license appears pki-only. ${LICENSE_REMEDIATION}"
     verify_pass=false
   fi
 
-  if curl -sf -H "X-Vault-Token: ${VAULT_TOKEN}" http://127.0.0.1:8200/v1/sys/mounts | jq -r 'keys[]' | grep -q 'aws/'; then
+  _vc_mounts_aws=$(vault_exec "vault secrets list -format=json" 2>/dev/null | jq -r 'keys[]' 2>/dev/null || true)
+  if grep -q 'aws/' <<<"${_vc_mounts_aws}"; then
     ok "License gate: aws/ secrets engine mounted (pki-only absent)"
   else
     fail "License gate: aws/ secrets engine NOT mounted — license appears pki-only. ${LICENSE_REMEDIATION}"
@@ -475,8 +527,8 @@ TFVARS
   # agent-registry responds → agentic-iam / platform-standard present. Read back
   # the uc1-agent registration the apply just reconciled (agent-registry/
   # registration/display-name/<name> — 09-DISCOVERY confirmed path).
-  if curl -sf -H "X-Vault-Token: ${VAULT_TOKEN}" \
-       http://127.0.0.1:8200/v1/agent-registry/registration/display-name/uc1-agent >/dev/null 2>&1; then
+  if vault_exec "vault read -format=json agent-registry/registration/display-name/uc1-agent" \
+       >/dev/null 2>&1; then
     ok "License gate: agent-registry responds (agentic-iam / platform-standard present)"
   else
     fail "License gate: agent-registry did not respond — license lacks platform-standard/agentic-iam. ${LICENSE_REMEDIATION}"
@@ -485,15 +537,15 @@ TFVARS
 
   # oauth-resource-server config profile 'ivia' responds → feature active +
   # profile reconciled (sys/config/oauth-resource-server/<name> — reference contract).
-  if curl -sf -H "X-Vault-Token: ${VAULT_TOKEN}" \
-       http://127.0.0.1:8200/v1/sys/config/oauth-resource-server/ivia >/dev/null 2>&1; then
+  if vault_exec "vault read sys/config/oauth-resource-server/ivia" >/dev/null 2>&1; then
     ok "License gate: oauth-resource-server profile 'ivia' responds (feature active)"
   else
     fail "License gate: oauth-resource-server profile 'ivia' did not respond — activation/license issue. ${LICENSE_REMEDIATION}"
     verify_pass=false
   fi
 
-  if curl -sf -H "X-Vault-Token: ${VAULT_TOKEN}" http://127.0.0.1:8200/v1/sys/policy | jq -r '.policies[]' | grep -q 'uc1-readonly'; then
+  _vc_policies=$(vault_exec "vault policy list -format=json" 2>/dev/null | jq -r '.[]' 2>/dev/null || true)
+  if grep -q 'uc1-readonly' <<<"${_vc_policies}"; then
     ok "Policy uc1-readonly: exists"
   else
     fail "Policy uc1-readonly: not found"
@@ -541,51 +593,95 @@ phase_ivia_verify() {
   local IVIA_LMI_ENDPOINT="iviaconfig.verify-access.svc.cluster.local"
   ok "IVIA LMI endpoint (in-cluster): ${IVIA_LMI_ENDPOINT}:9443"
 
-  info "Verifying OIDC discovery..."
-  local issuer
+  # There are TWO issuer values in this workshop and only one of them is
+  # authoritative HERE:
+  #
+  #   (a) Vault's oauth-resource-server profile `issuer_id` — the value Vault
+  #       actually validates UC2/UC3 tokens against. Written by this script's
+  #       own Phase 2 apply from the tier-2 ivia_issuer output, so by the time
+  #       Phase 3 runs it MUST already be the real ACME'd nip.io FQDN. This is
+  #       what we gate on.
+  #
+  #   (b) iviaop's own OIDC discovery document — serves the pre-ACME
+  #       `.invalid` placeholder until TIER 3 patches it. This script runs at
+  #       deploy Step 8, i.e. during tier 2, so a placeholder here is EXPECTED
+  #       and is not evidence that ACME failed. Gating on it produced a false
+  #       "ACME did not complete. Re-run Step 7" on healthy deploys.
+  #
+  # (.invalid is an RFC 6761 reserved TLD — never a real issuer.)
+  info "Verifying Vault's configured OAuth issuer..."
+  local vault_issuer=""
+  # Read via vault_exec, not a port-forward. This used to open a second tunnel on
+  # 18200 purely to read one field, and inherited every failure mode of the first:
+  # a tunnel that never bound (stale listener) or died mid-read produced
+  # "Could not read Vault's oauth-resource-server issuer_id" — a warning about
+  # ACME on a deploy where ACME was fine. kubectl exec needs no local port, so
+  # there is no port to clash over and no orphan to reap.
+  vault_issuer=$(vault_exec "vault read -format=json sys/config/oauth-resource-server/ivia" \
+    2>/dev/null | jq -r '.data.issuer_id // empty' 2>/dev/null || echo "")
+
+  if [[ -z "$vault_issuer" ]]; then
+    warn "Could not read Vault's oauth-resource-server issuer_id"
+    warn "  Check: vault read sys/config/oauth-resource-server/ivia"
+    record "ivia_verify" "WARN"
+  elif [[ "$vault_issuer" == *".invalid"* ]]; then
+    warn "Vault's OAuth issuer_id is a pre-ACME placeholder: ${vault_issuer}"
+    warn "  Vault validates UC2/UC3 tokens against this value, so a placeholder"
+    warn "  here means ACME (deploy Step 7) did not complete. Re-run Step 7:"
+    warn "    bash infrastructure/scripts/deploy-workshop.sh --tier 2 --skip-vault-init"
+    record "ivia_verify" "WARN"
+  else
+    ok "Vault OAuth issuer_id: ${vault_issuer}"
+    record "ivia_verify" "PASS"
+  fi
+
+  # iviaop discovery — see (b) above. A `.invalid` placeholder here is EXPECTED
+  # until tier 3 runs, so this must not warn during tier 2. But once tier 3 HAS
+  # performed the flip and the issuer is STILL a placeholder, that is a genuine
+  # fault and staying silent hides it.
+  #
+  # TWO things must both happen before the issuer becomes the real FQDN:
+  #   1. deploy Step 7 (ACME) issues the cert and re-applies module.ivia, AND
+  #   2. tier 3 applies kubernetes_config_map_v1_data.iviaop_clients_patch
+  #      (infrastructure/workloads/main.tf) and restarts iviaop.
+  # The patch carries `depends_on = [module.uc2_app]` because it needs the
+  # banking-UI ALB hostname that only tier 3 creates, so the flip is DEFERRED to
+  # tier 3 BY DESIGN — a circular-dependency break documented in
+  # modules/verify_access/main.tf. So "has the flip run?" is answered by that
+  # resource being present in tier-3 state.
+  #
+  # Presence of the RESOURCE, not merely of the state FILE: a `terraform init` or
+  # a partially-failed apply leaves a state file behind with the patch absent, and
+  # gating on the file would then report a real tier-2 placeholder as a tier-3
+  # failure. Absent/unreadable state is treated as "tier 3 has not run", which is
+  # the no-false-alarm direction.
+  local issuer tier3_state tier3_flip_applied=false
+  tier3_state="${VAULT_CONFIG_DIR}/../workloads/terraform.tfstate"
+  if [[ -f "$tier3_state" ]] && \
+     [[ "$(jq -r '[.resources[]? | select(.type=="kubernetes_config_map_v1_data" and .name=="iviaop_clients_patch")] | length' "$tier3_state" 2>/dev/null || echo 0)" -gt 0 ]]; then
+    tier3_flip_applied=true
+  fi
+
   issuer=$(kubectl exec -n verify-access deploy/iviawrprp1 -- \
     curl -sk --max-time 15 \
     https://localhost:9443/isvaop/oauth2/.well-known/openid-configuration \
     2>/dev/null | jq -r '.issuer // empty' 2>/dev/null || echo "")
 
-  if [[ -n "$issuer" ]]; then
-    # A `.invalid` issuer is the placeholder IVIA serves until the OIDC issuer is
-    # flipped to the real nip.io FQDN. Two things must both happen for the flip:
-    #   1. deploy Step 7 (ACME) issues the cert + re-applies module.ivia, AND
-    #   2. TIER 3 applies kubernetes_config_map_v1_data.iviaop_clients_patch
-    #      (infrastructure/workloads/main.tf) + restarts iviaop — the patch needs
-    #      the banking-UI ALB hostname that only exists after Tier 3's uc2_app,
-    #      so the issuer flip is DEFERRED to Tier 3 by design (circular-dep break,
-    #      documented in modules/verify_access/main.tf).
-    # Therefore a `.invalid` issuer at the end of Tier 2 is EXPECTED, not a
-    # failure: it is patched during Tier 3. Only treat it as a real problem (WARN)
-    # once Tier 3 has actually run (its state exists) and the issuer is STILL a
-    # placeholder. (.invalid is an RFC 6761 reserved TLD — never a real issuer.)
-    local _tier3_state="${VAULT_CONFIG_DIR}/../workloads/terraform.tfstate"
-    if [[ "$issuer" == *".invalid"* ]]; then
-      if [[ -f "$_tier3_state" ]]; then
-        # Tier 3 has applied but the issuer never flipped — this IS a real fault.
-        warn "OIDC issuer is still a placeholder after Tier 3: ${issuer}"
-        warn "  Tier 3 ran (workloads state present) but the issuer was not flipped"
-        warn "  to the real nip.io FQDN. Investigate ACME (deploy Step 7) and the"
-        warn "  iviaop_clients_patch / iviaop rollout, then re-run Step 7:"
-        warn "    bash infrastructure/scripts/deploy-workshop.sh --tier 2 --skip-vault-init"
-        record "ivia_verify" "WARN"
-      else
-        # Tier 3 has NOT run yet — placeholder is the expected pre-patch state.
-        info "OIDC issuer is the pre-Tier-3 placeholder: ${issuer}"
-        info "  This is EXPECTED after Tier 2. The real nip.io issuer is patched in"
-        info "  during Tier 3 (iviaop_clients_patch + iviaop rollout, which need the"
-        info "  banking-UI ALB created in Tier 3). Proceed to Tier 3 — nothing to fix here."
-        record "ivia_verify" "PASS"
-      fi
+  if [[ -z "$issuer" ]]; then
+    info "iviaop OIDC discovery not responding yet — IVIA may still be initializing (informational)"
+  elif [[ "$issuer" == *".invalid"* ]]; then
+    if [[ "$tier3_flip_applied" == true ]]; then
+      warn "iviaop discovery issuer is STILL a placeholder after tier 3: ${issuer}"
+      warn "  Tier 3 applied iviaop_clients_patch, so the issuer should already be"
+      warn "  the real nip.io FQDN. Check that iviaop actually restarted to reload"
+      warn "  the patched ConfigMap (it reads provider.yml/clients.yml only at startup):"
+      warn "    kubectl rollout restart deploy/iviaop -n verify-access"
+      record "ivia_verify" "WARN"
     else
-      ok "OIDC issuer: ${issuer}"
-      record "ivia_verify" "PASS"
+      info "iviaop discovery issuer: ${issuer} (placeholder — expected; tier 3 patches it)"
     fi
   else
-    warn "OIDC discovery not responding — IVIA may still be initializing"
-    record "ivia_verify" "WARN"
+    info "iviaop discovery issuer: ${issuer}"
   fi
 }
 

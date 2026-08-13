@@ -6,10 +6,10 @@
 #   1. Installs missing CLI prereqs (kubectl 1.34.x, helm 3.12+, terraform 1.10+,
 #      vault 1.21.x, aws v2, jq, yq) — macOS Homebrew or Linux apt/yum
 #   2. Verifies Amazon Bedrock model access (us.amazon.nova-pro-v1:0
-#      Amazon Nova Pro cross-region inference profile) in us-west-2 via
-#      a 1-token Converse invocation
-#   3. Verifies AWS service quotas in us-west-2 (EC2 vCPU >= 32,
-#      VPC EIP >= 6, RDS DB instances >= 1, AOSS OCU indexing >= 2,
+#      Amazon Nova Pro cross-region inference profile) in the resolved
+#      deploy region via a 1-token Converse invocation
+#   3. Verifies AWS service quotas in the resolved deploy region (EC2 vCPU
+#      >= 32, VPC EIP >= 6, RDS DB instances >= 1, AOSS OCU indexing >= 2,
 #      AOSS OCU search >= 2)
 #   4. Verifies IAM permissions for the workshop bootstrap (17 actions via
 #      iam:SimulatePrincipalPolicy with self-test fallback)
@@ -147,7 +147,19 @@ source "$SCRIPT_DIR/common-checks.sh"
 # separate "base model" / "profile" distinction to verify — the CRIS id IS
 # the only id that works. Single canonical constant.
 MODEL_ID="us.amazon.nova-pro-v1:0"
-AWS_REGION="${AWS_REGION:-us-west-2}"
+
+# Region comes from the shared resolver, never a literal: AWS_REGION env var if
+# the attendee exported one, otherwise the `region` value in
+# infrastructure/terraform.tfvars — i.e. the region this deploy will actually
+# use. A hardcoded fallback here silently checked quotas and Bedrock access in
+# the wrong region while the deploy ran somewhere else. Fail loud instead.
+# shellcheck source=resolve-region.sh
+source "$SCRIPT_DIR/resolve-region.sh"
+if ! resolve_region ""; then
+    exit 1
+fi
+AWS_REGION="$RESOLVED_REGION"
+export AWS_REGION
 export AWS_PAGER=""
 
 # ---- Minimum tool versions (enforced in the "Verify CLI tool versions" section) ----

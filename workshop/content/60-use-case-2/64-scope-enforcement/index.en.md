@@ -132,23 +132,31 @@ The credential issued above lives for **15 minutes** (`default_ttl`). If you tak
 
 ### Step 2.2 — Attempt INSERT with those credentials
 
-No workshop pod has the `psql` binary pre-installed, so spawn a transient `postgres:16-alpine` pod that connects to RDS as the Vault-vended ephemeral role, attempts the INSERT, and auto-deletes when it exits. The `${PG_USER}`, `${PG_PASS}`, and `${RDS_HOST}` references resolve from the exports you just ran in Step 2.1:
+No workshop pod has the `psql` binary pre-installed, so spawn a transient `postgres:16-alpine` pod that connects to RDS as the Vault-vended ephemeral role and attempts the INSERT. The `${PG_USER}`, `${PG_PASS}`, and `${RDS_HOST}` references resolve from the exports you just ran in Step 2.1.
+
+The pod runs detached and its output is read back with `kubectl logs`. The obvious form — `kubectl run --rm -i` — races: when the pod finishes before the client attaches, the output is lost and you get `If you don't see a command prompt, try pressing enter.` followed by a deleted pod and nothing else. On this step an empty result looks exactly like a correct answer, so the race has to be removed rather than worked around. The loop waits for either terminal phase, `Succeeded` or `Failed`, so a failure — an expired credential, a denied statement — shows you the error immediately instead of stalling.
 
 ```bash
 kubectl delete pod pg-insert-attempt -n banking-app --ignore-not-found --now >/dev/null 2>&1
-kubectl run pg-insert-attempt --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
+kubectl run pg-insert-attempt --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${PG_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop \
     -c "INSERT INTO banking.accounts (user_sub, account_number, balance)
-         VALUES ('attacker@example.com', 'FAKE-001', 999999.00);"
+         VALUES ('attacker@example.com', 'FAKE-001', 999999.00);" >/dev/null
+for _ in $(seq 60); do
+  case "$(kubectl get pod pg-insert-attempt -n banking-app -o jsonpath='{.status.phase}' 2>/dev/null)" in
+    Succeeded|Failed) break ;;
+  esac
+  sleep 2
+done
+kubectl logs pg-insert-attempt -n banking-app
+kubectl delete pod pg-insert-attempt -n banking-app --now >/dev/null 2>&1
 ```
 
-Expected output (the pod exits with code 1 because `psql` returns non-zero on SQL errors — that is the *success* signal here, the INSERT was rejected):
+The loop waits for the pod to reach **either** terminal phase before reading its log. That matters here: `psql` exits non-zero on a SQL error, so this pod is *expected* to end in `Failed` — and it also matters on the steps that expect success, because an expired credential ends them in `Failed` too and you need to see the password error, not a timeout.
 
 ```
 ERROR:  permission denied for table accounts
-pod "pg-insert-attempt" deleted
-pod banking-app/pg-insert-attempt terminated (Error)
 ```
 
 The Postgres GRANT layer rejected the INSERT independently of Vault policy. Even if an attacker obtained a `uc2-personal-readonly` credential through a Vault misconfiguration that widened the policy scope, the database GRANT would still prevent writes — and because every Vault-vended credential is its own freshly-created Postgres role (with grants applied directly to it), there is no permanent role to GRANT INSERT onto either.
@@ -168,13 +176,21 @@ MASTER_USER=$(echo "${SECRET_JSON}" | jq -r '.username')
 MASTER_PASS=$(echo "${SECRET_JSON}" | jq -r '.password')
 
 kubectl delete pod pg-grants -n banking-app --ignore-not-found --now >/dev/null 2>&1
-kubectl run pg-grants --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
+kubectl run pg-grants --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${MASTER_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${MASTER_USER}" -d workshop \
-    -c "\dp banking.accounts"
+    -c "\dp banking.accounts" >/dev/null
+for _ in $(seq 60); do
+  case "$(kubectl get pod pg-grants -n banking-app -o jsonpath='{.status.phase}' 2>/dev/null)" in
+    Succeeded|Failed) break ;;
+  esac
+  sleep 2
+done
+kubectl logs pg-grants -n banking-app
+kubectl delete pod pg-grants -n banking-app --now >/dev/null 2>&1
 ```
 
-Expected output — one `vault_root=arwdDxtm/vault_root` line followed by one row per **currently-active** Vault-vended credential (every active lease maps to one Postgres role, each granted `=r/vault_root`). The exact number of `v-…` rows depends on how many leases are still live — every issuance you made on pages 62 and 63 contributes one:
+Expected output — one `vault_root=arwdDxtm/vault_root` line followed by one row per **currently-active** Vault-vended credential (every active lease maps to one Postgres role, each granted `=r/vault_root`). The exact number of `v-…` rows depends on how many leases are still live — every issuance you made on the previous pages contributes one:
 
 ```
                                                                                           Access privileges
@@ -182,12 +198,23 @@ Expected output — one `vault_root=arwdDxtm/vault_root` line followed by one ro
 ---------+----------+-------+--------------------------------------------------------------------+-------------------+---------------------------------------------------------------------------------
  banking | accounts | table | vault_root=arwdDxtm/vault_root                                    +|                   | user_accounts (r):                                                             +
          |          |       | "v-root-uc2-pers-<random>-<timestamp>"=r/vault_root               +|                   |   (u): ((user_sub)::text = current_setting('app.current_user_sub'::text, true))
-         |          |       | "v-root-uc2-pers-<random>-<timestamp>"=r/vault_root               +|                   |
+         |          |       | "v-JWT Toke-uc2-pers-<random>-<timestamp>"=r/vault_root           +|                   |
          |          |       | "v-root-uc2-pers-<random>-<timestamp>"=r/vault_root                |                   |
 (1 row)
-
-pod "pg-grants" deleted
 ```
+
+:::alert{type="info" header="\"v-JWT Toke-\" is not corruption — it is the on-behalf-of path made visible"}
+Two role-name prefixes appear, and the difference tells you *how* each credential was obtained. Vault builds every ephemeral role name from the display name of the token that asked for it, truncated to 8 characters:
+
+- **`v-root-…`** — issued with the root token, i.e. by one of the inspection commands you have been running by hand.
+- **`v-JWT Toke-…`** — issued by presenting a real IVIA OAuth JWT, whose Vault display name is `JWT Token with JTI: <uuid>`. These are the on-behalf-of issuances: the MCP server serving a signed-in user, `verify-uc2.sh`, or your own Step 5 on the [Configure the OAuth Resource Server](../62-configure-oauth-resource-server/) page.
+
+The truncation is why it reads oddly. The name deliberately identifies the *token*, never the human `sub` — human attribution comes from correlating the lease with the IVIA OAuth plane, not from the Postgres role name.
+
+The middle segment is the Vault database role, truncated the same way: `uc2-pers` is `uc2-personal-banker`. If you have already run the Use Case 3 checks you may also see `v-…-uc3-read-…` (`uc3-readonly`) or `v-…-uc3-refu-…` (`uc3-refund-writer`) rows.
+
+Both of those Use Case 3 rows read `=r/vault_root` here, and the second one is worth a second look: `uc3-refund-writer` is the *write* role, but its write privileges are granted on `banking.refunds` only — on this table it holds plain `SELECT`, exactly like every other ephemeral role. A role's name describes what it is **for**; the ACL is what it can actually **do**, table by table.
+:::
 
 What to read from this output:
 

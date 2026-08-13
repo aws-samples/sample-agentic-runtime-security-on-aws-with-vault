@@ -74,7 +74,7 @@ ok "${RUNNING_COUNT} Vault server pod(s) running"
 info "Checking Vault initialization status..."
 VAULT_STATUS=$(kubectl exec -n "${VAULT_NS}" "${VAULT_POD}" -- vault status -format=json 2>/dev/null || true)
 
-if echo "${VAULT_STATUS}" | grep -q '"initialized": true'; then
+if grep -q '"initialized": true' <<<"${VAULT_STATUS}"; then
   SEALED=$(echo "${VAULT_STATUS}" | grep -o '"sealed": [a-z]*' | head -1)
   ok "Vault is already initialized (${SEALED})"
 
@@ -136,7 +136,7 @@ echo ""
 info "Verifying Vault is unsealed (KMS auto-unseal)..."
 VAULT_STATUS=$(kubectl exec -n "${VAULT_NS}" "${VAULT_POD}" -- vault status -format=json 2>/dev/null || true)
 
-if echo "${VAULT_STATUS}" | grep -q '"sealed": false'; then
+if grep -q '"sealed": false' <<<"${VAULT_STATUS}"; then
   ok "Vault is unsealed via KMS auto-unseal"
 else
   warn "Vault is still sealed — check KMS key permissions and Pod Identity association."

@@ -30,15 +30,15 @@ Read the Kubernetes auth role that binds `uc1-retriever-sa` to the `uc1-readonly
 vault read auth/kubernetes/role/uc1
 ```
 
-Expected output:
+Expected output (key fields — the command returns several more):
 
 ```
 Key                                 Value
 ---                                 -----
-alias_name_source                   serviceaccount_uid
+alias_name_source                   serviceaccount_name
 bound_service_account_names         [uc1-retriever-sa]
 bound_service_account_namespaces    [uc1]
-policies                            [uc1-readonly]
+token_policies                      [uc1-readonly]
 token_ttl                           1h
 token_max_ttl                       2h
 token_type                          default
@@ -47,7 +47,7 @@ token_type                          default
 Key observations:
 
 - `bound_service_account_names` is `[uc1-retriever-sa]` — only this SA in namespace `uc1` can obtain this role.
-- `policies` is `[uc1-readonly]` — the Vault token issued after login is scoped to this policy only.
+- `token_policies` is `[uc1-readonly]` — the Vault token issued after login is scoped to this policy only.
 - `token_ttl` is 1 hour — the Vault session (not the database credential) lifetime.
 
 ## Step 2 — Inspect the uc1-readonly policy
@@ -153,8 +153,13 @@ Key                               Value
 ---                               -----
 display_name                      uc1-agent
 ceiling_policies                  [uc1-ceiling]
-optional_authorization_details    true
+optional_authorization_details    false
+owner                             uc1-retriever-service
 ```
+
+`optional_authorization_details` is **not set** by the Terraform for this registration — it is
+left computed, because RAR-optionality is moot for a Kubernetes-auth agent that never presents
+an OAuth token. Contrast Use Cases 2 and 3, which set it deliberately (`true` and `false`).
 
 Two things distinguish Use Case 1 from Use Cases 2 and 3:
 

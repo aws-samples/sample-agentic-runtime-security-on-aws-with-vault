@@ -24,6 +24,17 @@ WRP_DEPLOY="iviawrprp1"
 
 # Source common color/log helpers if available (same pattern as sibling scripts)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Opt OUT of common-checks.sh's EXIT trap. This script reports through its own
+# print_success/print_error helpers (below) and never calls print_pass/print_fail,
+# so FAILURES[] is always empty -- which made the inherited
+# `trap 'print_summary; exit $?' EXIT` return 0 and OVERWRITE every one of the
+# `exit 1` hard-failure paths below. Proven: with an unusable kubeconfig this
+# script printed "[FAIL] Deployment iviawrprp1 not found", ran `exit 1`, and the
+# process still exited 0 -- so deploy-workshop.sh Step 9 (_run_subscript gates on
+# rc alone, line 344) reported PASS with IVIA entirely absent. The trailing
+# "No checks ran" banner was the visible symptom. COMMON_CHECKS_SUMMARY=0 is the
+# opt-out common-checks.sh already documents for exactly this case.
+COMMON_CHECKS_SUMMARY=0
 # shellcheck disable=SC1091
 [ -f "${SCRIPT_DIR}/common-checks.sh" ] && . "${SCRIPT_DIR}/common-checks.sh"
 
@@ -86,12 +97,28 @@ fi
 
 # --- 3. OIDC discovery via WRP exec curl (CONTEXT exit gate) ---
 print_info "Fetching OIDC discovery via kubectl exec deploy/${WRP_DEPLOY}..."
-resp=$(kubectl exec -n "${IVIA_NS}" "deploy/${WRP_DEPLOY}" -- \
-  curl -sk --max-time 15 \
-  https://localhost:9443/isvaop/oauth2/.well-known/openid-configuration)
+# The pod passing its Kubernetes readiness probe does NOT mean the WRP's 9443
+# listener is already serving the /isvaop junction. On a freshly cycled pod the
+# TLS handshake is refused for a while and curl exits 35 (SSL connect error) --
+# under `set -e` that transient aborts the whole script mid-gate. Retry with
+# backoff (24 x 5s = 120s) and only fail once the endpoint has genuinely had
+# time to answer. Mirrors the retry deploy-workshop.sh Step 9 already does
+# around its own IVIA OIDC probe.
+#
+# The `|| resp=""` is required: without it `set -e` kills the script on the
+# first transient instead of letting the loop retry.
+resp=""
+for _oidc_try in $(seq 1 24); do
+  resp=$(kubectl exec -n "${IVIA_NS}" "deploy/${WRP_DEPLOY}" -- \
+    curl -sk --max-time 15 \
+    https://localhost:9443/isvaop/oauth2/.well-known/openid-configuration 2>/dev/null) || resp=""
+  [ -n "${resp}" ] && break
+  print_info "OIDC discovery not answering yet (attempt ${_oidc_try}/24) — retrying in 5s"
+  sleep 5
+done
 
 if [ -z "${resp}" ]; then
-  print_error "Empty response from OIDC discovery endpoint"
+  print_error "Empty response from OIDC discovery endpoint after 120s"
   exit 1
 fi
 

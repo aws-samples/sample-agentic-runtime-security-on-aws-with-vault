@@ -5,10 +5,12 @@ weight: 73
 
 ## Where Enforcement Now Lives: at Vault, per request
 
-Vault Enterprise's OAuth resource server enforces the delegation itself. When the delegated JWT is presented via `X-Vault-Token`, Vault resolves the agent actor from `act.sub` and narrows the token per request from the `vault:path_access` RAR. Two forged-token attacks fail **at Vault** — before any credential is issued:
+Vault Enterprise's OAuth resource server enforces the delegation itself. When the delegated JWT is presented via `X-Vault-Token`, Vault resolves the agent actor from `act.sub`, intersects that agent's ceiling with the human's baseline, and narrows the result per request from the `vault:path_access` RAR. Two attacks using **genuine, validly-signed IVIA tokens** fail **at Vault** — before any credential is issued:
 
-- **Wrong actor** — a token whose `act.sub` names an agent Vault does not have registered fails closed: no agent entity resolves, so the on-behalf-of authorization is denied.
+- **Wrong agent** — a token delegating to `agent-uc2` is denied a Use Case 3 path, because `uc2-agent-ceiling` does not contain it. This holds **even when the human's own baseline permits that path**: the ceiling of the agent doing the acting is what binds.
 - **Wrong RAR path** — a token whose `vault:path_access` RAR names a path *other than* the one being requested is denied **even though the human baseline and the agent ceiling both permit the target path**. The per-request RAR is a hard, in-Vault narrowing.
+
+Both matter more than the obvious forgery case, because in both the attacker holds a token IVIA really did sign.
 
 ## Run the Bypass Test
 
@@ -16,39 +18,54 @@ Vault Enterprise's OAuth resource server enforces the delegation itself. When th
 cd infrastructure/scripts && ./verify-uc3.sh --bypass
 ```
 
-The script runs **genuine negative tests**, each classified by the *reason* Vault rejected the request — so the test can never silently pass on an infrastructure error:
+The script first **self-mints a real delegated token** for `oscar` through the production path (PKCE login, then RFC 8693 token exchange), then runs **genuine negative tests** against it — each classified by the *reason* Vault rejected the request, so the test can never silently pass on an infrastructure error:
 
-- **Untrusted-signer control:** forges an HS256 JWT (PyJWT, in a temporary pod) and presents it. Vault trusts only IVIA's RS256 JWKS via the resource server profile, so the token dies at the signature layer.
-- **Wrong-actor control:** presents a genuine IVIA-signed delegated token whose `act.sub` names an unregistered agent (`evil-actor`). The signature and issuer pass, but no agent entity resolves for `evil-actor`, so Vault denies the on-behalf-of authorization.
-- **Wrong-RAR-path control (the money shot):** presents a genuine delegated token that resolves `sub = jaime` and `act.sub = uc3-actor` correctly, but carries a `vault:path_access` RAR pointing at the **wrong path**. Vault denies the request even though baseline ∩ ceiling permit `database/creds/uc3-refund-writer` — the RAR did not name it, so Vault narrowed the token away from it.
+- **Untrusted-signer control (Check 14):** forges an HS256 JWT whose claims are *identical* to the allowed token — same `iss`, `aud`, `sub`, `act.sub`, same RAR. Only the signature differs. Vault trusts only IVIA's RS256 JWKS via the resource server profile, so the token dies at the signature layer, and because nothing else varies the denial is attributable to the signature alone.
+- **Wrong-RAR-path control (Check 17 — the money shot):** presents a genuine delegated token that resolves `sub = oscar` and `act.sub = uc3-actor` correctly, but asks for a path its `vault:path_access` RAR does not name. Vault denies with `RAR_NO_MATCH` even though the entity ACL and the agent ceiling both permit that path — the RAR did not name it, so Vault narrowed the token away from it.
+- **Wrong-agent control (Check 18):** presents a validly-delegated token from the *other* use case — a real `agent-uc2` login with `act.sub=agent-uc2` — against `database/creds/uc3-refund-writer`. Denied, because `uc2-agent-ceiling` omits the refund path. This is the cross-use-case isolation result: **even though `oscar`'s own human baseline permits the refund path**, an agent whose ceiling excludes it cannot reach it on his behalf.
 
-**Representative output** — each control is a `403 permission denied` at Vault, classified by why:
+A positive control runs alongside them (**Check 16**), confirming a correctly-scoped delegated token *is* still authorized — so a green run proves the enforcement is discriminating, not merely blocking everything.
+
+**Representative output:**
 
 ```
   ℹ INFO Use Case 3 — CIBA Privileged verification — BYPASS TEST MODE
 
-  ✓ PASS Untrusted-signer control: Vault rejected the HS256 self-forged JWT at the signature layer (trusts only IVIA's RS256 JWKS) — an attacker cannot forge their way in
-  ✓ PASS Wrong-actor control: real IVIA-signed token with act.sub=evil-actor DENIED — no registered agent entity resolves, on-behalf-of authorization fails closed
-  ✓ PASS Wrong-RAR-path control: real delegated token (sub=jaime, act.sub=uc3-actor) DENIED — its vault:path_access RAR named a different path, so Vault narrowed the token away from database/creds/uc3-refund-writer even though baseline ∩ ceiling permit it
+  ℹ INFO Self-mint: obtaining a REAL delegated OBO token for 'oscar' (PKCE login + RFC 8693 token-exchange, all secrets sourced at runtime)
+  ✓ PASS Self-mint: minted a real IVIA-issued delegated token + subject token for 'oscar'
+
+  ✓ PASS Bypass Check 14 PASSED: Vault rejected the HS256 forgery whose claims match the ALLOWED delegated token (iss/aud/sub/act.sub/RAR identical) — only the signature differs …
+  ✓ PASS Bypass Check 15: REAL delegated token carries a jti claim (sub=oscar, jti=<uuid>)
+  ✓ PASS Bypass Check 15: REAL delegated token carries act.sub=uc3-actor (OBO actor claim Vault resolves)
+  ✓ PASS Bypass Check 16 PASSED: the delegated token … was ALLOWED to read database/creds/uc3-refund-writer …
+  ✓ PASS Bypass Check 17 PASSED: the delegated token (RAR path=database/creds/uc3-refund-writer) was DENIED reading database/creds/uc3-readonly with RAR_NO_MATCH …
+  ✓ PASS Bypass Check 18 PASSED: the agent-uc2 UC2 token (sub=oscar, act.sub=agent-uc2) was DENIED reading database/creds/uc3-refund-writer …
+  ⚠ WARN Bypass Check 19: SKIPPED — no UC3_WRONG_ACTOR_TOKEN supplied.
 
 ===============================================================================
- ✓ checks passed
+ ✓ 7 check(s) passed
 ===============================================================================
 ```
 
+::::alert{header="Check 19 skips, and that is the correct result" type="info"}
+Check 19 tests an *unregistered* actor — a token whose `act.sub` names an agent Vault has never heard of. It is skipped by default and the run is still green, because **production IVIA cannot mint such a token**: the `isvaop_pretoken` rule only ever stamps `act.sub=uc3-actor`. Constructing one requires an operator to supply it via `UC3_WRONG_ACTOR_TOKEN`.
+
+That IVIA cannot produce a wrong-actor token is itself a property worth noticing — the actor claim is stamped server-side at mint time, never chosen by the caller. Check 18 already proves the enforcement that matters: delegation is mandatory and the agent's ceiling binds it.
+::::
+
 ## Three Independent Denials, Each Sufficient On Its Own
 
-| Layer | Mechanism | What It Enforces |
-|---|---|---|
-| JWT signature | JWKS validation against IVIA's RS256 public keys (resource server profile) | Only IVIA-signed tokens are accepted — HS256 self-signed tokens are always rejected |
-| Agent actor | `act.sub` resolved against the Agent Registry | Only a token naming a **registered** agent (`uc3-actor`) authorizes on-behalf-of; an unknown actor fails closed |
-| Per-request RAR | `vault:path_access` path must match the requested path | Evaluated in Vault at the point of use: a delegated token whose RAR names a different path is denied **even though baseline ∩ ceiling permit the target** |
+| Layer | Mechanism | Check | What It Enforces |
+|---|---|---|---|
+| JWT signature | JWKS validation against IVIA's RS256 public keys (resource server profile) | 14 | Only IVIA-signed tokens are accepted — an HS256 forgery is rejected even when every claim matches a valid token |
+| Agent ceiling | `act.sub` resolved against the Agent Registry, then its `ceiling_policies` intersected with the human baseline | 18 | The acting agent's ceiling binds regardless of the human's rights: `agent-uc2` cannot reach a Use Case 3 path **even for a user whose own baseline permits it** |
+| Per-request RAR | `vault:path_access` path must match the requested path | 17 | Evaluated in Vault at the point of use: a delegated token whose RAR names a different path is denied **even though baseline ∩ ceiling permit the target** |
 
 The RAR-path control is the one that proves enforcement moved *into* Vault: the human baseline and the agent ceiling both allow `database/creds/uc3-refund-writer`, yet Vault still denies the request when the per-request `vault:path_access` RAR does not name that exact path. Vault — not IVIA, not the agent — is the interpreter of the RAR.
 
 ### Threat Model
 
-**What this protects against:** A rogue agent pod that obtains a user's delegated token cannot repurpose it. If its `act.sub` names an unregistered agent, no agent entity resolves and Vault fails closed; if it carries a `vault:path_access` RAR for a different path, Vault narrows the token away from the refund-writer credential. A self-forged token is rejected even earlier, at RS256 signature validation. No DB credentials are ever issued.
+**What this protects against:** A rogue agent pod that obtains a user's delegated token cannot repurpose it. If the token delegates to a *different* agent, that agent's ceiling binds and the Use Case 3 path is refused even for a user entitled to it; if it carries a `vault:path_access` RAR for a different path, Vault narrows the token away from the refund-writer credential. A self-forged token is rejected even earlier, at RS256 signature validation — and an actor claim naming an agent Vault has never registered resolves to no entity at all, so the on-behalf-of authorization fails closed. No DB credentials are ever issued.
 
 **What this does NOT protect against:** A compromised agent-uc3 pod with its service account JWT intact could initiate a CIBA flow and present the resulting delegated token to Vault. Mitigations for pod compromise (e.g., falco runtime rules, IRSA session policy restrictions) are out of scope for this workshop but represent the next layer of defense.
 
@@ -172,7 +189,13 @@ The Postgres GRANT layer rejects the INSERT before the RLS policy (or any constr
 
 RLS is not the only layer scoping refund reads. The `check_refund_status` tool adds an explicit **owner predicate** — it `JOIN banking.accounts` and requires `a.user_sub = <authenticated_sub>` — so a `refund_id` you do not own returns the **same** empty result as a non-existent one. The agent reports `{"error": "Refund <id> not found"}` either way, leaking nothing about another user's refunds. This section proves that predicate at the database layer with the `uc3-readonly` credential from Step 2.1, running the exact query the agent runs (`uc3-agent/app/agent.py`, `check_refund_status`).
 
-Refunds are **created by you** during the CIBA approval flow (page 71) — they are never seeded — so the IDs below are examples from one run; **yours will differ.**
+Refunds are **created by you** during the CIBA approval flow — they are never seeded — so the IDs below are examples from one run; **yours will differ.**
+
+:::alert{type="warning" header="This section needs a completed refund first"}
+`banking.refunds` starts **empty**. If you have not yet finished [Test the Refund Flow](../70-test-refund/) — including the physical **Approve** tap on your enrolled device — Step 4.1 below runs correctly but returns `(0 rows)` for both personas, and Step 4.2 has no `REFUND_ID` to use.
+
+That is not a failure. Go and complete the refund, then come back to this section.
+:::
 
 #### Step 4.1 — Find a refund you created
 

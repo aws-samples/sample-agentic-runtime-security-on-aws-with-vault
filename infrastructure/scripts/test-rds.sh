@@ -132,11 +132,17 @@ else
             "Update the parameter group ${pg_name}: aws rds modify-db-parameter-group --db-parameter-group-name ${pg_name} --region ${REGION} --parameters 'ParameterName=shared_preload_libraries,ParameterValue=pgaudit,ApplyMethod=pending-reboot'. Reboot the instance to take effect."
     fi
 
+    # NOTE: describe-db-parameters auto-paginates and the CLI applies --query to
+    # EACH page, so `| [0]` emits one line per page — a multi-line blob that is
+    # never equal to "None" and made this check impossible to fail. Aggregate
+    # every page instead, drop the `None` placeholders the CLI prints for pages
+    # that don't contain the parameter, and take what's left. --no-paginate is
+    # not the fix: it returns page 1 only, so the check would always fail.
     pgaudit_log=$(aws rds describe-db-parameters --db-parameter-group-name "$pg_name" \
         --region "$REGION" \
-        --query "Parameters[?ParameterName=='pgaudit.log'].ParameterValue | [0]" \
-        --output text 2>/dev/null)
-    if [ -n "$pgaudit_log" ] && [ "$pgaudit_log" != "None" ]; then
+        --query "Parameters[?ParameterName=='pgaudit.log'].ParameterValue" \
+        --output text 2>/dev/null | tr '\t' '\n' | grep -v '^None$' | head -1)
+    if [ -n "$pgaudit_log" ]; then
         print_pass "pgaudit.log = ${pgaudit_log}"
     else
         print_fail "pgaudit.log is unset" \

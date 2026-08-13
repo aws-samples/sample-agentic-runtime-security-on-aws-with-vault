@@ -54,8 +54,17 @@
 #   Checks 15-18 self-mint (no manual token); a mint failure is a HARD FAIL.
 #   UC3_DELEGATED_TOKEN (if set) overrides the minted token for the Part B live gate.
 #
+# No-phone mode (--no-phone) — ADMIN ONLY, standalone. Drives the LIVE refund end to
+# end when nobody has the IBM Verify app: it enrols a throwaway virtual authenticator
+# over the same OAuth + SCIM endpoints the app uses, signs the real user-presence
+# challenge, and then prints the full three-plane Athena correlation for the refund it
+# produced (checks N1-N8). Nothing is stubbed — IVIA resolves the transaction on its
+# own evidence and approval stays bound to the exact transaction the agent fired. It
+# refuses to run if the persona already has a device it did not enrol, and it never
+# leaves one enrolled. See uc3-virtual-authenticator.py.
+#
 # Usage:
-#   ./verify-uc3.sh [--bypass] [--help]
+#   ./verify-uc3.sh [--bypass | --no-phone] [--help]
 #
 # Env-var overrides:
 #   BANKING_NAMESPACE     (default: banking-app)
@@ -73,19 +82,40 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SCRIPT_DESCRIPTION="Use Case 3 — CIBA Privileged verification"
 
+BYPASS_MODE=false
+NOPHONE_MODE=false
+
+# Parse flags BEFORE sourcing common-checks.sh: its EXIT trap replaces the exit
+# code with the summary's, so a usage error must bail while the code still means
+# something (an unrecognized flag has to be loud, never a silent rc=0).
+for _arg in "$@"; do
+    case "${_arg}" in
+    --bypass) BYPASS_MODE=true ;;
+    --no-phone) NOPHONE_MODE=true ;;
+    --help | -h) ;; # handled after the helpers are sourced (needs no parsing)
+    *)
+        echo "verify-uc3.sh: unrecognized option '${_arg}' — see ./verify-uc3.sh --help" >&2
+        exit 2
+        ;;
+    esac
+done
+
+if [ "${BYPASS_MODE}" = true ] && [ "${NOPHONE_MODE}" = true ]; then
+    echo "verify-uc3.sh: --bypass and --no-phone are separate standalone modes — run them one at a time" >&2
+    exit 2
+fi
+
 # Source common helpers (print_pass, print_fail, print_warn, print_info,
 # FAILURES[] accumulator, print_summary, EXIT trap).
 # shellcheck source=common-checks.sh
 source "${SCRIPT_DIR}/common-checks.sh"
-
-BYPASS_MODE=false
 
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
     cat <<USAGE
 verify-uc3.sh — ${SCRIPT_DESCRIPTION}
 
 Usage:
-  ./verify-uc3.sh [--bypass] [--help]
+  ./verify-uc3.sh [--bypass | --no-phone] [--help]
 
 Normal mode checks (19 total):
   IVIA Full-Stack Checks (A-F):
@@ -130,6 +160,26 @@ no manual browser capture needed:
       only signs act.sub=uc3-actor, so this is operator-supplied; absent = SKIP (WARN)
       A self-mint failure is a HARD FAIL (skip = not-proven != pass), never silent.
 
+No-phone mode (--no-phone) — ADMIN ONLY, runs standalone. Drives the LIVE Use Case 3
+refund end-to-end when nobody has the IBM Verify app installed, then prints the full
+three-plane Athena audit correlation for the refund it just produced:
+  N1. Virtual authenticator enrolled for the persona (same OAuth + SCIM endpoints
+      the IBM Verify app uses) with a registered user-presence key
+  N2. Authenticated /chat lists the persona's transactions (real IVIA id_token)
+  N3. The agent fired a real MMFA push (a pending transaction appeared)
+  N4. IVIA accepted a real RSA-signed user-presence challenge and resolved the
+      transaction SUCCESS — read back through the SAME SCIM surface the agent reads
+  N5. The agent completed the refund turn (CIBA poll -> RFC 8693 -> Vault JIT creds)
+  N6. The refund row is in banking.refunds under RLS, approved_by=<persona>
+  N7. The virtual authenticator was deleted (nothing left enrolled)
+  N8. audit_correlation returns the row for this refund's request_id — printed in
+      full, every column (the three-plane capstone)
+  Nothing is stubbed: IVIA resolves the transaction on its own evidence and the
+  approval stays bound to the EXACT transaction the agent fired. Every check is a
+  HARD FAIL — there are no skips in this mode.
+  Refuses to run (N1 FAIL) if the persona has a device this tool did not enrol:
+  mmfa.fire_push() targets the first device listed, so it must never race a phone.
+
 Env-var overrides:
   BANKING_NAMESPACE       (default: banking-app)
   LOGGING_NAMESPACE       (default: logging)
@@ -140,6 +190,8 @@ Env-var overrides:
   AWS_REGION              (default: resolved from terraform.tfvars)
   UC3_PERSONA             (--bypass — workshop persona to self-mint the delegated
                            token for; default: oscar. Any user in base_layer.yaml.tftpl)
+  UC3_NOPHONE_PERSONA     (--no-phone — persona whose refund is driven end-to-end;
+                           default: jaime, the persona the workshop pages use)
   UC3_VERIFY_CHAT_TOKEN   (optional — bearer captured from a real browser sign-in;
                            enables Checks 12 and 13 against the live /chat endpoint)
   UC3_DELEGATED_TOKEN     (--bypass — OPTIONAL override: a REAL IVIA-issued delegated
@@ -151,10 +203,6 @@ Env-var overrides:
                            actor. Enables Bypass Check 19; absent = documented SKIP)
 USAGE
     exit 0
-fi
-
-if [ "${1:-}" = "--bypass" ]; then
-    BYPASS_MODE=true
 fi
 
 #-------------------------------------------------------------------------------
@@ -195,6 +243,8 @@ VAULT_EXEC="VAULT_TOKEN='${VAULT_ROOT_TOKEN:-}'"
 
 if [ "${BYPASS_MODE}" = true ]; then
     print_info "${SCRIPT_DESCRIPTION} — BYPASS TEST MODE"
+elif [ "${NOPHONE_MODE}" = true ]; then
+    print_info "${SCRIPT_DESCRIPTION} — NO-PHONE MODE (live CIBA refund, virtual authenticator)"
 else
     print_info "${SCRIPT_DESCRIPTION}"
 fi
@@ -633,6 +683,298 @@ print(jwt.encode(payload, 'forged-secret', algorithm='HS256'))
     # Summary is printed automatically by the common-checks.sh EXIT trap.
     # Keep a terminating exit so bypass mode does not fall through into the
     # normal-mode checks (the trap still overrides the code with the real result).
+    exit 0
+fi
+
+if [ "${NOPHONE_MODE}" = true ]; then
+    #===========================================================================
+    # NO-PHONE MODE (admin) — the LIVE Use Case 3 refund without the IBM Verify app.
+    #
+    # Use Case 3's approval is a real tap on an enrolled phone, and that is what
+    # attendees do. An admin preparing a delivery still has to prove the chain
+    # works, phone or not. The IBM Verify app is an HTTP client of documented IVIA
+    # endpoints, so this mode enrols a THROWAWAY virtual device over those SAME
+    # endpoints (OAuth authorization_code for the MMFA AuthenticatorClient, SCIM
+    # for the response key) and answers the real user-presence challenge with a
+    # real RSA signature.
+    #
+    # Nothing is stubbed and no gate is relaxed: IVIA resolves the transaction on
+    # its own evidence, the agent reads the outcome through its own
+    # mmfa.read_txn_status(), and approval stays bound to the EXACT MMFA
+    # transaction the agent fired — a stale or foreign approval still cannot
+    # complete a refund. The refund row in RDS and the audit_correlation row are
+    # the proof, not the script's own reporting.
+    #
+    # The device logic lives in uc3-virtual-authenticator.py and runs INSIDE the
+    # uc3-agent pod (httpx + cryptography are already there, and it can reach both
+    # the WRP ALB and the agent's own /chat).
+    #===========================================================================
+    NOPHONE_PERSONA="${UC3_NOPHONE_PERSONA:-jaime}"
+    nophone_helper="${SCRIPT_DIR}/uc3-virtual-authenticator.py"
+
+    # Every host/secret is sourced at RUNTIME (never hardcoded), exactly like
+    # _mint_uc3_tokens: WRP host <- infrastructure/.acme-state; redirect_uri +
+    # client id <- banking-app config maps; client secret <- uc3-agent-config;
+    # persona password <- base_layer.yaml.tftpl (its single source of truth).
+    np_acme_state="${SCRIPT_DIR}/../.acme-state"
+    np_base_layer="${SCRIPT_DIR}/../modules/verify_access/base_layer/base_layer.yaml.tftpl"
+    np_wrp=$(grep -E '^NIP_FQDN_WRP=' "${np_acme_state}" 2>/dev/null | cut -d= -f2)
+    np_redirect=$(kubectl get configmap -n "${BANKING_NAMESPACE}" banking-ui-config -o jsonpath='{.data.REDIRECT_URI}' 2>/dev/null)
+    np_client=$(kubectl get configmap -n "${BANKING_NAMESPACE}" banking-ui-config -o jsonpath='{.data.IVIA_CLIENT_ID}' 2>/dev/null)
+    np_secret=$(kubectl get configmap -n "${BANKING_NAMESPACE}" uc3-agent-config -o jsonpath='{.data.IVIA_CLIENT_SECRET}' 2>/dev/null)
+    np_password=$(grep -oE 'password:[[:space:]]*"[^"]+"' "${np_base_layer}" 2>/dev/null | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+    np_pod=$(kubectl get pod -n "${BANKING_NAMESPACE}" -l app=uc3-agent -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    np_op="${IVIA_ISSUER%/oauth2}"
+    [ -n "${np_wrp}" ] && np_wrp="https://${np_wrp#https://}"
+
+    if [ ! -f "${nophone_helper}" ]; then
+        print_fail "Check N1: uc3-virtual-authenticator.py not found next to this script" \
+            "Expected at ${nophone_helper}. Re-clone or restore the file, then re-run."
+        exit 0
+    fi
+    if [ -z "${np_wrp}" ] || [ -z "${np_redirect}" ] || [ -z "${np_client}" ] ||
+        [ -z "${np_secret}" ] || [ -z "${np_password}" ] || [ -z "${np_pod}" ]; then
+        print_fail "Check N1: could not resolve the inputs the live refund needs" \
+            "wrp='${np_wrp}' redirect_uri='${np_redirect}' client='${np_client}' secret=$([ -n "${np_secret}" ] && echo set || echo MISSING) password=$([ -n "${np_password}" ] && echo set || echo MISSING) uc3-agent pod='${np_pod}'. Fix: deploy tier 3 and confirm the banking-ui-config / uc3-agent-config ConfigMaps exist. Check: kubectl get configmap -n ${BANKING_NAMESPACE}"
+        exit 0
+    fi
+
+    np_log="${TMPDIR:-/tmp}/verify-uc3-no-phone-$$.log"
+    np_started=$(date +%s)
+
+    print_info "No-phone run for persona '${NOPHONE_PERSONA}' — enrolling a virtual authenticator, driving the real /chat refund, and signing the approval. Takes ~2-4 minutes (the agent polls CIBA for up to 120s)."
+    echo ""
+
+    kubectl exec -i -n "${BANKING_NAMESPACE}" "${np_pod}" -- python3 - run \
+        "${np_wrp}" "${NOPHONE_PERSONA}" "${np_password}" "${np_client}" \
+        "${np_secret}" "${np_redirect}" "${np_op}" \
+        <"${nophone_helper}" 2>&1 | tee "${np_log}"
+    np_rc=${PIPESTATUS[0]}
+    echo ""
+
+    # _np <KEY> — last value the helper emitted for KEY (its KEY=value protocol).
+    _np() { sed -n "s/^$1=//p" "${np_log}" 2>/dev/null | tail -1; }
+
+    np_err=$(_np ERR)
+
+    #---------------------------------------------------------------------------
+    # Check N1 — virtual authenticator enrolled + user-presence key registered
+    #---------------------------------------------------------------------------
+    np_authenticator=$(_np AUTHENTICATOR)
+    if [ "${np_rc}" = "2" ]; then
+        print_fail "Check N1: refused to enrol — ${NOPHONE_PERSONA} already has $(_np PREFLIGHT_OTHER) enrolled device(s) this tool did not create" \
+            "The agent's mmfa.fire_push() targets the FIRST device listed, so --no-phone must never race a real phone. Use the phone for the approval, or unenrol it first. Detail: ${np_err}"
+    elif [ -n "${np_authenticator}" ] && [ "$(_np KEY_REGISTERED)" = "1" ]; then
+        print_pass "Check N1: virtual authenticator enrolled for ${NOPHONE_PERSONA} (id=${np_authenticator}) with a user-presence key — same OAuth + SCIM endpoints the IBM Verify app uses"
+    else
+        print_fail "Check N1: could not enrol a virtual authenticator for ${NOPHONE_PERSONA}" \
+            "Detail: ${np_err:-see ${np_log}}. Check the MMFA AuthenticatorClient exists and /scim is junctioned: kubectl exec -n ${BANKING_NAMESPACE} ${np_pod} -- python3 -c \"import httpx; print(httpx.get('${np_wrp}/scim/Schemas').status_code)\""
+    fi
+
+    #---------------------------------------------------------------------------
+    # Check N2 — authenticated /chat lists the persona's transactions
+    #---------------------------------------------------------------------------
+    np_chat1=$(_np CHAT1)
+    if [ "$(_np CHAT1_STATUS)" = "200" ] && echo "${np_chat1}" | grep -qi "transaction\|amount\|merchant"; then
+        print_pass "Check N2: /chat returned ${NOPHONE_PERSONA}'s transactions with a real IVIA id_token (auth.py verified the JWKS signature, aud and iss)"
+    else
+        print_fail "Check N2: /chat did not return transaction data for ${NOPHONE_PERSONA}" \
+            "HTTP $(_np CHAT1_STATUS). A 401 means the minted id_token was rejected by auth.py. Got: ${np_chat1:0:200}. Check: kubectl logs deployment/uc3-agent -n ${BANKING_NAMESPACE}"
+    fi
+
+    #---------------------------------------------------------------------------
+    # Check N3 — the agent fired a real MMFA push (initiate_refund reached)
+    #---------------------------------------------------------------------------
+    np_txn=$(_np TXN_ID)
+    if [ -n "${np_txn}" ]; then
+        print_pass "Check N3: the agent fired a real MMFA push at initiate_refund (transaction ${np_txn}) — this is the approval an attendee would see on their phone"
+    else
+        print_fail "Check N3: no MMFA transaction appeared — the agent never reached initiate_refund" \
+            "Detail: ${np_err:-see ${np_log}}. The refund turn is: '$(_np CHAT2)'. Check: kubectl logs deployment/uc3-agent -n ${BANKING_NAMESPACE} | grep ciba"
+    fi
+
+    #---------------------------------------------------------------------------
+    # Check N4 — IVIA accepted a REAL signed user-presence challenge
+    #---------------------------------------------------------------------------
+    np_approve_status=$(_np APPROVE_STATUS)
+    np_txn_status=$(_np TXN_STATUS)
+    if { [ "${np_approve_status}" = "204" ] || [ "${np_approve_status}" = "200" ]; } &&
+        [ "${np_txn_status}" = "SUCCESS" ]; then
+        print_pass "Check N4: IVIA accepted the RSA-signed user-presence challenge (HTTP ${np_approve_status}) and resolved transaction ${np_txn} SUCCESS — read back through the SAME SCIM surface the agent's mmfa.read_txn_status() reads"
+    else
+        print_fail "Check N4: the signed approval was not accepted (PUT HTTP ${np_approve_status:-none}, transaction ${np_txn_status:-unresolved})" \
+            "Detail: ${np_err:-see ${np_log}}. A 400 here means IVIA rejected the signature — confirm the user-presence key registered (Check N1) and that the POST->PUT pair shared its JSESSIONID."
+    fi
+
+    #---------------------------------------------------------------------------
+    # Check N5 — the agent completed the refund turn (CIBA -> RFC 8693 -> Vault)
+    #---------------------------------------------------------------------------
+    if [ "$(_np CHAT3_STATUS)" = "200" ] && [ "$(_np RUN_COMPLETE)" = "1" ]; then
+        print_pass "Check N5: the agent completed the refund turn — CIBA token poll saw the approval, exchanged it (RFC 8693, act.sub=uc3-actor) and fetched JIT DB creds from Vault"
+    else
+        print_fail "Check N5: the agent did not complete the refund turn (HTTP $(_np CHAT3_STATUS))" \
+            "Detail: ${np_err:-see ${np_log}}. Response: $(_np CHAT3). A CIBA poll timeout means IVIA never saw the approval for the transaction the agent fired. Check: kubectl logs deployment/uc3-agent -n ${BANKING_NAMESPACE} | grep ciba_poll"
+    fi
+
+    #---------------------------------------------------------------------------
+    # Check N6 — the refund row is in RDS under RLS (the authoritative proof)
+    #
+    # Read with Vault-vended uc3-refund-writer creds and the RLS GUC set to the
+    # persona, so the row is only visible if it really belongs to their account.
+    #---------------------------------------------------------------------------
+    np_request_id=""
+    np_db_creds=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
+        sh -c "${VAULT_EXEC} vault read database/creds/uc3-refund-writer -format=json" 2>/dev/null || echo "{}")
+    np_db_user=$(echo "${np_db_creds}" | jq -r '.data.username // empty' 2>/dev/null || echo "")
+    np_db_pass=$(echo "${np_db_creds}" | jq -r '.data.password // empty' 2>/dev/null || echo "")
+    np_rds=$(kubectl get configmap uc3-agent-config -n "${BANKING_NAMESPACE}" -o jsonpath='{.data.DB_HOST}' 2>/dev/null || echo "")
+    if [ -z "${np_rds}" ]; then
+        np_rds=$(kubectl get configmap banking-mcp-config -n "${BANKING_NAMESPACE}" -o jsonpath='{.data.RDS_ADDRESS}' 2>/dev/null || echo "")
+    fi
+
+    if [ -n "${np_db_user}" ] && [ -n "${np_rds}" ]; then
+        np_row_pod="verify-uc3-nophone-row-$$"
+        kubectl delete pod "${np_row_pod}" -n default --ignore-not-found --wait=true &>/dev/null
+        kubectl run "${np_row_pod}" -n default --restart=Never \
+            --image=postgres:17-alpine --env="PGPASSWORD=${np_db_pass}" \
+            --command -- psql -h "${np_rds}" -U "${np_db_user}" -d workshop --no-password -A -t -F'|' \
+            -c "SET app.current_user_sub = '${NOPHONE_PERSONA}'; SELECT refund_id, request_id, amount, currency, approved_by, EXTRACT(EPOCH FROM created_at)::bigint FROM banking.refunds WHERE approved_by = '${NOPHONE_PERSONA}' ORDER BY created_at DESC LIMIT 1;" &>/dev/null
+        kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/"${np_row_pod}" -n default --timeout=90s &>/dev/null || true
+        np_row=$(kubectl logs "${np_row_pod}" -n default 2>/dev/null | grep '|' | tail -1)
+        kubectl delete pod "${np_row_pod}" -n default --ignore-not-found &>/dev/null
+
+        np_refund_id=$(echo "${np_row}" | cut -d'|' -f1)
+        np_request_id=$(echo "${np_row}" | cut -d'|' -f2)
+        np_amount=$(echo "${np_row}" | cut -d'|' -f3)
+        np_currency=$(echo "${np_row}" | cut -d'|' -f4)
+        np_approved_by=$(echo "${np_row}" | cut -d'|' -f5)
+        np_created=$(echo "${np_row}" | cut -d'|' -f6)
+
+        if [ -z "${np_refund_id}" ]; then
+            print_fail "Check N6: no refund row for ${NOPHONE_PERSONA} in banking.refunds" \
+                "The approval chain reported success but nothing was written. Check: kubectl logs deployment/uc3-agent -n ${BANKING_NAMESPACE} | grep process_refund"
+        elif [ "${np_created:-0}" -lt "${np_started}" ] 2>/dev/null; then
+            print_fail "Check N6: the newest refund row for ${NOPHONE_PERSONA} predates this run (refund_id=${np_refund_id})" \
+                "This run wrote nothing — the row shown is from an earlier refund. Do NOT read it as a pass. Check: kubectl logs deployment/uc3-agent -n ${BANKING_NAMESPACE} | grep process_refund"
+            np_request_id=""
+        else
+            print_pass "Check N6: refund row written to RDS under RLS — refund_id=${np_refund_id}, ${np_amount} ${np_currency}, approved_by=${np_approved_by}, request_id=${np_request_id}"
+        fi
+    else
+        print_fail "Check N6: could not read banking.refunds (no Vault DB creds or RDS host)" \
+            "Fix: confirm database/creds/uc3-refund-writer vends (verify-uc3.sh Check 7) and uc3-agent-config carries DB_HOST. Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault read database/creds/uc3-refund-writer"
+    fi
+
+    #---------------------------------------------------------------------------
+    # Check N7 — the virtual authenticator is gone (never leave one enrolled)
+    #
+    # The helper deletes its own device on the way out; this is the independent
+    # confirmation, and it also recovers a device left behind by an interrupted
+    # run. It only ever deletes devices carrying this tool's key handle.
+    #---------------------------------------------------------------------------
+    np_cleanup=$(kubectl exec -i -n "${BANKING_NAMESPACE}" "${np_pod}" -- python3 - cleanup \
+        "${np_wrp}" "${NOPHONE_PERSONA}" "${np_password}" <"${nophone_helper}" 2>&1)
+    np_left=$(printf '%s\n' "${np_cleanup}" | sed -n 's/^CLEANUP_FOREIGN_LEFT=//p' | tail -1)
+    np_swept=$(printf '%s\n' "${np_cleanup}" | sed -n 's/^CLEANUP_DELETED=//p' | tail -1)
+    if [ "${np_left}" = "0" ] && [ -n "${np_swept}" ] && [ "${np_swept}" != "FAILED" ]; then
+        print_pass "Check N7: no virtual authenticator left enrolled for ${NOPHONE_PERSONA} (swept ${np_swept} on this pass) — a real phone enrolled later will be the only device"
+    else
+        print_fail "Check N7: could not confirm the virtual authenticator was removed" \
+            "Leaving one enrolled would hijack a later real-phone run (mmfa.fire_push takes the first device listed). Remove it with: kubectl exec -i -n ${BANKING_NAMESPACE} ${np_pod} -- python3 - cleanup '${np_wrp}' '${NOPHONE_PERSONA}' '<persona-password>' < ${nophone_helper}. Got: $(printf '%s' "${np_cleanup}" | tail -2 | tr '\n' ' ')"
+    fi
+
+    #---------------------------------------------------------------------------
+    # Check N8 — three-plane audit correlation, printed in full
+    #
+    # Same VIEW the workshop's audit page uses (Check 11 auto-creates it). The
+    # planes land via fluent-bit -> Firehose (60s buffer) -> Glue, so this polls
+    # rather than reading once.
+    #---------------------------------------------------------------------------
+    if [ -z "${np_request_id}" ]; then
+        print_fail "Check N8: no request_id from this run — the audit correlation cannot be run" \
+            "Check N6 must produce a refund row first; the correlation is keyed on its request_id."
+    elif [ -z "${AWS_REGION:-}" ]; then
+        print_fail "Check N8: AWS_REGION not resolved" \
+            "Set AWS_REGION or add region to infrastructure/terraform.tfvars, then re-run."
+    else
+        np_results=""
+        np_rows=0
+        np_qid=""
+        np_attempt=1
+        np_attempts=10   # 10 attempts x 20s -> ~200s for fluent-bit + Firehose + Glue
+        while [ "${np_attempt}" -le "${np_attempts}" ]; do
+            print_info "Check N8 attempt ${np_attempt}/${np_attempts}: audit_correlation for request_id=${np_request_id}"
+            # --work-group workshop is load-bearing: the attendee role is scoped
+            # to that workgroup, and it enforces its own encrypted result
+            # location, so no client-side --result-configuration is needed.
+            np_qid=$(aws athena start-query-execution \
+                --query-string "SELECT * FROM audit_correlation WHERE request_id = '${np_request_id}'" \
+                --work-group workshop \
+                --query-execution-context "Database=${GLUE_DATABASE:-workshop_logs}" \
+                --region "${AWS_REGION}" \
+                --query 'QueryExecutionId' --output text 2>/dev/null || echo "")
+            if [ -z "${np_qid}" ] || [ "${np_qid}" = "None" ]; then
+                sleep 20
+                np_attempt=$((np_attempt + 1))
+                continue
+            fi
+
+            np_state="RUNNING"
+            np_poll=0
+            while [ "${np_poll}" -lt 20 ]; do
+                np_state=$(aws athena get-query-execution --query-execution-id "${np_qid}" \
+                    --region "${AWS_REGION}" --query 'QueryExecution.Status.State' --output text 2>/dev/null || echo "FAILED")
+                case "${np_state}" in
+                SUCCEEDED | FAILED | CANCELLED) break ;;
+                esac
+                sleep 3
+                np_poll=$((np_poll + 1))
+            done
+
+            if [ "${np_state}" != "SUCCEEDED" ]; then
+                np_rows="ERROR"
+                break
+            fi
+
+            np_results=$(aws athena get-query-results --query-execution-id "${np_qid}" \
+                --region "${AWS_REGION}" --output json 2>/dev/null || echo "")
+            np_rows=$(printf '%s' "${np_results}" | jq -r '(.ResultSet.Rows | length) - 1' 2>/dev/null || echo 0)
+            if [ "${np_rows:-0}" -ge 1 ] 2>/dev/null; then
+                break
+            fi
+            np_rows=0
+            sleep 20
+            np_attempt=$((np_attempt + 1))
+        done
+
+        if [ "${np_rows}" = "ERROR" ]; then
+            print_fail "Check N8: the Athena query did not succeed (state=${np_state})" \
+                "Reason: $(aws athena get-query-execution --query-execution-id "${np_qid}" --region "${AWS_REGION}" --query 'QueryExecution.Status.StateChangeReason' --output text 2>/dev/null). Fix: confirm the audit_correlation VIEW exists (plain ./verify-uc3.sh Check 11 auto-creates it) and the Glue tables resolve."
+        elif [ "${np_rows:-0}" -ge 1 ] 2>/dev/null; then
+            # The row exists — render it with the workshop's own money-shot
+            # printer so this mode and the audit page show the same output.
+            echo ""
+            np_render_rc=0
+            AWS_REGION="${AWS_REGION}" \
+                bash "${SCRIPT_DIR}/show-audit-correlation.sh" "${np_request_id}" || np_render_rc=$?
+            echo ""
+            if [ "${np_render_rc}" -ne 0 ]; then
+                # Printing the row IS this mode's output — a green check above a
+                # missing table would be worse than no check at all.
+                print_fail "Check N8: the correlation row exists (${np_rows}) but show-audit-correlation.sh could not print it (exit ${np_render_rc})" \
+                    "Reproduce: AWS_REGION=${AWS_REGION} ${SCRIPT_DIR}/show-audit-correlation.sh ${np_request_id}"
+            else
+                print_pass "Check N8: audit_correlation returned ${np_rows} row(s) for request_id=${np_request_id} — IVIA decision, Vault lease and the Postgres write all correlate on one id (three-plane capstone)"
+            fi
+        else
+            print_fail "Check N8: audit_correlation returned ZERO rows for request_id=${np_request_id} after ~200s" \
+                "The refund is written (Check N6) but the planes have not correlated. Fix: wait for fluent-bit + Firehose (60s buffer) + Glue, then re-run just this assertion: UC3_VERIFY_REQUEST_ID=${np_request_id} ./verify-uc3.sh"
+        fi
+    fi
+
+    rm -f "${np_log}"
+
+    # Summary is printed automatically by the common-checks.sh EXIT trap.
     exit 0
 fi
 

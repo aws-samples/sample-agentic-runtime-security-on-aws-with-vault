@@ -59,7 +59,7 @@ class VaultClient:
             },
         )
 
-    def _ensure_authenticated(self) -> None:
+    def ensure_authenticated(self) -> None:
         """Re-login if the pod's Vault token has expired.
 
         The agent logs in once at startup, but the Vault token has a finite TTL.
@@ -68,6 +68,10 @@ class VaultClient:
         then narrates as "I couldn't find it" instead of a real error. The
         projected SA JWT on disk is auto-rotated by Kubernetes, so a fresh login
         always succeeds. Mirrors the banking-app agent's proven re-auth pattern.
+
+        Public because /health calls it too: a probe that only inspects the
+        cached token reports "degraded" on a perfectly serviceable agent as soon
+        as the TTL elapses, while the very next /query silently re-logs in.
         """
         if not self.client.is_authenticated():
             logger.info("vault_token_expired_relogin")
@@ -85,7 +89,7 @@ class VaultClient:
         Returns:
             dict with keys: username, password, lease_id, lease_duration.
         """
-        self._ensure_authenticated()
+        self.ensure_authenticated()
         response = self.client.secrets.database.generate_credentials(name=role_name)
         creds = {
             "username": response["data"]["username"],
@@ -119,7 +123,7 @@ class VaultClient:
         """
 
         def _refresh() -> dict:
-            self._ensure_authenticated()
+            self.ensure_authenticated()
             response = self.client.read("aws/sts/bedrock-reader")
             data = response["data"]
             lease_seconds = int(response.get("lease_duration") or 900)

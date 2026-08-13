@@ -251,9 +251,26 @@ async def ciba_status(request: Request, auth_req_id: str):
 
 @app.get("/health")
 async def health():
-    """Liveness probe — confirms Vault client is authenticated."""
+    """Liveness probe — confirms Vault client is authenticated.
+
+    vault_authenticated re-authenticates the same way a real request does.
+    Reading only the token cached at startup reported False once its finite TTL
+    elapsed, on an agent that was serving normally — every credential refresh
+    calls ensure_authenticated() and silently re-logs in.
+
+    Never raises: this is the liveness probe, and failing it would restart-loop
+    the pod whenever Vault was briefly unreachable.
+    """
+    vault_authenticated = False
+    if _vault_client:
+        try:
+            _vault_client.ensure_authenticated()
+            vault_authenticated = _vault_client.is_authenticated()
+        except Exception:  # noqa: BLE001 — probe must never raise; see docstring
+            logger.warning("uc3_health_vault_reauth_failed", exc_info=True)
+
     return {
         "status": "ok",
         "service": "uc3-agent",
-        "vault_authenticated": _vault_client.is_authenticated() if _vault_client else False,
+        "vault_authenticated": vault_authenticated,
     }

@@ -1,6 +1,6 @@
 ---
 title: 'Validate Identity Access'
-weight: 36
+weight: 334
 ---
 
 IBM Verify Identity Access (IVIA) runs as a self-contained seven-pod stack in the `verify-access` namespace. The autoconf Job configured it fully unattended — confirm all pods are healthy and OIDC is serving before continuing.
@@ -53,10 +53,10 @@ kubectl wait --for=condition=complete job \
 If — and only if — `kubectl get pods -n verify-access` shows the autoconf Job with `STATUS=Error`, inspect the log to find the failure:
 
 ```bash
-kubectl logs -n verify-access -l app.kubernetes.io/name=ivia-autoconf
+kubectl logs -n verify-access -l app.kubernetes.io/name=ivia-autoconf --tail=-1
 ```
 
-Look for the `API FAILURE SUMMARY` at the bottom. To retry, remove the failed Job from Terraform state and re-apply:
+`--tail=-1` is required: with a label selector (`-l`) `kubectl logs` defaults to showing only the last **10** lines, which is not enough to read the summary block. Look for the `API FAILURE SUMMARY` at the bottom of the output. To retry, remove the failed Job from Terraform state and re-apply:
 
 ```bash
 terraform -chdir=infrastructure state rm 'module.ivia.kubernetes_job_v1.ivia_autoconf'
@@ -71,7 +71,7 @@ terraform -chdir=infrastructure apply
 kubectl get ingress -n verify-access
 ```
 
-Expected — one ALB Ingress with an `ADDRESS` like `k8s-workshop-acme-<hash>.<region>.elb.amazonaws.com`. The shared `workshop-acme` IngressGroup fronts both this WRP Ingress and the banking-UI Ingress, so one Let's Encrypt cert covers both nip.io FQDNs.
+Expected — one ALB Ingress with an `ADDRESS` like `k8s-workshopacme-<hash>.<region>.elb.amazonaws.com`. The shared `workshop-acme` IngressGroup fronts both this WRP Ingress and the banking-UI Ingress, so one Let's Encrypt cert covers both nip.io FQDNs.
 
 The hostname the browser trusts is the **nip.io FQDN** the cert was issued for — read it from `.acme-state`, not the raw ALB hostname:
 
@@ -80,15 +80,17 @@ source infrastructure/.acme-state && WRP_HOST="$NIP_FQDN_WRP" && echo "WRP host:
 ```
 
 :::alert{header="Trusted cert vs. raw ALB" type="info"}
-The browser and mobile app validate against the nip.io FQDN (`NIP_FQDN_WRP`), not the raw `k8s-workshop-acme-*.elb.amazonaws.com` hostname — hitting the raw host shows a TLS warning, which is expected. `deploy-workshop.sh` Step 7 issued that trusted Let's Encrypt cert and wrote `.acme-state`. If Step 7 failed, return to page 31 and re-run.
+The browser and mobile app validate against the nip.io FQDN (`NIP_FQDN_WRP`), not the raw `k8s-workshopacme-*.elb.amazonaws.com` hostname — hitting the raw host shows a TLS warning, which is expected. `deploy-workshop.sh` Step 7 issued that trusted Let's Encrypt cert and wrote `.acme-state`. If Step 7 failed, return to page 31 and re-run.
 :::
 
 ## Step 3 — Confirm OIDC discovery via WRP junction
 
 Browser flows reach the OIDC Provider through the WRP `/isvaop` junction:
 
+Note there is no `-k` here. The alert above claims the nip.io FQDN carries a browser-trusted Let's Encrypt certificate — skipping verification would leave that claim untested, so this command verifies the chain. If it succeeds, the certificate really is trusted:
+
 ```bash
-curl -sk "https://$WRP_HOST/isvaop/oauth2/.well-known/openid-configuration" | jq .issuer
+curl -s "https://$WRP_HOST/isvaop/oauth2/.well-known/openid-configuration" | jq .issuer
 ```
 
 Expected:
@@ -96,6 +98,8 @@ Expected:
 ```
 "https://<NIP_FQDN_WRP>"
 ```
+
+A `curl: (60) SSL certificate problem` here means Step 7's ACME issuance did not complete — check `kubectl get certificate workshop-le-tls -n cert-manager` shows `READY=True`.
 
 ## Step 4 — Confirm internal OIDC discovery
 
@@ -105,7 +109,7 @@ Vault and agent workloads reach the OIDC Provider via its ClusterIP service. Ver
 kubectl run oidc-check --image=curlimages/curl --rm -i --restart=Never --quiet -n verify-access -- curl -sk https://iviaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration </dev/null | jq .issuer
 ```
 
-Expected — the **same** issuer as Step 3, even reached over ClusterIP. The provider always advertises the one public WRP issuer, which lets Vault validate IVIA tokens against a single `bound_issuer`:
+Expected — the **same** issuer as Step 3, even reached over ClusterIP. The provider always advertises the one public WRP issuer, which lets Vault validate IVIA tokens against a single `issuer_id` on its OAuth resource server profile:
 
 ```
 "https://<NIP_FQDN_WRP>"

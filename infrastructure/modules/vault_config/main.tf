@@ -690,12 +690,25 @@ locals {
   }
 }
 
+# Every identity write below is ordered AFTER the oauth-resource-server activation
+# flag. The gate declared at the top of this file names the agent registrations, but
+# the edge only ever reached the config profile — so Terraform was free to schedule
+# identity writes concurrently with the activation. An entity create whose request is
+# in flight when the feature activates comes back without `id`, and the provider reads
+# that field unguarded (resource_identity_entity.go:146), panicking the plugin process
+# and failing the whole apply. Observed 2026-08-10: of five entities dispatched in one
+# wave, the three issued after the flag landed created in 0s; the two issued before it
+# panicked. The registrations and aliases inherit this ordering transitively through
+# entity_id / canonical_id, so the edge belongs on the entities.
+#
 # --- UC1: Kubernetes registry identity (entity + registration; alias in Task 3) ---
 resource "vault_identity_entity" "uc1_agent" {
   name = "uc1-agent"
   # No entity policies: UC1's enforcement floor is vault_policy.uc1_readonly bound
   # to the uc1 k8s role. This entity exists purely as the Agent Registry identity;
   # its ceiling is inert (k8s tokens carry no act.sub).
+
+  depends_on = [vault_activation_flags.oauth_resource_server]
 }
 
 resource "vault_agent_registration" "uc1_agent" {
@@ -713,6 +726,8 @@ resource "vault_identity_entity" "human" {
   for_each = local.obo_human_subs
   name     = each.value
   policies = local.obo_human_policies[each.key]
+
+  depends_on = [vault_activation_flags.oauth_resource_server]
 }
 
 # --- UC2 agent (agent-uc2): entity + registration ---
@@ -720,6 +735,8 @@ resource "vault_identity_entity" "agent_uc2" {
   name = var.uc2_agent_identity # "agent-uc2"
   # No baseline policies: in OBO the agent contributes its ceiling via the
   # registration below, not via entity policies.
+
+  depends_on = [vault_activation_flags.oauth_resource_server]
 }
 
 resource "vault_agent_registration" "agent_uc2" {
@@ -734,6 +751,8 @@ resource "vault_agent_registration" "agent_uc2" {
 # --- UC3 agent (uc3-actor): entity + registration ---
 resource "vault_identity_entity" "uc3_actor" {
   name = var.uc3_agent_identity # "uc3-actor" — the ACTOR, not the human sub
+
+  depends_on = [vault_activation_flags.oauth_resource_server]
 }
 
 resource "vault_agent_registration" "uc3_actor" {
@@ -809,8 +828,8 @@ resource "vault_generic_endpoint" "oauth_alias" {
   write_fields         = ["id"]
 
   data_json = jsonencode({
-    name         = each.key # human-readable alias name
-    external_id  = each.key # the OAuth claim value (sub / act.sub) native OBO
+    name        = each.key # human-readable alias name
+    external_id = each.key # the OAuth claim value (sub / act.sub) native OBO
     # resolves the entity BY. Vault matches the JWT sub/act.sub against the
     # alias external_id (scoped by issuer), NOT by name — a name-only alias
     # resolves via identity/lookup/entity but fails native OBO with "no alias

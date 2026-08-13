@@ -201,6 +201,18 @@ KB_REGION="${KB_REGION:-us-east-1}"
 # `init -upgrade` — that silently bumps loosely-pinned modules and fabricates
 # drift). Skips cleanly when the root was never initialized / has empty state.
 #===============================================================================
+# `terraform init` that survives a corrupted provider cache. An interrupted
+# download leaves a FILE where a provider directory belongs, and every later init
+# dies with "mkdir .terraform/providers/...: file exists" — which is what made a
+# populated tier-3 state read as empty and get skipped (audit 2026-08-11).
+# .terraform/providers is a pure cache, so clearing it and re-initing is safe.
+_init_root() {
+    local dir="$1"
+    terraform -chdir="$dir" init -input=false >/dev/null 2>&1 && return 0
+    rm -rf "${dir}/.terraform/providers"
+    terraform -chdir="$dir" init -input=false >/dev/null 2>&1
+}
+
 _destroy_root() {
     local label="$1" dir="$2"
     if [ ! -d "$dir" ]; then
@@ -213,13 +225,34 @@ _destroy_root() {
     fi
     if [ ! -d "${dir}/.terraform" ]; then
         # Not yet initialized — try a bare init so destroy can read providers/state.
-        terraform -chdir="$dir" init -input=false >/dev/null 2>&1 || {
+        _init_root "$dir" || {
             print_info "${label}: no .terraform and init failed — skipping (nothing to destroy)"
             return 0
         }
     fi
-    local n
-    n=$(terraform -chdir="$dir" state list 2>/dev/null | wc -l | tr -d ' ')
+    # `state list` failing and `state list` returning nothing are NOT the same
+    # thing: a present-but-stale .terraform (lock file bumped, provider cache
+    # pruned) makes it exit non-zero with "Required plugins are not installed",
+    # and reading that as "empty" silently skips a root holding live resources.
+    # Re-init once, then believe an empty answer only when the command succeeded.
+    local n state_out state_rc=0
+    state_out=$(terraform -chdir="$dir" state list 2>&1) || state_rc=$?
+    if [ "$state_rc" -ne 0 ]; then
+        print_info "${label}: state unreadable — re-running init before deciding"
+        _init_root "$dir" || true
+        state_rc=0
+        state_out=$(terraform -chdir="$dir" state list 2>&1) || state_rc=$?
+    fi
+    if [ "$state_rc" -ne 0 ]; then
+        # Never skip on an unreadable state — fall through to destroy, which
+        # surfaces the real provider/backend error instead of hiding it.
+        print_warn "${label}: state STILL unreadable after init — attempting destroy anyway so the error is visible, not silently skipped"
+        print_warn "${label}: $(printf '%s' "$state_out" | grep -m1 -E 'Error|error:' || echo 'see terraform output below')"
+        terraform -chdir="$dir" destroy -auto-approve \
+            || print_warn "${label}: terraform destroy had errors — AWS sweep will catch residuals"
+        return 0
+    fi
+    n=$(printf '%s\n' "$state_out" | grep -c . || true)
     if [ "${n:-0}" -eq 0 ]; then
         print_info "${label}: state empty — nothing to destroy"
         return 0
@@ -1251,11 +1284,21 @@ sweep_orphan_target_groups() {
 # wildcard cert that happens to share the regional ELB domain.
 sweep_acm_certs() {
     local certs
+    # Candidates are EVERY cert in the region, not just the self-signed ALB wildcard.
+    # Step 7 imports the Let's Encrypt cert into this SAME ARN (main.tf:95 keeps the ARN
+    # stable via lifecycle.ignore_changes), and that import REPLACES the cert's
+    # DomainName with the nip.io FQDN. Filtering candidates on
+    # '*.<region>.elb.amazonaws.com' therefore stops matching the very cert Terraform
+    # created, so it survived teardown AND the zero-residual audit reported PASS.
+    # Observed 2026-08-10: wrp.6je46q.54-211-202-193.nip.io left ISSUED and unattached.
+    # The workshop tag stays the deny-by-default guard — it survives import-certificate
+    # because the ARN never changes — so widening the candidate list cannot reach an
+    # unrelated cert.
     certs=$(aws acm list-certificates --region "$REGION" \
-        --query "CertificateSummaryList[?DomainName=='*.${REGION}.elb.amazonaws.com'].CertificateArn" \
+        --query "CertificateSummaryList[].CertificateArn" \
         --output text 2>/dev/null)
     if [[ -z "$certs" || "$certs" == "None" ]]; then
-        print_info "ACM certs (workshop ALB wildcard): none"
+        print_info "ACM certs (workshop-tagged): none"
         return 0
     fi
     for arn in $certs; do
@@ -1581,10 +1624,11 @@ phase_verify_zero_residuals() {
     [[ "$eks_cluster" == "None" ]] && eks_cluster=""
     _check "EKS cluster" "$eks_cluster"
 
-    # ACM cert (self-signed ALB wildcard, workshop-tagged)
+    # ACM cert, workshop-tagged. NOT filtered by domain: Step 7's import replaces the
+    # self-signed wildcard material with the Let's Encrypt nip.io cert under the same ARN.
     local acm=""
     for arn in $(aws acm list-certificates --region "$REGION" \
-            --query "CertificateSummaryList[?DomainName=='*.${REGION}.elb.amazonaws.com'].CertificateArn" \
+            --query "CertificateSummaryList[].CertificateArn" \
             --output text 2>/dev/null); do
         [[ -z "$arn" || "$arn" == "None" ]] && continue
         local t
@@ -1593,7 +1637,7 @@ phase_verify_zero_residuals() {
             --output text 2>/dev/null)
         [[ -n "$t" && "$t" != "None" ]] && acm="$acm ${arn##*/}"
     done
-    _check "ACM certs (workshop ALB wildcard)" "$(echo "$acm" | xargs)"
+    _check "ACM certs (workshop-tagged)" "$(echo "$acm" | xargs)"
 
     # RDS instances
     local rds
@@ -2045,10 +2089,11 @@ phase_verify_keep_eks() {
     [[ "$orphan_tgs" == "None" ]] && orphan_tgs=""
     _check "Orphan target groups (workshop-named)" "$orphan_tgs"
 
-    # ACM cert (self-signed wildcard) — gone, we kill it in targeted destroy
+    # ACM cert, workshop-tagged — killed in targeted destroy. NOT filtered by domain:
+    # after Step 7's import the ARN carries the Let's Encrypt nip.io cert, not the wildcard.
     local acm=""
     for arn in $(aws acm list-certificates --region "$REGION" \
-            --query "CertificateSummaryList[?DomainName=='*.${REGION}.elb.amazonaws.com'].CertificateArn" \
+            --query "CertificateSummaryList[].CertificateArn" \
             --output text 2>/dev/null); do
         [[ -z "$arn" || "$arn" == "None" ]] && continue
         local t
@@ -2057,7 +2102,7 @@ phase_verify_keep_eks() {
             --output text 2>/dev/null)
         [[ -n "$t" && "$t" != "None" ]] && acm="$acm ${arn##*/}"
     done
-    _check "ACM certs (workshop ALB wildcard)" "$(echo "$acm" | xargs)"
+    _check "ACM certs (workshop-tagged)" "$(echo "$acm" | xargs)"
 
     echo ""
     if [[ $failures -eq 0 ]]; then
@@ -2179,6 +2224,41 @@ if [ "$DRY_RUN" = true ]; then
 else
     rm -f "$acme_state" "$acme_rerun"
     print_info "Removed local Phase 07.8 ACME cache (.acme-state, .acme-rerun-marker)"
+fi
+
+# Local-only state cleanup: after a FULL nuke the three roots' state files list
+# resources that no longer exist. That is not merely untidy — tier-1 state holds
+# helm_release/kubernetes entries whose providers dial the destroyed cluster, so
+# the next deploy's refresh dies on "Kubernetes cluster unreachable" before it
+# can plan anything. A self-paced attendee starts from a fresh clone with NO
+# state, and a re-deploy here must start from the same place.
+#
+# Archived, never deleted: if this teardown was wrong about something, the state
+# is the only record of what it left behind. Gated twice — full mode only (the
+# partial modes deliberately keep infrastructure alive and MUST keep tracking
+# it), and only when verification found zero residuals.
+_reset_local_state() {
+    local stamp="$1" root f moved=0
+    for root in "$TIER1_DIR" "$TIER2_DIR" "$TIER3_DIR"; do
+        for f in "${root}/terraform.tfstate" "${root}/terraform.tfstate.backup"; do
+            [ -f "$f" ] || continue
+            mv "$f" "${f}.pre-teardown-${stamp}" && moved=$((moved + 1))
+        done
+    done
+    echo "$moved"
+}
+
+if [ "$DRY_RUN" = true ]; then
+    print_info "[DRY-RUN] Would archive the three roots' terraform.tfstate files"
+elif [ "$AWS_ONLY" = true ] || [ "$POST_DESTROY_ONLY" = true ] || [ "$KEEP_EKS" = true ]; then
+    : # partial mode — the surviving infrastructure must stay tracked
+elif [ "${VERIFY_FAILED:-}" = true ]; then
+    print_warn "Keeping local terraform state — verification found residuals and the state is the only record of them"
+else
+    _state_moved=$(_reset_local_state "$(date +%s)")
+    if [ "${_state_moved:-0}" -gt 0 ]; then
+        print_info "Archived ${_state_moved} local state file(s) as *.pre-teardown-* — the next deploy starts from empty state, like a fresh clone"
+    fi
 fi
 
 phase_header "Teardown Complete"
