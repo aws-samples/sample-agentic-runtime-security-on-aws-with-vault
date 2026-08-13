@@ -223,14 +223,16 @@ Expected output — one row per recent issuance:
 time                 identity                                                  agent
 2026-07-28T03:20:48  root                                                      -
 2026-07-28T02:53:25  JWT Token with JTI: f77a2c34-61f5-406b-8669-8fb4ecb9c40c  agent-uc2
+2026-07-28T02:49:23  -                                                         -
 2026-07-28T02:47:12  JWT Token with JTI: da65bce9-4846-4da0-8a24-9dc45e8654d1  agent-uc2
 ...
 ```
 
-Two row patterns appear:
+Three row patterns appear:
 
 - **`identity=root`, `agent=-`** — the credential was issued via the Vault root token (the inspection commands on the previous pages, including your Step 1 above, and the `verify-uc2.sh` checks). Root-token issuance resolves no Agent Registry identity, so the `agent` column is empty (the helper renders empty fields as `-`).
 - **`identity=JWT Token with JTI: <jti>`, `agent=agent-uc2`** — the credential was issued by presenting a real user's IVIA OAuth JWT directly as the `X-Vault-Token` on the `database/creds` read. Vault's OAuth resource server validated the JWT and resolved it to the `agent-uc2` Agent Registry identity; the audit device records the token by its unique **JTI**, never the human `sub`. **These rows appear after you sign in through the Banking UI and run a banking query** (the browser flow in [OAuth Login Flow](../61-oauth-pkce-flow/)) — one fresh row per tool call. The human user behind the token is tied back through the IVIA decision plane (the `request_id` correlation shown on the [three-plane audit](../../70-use-case-3/74-three-plane-audit/) page), not a Vault entity id — native Vault audit records the token JTI + resolved agent, not the human sub. If you have not yet driven a signed-in query, only the `root` rows are present.
+- **Both columns `-`** — a **denied** request. The filter is `type = 'response'`, and Vault records a response for refusals as well as issuances; a refused request never authenticates, so it resolves neither a display name nor an agent. You produce one of these deliberately on the [Configure the OAuth Resource Server](../62-configure-oauth-resource-server/) page, where presenting the `id_token` instead of the `access_token` is rejected with a 403. These rows are the enforcement plane doing its job — not a gap in the audit trail. Adding `response.data['error']` to the projection distinguishes them positively: it is non-empty only on denials, and its value is `hmac-sha256:<digest>` rather than the message itself, because the audit device HMACs response data by default. You can prove a refusal happened, and correlate two refusals as identical, without the log ever disclosing what was refused.
 
 ## Step 7 — Find the revocation event for the lease you revoked
 
