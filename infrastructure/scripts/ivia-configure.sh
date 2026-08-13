@@ -24,6 +24,17 @@ WRP_DEPLOY="iviawrprp1"
 
 # Source common color/log helpers if available (same pattern as sibling scripts)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Opt OUT of common-checks.sh's EXIT trap. This script reports through its own
+# print_success/print_error helpers (below) and never calls print_pass/print_fail,
+# so FAILURES[] is always empty -- which made the inherited
+# `trap 'print_summary; exit $?' EXIT` return 0 and OVERWRITE every one of the
+# `exit 1` hard-failure paths below. Proven: with an unusable kubeconfig this
+# script printed "[FAIL] Deployment iviawrprp1 not found", ran `exit 1`, and the
+# process still exited 0 -- so deploy-workshop.sh Step 9 (_run_subscript gates on
+# rc alone, line 344) reported PASS with IVIA entirely absent. The trailing
+# "No checks ran" banner was the visible symptom. COMMON_CHECKS_SUMMARY=0 is the
+# opt-out common-checks.sh already documents for exactly this case.
+COMMON_CHECKS_SUMMARY=0
 # shellcheck disable=SC1091
 [ -f "${SCRIPT_DIR}/common-checks.sh" ] && . "${SCRIPT_DIR}/common-checks.sh"
 
