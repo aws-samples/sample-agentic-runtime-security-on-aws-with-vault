@@ -1,6 +1,6 @@
 ---
 title: 'Validate Identity Access'
-weight: 36
+weight: 334
 ---
 
 IBM Verify Identity Access (IVIA) runs as a self-contained seven-pod stack in the `verify-access` namespace. The autoconf Job configured it fully unattended — confirm all pods are healthy and OIDC is serving before continuing.
@@ -71,7 +71,7 @@ terraform -chdir=infrastructure apply
 kubectl get ingress -n verify-access
 ```
 
-Expected — one ALB Ingress with an `ADDRESS` like `k8s-workshop-acme-<hash>.<region>.elb.amazonaws.com`. The shared `workshop-acme` IngressGroup fronts both this WRP Ingress and the banking-UI Ingress, so one Let's Encrypt cert covers both nip.io FQDNs.
+Expected — one ALB Ingress with an `ADDRESS` like `k8s-workshopacme-<hash>.<region>.elb.amazonaws.com`. The shared `workshop-acme` IngressGroup fronts both this WRP Ingress and the banking-UI Ingress, so one Let's Encrypt cert covers both nip.io FQDNs.
 
 The hostname the browser trusts is the **nip.io FQDN** the cert was issued for — read it from `.acme-state`, not the raw ALB hostname:
 
@@ -80,7 +80,7 @@ source infrastructure/.acme-state && WRP_HOST="$NIP_FQDN_WRP" && echo "WRP host:
 ```
 
 :::alert{header="Trusted cert vs. raw ALB" type="info"}
-The browser and mobile app validate against the nip.io FQDN (`NIP_FQDN_WRP`), not the raw `k8s-workshop-acme-*.elb.amazonaws.com` hostname — hitting the raw host shows a TLS warning, which is expected. `deploy-workshop.sh` Step 7 issued that trusted Let's Encrypt cert and wrote `.acme-state`. If Step 7 failed, return to page 31 and re-run.
+The browser and mobile app validate against the nip.io FQDN (`NIP_FQDN_WRP`), not the raw `k8s-workshopacme-*.elb.amazonaws.com` hostname — hitting the raw host shows a TLS warning, which is expected. `deploy-workshop.sh` Step 7 issued that trusted Let's Encrypt cert and wrote `.acme-state`. If Step 7 failed, return to page 31 and re-run.
 :::
 
 ## Step 3 — Confirm OIDC discovery via WRP junction

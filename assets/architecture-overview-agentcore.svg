@@ -1,0 +1,325 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 920" width="1600" height="920" style="background:#0d1117; font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;">
+
+  <rect width="1600" height="920" fill="#0d1117"/>
+
+  <!-- ===== TITLE ===== -->
+  <text x="40" y="40" fill="white" font-size="24" font-weight="bold">Agentic Runtime Security — Alternative Architecture (Bedrock AgentCore)</text>
+  <text x="40" y="62" fill="#8b949e" font-size="13">Amazon Bedrock AgentCore + HashiCorp Vault Enterprise — dynamic credentials &amp; user attribution with no self-managed cluster, no IVIA / OpenLDAP</text>
+
+  <!-- AWS badge top-right -->
+  <rect x="1372" y="22" width="208" height="36" rx="18" fill="none" stroke="#f59e0b" stroke-width="2"/>
+  <text x="1390" y="45" fill="#f59e0b" font-size="12" font-weight="bold">aws</text>
+  <text x="1420" y="45" fill="#fde68a" font-size="11">Bedrock AgentCore (managed)</text>
+
+  <!-- ===== DEFS ===== -->
+  <defs>
+    <marker id="ag-blue"   markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#3b82f6"/></marker>
+    <marker id="ag-teal"   markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#14b8a6"/></marker>
+    <marker id="ag-purple" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#a855f7"/></marker>
+    <marker id="ag-red"    markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#ef4444"/></marker>
+    <marker id="ag-green"  markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#22c55e"/></marker>
+    <marker id="ag-amber"  markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#f59e0b"/></marker>
+    <radialGradient id="agRingD" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#0f1b30"/>
+      <stop offset="100%" stop-color="#0a1424"/>
+    </radialGradient>
+    <radialGradient id="agVaultCore" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#1f2937"/>
+      <stop offset="100%" stop-color="#111827"/>
+    </radialGradient>
+    <linearGradient id="agVaultRingGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#22d3ee"/>
+      <stop offset="33%" stop-color="#a855f7"/>
+      <stop offset="66%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#f59e0b"/>
+    </linearGradient>
+    <linearGradient id="agSeamGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#a855f7"/>
+      <stop offset="100%" stop-color="#22d3ee"/>
+    </linearGradient>
+  </defs>
+
+  <!-- ================================================================== -->
+  <!-- LEFT: User + Identity Provider                                      -->
+  <!-- ================================================================== -->
+  <rect x="30" y="200" width="210" height="400" rx="12" fill="#0c2417" stroke="#22c55e" stroke-width="2"/>
+  <text x="50" y="228" fill="#4ade80" font-size="14" font-weight="bold">User + Identity</text>
+  <text x="50" y="245" fill="#4ade80" font-size="14" font-weight="bold">Provider</text>
+
+  <!-- User icon -->
+  <circle cx="68" cy="292" r="13" fill="none" stroke="#c9d1d9" stroke-width="1.5"/>
+  <circle cx="68" cy="287" r="4.5" fill="#c9d1d9"/>
+  <path d="M56,301 Q68,294 80,301" fill="none" stroke="#c9d1d9" stroke-width="1.5"/>
+  <text x="92" y="290" fill="#e6edf3" font-size="11" font-weight="600">End Users</text>
+  <text x="92" y="304" fill="#8b949e" font-size="10">(human initiates the task)</text>
+
+  <!-- IdP icon -->
+  <rect x="55" y="330" width="26" height="22" rx="3" fill="none" stroke="#4ade80" stroke-width="1.5"/>
+  <circle cx="68" cy="341" r="4.5" fill="none" stroke="#4ade80" stroke-width="1.5"/>
+  <text x="92" y="338" fill="#e6edf3" font-size="11" font-weight="600">OIDC Identity Provider</text>
+  <text x="92" y="352" fill="#8b949e" font-size="10">Cognito · Okta · Entra ID</text>
+  <text x="92" y="365" fill="#8b949e" font-size="10">· IBM Verify (pluggable)</text>
+
+  <!-- Auth method -->
+  <rect x="55" y="392" width="26" height="16" rx="4" fill="none" stroke="#c9d1d9" stroke-width="1.5"/>
+  <text x="92" y="398" fill="#e6edf3" font-size="11" font-weight="600">OAuth 2.0 / OIDC</text>
+  <text x="92" y="412" fill="#8b949e" font-size="10">+ PKCE user login</text>
+
+  <!-- Identity claims -->
+  <rect x="55" y="440" width="26" height="15" rx="7.5" fill="none" stroke="#22c55e" stroke-width="1.5"/>
+  <circle cx="68" cy="447.5" r="3" fill="#22c55e"/>
+  <text x="92" y="446" fill="#e6edf3" font-size="11" font-weight="600">User identity claims</text>
+  <text x="92" y="460" fill="#8b949e" font-size="10">carried into the JWT</text>
+
+  <text x="50" y="500" fill="#8b949e" font-size="10">IdP is pluggable — IVIA is now</text>
+  <text x="50" y="514" fill="#8b949e" font-size="10">just one supported option.</text>
+
+  <text x="50" y="548" fill="#4ade80" font-size="10" font-weight="bold">User attribution preserved</text>
+  <text x="50" y="564" fill="#4ade80" font-size="10" font-weight="bold">end-to-end (every hop)</text>
+
+  <!-- ================================================================== -->
+  <!-- CENTER: Amazon Bedrock AgentCore (managed serverless runtime)       -->
+  <!-- ================================================================== -->
+  <rect x="285" y="100" width="520" height="580" rx="12" fill="#0a1626" stroke="#3b82f6" stroke-width="2"/>
+  <text x="305" y="128" fill="#60a5fa" font-size="16" font-weight="bold">Amazon Bedrock AgentCore</text>
+  <text x="305" y="146" fill="#8b949e" font-size="10.5">managed, serverless agent runtime + agent identity — no EKS, no ServiceAccounts, no NetworkPolicy to operate</text>
+
+  <!-- Central agent loop circle -->
+  <circle cx="545" cy="258" r="96" fill="none" stroke="#3b82f6" stroke-width="3" stroke-dasharray="8,4" opacity="0.4"/>
+  <circle cx="545" cy="258" r="78" fill="url(#agRingD)" stroke="#3b82f6" stroke-width="2"/>
+  <text x="545" y="246" fill="#60a5fa" font-size="14" font-weight="bold" text-anchor="middle">AgentCore</text>
+  <text x="545" y="264" fill="#60a5fa" font-size="14" font-weight="bold" text-anchor="middle">Runtime</text>
+  <text x="545" y="286" fill="#8b949e" font-size="8.5" text-anchor="middle">framework-agnostic</text>
+  <text x="545" y="299" fill="#8b949e" font-size="8.5" text-anchor="middle">Strands · LangGraph · LlamaIndex</text>
+  <text x="545" y="312" fill="#8b949e" font-size="8.5" text-anchor="middle">Bedrock Nova model calls</text>
+
+  <text x="305" y="392" fill="#60a5fa" font-size="9" font-style="italic">Each agent = a unique, centrally managed identity (ARN)</text>
+
+  <!-- AgentCore Secure Token Vault box (left, blue) -->
+  <rect x="305" y="410" width="228" height="100" rx="8" fill="#0a1a3f" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="419" y="432" fill="#60a5fa" font-size="10.5" font-weight="bold" text-anchor="middle">AgentCore Secure Token Vault</text>
+  <text x="419" y="450" fill="#bfdbfe" font-size="9" text-anchor="middle">stores short-lived user-delegated</text>
+  <text x="419" y="464" fill="#bfdbfe" font-size="9" text-anchor="middle">OAuth tokens (on-behalf-of)</text>
+  <text x="419" y="484" fill="#8b949e" font-size="8.5" text-anchor="middle">replaces IVIA / CIBA out-of-band</text>
+  <text x="419" y="497" fill="#8b949e" font-size="8.5" text-anchor="middle">consent + token storage</text>
+
+  <!-- AgentCore Identity box (right, purple - the JWT issuer that meets the seam) -->
+  <rect x="305" y="530" width="480" height="118" rx="8" fill="#18102b" stroke="#a855f7" stroke-width="1.5"/>
+  <rect x="317" y="546" width="22" height="4" rx="1" fill="#a855f7"/>
+  <rect x="317" y="554" width="16" height="4" rx="1" fill="#a855f7"/>
+  <rect x="317" y="562" width="22" height="4" rx="1" fill="#a855f7"/>
+  <text x="347" y="556" fill="#c084fc" font-size="12" font-weight="bold">AgentCore Identity</text>
+  <text x="347" y="571" fill="#8b949e" font-size="9">workload identity for agents + user-context JWT issuance</text>
+  <text x="317" y="596" fill="#e9d5ff" font-size="9">Agent workload identity (ARN)</text>
+  <text x="547" y="596" fill="#e9d5ff" font-size="9">Issues JWT carrying user identity</text>
+  <text x="317" y="614" fill="#e9d5ff" font-size="9">OIDC IdP federation (user auth)</text>
+  <text x="547" y="614" fill="#e9d5ff" font-size="9">JWKS endpoint (trusted by Vault)</text>
+  <text x="317" y="636" fill="#fdba74" font-size="9" font-weight="bold">Replaces Vault K8s auth + IVIA as the token issuer</text>
+
+  <!-- ================================================================== -->
+  <!-- THE SEAM  (vertical) — Vault trusts AgentCore issuer via JWKS       -->
+  <!-- ================================================================== -->
+  <rect x="805" y="150" width="26" height="480" rx="13" fill="url(#agSeamGrad)" opacity="0.16"/>
+  <line x1="818" y1="150" x2="818" y2="630" stroke="url(#agSeamGrad)" stroke-width="3"/>
+  <circle cx="818" cy="150" r="4" fill="#a855f7"/>
+  <circle cx="818" cy="630" r="4" fill="#22d3ee"/>
+  <text transform="translate(812,470) rotate(-90)" fill="#e6edf3" font-size="10" font-weight="bold" text-anchor="middle">JWKS validation — THE SEAM</text>
+
+  <!-- ================================================================== -->
+  <!-- MIDDLE-RIGHT: HashiCorp Vault Enterprise (THE CONSTANT)             -->
+  <!-- ================================================================== -->
+  <rect x="843" y="100" width="237" height="580" rx="12" fill="#0d1117" stroke="#3b82f6" stroke-width="2"/>
+
+  <!-- signature vault ring -->
+  <circle cx="888" cy="150" r="26" fill="url(#agVaultRingGrad)" opacity="0.9"/>
+  <circle cx="888" cy="150" r="21" fill="url(#agVaultCore)"/>
+  <polygon points="888,139 880,155 896,155" fill="white" opacity="0.9"/>
+  <rect x="884" y="147" width="8" height="6" fill="#0d1117"/>
+  <text x="925" y="140" fill="#60a5fa" font-size="14" font-weight="bold">HashiCorp Vault</text>
+  <text x="925" y="156" fill="#8b949e" font-size="9">Enterprise 2.0.3+ / HCP Vault Dedicated</text>
+
+  <!-- unchanged ribbon -->
+  <rect x="863" y="184" width="197" height="22" rx="11" fill="#0c2417" stroke="#22c55e" stroke-width="1"/>
+  <text x="961" y="199" fill="#4ade80" font-size="9" font-weight="bold" text-anchor="middle">UNCHANGED FROM REFERENCE ARCH</text>
+
+  <!-- OAuth resource server -->
+  <rect x="863" y="220" width="197" height="70" rx="8" fill="#0a1a3f" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="877" y="240" fill="#60a5fa" font-size="10.5" font-weight="bold">OAuth resource server</text>
+  <text x="877" y="256" fill="#bfdbfe" font-size="9">validates AgentCore JWT via JWKS —</text>
+  <text x="877" y="269" fill="#bfdbfe" font-size="9">no separate Vault login step</text>
+  <text x="877" y="283" fill="#8b949e" font-size="8.5">X-Vault-Token, direct authN</text>
+
+  <!-- Agent Registry -->
+  <rect x="863" y="298" width="197" height="66" rx="8" fill="#18102b" stroke="#a855f7" stroke-width="1.5"/>
+  <text x="877" y="318" fill="#c084fc" font-size="10.5" font-weight="bold">Agent Registry (beta)</text>
+  <text x="877" y="334" fill="#e9d5ff" font-size="9">each agent = a Vault identity entity</text>
+  <text x="877" y="348" fill="#e9d5ff" font-size="9">metadata + approved scopes</text>
+  <text x="877" y="361" fill="#8b949e" font-size="8.5">unregistered agents blocked</text>
+
+  <!-- Ephemeral authorization -->
+  <rect x="863" y="372" width="197" height="66" rx="8" fill="#0d2a2a" stroke="#14b8a6" stroke-width="1.5"/>
+  <text x="877" y="392" fill="#2dd4bf" font-size="10.5" font-weight="bold">Ephemeral authorization</text>
+  <text x="877" y="408" fill="#a7f3d0" font-size="9">bound to authorization_details</text>
+  <text x="877" y="421" fill="#a7f3d0" font-size="9">claim in the JWT body</text>
+  <text x="877" y="434" fill="#8b949e" font-size="8.5">token expires → authz expires</text>
+
+  <!-- Dynamic secrets -->
+  <rect x="863" y="446" width="197" height="78" rx="8" fill="#0a1a3f" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="877" y="466" fill="#60a5fa" font-size="10.5" font-weight="bold">Dynamic secrets engine</text>
+  <text x="877" y="482" fill="#bfdbfe" font-size="9">DB (Postgres · MySQL · Mongo)</text>
+  <text x="877" y="496" fill="#bfdbfe" font-size="9">AWS IAM · SSH · PKI · KV</text>
+  <text x="877" y="513" fill="#8b949e" font-size="8.5">short-lived, per-request, auto-revoked</text>
+
+  <text x="863" y="548" fill="#f59e0b" font-size="9.5" font-weight="bold">No standing privileges —</text>
+  <text x="863" y="562" fill="#f59e0b" font-size="9.5" font-weight="bold">creds die with the JWT lease</text>
+
+  <!-- Tamper-evident audit -->
+  <rect x="863" y="576" width="197" height="52" rx="8" fill="#2a0e0e" stroke="#ef4444" stroke-width="1.5"/>
+  <text x="877" y="596" fill="#f87171" font-size="10.5" font-weight="bold">Tamper-evident audit log</text>
+  <text x="877" y="612" fill="#c9d1d9" font-size="9">agent id + user id + JWT + lease</text>
+
+  <!-- ================================================================== -->
+  <!-- RIGHT: Protected Resources (reached only with Vault JIT creds)      -->
+  <!-- ================================================================== -->
+  <rect x="1100" y="100" width="475" height="330" rx="12" fill="#07221f" stroke="#14b8a6" stroke-width="2"/>
+  <text x="1118" y="128" fill="#2dd4bf" font-size="14" font-weight="bold">Protected Resources</text>
+  <text x="1118" y="145" fill="#8b949e" font-size="9">outside the runtime — reached only with Vault-vended, short-lived JIT credentials</text>
+
+  <!-- Databases -->
+  <rect x="1115" y="158" width="215" height="120" rx="6" fill="#0d1117" stroke="#14b8a6" stroke-width="1"/>
+  <ellipse cx="1135" cy="180" rx="9" ry="4.5" fill="none" stroke="#2dd4bf" stroke-width="1.5"/>
+  <path d="M1126,180 L1126,198 Q1135,207 1144,198 L1144,180" fill="none" stroke="#2dd4bf" stroke-width="1.5"/>
+  <text x="1158" y="184" fill="#e6edf3" font-size="11" font-weight="600">Databases</text>
+  <text x="1126" y="212" fill="#8b949e" font-size="9">PostgreSQL · MySQL · MongoDB</text>
+  <text x="1126" y="230" fill="#8b949e" font-size="9">dynamic creds, TTL-bound</text>
+  <text x="1126" y="262" fill="#fde68a" font-size="9" font-weight="bold">auto-revoked at lease expiry</text>
+
+  <!-- AWS IAM + APIs -->
+  <rect x="1115" y="290" width="215" height="120" rx="6" fill="#0d1117" stroke="#14b8a6" stroke-width="1"/>
+  <rect x="1126" y="307" width="18" height="14" rx="3" fill="#14b8a6"/>
+  <text x="1131" y="318" fill="#0d1117" font-size="8" font-weight="bold">AWS</text>
+  <text x="1158" y="313" fill="#e6edf3" font-size="11" font-weight="600">AWS IAM / STS · SaaS APIs</text>
+  <text x="1126" y="340" fill="#8b949e" font-size="9">assumed-role creds + API tokens</text>
+  <text x="1126" y="358" fill="#8b949e" font-size="9">scoped per task</text>
+  <text x="1126" y="386" fill="#fde68a" font-size="9" font-weight="bold">no rotation scripts</text>
+
+  <!-- SSH / PKI / KV -->
+  <rect x="1348" y="158" width="215" height="120" rx="6" fill="#0d1117" stroke="#14b8a6" stroke-width="1"/>
+  <text x="1368" y="182" fill="#e6edf3" font-size="11" font-weight="600">SSH · PKI · KV</text>
+  <text x="1368" y="206" fill="#8b949e" font-size="9">Vault secrets engines</text>
+  <text x="1368" y="224" fill="#8b949e" font-size="9">certificates, keys, static KV</text>
+  <text x="1368" y="262" fill="#2dd4bf" font-size="9" font-weight="bold">per-request issuance</text>
+
+  <!-- Bedrock models -->
+  <rect x="1348" y="290" width="215" height="120" rx="6" fill="#0d1117" stroke="#14b8a6" stroke-width="1"/>
+  <rect x="1359" y="307" width="18" height="14" rx="3" fill="#14b8a6"/>
+  <text x="1364" y="318" fill="#0d1117" font-size="8" font-weight="bold">AI</text>
+  <text x="1391" y="313" fill="#e6edf3" font-size="11" font-weight="600">Amazon Bedrock</text>
+  <text x="1368" y="340" fill="#8b949e" font-size="9">Nova models (agent reasoning)</text>
+  <text x="1368" y="358" fill="#8b949e" font-size="9">STS assumed_role creds</text>
+  <text x="1368" y="386" fill="#fde68a" font-size="9" font-weight="bold">Vault-scoped access</text>
+
+  <!-- ================================================================== -->
+  <!-- BOTTOM: Audit + Attribution — one Vault stream                      -->
+  <!-- ================================================================== -->
+  <rect x="290" y="700" width="700" height="170" rx="12" fill="#2a0e0e" stroke="#ef4444" stroke-width="2"/>
+  <text x="320" y="728" fill="#f87171" font-size="14" font-weight="bold">Audit + Attribution</text>
+  <text x="320" y="744" fill="#8b949e" font-size="11">One audit stream — Vault's tamper-evident log, no extra instrumentation</text>
+
+  <rect x="312" y="758" width="300" height="86" rx="8" fill="#0d1117" stroke="#ef4444" stroke-width="1.5"/>
+  <text x="330" y="780" fill="#f87171" font-size="11" font-weight="bold">Vault Audit Log (JSON, hash-chained)</text>
+  <text x="330" y="800" fill="#c9d1d9" font-size="9">agent identity · resolved user identity (JWT claims)</text>
+  <text x="330" y="815" fill="#c9d1d9" font-size="9">JWT metadata · credential lease ID · timestamp</text>
+  <text x="330" y="833" fill="#8b949e" font-size="8.5">was: 3-plane Athena JOIN (IVIA + Vault + pgaudit)</text>
+
+  <line x1="620" y1="800" x2="662" y2="800" stroke="#ef4444" stroke-width="2" marker-end="url(#ag-red)"/>
+
+  <rect x="672" y="758" width="300" height="86" rx="8" fill="#0d1117" stroke="#ef4444" stroke-width="1.5"/>
+  <text x="690" y="780" fill="#f87171" font-size="11" font-weight="bold">Answers, per action:</text>
+  <text x="690" y="802" fill="#c9d1d9" font-size="9.5">Which user caused this database query?</text>
+  <text x="690" y="818" fill="#c9d1d9" font-size="9.5">Which agent, under what authorization,</text>
+  <text x="690" y="832" fill="#c9d1d9" font-size="9.5">for which task, and when?</text>
+
+  <!-- ================================================================== -->
+  <!-- NUMBERED FLOW ARROWS                                                -->
+  <!-- ================================================================== -->
+  <!-- 1: User → AgentCore (authenticate + invoke) -->
+  <line x1="244" y1="300" x2="283" y2="290" stroke="#3b82f6" stroke-width="2" stroke-dasharray="6,3" marker-end="url(#ag-blue)"/>
+  <circle cx="263" cy="278" r="12" fill="#3b82f6"/>
+  <text x="263" y="282" fill="white" font-size="11" font-weight="bold" text-anchor="middle">1</text>
+  <text x="263" y="262" fill="#60a5fa" font-size="9" text-anchor="middle">authenticate + invoke</text>
+
+  <!-- 2: Runtime → AgentCore Identity (issue user-context JWT) -->
+  <line x1="545" y1="338" x2="545" y2="528" stroke="#a855f7" stroke-width="2" stroke-dasharray="6,3" marker-end="url(#ag-purple)"/>
+  <circle cx="545" cy="430" r="12" fill="#a855f7"/>
+  <text x="545" y="434" fill="white" font-size="11" font-weight="bold" text-anchor="middle">2</text>
+  <text x="588" y="428" fill="#c084fc" font-size="9">issue user-context JWT</text>
+
+  <!-- 3: AgentCore Identity → Vault OAuth resource server (JWKS - THE SEAM) -->
+  <line x1="786" y1="585" x2="861" y2="262" stroke="#a855f7" stroke-width="2" stroke-dasharray="6,3" marker-end="url(#ag-purple)"/>
+  <circle cx="818" cy="420" r="12" fill="#8b5cf6"/>
+  <text x="818" y="424" fill="white" font-size="11" font-weight="bold" text-anchor="middle">3</text>
+  <text x="655" y="455" fill="#c084fc" font-size="9">present JWT → Vault validates,</text>
+  <text x="655" y="468" fill="#c084fc" font-size="9">checks Agent Registry, authorizes</text>
+
+  <!-- 4: Vault → Runtime (JIT credentials) -->
+  <line x1="861" y1="300" x2="625" y2="270" stroke="#3b82f6" stroke-width="2" stroke-dasharray="6,3" marker-end="url(#ag-blue)"/>
+  <circle cx="740" cy="286" r="12" fill="#3b82f6"/>
+  <text x="740" y="290" fill="white" font-size="11" font-weight="bold" text-anchor="middle">4</text>
+  <text x="655" y="245" fill="#60a5fa" font-size="9">short-lived JIT creds</text>
+
+  <!-- 5: Runtime → Protected Resources (access data) — routed over the top to avoid crossing the Vault panel -->
+  <polyline points="617,193 617,87 1250,87 1250,156" fill="none" stroke="#14b8a6" stroke-width="2" stroke-dasharray="6,3" marker-end="url(#ag-teal)"/>
+  <circle cx="930" cy="87" r="12" fill="#14b8a6"/>
+  <text x="930" y="91" fill="white" font-size="11" font-weight="bold" text-anchor="middle">5</text>
+  <text x="1080" y="79" fill="#2dd4bf" font-size="9" text-anchor="middle">access data with scoped JIT creds</text>
+
+  <!-- 6: Vault → Audit -->
+  <line x1="920" y1="630" x2="720" y2="756" stroke="#ef4444" stroke-width="2" stroke-dasharray="6,3" marker-end="url(#ag-red)"/>
+  <circle cx="820" cy="693" r="12" fill="#ef4444"/>
+  <text x="820" y="697" fill="white" font-size="11" font-weight="bold" text-anchor="middle">6</text>
+  <text x="838" y="672" fill="#f87171" font-size="9">every credential request logged</text>
+
+  <!-- 7: AgentCore → User (response) -->
+  <line x1="283" y1="420" x2="244" y2="420" stroke="#22c55e" stroke-width="2" stroke-dasharray="6,3" marker-end="url(#ag-green)"/>
+  <circle cx="263" cy="435" r="12" fill="#22c55e"/>
+  <text x="263" y="439" fill="white" font-size="11" font-weight="bold" text-anchor="middle">7</text>
+  <text x="263" y="457" fill="#4ade80" font-size="9" text-anchor="middle">streams answer</text>
+
+  <!-- ================================================================== -->
+  <!-- FLOW LEGEND (bottom-left, sits above bottom panel edge)             -->
+  <!-- ================================================================== -->
+  <rect x="30" y="628" width="250" height="164" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+  <text x="50" y="652" fill="#c9d1d9" font-size="11" font-weight="bold">Flow Legend</text>
+
+  <line x1="50" y1="672" x2="80" y2="672" stroke="#3b82f6" stroke-width="2" stroke-dasharray="6,3"/>
+  <text x="90" y="676" fill="#8b949e" font-size="10">Primary data flow</text>
+
+  <line x1="50" y1="694" x2="80" y2="694" stroke="#a855f7" stroke-width="2" stroke-dasharray="6,3"/>
+  <text x="90" y="698" fill="#8b949e" font-size="10">Identity / JWT flow</text>
+
+  <line x1="50" y1="716" x2="80" y2="716" stroke="#14b8a6" stroke-width="2" stroke-dasharray="6,3"/>
+  <text x="90" y="720" fill="#8b949e" font-size="10">Data access (scoped creds)</text>
+
+  <line x1="50" y1="738" x2="80" y2="738" stroke="#ef4444" stroke-width="2" stroke-dasharray="6,3"/>
+  <text x="90" y="742" fill="#8b949e" font-size="10">Audit flow</text>
+
+  <line x1="50" y1="760" x2="80" y2="760" stroke="#22c55e" stroke-width="2" stroke-dasharray="6,3"/>
+  <text x="90" y="764" fill="#8b949e" font-size="10">Response to user</text>
+
+  <text x="50" y="784" fill="#6b7280" font-size="9">Vault never authenticates the user.</text>
+
+  <!-- ================================================================== -->
+  <!-- CHANGES SUMMARY (bottom-right)                                      -->
+  <!-- ================================================================== -->
+  <rect x="1030" y="700" width="545" height="170" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+  <text x="1050" y="724" fill="#c9d1d9" font-size="12" font-weight="bold">What changes vs. the IVIA + Vault reference</text>
+  <text x="1050" y="746" fill="#fb923c" font-size="10">IVIA + OpenLDAP (on EKS)   →   AgentCore Identity + external OIDC IdP</text>
+  <text x="1050" y="764" fill="#60a5fa" font-size="10">Self-managed EKS agent pods   →   AgentCore Runtime (managed, serverless)</text>
+  <text x="1050" y="782" fill="#c084fc" font-size="10">Vault Kubernetes auth   →   AgentCore workload identity (JWT)</text>
+  <text x="1050" y="800" fill="#2dd4bf" font-size="10">CIBA out-of-band consent   →   AgentCore Secure Token Vault (OBO)</text>
+  <text x="1050" y="818" fill="#4ade80" font-size="10" font-weight="bold">Unchanged: Vault Agent Registry · ephemeral authz · dynamic secrets · audit</text>
+  <text x="1050" y="844" fill="#8b949e" font-size="9">AWS-only (AgentCore not multi-cloud). Vault native AI-agent support = beta (Ent 2.0.3+).</text>
+  <text x="1050" y="858" fill="#8b949e" font-size="9">Each system still owns exactly one trust plane; the seam is now Vault ↔ AgentCore JWKS.</text>
+
+</svg>

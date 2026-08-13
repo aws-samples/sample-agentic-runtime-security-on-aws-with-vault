@@ -42,6 +42,17 @@ Now spawn a transient `postgres:16-alpine` pod and run the SELECT as Oscar (no p
 
 The pod runs detached and its output is read back with `kubectl logs`. The obvious form — `kubectl run --rm -i` — races: when the pod finishes before the client attaches, the output is lost and you get `If you don't see a command prompt, try pressing enter.` followed by a deleted pod and nothing else. On this step an empty result looks exactly like a correct answer, so the race has to be removed rather than worked around. The loop waits for either terminal phase, `Succeeded` or `Failed`, so a failure — an expired credential, a denied statement — shows you the error immediately instead of stalling.
 
+:::alert{type="info" header="If the first run prints no query output, just run it again"}
+The **first** `kubectl run … psql` you execute on a given node has to pull the `postgres:16-alpine` image. That delay can outrun `kubectl`'s attach, and you get only:
+
+```
+If you don't see a command prompt, try pressing enter.
+pod "pg-client-oscar" deleted
+```
+
+— with the query results missing. The command ran fine; the output stream was simply missed. Re-run the same block and it prints normally. This applies to every `psql` block in Use Case 2 and Use Case 3, and you will hit it at most once per node.
+:::
+
 ```bash
 kubectl delete pod pg-client-oscar -n banking-app --ignore-not-found --now >/dev/null 2>&1
 kubectl run pg-client-oscar --restart=Never --image=postgres:16-alpine -n banking-app \

@@ -30,32 +30,24 @@ Read the Kubernetes auth role that binds `uc1-retriever-sa` to the `uc1-readonly
 vault read auth/kubernetes/role/uc1
 ```
 
-Expected output:
+Expected output (key fields — the command returns several more):
 
 ```
-Key                                         Value
----                                         -----
-alias_metadata                              map[]
-alias_name_source                           serviceaccount_name
-bound_service_account_names                 [uc1-retriever-sa]
-bound_service_account_namespace_selector    n/a
-bound_service_account_namespaces            [uc1]
-token_bound_cidrs                           []
-token_explicit_max_ttl                      0s
-token_max_ttl                               2h
-token_no_default_policy                     false
-token_num_uses                              0
-token_period                                0s
-token_policies                              [uc1-readonly]
-token_ttl                                   1h
-token_type                                  default
+Key                                 Value
+---                                 -----
+alias_name_source                   serviceaccount_name
+bound_service_account_names         [uc1-retriever-sa]
+bound_service_account_namespaces    [uc1]
+token_policies                      [uc1-readonly]
+token_ttl                           1h
+token_max_ttl                       2h
+token_type                          default
 ```
 
 Key observations:
 
 - `bound_service_account_names` is `[uc1-retriever-sa]` — only this SA in namespace `uc1` can obtain this role.
 - `token_policies` is `[uc1-readonly]` — the Vault token issued after login is scoped to this policy only.
-- `alias_name_source` is `serviceaccount_name`, so the Vault identity alias is the stable `uc1/uc1-retriever-sa` pair rather than the service account's UID. Delete and recreate the service account and the same Vault entity is reused — with `serviceaccount_uid` it would be a brand-new identity every time.
 - `token_ttl` is 1 hour — the Vault session (not the database credential) lifetime.
 
 ## Step 2 — Inspect the uc1-readonly policy
@@ -105,13 +97,13 @@ Notice what is **not** in the policy:
 vault auth list
 ```
 
-Look for the `kubernetes/` mount in the output (accessor suffixes are generated per deploy — yours will differ):
+Look for the `kubernetes/` mount in the output:
 
 ```
-Path           Type          Accessor                    Description                Version
-----           ----          --------                    -----------                -------
-kubernetes/    kubernetes    auth_kubernetes_1f629075    n/a                        n/a
-token/         token         auth_token_78018ae6         token based credentials    n/a
+Path           Type          Description
+----           ----          -----------
+kubernetes/    kubernetes    n/a
+token/         token         token based credentials
 ```
 
 Verify the Kubernetes auth configuration points to the EKS cluster:
@@ -154,24 +146,20 @@ Use Case 1 keeps **Kubernetes auth** — its agent presents a ServiceAccount JWT
 vault read agent-registry/registration/display-name/uc1-agent
 ```
 
-Expected:
+Expected (key fields):
 
 ```
 Key                               Value
 ---                               -----
-ceiling_policies                  [uc1-ceiling]
-creation_time                     2026-08-12T04:32:40Z
-description                       n/a
 display_name                      uc1-agent
-entity_id                         dc513d26-be17-cc64-34ec-fb423bfa7ed2
-id                                579a2f16-87c1-79fe-4b69-bfbd54158162
-last_updated_time                 2026-08-12T04:32:40Z
-no_default_ceiling_policy         true
+ceiling_policies                  [uc1-ceiling]
 optional_authorization_details    false
 owner                             uc1-retriever-service
 ```
 
-`entity_id` and `id` are generated per deploy — yours will differ. `optional_authorization_details` is `false` here because per-request authorization detail is a property of the OAuth path; Use Case 1 arrives over Kubernetes auth, so the setting has nothing to act on either way.
+`optional_authorization_details` is **not set** by the Terraform for this registration — it is
+left computed, because RAR-optionality is moot for a Kubernetes-auth agent that never presents
+an OAuth token. Contrast Use Cases 2 and 3, which set it deliberately (`true` and `false`).
 
 Two things distinguish Use Case 1 from Use Cases 2 and 3:
 

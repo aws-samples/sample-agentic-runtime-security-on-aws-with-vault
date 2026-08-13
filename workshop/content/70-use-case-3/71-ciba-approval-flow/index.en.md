@@ -5,7 +5,7 @@ weight: 71
 
 ## How CIBA Works
 
-CIBA (OpenID Connect Client-Initiated Backchannel Authentication) lets an automated agent request user approval without controlling the browser session. The agent initiates the flow on the backchannel; the user approves out-of-band on a separate device — here, an **IBM Verify mobile push** approved from the enrolled authenticator.
+CIBA (OpenID Connect Client-Initiated Backchannel Authentication) lets an automated agent request user approval without controlling the browser session. The agent initiates the flow on the backchannel; the user approves out-of-band on a separate device — here, an **IBM Verify mobile push** that requires a physical tap on the enrolled phone.
 
 ## CIBA Mobile-Push Approval Flow
 
@@ -45,7 +45,7 @@ sequenceDiagram
     OP-->>Agent: auth_req_id
     Agent->>RT: Fire MMFA push<br/>(authsvc mmfa_initiate_simple_login, username)
     RT->>Phone: Push "Approve your OscarVault request"
-    Note over Phone: User approves<br/>(enrolled authenticator signs the challenge)
+    Note over Phone: User taps Approve<br/>(physical device + biometric)
     Phone->>RT: Approval recorded → SCIM MMFA txn = SUCCESS
     loop Agent polls /token every 5s (up to 120s)
         Agent->>OP: POST /oauth2/token<br/>(grant_type=ciba, auth_req_id)
@@ -62,14 +62,12 @@ sequenceDiagram
 1. The agent POSTs `/oauth2/ciba` (bc-authorize) directly to the OIDC Provider ClusterIP with `login_hint=<user_sub>`, `binding_message=<request_id>`, and the refund `authorization_details`. This is machine-to-machine — it bypasses the WRP. IVIA returns an `auth_req_id`.
 2. IVIA runs the `notifyuser` mapping rule. In the mobile-push design it does **not** serve a browser consent page — it wires CIBA completion to a server-polled check-status endpoint on the agent via `ExternalAuthenticatorWithCheckStatusEndpoint(<uc3-agent>/api/ciba/status, bearer)`.
 3. The agent fires the MMFA push itself, right after bc-authorize, to the authenticated user's IBM Verify device (AAC runtime authsvc policy `mmfa_initiate_simple_login`, message "Approve your OscarVault request"). Identity comes from the authenticated session — never an LLM parameter. The agent records `auth_req_id → {username, transaction_id}`.
-4. The user taps **Approve** in the IBM Verify app. The app signs the user-presence challenge with the private key it registered at enrolment; IBM Verify Identity Access verifies that signature and the MMFA transaction resolves to `SUCCESS` in that user's SCIM record.
+4. The user taps **Approve** on the IBM Verify app (physical device, biometric). The MMFA transaction resolves to `SUCCESS` in that user's SCIM record.
 5. The agent polls `/oauth2/token` (`grant_type=urn:openid:params:grant-type:ciba`, `auth_req_id`) every 5 seconds for up to 120 seconds. On **each** poll IVIA runs the `checkstatus` rule, which PUTs the agent's `/api/ciba/status` with the CIBA bearer. The agent reads the user's **own** SCIM MMFA transaction for the **exact** push it fired and returns `approved` / `denied` / `pending` — a stale or unrelated SUCCESS cannot complete the flow.
 6. When the agent returns `approved`, `checkstatus` calls `ciba.success({sub})` and the `/token` poll returns the access token (`subject_token`) carrying the user's identity. (Deny → `ciba.failed()`; otherwise `ciba.pending()` and the agent keeps polling.)
 
 :::alert{header="Why the approval is unforgeable" type="info"}
-Two independent facts must both hold before the refund proceeds: the approval is signed by the key registered to that user's **enrolled authenticator**, AND the agent confirms that the **exact** MMFA transaction it fired (matched by `transactionId`, never "any SUCCESS for the user") resolved to `SUCCESS` in that user's own SCIM record.
-
-Be precise about what the first fact proves. What is enforced is possession of the **registered user-presence key**, not possession of a particular phone: `infrastructure/scripts/uc3-virtual-authenticator.py` enrols a software authenticator over the same OAuth + SCIM endpoints the IBM Verify app uses, signs the challenge, and IBM Verify Identity Access accepts it — which is exactly what makes `verify-uc3.sh --no-phone` possible. The property the workshop actually demonstrates, and the one that matters, is the **transaction binding**: an approval is only ever accepted for the one `transactionId` the agent fired. The CIBA bearer is replayed to the check-status endpoint as a per-request shared secret — defense-in-depth on top of the SCIM gate. The backchannel (bc-authorize and token poll) is machine-to-machine and never touches the WRP.
+Two independent facts must both hold before the refund proceeds: the user physically taps **Approve** on their enrolled device, AND the agent confirms that the **exact** MMFA transaction it fired (matched by `transactionId`, never "any SUCCESS for the user") resolved to `SUCCESS` in that user's own SCIM record. The CIBA bearer is replayed to the check-status endpoint as a per-request shared secret — defense-in-depth on top of the SCIM gate. The backchannel (bc-authorize and token poll) is machine-to-machine and never touches the WRP.
 :::
 
 ## RFC 8693 Token Exchange
@@ -156,9 +154,11 @@ Check the CIBA mobile-push + token exchange path is working:
 kubectl get pods -n banking-app -l app=uc3-agent
 ```
 
-```bash
-# Watch the mobile-push flow in the agent logs (push fired, then check-status polls)
-kubectl logs -n banking-app -l app=uc3-agent --since=10m --tail=-1 | grep -E 'mmfa_push_fired|ciba_status_polled'
+Expected — one pod, `1/1 Running`:
+
+```
+NAME                         READY   STATUS    RESTARTS   AGE
+uc3-agent-<hash>             1/1     Running   0          11h
 ```
 
 ```bash
@@ -168,3 +168,20 @@ kubectl exec -n vault vault-0 -- sh -c \
   'https://iviaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration'" \
   | jq '.backchannel_authentication_endpoint'
 ```
+
+Expected — the backchannel endpoint on your `nip.io` WRP host. The probe itself travels the in-cluster ClusterIP path; the *value* it returns is the public issuer, which is the correct advertised endpoint:
+
+```
+"https://wrp.<deploy-id>.<alb-ip-dashed>.nip.io/isvaop/oauth2/ciba"
+```
+
+```bash
+# Watch the mobile-push flow in the agent logs (push fired, then check-status polls)
+kubectl logs -n banking-app -l app=uc3-agent --tail=-1 --since=30m | grep -E 'mmfa_push_fired|ciba_status_polled'
+```
+
+::::alert{header="This one returns nothing until you have done the phone step" type="info"}
+`mmfa_push_fired` and `ciba_status_polled` are written **only** when a refund flow actually fires a push. If you have not yet completed [Test the Refund Flow](../70-test-refund/) with a tap on your enrolled device, this command prints nothing and exits `1`. That is expected — it is not a broken deployment.
+
+Run it again *after* your refund completes and you will see the push and the poll cycle. `--since=30m` bounds the window: the agent logs continuously, so a small `--tail` can scroll the events out of view.
+::::

@@ -1284,11 +1284,21 @@ sweep_orphan_target_groups() {
 # wildcard cert that happens to share the regional ELB domain.
 sweep_acm_certs() {
     local certs
+    # Candidates are EVERY cert in the region, not just the self-signed ALB wildcard.
+    # Step 7 imports the Let's Encrypt cert into this SAME ARN (main.tf:95 keeps the ARN
+    # stable via lifecycle.ignore_changes), and that import REPLACES the cert's
+    # DomainName with the nip.io FQDN. Filtering candidates on
+    # '*.<region>.elb.amazonaws.com' therefore stops matching the very cert Terraform
+    # created, so it survived teardown AND the zero-residual audit reported PASS.
+    # Observed 2026-08-10: wrp.6je46q.54-211-202-193.nip.io left ISSUED and unattached.
+    # The workshop tag stays the deny-by-default guard — it survives import-certificate
+    # because the ARN never changes — so widening the candidate list cannot reach an
+    # unrelated cert.
     certs=$(aws acm list-certificates --region "$REGION" \
-        --query "CertificateSummaryList[?DomainName=='*.${REGION}.elb.amazonaws.com'].CertificateArn" \
+        --query "CertificateSummaryList[].CertificateArn" \
         --output text 2>/dev/null)
     if [[ -z "$certs" || "$certs" == "None" ]]; then
-        print_info "ACM certs (workshop ALB wildcard): none"
+        print_info "ACM certs (workshop-tagged): none"
         return 0
     fi
     for arn in $certs; do
@@ -1614,10 +1624,11 @@ phase_verify_zero_residuals() {
     [[ "$eks_cluster" == "None" ]] && eks_cluster=""
     _check "EKS cluster" "$eks_cluster"
 
-    # ACM cert (self-signed ALB wildcard, workshop-tagged)
+    # ACM cert, workshop-tagged. NOT filtered by domain: Step 7's import replaces the
+    # self-signed wildcard material with the Let's Encrypt nip.io cert under the same ARN.
     local acm=""
     for arn in $(aws acm list-certificates --region "$REGION" \
-            --query "CertificateSummaryList[?DomainName=='*.${REGION}.elb.amazonaws.com'].CertificateArn" \
+            --query "CertificateSummaryList[].CertificateArn" \
             --output text 2>/dev/null); do
         [[ -z "$arn" || "$arn" == "None" ]] && continue
         local t
@@ -1626,7 +1637,7 @@ phase_verify_zero_residuals() {
             --output text 2>/dev/null)
         [[ -n "$t" && "$t" != "None" ]] && acm="$acm ${arn##*/}"
     done
-    _check "ACM certs (workshop ALB wildcard)" "$(echo "$acm" | xargs)"
+    _check "ACM certs (workshop-tagged)" "$(echo "$acm" | xargs)"
 
     # RDS instances
     local rds
@@ -2078,10 +2089,11 @@ phase_verify_keep_eks() {
     [[ "$orphan_tgs" == "None" ]] && orphan_tgs=""
     _check "Orphan target groups (workshop-named)" "$orphan_tgs"
 
-    # ACM cert (self-signed wildcard) — gone, we kill it in targeted destroy
+    # ACM cert, workshop-tagged — killed in targeted destroy. NOT filtered by domain:
+    # after Step 7's import the ARN carries the Let's Encrypt nip.io cert, not the wildcard.
     local acm=""
     for arn in $(aws acm list-certificates --region "$REGION" \
-            --query "CertificateSummaryList[?DomainName=='*.${REGION}.elb.amazonaws.com'].CertificateArn" \
+            --query "CertificateSummaryList[].CertificateArn" \
             --output text 2>/dev/null); do
         [[ -z "$arn" || "$arn" == "None" ]] && continue
         local t
@@ -2090,7 +2102,7 @@ phase_verify_keep_eks() {
             --output text 2>/dev/null)
         [[ -n "$t" && "$t" != "None" ]] && acm="$acm ${arn##*/}"
     done
-    _check "ACM certs (workshop ALB wildcard)" "$(echo "$acm" | xargs)"
+    _check "ACM certs (workshop-tagged)" "$(echo "$acm" | xargs)"
 
     echo ""
     if [[ $failures -eq 0 ]]; then

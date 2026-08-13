@@ -1,6 +1,6 @@
 ---
 title: 'Verify Infrastructure'
-weight: 33
+weight: 331
 ---
 
 Run the foundation verification script to confirm all modules deployed correctly. It checks EKS cluster status + nodes + addons, RDS status + pgaudit + encryption, Bedrock KB + data sources + retrieval, audit log groups with KMS, and the region contract.
@@ -31,6 +31,14 @@ If any check fails, the script prints a red error with a `Fix:` remediation hint
 
 **Audit log groups** — `/workshop/vault-audit`, `/workshop/ivia-decision`, `/workshop/agent-trace` exist and are KMS-encrypted with the workshop CMK
 
-**Region contract** — no canonical region literal (e.g. `us-west-2`) anywhere in `infrastructure/` outside `terraform.tfvars`
+**OpenLDAP (IVIA user registry)** — deployment Available in the `verify-access` namespace, and the `oscar` user exists (`cn=oscar,dc=ibm,dc=com`)
+
+**Vault native surface** — Vault reports an Enterprise (`+ent`) build, and the Agent Registry responds with the `uc1-agent` registration resolvable by display-name
+
+**Region contract** — no canonical region literal for your deploy region anywhere in `infrastructure/` outside `terraform.tfvars`
 
 ::::
+
+The last two groups reach past Tier 1 into the Tier-2 identity substrate. At an event that is
+useful confirmation: it means the Vault and IVIA layer provisioned during account setup is
+sound, not just the VPC/EKS/RDS foundation.

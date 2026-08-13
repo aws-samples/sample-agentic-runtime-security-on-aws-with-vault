@@ -42,7 +42,7 @@ The response surfaces the Vault authentication state:
 
 ```json
 {
-  "answer": "I was unable to find any tables in the database ...",
+  "answer": "The database contains numerous system tables and views, which are part of the PostgreSQL system catalog ... If you are looking for user-created tables, they might be in a different schema or might not exist in this database.",
   "credential_metadata": {
     "vault_authenticated": true,
     "vault_role": "uc1"
@@ -50,28 +50,50 @@ The response surfaces the Vault authentication state:
 }
 ```
 
-`vault_authenticated: true` with `vault_role: uc1` confirms the pod authenticated to Vault with its ServiceAccount identity — not a static key. The "no tables" answer is itself a teaching moment: the `uc1-readonly` Vault role only GRANTs SELECT on schema `public` (empty here), so even though the agent successfully obtained a credential, that credential's reach is bounded by the role.
+The exact wording of `answer` varies between runs — it is model-generated. What matters is `credential_metadata`.
+
+`vault_authenticated: true` with `vault_role: uc1` confirms the pod authenticated to Vault with its ServiceAccount identity — not a static key. The answer is itself a teaching moment: the `uc1-readonly` role's `creation_statements` grant SELECT only on schema `public`, so the agent sees the PostgreSQL system catalog and nothing else. The workshop's actual customer data was seeded into the **`banking`** schema, which this credential was never granted `USAGE` on — Use Case 2's `uc2-personal-readonly` role is the one that grants it. The agent obtained a credential successfully; that credential's *reach* is bounded by the role.
 
 ## Step 3 — Observe credential issuance in the Vault audit log
 
 The SQL-shaped question in Step 2 made the agent call Vault for a Just-In-Time database credential. Read the audit log for that issuance event:
 
-Vault runs as a **three-node Raft cluster** and each node writes its own audit entries to its own stdout. The agent reached Vault through `svc/vault`, which load-balances across all three — so the entry can be on any of them, and reading only `vault-0` returns nothing about two times in three (with exit code 0, so it looks like the credential was never issued). Read all three:
-
 ```bash
-for p in vault-0 vault-1 vault-2; do
-  kubectl logs -n vault $p --since=15m \
-    | jq -c 'select(.type=="response" and .request.path=="database/creds/uc1-readonly")
-             | {time, path: .request.path,
-                display_name: .auth.display_name,
-                lease_id: .response.secret.lease_id}'
-done | tail -1
+kubectl logs -n vault -l app.kubernetes.io/name=vault,component=server --tail=-1 --since=15m \
+  | grep -aE '^\{' \
+  | jq -c 'select(.type=="response" and .request.path=="database/creds/uc1-readonly")
+           | {time, path: .request.path,
+              display_name: .auth.display_name,
+              lease_id: .response.secret.lease_id}' \
+  | tail -1
 ```
+
+:::alert{header="Why this reads all three Vault pods, not just vault-0" type="info"}
+Vault runs as a **three-node Raft cluster**. The credential issuance is logged by whichever
+node served the request — often `vault-1` or `vault-2`, not `vault-0` — so reading a single
+pod's log returns **nothing at all** even though the credential was issued correctly. The
+label selector reads all three.
+
+Two details in that command are load-bearing:
+
+- **`--tail=-1`** — when `kubectl logs` is given a *label selector* it silently defaults to
+  `--tail=10` per pod, which drops the event you are looking for. Without this flag the command
+  returns empty.
+- **`grep -aE '^\{'`** — the Vault container's entrypoint writes a few non-JSON lines at
+  startup (`Container is running as non-root user, ignoring SKIP_CHOWN`). Piping those into
+  `jq` aborts the whole pipeline with `parse error: Invalid numeric literal`. The `grep` keeps
+  only JSON audit records.
+:::
 
 Expected:
 
 ```json
-{"time":"2026-08-12T20:36:27.313650573Z","path":"database/creds/uc1-readonly","display_name":"kubernetes-uc1-uc1-retriever-sa","lease_id":"database/creds/uc1-readonly/T8oQy2nNmNHDO5oxNbLCQzhP"}
+{
+  "time": "2026-06-18T21:20:56Z",
+  "path": "database/creds/uc1-readonly",
+  "display_name": "kubernetes-uc1-uc1-retriever-sa",
+  "lease_id": "database/creds/uc1-readonly/FTDIUF5OVChJxHpUfKOHoaZz"
+}
 ```
 
 `display_name` is `kubernetes-uc1-uc1-retriever-sa` — the Vault Kubernetes mount, the role, and the ServiceAccount that authenticated. `lease_id` is unique per issuance — every `query_database` call produces a fresh one, which is the audit-trail proof that credentials are JIT (not reused). This entry is the first link in the audit-correlation chain that Use Case 3 completes end-to-end. The 15-minute TTL comes from the `default_ttl = 900` on `vault_database_secret_backend_role.uc1_readonly` (visible via `vault read database/roles/uc1-readonly` from the previous page).
@@ -117,7 +139,7 @@ The script runs ten checks and prints a pass/fail summary:
 | JIT STS creds | `aws/sts/bedrock-reader` issues an access key + session token |
 | Agent /health | the agent reports `healthy` |
 | ENFC-01 | the `uc1-readonly` policy does not grant the UC3 refund path |
-| Agent Registry | registration `uc1-agent` resolves by display-name — the registry identity from Step 5 of the previous page |
+| Agent Registry | registration `uc1-agent` resolves by display-name (the registry identity from the previous page) |
 | Audit device | a Vault audit device is enabled |
 | /query end-to-end | a real query returns a KB-grounded answer (not "couldn't find it") |
 
@@ -127,8 +149,8 @@ Expected summary:
 ✓ PASS UC1 agent pod Running (1 pod(s) in uc1)
 ✓ PASS UC1 ServiceAccount uc1-retriever-sa exists
 ✓ PASS Vault role uc1 bound to uc1-retriever-sa
-✓ PASS JIT DB creds issuance: username=v-root-uc1-read-KCkqzWHdR26Cy3T4eTyP-1786567026
-✓ PASS JIT STS creds issuance: access_key=ASIA4TGI...
+✓ PASS JIT DB creds issuance: username=v-root-uc1-read-...
+✓ PASS JIT STS creds issuance: access_key=ASIA...
 ✓ PASS Agent /health endpoint: healthy
 ✓ PASS ENFC-01: uc1-readonly policy does not grant UC3 (uc3-refund-writer) path access
 ✓ PASS UC1 Agent Registry: registration 'uc1-agent' resolvable by display-name (registry identity; ceiling INERT — k8s uc1-readonly is the floor)
@@ -137,8 +159,6 @@ Expected summary:
 
  ✓ 10 check(s) passed
 ```
-
-The credential in that fourth line is prefixed `v-root-` rather than `v-kubernet-` because the verify script issues it with the root token to test the path directly. The agent's own credentials — the ones in the Step 3 audit entry — carry the `kubernetes-uc1-uc1-retriever-sa` display name.
 
 If a check fails, the script prints a copy-paste `Fix hint`. The `/query end-to-end` check fails (not falsely passes) if the Knowledge Base is empty — its fix hint points to `./sync-bedrock-kb.sh`.
 
@@ -157,22 +177,17 @@ T+900s  Lease expiry fires — Vault runs: DROP ROLE IF EXISTS "v-kubernet-uc1-r
         Any open connection using that credential fails on its next query
 ```
 
-Observe the active leases right after a query, then watch them disappear after 15 minutes. Leases are listed through `sys/leases/lookup` — `vault lease` only has `lookup`, `renew` and `revoke` subcommands, so `vault lease list` exits with the CLI usage text rather than a listing. The [Credential Revocation](../../60-use-case-2/65-credential-revocation/) page uses this same form:
+Observe the active lease right after a query, then watch it disappear after 15 minutes:
 
 ```bash
 vault list sys/leases/lookup/database/creds/uc1-readonly
 ```
 
-Expected — one key per live credential; the suffix matches the `lease_id` tail from Step 3:
+Each key in that list is one live JIT credential. Look up any one of them to see its remaining TTL:
 
+```bash
+vault lease lookup database/creds/uc1-readonly/<key-from-the-list>
 ```
-Keys
-----
-T8oQy2nNmNHDO5oxNbLCQzhP
-U8AYazSUPHYOemVtly4upqVL
-```
-
-If every lease has already expired, Vault prints `No value found at sys/leases/lookup/database/creds/uc1-readonly` and exits 2 — that is the CLI's convention for an empty list, not an error.
 
 Why this matters for OBJ-2: if the pod is compromised at T+800s, the attacker has at most 100 seconds of Postgres access before the credential self-destructs — no long-lived password to rotate, no rotation job to run.
 :::

@@ -1,14 +1,19 @@
 ---
 title: 'Validate Vault'
-weight: 35
+weight: 333
 ---
 
-Vault was deployed as a 3-node Raft HA cluster, initialized, and unsealed by `terraform apply` plus `deploy-workshop.sh`. Confirm it is healthy before proceeding.
+Vault was deployed as a 3-node Raft HA cluster, initialized, and unsealed as part of Tier 2 — during your account setup at an event, or by your own `deploy-workshop.sh` run when self-paced. Confirm it is healthy before proceeding.
 
 ![Vault authorization flow — ephemeral, per-request credentials across Use Cases 1, 2, and 3](/static/images/vault-authorization-flow.png)
 
 :::alert{header="Root token location" type="info"}
-`vault-init.sh` (run by `deploy-workshop.sh`) wrote the Vault root token to `~/vault-init.json` during initialization. Load it before running the authenticated checks below:
+The Vault root token lives at `~/vault-init.json`. How it got there depends on your path:
+
+- **At an event** — you pulled it from the state bucket in Step 3 of [Deploy — At an Event](../../31-deploy-at-an-event/). `vault-init.sh` ran inside the account-setup build, not on your machine, so there is no local run to go looking for.
+- **Self-paced** — `vault-init.sh` (run by `deploy-workshop.sh`) wrote it during Tier-2 initialization.
+
+Load it before running the authenticated checks below:
 
 ```bash
 export VAULT_ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)
@@ -18,19 +23,20 @@ export VAULT_ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)
 ## Step 1 — Confirm pods are Running
 
 ```bash
-kubectl get pods -n vault -l app.kubernetes.io/name=vault
+kubectl get pods -n vault
 ```
 
-Expected — the three Raft nodes `Running`:
+Expected — the three Vault server pods `Running`, plus the agent-injector:
 
 ```
-NAME      READY   STATUS    RESTARTS   AGE
-vault-0   1/1     Running   0          12h
-vault-1   1/1     Running   0          12h
-vault-2   1/1     Running   0          12h
+NAME                                    READY   STATUS    RESTARTS   AGE
+vault-0                                 1/1     Running   0          5m
+vault-1                                 1/1     Running   0          4m
+vault-2                                 1/1     Running   0          4m
+vault-agent-injector-<hash>             1/1     Running   0          5m
 ```
 
-The label selector is what keeps this to the three server pods. Without it, `kubectl get pods -n vault` also returns the `vault-agent-injector` pod that ships with the Helm chart — a fourth `Running` pod that is expected, and not part of the Raft cluster.
+`vault-0`, `vault-1` and `vault-2` are the Raft cluster. Remember there are three of them — some later steps read Vault's audit log, and the node that served a request is the one that logged it.
 
 ## Step 2 — Confirm KMS auto-unseal
 
@@ -57,7 +63,7 @@ kubectl exec -n vault vault-0 -- \
   sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault operator raft list-peers"
 ```
 
-Expected — the three Vault nodes (the same `vault-0`, `vault-1`, `vault-2` pods from Step 1) form the Raft cluster: exactly one `leader` and two `follower`s, all with `Voter` = `true`. The follower rows can appear in any order:
+Expected — three peers, one leader:
 
 ```
 Node       Address                        State       Voter
@@ -89,7 +95,7 @@ kubectl exec -n vault vault-0 -- vault status | grep -i version
 Expected — the `+ent` suffix marks an Enterprise build:
 
 ```
-Version                  2.0.3+ent
+Version                 2.0.3+ent
 ```
 
 Agent Registry mount present alongside the database and AWS secrets engines:
@@ -98,12 +104,12 @@ Agent Registry mount present alongside the database and AWS secrets engines:
 kubectl exec -n vault vault-0 -- sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault secrets list" | grep -E 'agent-registry|database|aws'
 ```
 
-Expected — `agent-registry/`, `aws/`, and `database/` all listed (columns are Path, Type, Accessor, Description — the Agent Registry's type is `agent_registry` with an underscore):
+Expected — `agent-registry/`, `aws/`, and `database/` all listed. Note the engine **type** is `agent_registry` with an underscore, while its mount **path** uses a hyphen:
 
 ```
-agent-registry/    agent_registry    agent-registry_0f95efab    agent registry
-aws/               aws               aws_f9d9c477               n/a
-database/          database          database_f6e29cda          n/a
+agent-registry/    agent_registry    agent-registry_<id>    agent registry
+aws/               aws               aws_<id>               n/a
+database/          database          database_<id>          n/a
 ```
 
 If `agent-registry/` is missing, the Enterprise license does not carry the `agentic-iam` feature that unlocks the Agent Registry + OAuth resource server — re-check the license and re-run `deploy-workshop.sh`.

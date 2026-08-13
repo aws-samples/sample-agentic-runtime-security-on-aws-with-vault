@@ -1,12 +1,16 @@
 ---
 title: 'The OIDC Seam'
-weight: 37
+weight: 335
 ---
 
-The OIDC seam is where an IVIA-issued JWT becomes a Vault-vended dynamic credential. `deploy-workshop.sh` already configured Vault's **OAuth resource server** profile to trust IVIA — confirm the wiring is correct before running use cases.
+The OIDC seam is where an IVIA-issued JWT becomes a Vault-vended dynamic credential. `deploy-workshop.sh` already wired Vault's **OAuth resource server** profile (`ivia`) to trust IVIA — confirm the wiring is correct before running use cases.
 
-:::alert{header="No jwt auth backend" type="info"}
-Vault Enterprise validates the IVIA token *directly*, as a resource server: the agent presents the OAuth JWT in `X-Vault-Token` and Vault checks it against the `ivia` profile. There is no `vault write auth/jwt/login`, and no `jwt/` auth mount — that backend was retired when the workshop moved to the native Agent Registry model. Step 1 below confirms it is gone.
+:::alert{header="There is no jwt auth backend — and that is the point" type="info"}
+Vault Enterprise consumes the IVIA-issued OAuth JWT **directly**: the token is presented in the
+`X-Vault-Token` header and validated against the OAuth resource server profile. Earlier
+iterations of this workshop used a hand-rolled `jwt` auth backend with a `POST auth/jwt/login`
+round-trip; that backend has been **removed**. If you see no `jwt/` row in Step 1, the deploy is
+correct — its absence is asserted by `test-vault-verify.sh`.
 :::
 
 ## The OIDC Seam at Runtime
@@ -82,13 +86,13 @@ kubectl exec -n vault vault-0 -- \
   sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault auth list"
 ```
 
-Expected — exactly two mounts. `kubernetes/` is how Use Case 1's agent pod authenticates by service account; `token/` is Vault's built-in. **There is deliberately no `jwt/` row** — if you see one, the native cutover did not complete on your deploy:
+Expected — **two** mounts only. There is deliberately **no `jwt/` row**:
 
 ```
 Path           Type          Accessor                    Description                Version
 ----           ----          --------                    -----------                -------
-kubernetes/    kubernetes    auth_kubernetes_1f629075    n/a                        n/a
-token/         token         auth_token_78018ae6         token based credentials    n/a
+kubernetes/    kubernetes    auth_kubernetes_...         n/a                        n/a
+token/         token         auth_token_...              token based credentials    n/a
 ```
 
 ## Step 2 — Confirm secrets engines
@@ -98,17 +102,17 @@ kubectl exec -n vault vault-0 -- \
   sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault secrets list"
 ```
 
-Expected — six mounts. `agent-registry/` is the Enterprise engine that holds the agent identities (you listed its three registrations on the [Validate Vault](../35-verify-vault/) page); `database/` vends the per-request PostgreSQL credentials; `aws/` the dynamic IAM ones:
+Expected — six mounts. `agent-registry/` is the Enterprise engine this workshop exists to teach:
 
 ```
 Path               Type              Accessor                   Description
 ----               ----              --------                   -----------
-agent-registry/    agent_registry    agent-registry_0f95efab    agent registry
-aws/               aws               aws_f9d9c477               n/a
-cubbyhole/         cubbyhole         cubbyhole_8897d1f9         per-token private secret storage
-database/          database          database_f6e29cda          n/a
-identity/          identity          identity_425781cf          identity store
-sys/               system            system_0f6fda79            system endpoints used for control, policy and debugging
+agent-registry/    agent_registry    agent-registry_...         agent registry
+aws/               aws               aws_...                    n/a
+cubbyhole/         cubbyhole         cubbyhole_...              per-token private secret storage
+database/          database          database_...               n/a
+identity/          identity          identity_...               identity store
+sys/               system            system_...                 system endpoints used for control, policy and debugging
 ```
 
 ## Step 3 — Confirm the OAuth resource server trusts IVIA
@@ -137,37 +141,34 @@ kubectl exec -n vault vault-0 -- \
   sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read database/config/workshop-pg"
 ```
 
-Expected — `allowed_roles` lists the four use case roles (Use Case 3 has two: a writer for the refund and a reader):
+Expected — `allowed_roles` lists the four use case roles:
 
 ```
-Key                                   Value
----                                   -----
-allowed_roles                         [uc1-readonly uc2-personal-readonly uc3-refund-writer uc3-readonly]
-connection_details                    map[connection_url:postgresql://{{username}}:{{password}}@<rds-endpoint>:5432/workshop?sslmode=require ... username:vault_root]
-plugin_name                           postgresql-database-plugin
+connection_details    map[username:vault_root ...]
+allowed_roles         [uc1-readonly uc2-personal-readonly uc3-refund-writer uc3-readonly]
 ```
 
 ## Step 5 — Confirm IVIA OIDC discovery (cluster-internal)
 
-`--quiet` and `</dev/null` are both required — without them `kubectl run`'s `pod "oidc-check" deleted` message lands in the `jq` pipe and the command fails with a parse error:
-
 ```bash
-kubectl run oidc-check --image=curlimages/curl --rm -i --restart=Never --quiet \
-  -n verify-access -- \
-  curl -sk https://iviaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration \
-  </dev/null | jq '{issuer, authorization_endpoint, token_endpoint, jwks_uri}'
+kubectl run oidc-check --image=curlimages/curl --rm -i --restart=Never --quiet -n verify-access -- curl -sk https://iviaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration </dev/null | jq .
 ```
 
-Expected — the `issuer` is the **public WRP host**, the same value Step 3 showed in `issuer_id`, even though you reached the provider over its in-cluster ClusterIP. That single advertised issuer is what lets Vault validate every IVIA token against one `issuer_id`:
+The `--quiet` flag and `</dev/null` are both required: without them `kubectl run`'s pod-lifecycle message lands in the `jq` pipe and the command fails with `jq: parse error: Invalid numeric literal`.
+
+Expected — `issuer` matches the `issuer_id` from Step 3. Note the provider advertises the **public WRP host**, not the cluster-internal address you just called:
 
 ```json
 {
-  "issuer": "https://<NIP_FQDN_WRP>",
+  "issuer": "https://<NIP_FQDN_WRP from infrastructure/.acme-state>",
   "authorization_endpoint": "https://<NIP_FQDN_WRP>/isvaop/oauth2/authorize",
   "token_endpoint": "https://<NIP_FQDN_WRP>/isvaop/oauth2/token",
-  "jwks_uri": "https://<NIP_FQDN_WRP>/isvaop/oauth2/jwks"
+  "jwks_uri": "https://<NIP_FQDN_WRP>/isvaop/oauth2/jwks",
+  ...
 }
 ```
+
+This is intentional and is the same behaviour [Verify Identity Access](../334-verify-identity-access/) Step 4 describes: the provider always advertises the one public WRP issuer, which lets Vault validate IVIA tokens against a single `issuer_id` regardless of whether the caller reached it from inside or outside the cluster.
 
 :::expand{header="Platform Track — Why declarative IVIA configuration?"}
 
