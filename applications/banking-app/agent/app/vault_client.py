@@ -69,21 +69,30 @@ class AgentVaultClient:
             },
         )
 
-    def _fetch_bedrock_sts(self) -> dict:
-        """Read fresh ephemeral STS credentials from Vault's aws secrets engine.
+    def ensure_authenticated(self) -> None:
+        """Re-login if the pod's Vault token has expired.
 
-        Re-authenticates to Vault first if the pod's Vault token has expired —
-        the projected SA token on disk is auto-rotated by Kubernetes, so a fresh
-        login always succeeds. This is the refresh callback for
-        RefreshableCredentials, so it is invoked transparently by botocore
-        whenever the cached STS credentials approach their lease expiry.
-
-        Returns the metadata dict botocore expects (access_key/secret_key/token/
-        expiry_time), NOT a boto3.Session.
+        The projected SA token on disk is auto-rotated by Kubernetes, so a fresh
+        login always succeeds. Called on every credential fetch, and by /health
+        so the probe reports what a real request would find rather than the
+        staleness of a token cached at pod startup.
         """
         if not self.client.is_authenticated():
             logger.info("vault_token_expired_relogin")
             self.login()
+
+    def _fetch_bedrock_sts(self) -> dict:
+        """Read fresh ephemeral STS credentials from Vault's aws secrets engine.
+
+        Re-authenticates to Vault first if the pod's Vault token has expired.
+        This is the refresh callback for RefreshableCredentials, so it is invoked
+        transparently by botocore whenever the cached STS credentials approach
+        their lease expiry.
+
+        Returns the metadata dict botocore expects (access_key/secret_key/token/
+        expiry_time), NOT a boto3.Session.
+        """
+        self.ensure_authenticated()
 
         response = self.client.read("aws/sts/bedrock-reader")
         data = response["data"]

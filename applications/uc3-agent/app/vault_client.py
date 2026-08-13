@@ -195,9 +195,7 @@ class UC3VaultClient:
         vault_path = f"aws/sts/{vault_aws_role}"
 
         def _refresh() -> dict:
-            if not self._client.is_authenticated():
-                logger.info("uc3_vault_token_expired_relogin")
-                self.login()
+            self.ensure_authenticated()
             response = self._client.read(vault_path)
             data = response["data"]
             lease_seconds = int(response.get("lease_duration") or 900)
@@ -253,6 +251,18 @@ class UC3VaultClient:
             vault_aws_role="uc3-logs-writer",
             log_event="uc3_logs_sts_credentials_issued",
         )
+
+    def ensure_authenticated(self) -> None:
+        """Re-login if the pod's Vault token has expired.
+
+        The projected SA token on disk is auto-rotated by Kubernetes, so a fresh
+        login always succeeds. Called on every credential refresh, and by /health
+        so the probe reports what a real request would find rather than the
+        staleness of a token cached at pod startup.
+        """
+        if not self._client.is_authenticated():
+            logger.info("uc3_vault_token_expired_relogin")
+            self.login()
 
     def is_authenticated(self) -> bool:
         """Return True if the cached Vault token is still valid."""
