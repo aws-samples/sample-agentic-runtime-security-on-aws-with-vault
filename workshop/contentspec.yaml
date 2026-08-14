@@ -83,26 +83,45 @@ infrastructure:
       #   copies the assets from the us-east-1 store into an in-event-region bucket before
       #   `deploy-workshop.sh` runs. We deliberately did NEITHER yet — pending your answer.
       # The three tier-2 licensing parameters are REQUIRED (MinLength 1, no default)
-      # and are supplied ONCE by the event organizer at event-creation time — the
-      # same place AcmeEmail is set today, which is the precedent that NoEcho
-      # parameters are settable here. Attendees never see or handle them; that is
-      # the entire point of pre-provisioning tier 2 (#21).
+      # and are supplied ONCE by the event organizer, so that attendees never see or
+      # handle them — the entire point of pre-provisioning tier 2 (#21). They are
+      # licensed credentials, so there is deliberately no defaultValue: they must
+      # not be committed to this repo in any form.
       #
-      # They MUST stay listed here: Workshop Studio only surfaces template
-      # parameters declared in this list, and with no default the stack cannot
-      # create without them. Removing an entry breaks event provisioning outright.
+      # userOverridable is what makes a parameter legal here without a default. The
+      # Workshop Studio content validator states its own rule in the failure text:
+      #   INFRASTRUCTURE_VALIDATION_ERROR: parameter does not have default value in
+      #   CFN or ContentSpec and is not user overridable
+      # i.e. a parameter needs EITHER a default OR userOverridable. This list
+      # previously set neither, so the build was rejected.
       #
-      # Deliberately no defaultValue — these are licensed credentials and must not
-      # be committed to this repo in any form.
+      # NOT YET PROVEN (issue #24): that userOverridable: true renders an input at
+      # event creation. On a real Workshop Studio build with this list carrying no
+      # defaults and no flags, the event-creation flow showed no field for any of
+      # the three and they arrived empty, failing the stack on
+      # `secretString must have length >= 1`. AcmeEmail is NOT evidence to the
+      # contrary — it carries Default: "" in bootstrap.yaml and satisfied the
+      # validator on that default, never on being settable. It stays here with its
+      # default as the control for that test.
+      #
+      # TerraformSourceBucket and AssetsKeyPrefix are Workshop Studio's to fill and
+      # are pinned userOverridable: false — an organizer editing either one breaks
+      # the CodeBuild S3 source.
       parameters:
         - templateParameter: AcmeEmail
+          userOverridable: true
         - templateParameter: IcrEntitlementKey
+          userOverridable: true
         - templateParameter: VaultEnterpriseLicense
+          userOverridable: true
         - templateParameter: IviaMmfaPushClientSecret
+          userOverridable: true
         - templateParameter: TerraformSourceBucket
           defaultValue: "{{.AssetsBucketName}}"
+          userOverridable: false
         - templateParameter: AssetsKeyPrefix
           defaultValue: "{{.AssetsBucketPrefix}}"
+          userOverridable: false
 
 # NOTE (Phase 1 Open Question 1): Service quota requests are NOT in the verified v2 schema
 # surface. Quota provisioning is documented in workshop/content/20-prerequisites/ as
