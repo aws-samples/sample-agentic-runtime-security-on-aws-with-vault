@@ -5,15 +5,7 @@ weight: 80
 
 Run the teardown script to destroy all workshop resources and verify no chargeable resources remain.
 
-::::alert{header="At an event: there is nothing for you to clean up" type="info"}
-**Do not run the teardown script.** Your temporary account and everything in it are reclaimed by AWS after the event, and the CloudFormation stack that provisioned your account runs its own teardown build on delete — that is what actually removes the environment.
-
-Running `teardown.sh` yourself would not work as intended in any case: the Tier-2 state you pulled is an **outputs-only** copy (`"resources": []`), so a `terraform destroy` against it reconciles nothing — the Vault and IVIA volumes and the WRP load balancer would be left untouched while the script reported success on that phase.
-
-The rest of this page is *self-paced*: it describes how to tear down a workshop you deployed on your own AWS account.
-::::
-
-## 1. Self-paced: run the teardown script
+## 1. Run the teardown script
 
 From the repo root, run:
 
@@ -23,10 +15,9 @@ bash infrastructure/scripts/teardown.sh
 
 This single command performs the full teardown in order:
 
-1. **Terraform destroy — three roots in reverse dependency order:** `workloads` (the Use Case agent pods), then `services` (Vault + IVIA), then `infrastructure` (VPC, EKS, RDS, KB). Downstream first, because each root reads the one below it.
-2. **Phase-9 native Vault resources** — run between the `workloads` and `services` destroys, while Vault is still up. Deletes the Agent Registry registrations (`uc1-agent`, `agent-uc2`, `uc3-actor`), the identity entities and aliases (those three plus `oscar` and `jaime`), the `oauth-resource-server` profile `ivia`, and **the `vault-ent-license` secret**. These are Enterprise objects inside Vault, so they cannot be reclaimed once the Vault StatefulSet is gone.
-3. **Kubernetes drain** — deletes workshop namespaces (`vault`, `verify-access`, `uc1`, `banking-app`) and any NLB/ALB services managed by the AWS Load Balancer Controller
-4. **AWS sweep** — tag-scoped and name-prefix-scoped sweep of every resource the workshop provisioned:
+1. **Terraform destroy** — removes all Terraform-managed resources
+2. **Kubernetes drain** — deletes workshop namespaces (`vault`, `verify-access`, `uc1`, `banking-app`) and any NLB/ALB services managed by the AWS Load Balancer Controller
+3. **AWS sweep** — tag-scoped and name-prefix-scoped sweep of every resource the workshop provisioned:
    - EKS pod-identity associations, managed add-ons, node groups, cluster, OIDC provider
    - Vault PVCs, EBS volumes, EC2 launch templates
    - ECR repositories (`workshop/uc1-agent`, `workshop/uc3-agent`, `workshop-banking-app`)
@@ -40,8 +31,7 @@ This single command performs the full teardown in order:
    - KMS aliases and keys (scheduled for 7-day deletion — AWS minimum)
    - IAM roles, policies, and instance profiles tagged `Workshop=agentic-runtime-security`
    - VPC: load balancers, target groups, VPC endpoints, ENIs, security groups, NAT gateways, EIPs, subnets, route tables, VPC itself
-5. **Zero-residual verification** — confirms each resource class is gone before exiting
-6. **Local state cleanup** — removes `infrastructure/.acme-state` and `.acme-rerun-marker`, then archives the three roots' `terraform.tfstate` files. This only runs once the verification above has passed, so a partial teardown leaves your state intact and re-runnable.
+4. **Zero-residual verification** — confirms each resource class is gone before exiting
 
 The script exits non-zero if verification finds residuals; review the output for `FAIL` lines.
 
@@ -63,23 +53,6 @@ bash infrastructure/scripts/teardown.sh --dry-run
 
 The script runs a built-in audit, but you can run these spot-checks manually to confirm nothing chargeable remains.
 
-:::alert{header="Run this first — a region-less check reports success even when the cluster is still up" type="warning"}
-The EKS and RDS checks below are **regional**. If your AWS CLI default region is not the region you deployed into, `describe-cluster` answers for the wrong region and returns `ResourceNotFoundException` — which is the exact output this page calls proof of a successful teardown. You would be told everything is gone while a live cluster and database are still running.
-
-Pin the deploy region first. `terraform.tfvars` is read rather than `terraform output` because teardown archives the Terraform state, so the outputs are gone by the time you run these checks — the tfvars file is not touched:
-
-```bash
-export AWS_REGION=$(awk -F'"' '/^[[:space:]]*region[[:space:]]*=/{print $2}' infrastructure/terraform.tfvars)
-echo "checking region: ${AWS_REGION}"
-```
-
-Expected — the region you deployed into, **not** your shell's default:
-
-```
-checking region: us-east-1
-```
-:::
-
 **EKS cluster gone:**
 ```bash
 aws eks describe-cluster --name ars-workshop
@@ -93,8 +66,6 @@ aws rds describe-db-instances \
   --output text
 ```
 Expected: empty output
-
-The two checks above are regional and depend on the `AWS_REGION` you exported. The S3 and IAM checks below query global endpoints, so they are correct regardless.
 
 **S3 buckets gone:**
 ```bash

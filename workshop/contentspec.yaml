@@ -1,6 +1,6 @@
 # AWS Workshop Studio v2 manifest for the Agentic Runtime Security on AWS workshop.
 # Schema: https://docs.aws.amazon.com/workshop-studio/latest/
-# rebuild marker: 2026-08-05 (re-source S3 assets: EDR disabled + Uptycs secrets removed)
+# rebuild marker: 2026-08-19 (post-assets-sync rebuild)
 
 version: 2.0
 
@@ -82,23 +82,8 @@ infrastructure:
       #   deployableRegions (ship single-region us-east-1), or (b) add a buildspec step that
       #   copies the assets from the us-east-1 store into an in-event-region bucket before
       #   `deploy-workshop.sh` runs. We deliberately did NEITHER yet — pending your answer.
-      # The three tier-2 licensing parameters are REQUIRED (MinLength 1, no default)
-      # and are supplied ONCE by the event organizer at event-creation time — the
-      # same place AcmeEmail is set today, which is the precedent that NoEcho
-      # parameters are settable here. Attendees never see or handle them; that is
-      # the entire point of pre-provisioning tier 2 (#21).
-      #
-      # They MUST stay listed here: Workshop Studio only surfaces template
-      # parameters declared in this list, and with no default the stack cannot
-      # create without them. Removing an entry breaks event provisioning outright.
-      #
-      # Deliberately no defaultValue — these are licensed credentials and must not
-      # be committed to this repo in any form.
       parameters:
         - templateParameter: AcmeEmail
-        - templateParameter: IcrEntitlementKey
-        - templateParameter: VaultEnterpriseLicense
-        - templateParameter: IviaMmfaPushClientSecret
         - templateParameter: TerraformSourceBucket
           defaultValue: "{{.AssetsBucketName}}"
         - templateParameter: AssetsKeyPrefix

@@ -50,9 +50,7 @@ The agent is an LLM — occasionally it will *say* "I've sent an approval reques
 The push should land within a few seconds. Confirm the tool really fired — a `mmfa_push_fired` line appears only when the push actually went out:
 
 ```bash
-kubectl logs -n banking-app -l app=uc3-agent --since=10m --tail=-1 | grep mmfa_push_fired
+kubectl logs -n banking-app -l app=uc3-agent --tail=30 | grep mmfa_push_fired
 ```
-
-Both flags are load-bearing. The agent is health-checked continuously, so the push line scrolls out of a small window within seconds — a `--tail=30` here found nothing moments after a push that had definitely fired. And **`--tail=-1` is required whenever you pass `-l`**: with a label selector `kubectl logs` silently defaults to `--tail=10`, so `--since` on its own still shows you ten lines of health checks and nothing else.
 
 **2. If the push still doesn't arrive,** enable notifications for IBM Verify on your phone and confirm you completed device enrollment.

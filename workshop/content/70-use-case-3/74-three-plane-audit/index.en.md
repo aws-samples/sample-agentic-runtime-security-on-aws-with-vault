@@ -7,16 +7,6 @@ Each plane logs the same refund independently: IVIA records *who approved*, Vaul
 
 Under the native OAuth resource server model, the Vault audit event no longer carries a hand-rolled `may_act` bound-claim; it carries the **agent-registry** identity Vault resolved from the delegated token's `act.sub` claim (`uc3-actor`) and the per-request `vault:path_access` path Vault enforced. Those two fields are what surface in the correlation row below.
 
-The `workshop_logs` Glue database holds one table per plane plus the correlation VIEW — `SHOW TABLES IN workshop_logs` lists all five:
-
-| Object | Plane |
-|---|---|
-| `ivia_decisions` | IVIA — who approved, and the CIBA binding message |
-| `vault_audit` | Vault — which agent authenticated and the path it was scoped to |
-| `pgaudit_logs` | Postgres — the write that landed |
-| `agent_traces` | the agent's own execution trace |
-| `audit_correlation` | the VIEW that stitches the three planes into one row |
-
 ## The Pedagogical Money Shot
 
 Use Case 3 culminates in a single Athena query that answers all five workshop objectives in one row:

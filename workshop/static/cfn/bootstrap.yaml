@@ -3,13 +3,10 @@ AWSTemplateFormatVersion: "2010-09-09"
 
 Description: >-
   CloudFormation bootstrap for the Agentic Runtime Security on AWS workshop.
-  Provisions tier-1 (EKS foundation, ~17 min) AND tier-2 (Vault + IVIA, ~15 min)
-  via CodeBuild before the attendee session opens, so that the three licensing
-  secrets are supplied once by the organizer instead of being handed to every
-  attendee. Attendees run tier-3 themselves as the hands-on lesson.
+  Provisions tier-1 (EKS foundation, 183 resources, ~17 min) via CodeBuild before
+  the attendee session opens. Attendees run tier-2/3 themselves as the hands-on lesson.
   Source pattern: CodeBuild sources workshop/assets/ from S3 (TerraformSourceBucket) —
-  no git clone, no public mirror. Template location: workshop/static/cfn/bootstrap.yaml
-  (as referenced by contentspec.yaml infrastructure.cloudformationTemplates).
+  no git clone, no public mirror. Template location: workshop/assets/cfn/bootstrap.yaml
 
 Parameters:
   AcmeEmail:
@@ -22,44 +19,6 @@ Parameters:
       turned off expiration-notice emails and deleted stored account addresses on
       2025-06-04). The event organizer MAY set a real, reachable address (not
       *@example.com) if renewal/revocation notices are wanted.
-
-  # ─── Tier-2 licensing secrets ───────────────────────────────────────────────
-  # The three non-committable workshop inputs. Pre-provisioning tier 2 exists so
-  # that the organizer supplies them ONCE here instead of handing them to every
-  # attendee individually (#21). All three are NoEcho, are stored in Secrets
-  # Manager under a dedicated CMK the attendee role is explicitly denied on, and
-  # reach CodeBuild as SECRETS_MANAGER-typed environment variables — never as the
-  # PLAINTEXT type, whose values are returned verbatim by batch-get-projects.
-  IcrEntitlementKey:
-    Type: String
-    NoEcho: true
-    MinLength: 1
-    Description: >-
-      REQUIRED. IBM Container Registry entitlement key. Tier 2 builds the IVIA
-      image-pull secret from it (cp.icr.io); without a valid key every IVIA pod
-      lands in ImagePullBackOff. Obtain from the IBM Container Library.
-
-  VaultEnterpriseLicense:
-    Type: String
-    NoEcho: true
-    MinLength: 1
-    Description: >-
-      REQUIRED. Full contents of the Vault Enterprise .hclic license file (the
-      license string itself, not a path). Vault Enterprise will not start
-      without it, and the workshop needs the platform-standard / agentic-iam
-      features it carries.
-
-  IviaMmfaPushClientSecret:
-    Type: String
-    NoEcho: true
-    MinLength: 1
-    Description: >-
-      REQUIRED. IBM Verify MMFA push credential, used by Use Case 3's CIBA
-      mobile-push flow. Although tier 2's Terraform guards this on a count and
-      tolerates an empty value, deploy-workshop.sh's preflight does not — it
-      prompts for it and refuses an empty answer, so an unattended build must
-      have it. Required here to match that contract rather than fail 20 minutes
-      into the build.
 
   TerraformSourceBucket:
     Type: String
@@ -121,32 +80,6 @@ Resources:
         RestrictPublicBuckets: true
       VersioningConfiguration:
         Status: Enabled
-
-  # ─── S3: keep attendees out of the full tier-2 state ───────────────────────
-  # Terraform records every managed resource's attributes in state, so the tier-2
-  # state file contains the Vault license, the ICR entitlement key (inside the
-  # dockerconfigjson pull secret) and the MMFA credential in plaintext. The Delete
-  # path needs that file to run `terraform destroy`, so it is staged here rather
-  # than discarded — under tier2-private/, which this policy closes off.
-  #
-  # The attendee role carries ReadOnlyAccess, which grants s3:Get*/List* on every
-  # bucket in the account; a prefix is not private by naming alone. Attendees read
-  # tier1/ and tier2/ (the sanitized outputs-only copy) as normal.
-  StateBucketPolicy:
-    Type: "AWS::S3::BucketPolicy"
-    Properties:
-      Bucket: !Ref StateBucket
-      PolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Sid: DenyAttendeeAccessToFullTier2State
-            Effect: Deny
-            Principal: "*"
-            Action: "s3:*"
-            Resource: !Sub "${StateBucket.Arn}/tier2-private/*"
-            Condition:
-              ArnEquals:
-                "aws:PrincipalArn": !Sub "arn:aws:iam::${AWS::AccountId}:role/${AttendeeRoleName}"
 
   # ─── IAM: CodeBuild execution role ──────────────────────────────────────────
   # INITIAL non-Admin role scoped to tier-1 service namespaces + IAM management
@@ -227,88 +160,6 @@ Resources:
                   - "iam:RemoveRoleFromInstanceProfile"
                 Resource: "*"
 
-  # ─── KMS: dedicated CMK for the organizer's licensing secrets ──────────────
-  # Deliberately NOT the workshop CMK in modules/audit: that key's policy opens
-  # kms:ViaService secretsmanager to attendees on purpose, so anything encrypted
-  # with it is attendee-readable. These three secrets must not be.
-  #
-  # The attendee role carries SecretsManagerReadWrite, which is enough to call
-  # GetSecretValue on any secret in the account. What stops it here is the key:
-  # without kms:Decrypt on this CMK the call fails. The explicit Deny is keyed on
-  # aws:PrincipalArn rather than naming the role as a Principal, because KMS
-  # validates policy principals exist and WSParticipantRole is absent in a
-  # dev-account simulation.
-  BuildSecretsKey:
-    Type: "AWS::KMS::Key"
-    Properties:
-      Description: !Sub "${AWS::StackName} — encrypts the organizer-supplied tier-2 licensing secrets"
-      EnableKeyRotation: true
-      KeyPolicy:
-        Version: "2012-10-17"
-        Statement:
-          # Required base statement: without it the key is unmanageable and
-          # CloudFormation cannot create/encrypt the secrets or delete the key.
-          - Sid: EnableIAMPoliciesForAccountAdministration
-            Effect: Allow
-            Principal:
-              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
-            Action: "kms:*"
-            Resource: "*"
-          # Decrypt to read the secrets at build start; Encrypt/GenerateDataKey
-          # because the build also writes the full tier-2 state to S3 under
-          # SSE-KMS with this key.
-          - Sid: AllowCodeBuildRoleToUseTheKey
-            Effect: Allow
-            Principal:
-              AWS: !GetAtt CodeBuildServiceRole.Arn
-            Action:
-              - "kms:Decrypt"
-              - "kms:DescribeKey"
-              - "kms:Encrypt"
-              - "kms:GenerateDataKey*"
-              - "kms:ReEncrypt*"
-            Resource: "*"
-          # Explicit Deny beats every Allow, including the account-root statement
-          # above and any IAM policy attached to the attendee role.
-          - Sid: DenyAttendeeRole
-            Effect: Deny
-            Principal: "*"
-            Action: "kms:*"
-            Resource: "*"
-            Condition:
-              ArnEquals:
-                "aws:PrincipalArn": !Sub "arn:aws:iam::${AWS::AccountId}:role/${AttendeeRoleName}"
-
-  # ─── Secrets Manager: the three tier-2 licensing secrets ───────────────────
-  # These live for the lifetime of the stack rather than being deleted at the end
-  # of the create build: the stack's Delete path runs `terraform destroy` against
-  # the tier-2 root, which needs these variables defined. Confidentiality comes
-  # from BuildSecretsKey's Deny, not from deletion timing. They are removed with
-  # the stack.
-  IcrEntitlementKeySecret:
-    Type: "AWS::SecretsManager::Secret"
-    Properties:
-      Name: !Sub "${AWS::StackName}-icr-entitlement-key"
-      Description: "IBM Container Registry entitlement key — tier-2 IVIA image pull"
-      KmsKeyId: !Ref BuildSecretsKey
-      SecretString: !Ref IcrEntitlementKey
-
-  VaultEnterpriseLicenseSecret:
-    Type: "AWS::SecretsManager::Secret"
-    Properties:
-      Name: !Sub "${AWS::StackName}-vault-enterprise-license"
-      Description: "Vault Enterprise .hclic contents — tier-2 vault_server"
-      KmsKeyId: !Ref BuildSecretsKey
-      SecretString: !Ref VaultEnterpriseLicense
-
-  IviaMmfaPushSecret:
-    Type: "AWS::SecretsManager::Secret"
-    Properties:
-      Name: !Sub "${AWS::StackName}-ivia-mmfa-push-client-secret"
-      Description: "IBM Verify MMFA push credential — tier-2 IVIA (optional)"
-      KmsKeyId: !Ref BuildSecretsKey
-      SecretString: !Ref IviaMmfaPushClientSecret
-
   # ─── CodeBuild: tier-1 deploy project ──────────────────────────────────────
   # Source.Type=S3 (folder) — CodeBuild downloads the uploaded workshop/assets/ tree
   # from TerraformSourceBucket into $CODEBUILD_SRC_DIR. BuildSpec is read from
@@ -344,33 +195,12 @@ Resources:
           - Name: IMAGE_SOURCE
             Type: PLAINTEXT
             Value: !Ref ImageSource
-          # Key id, not key material — used to write the full tier-2 state to S3
-          # under SSE-KMS. Not sensitive.
-          - Name: BUILD_SECRETS_KEY_ID
-            Type: PLAINTEXT
-            Value: !Ref BuildSecretsKey
-          # SECRETS_MANAGER type, NOT PLAINTEXT: CodeBuild resolves the value at
-          # build start and batch-get-projects returns only the secret ARN. The
-          # PLAINTEXT type used above for ACME_EMAIL returns the value verbatim
-          # to anyone who can describe the project.
-          - Name: ICR_ENTITLEMENT_KEY
-            Type: SECRETS_MANAGER
-            Value: !Ref IcrEntitlementKeySecret
-          - Name: VAULT_ENTERPRISE_LICENSE
-            Type: SECRETS_MANAGER
-            Value: !Ref VaultEnterpriseLicenseSecret
-          - Name: IVIA_MMFA_PUSH_CLIENT_SECRET
-            Type: SECRETS_MANAGER
-            Value: !Ref IviaMmfaPushSecret
       ServiceRole: !GetAtt CodeBuildServiceRole.Arn
       Source:
         Type: S3
         Location: !Sub "${TerraformSourceBucket}/${AssetsKeyPrefix}"
         BuildSpec: buildspec/buildspec.yml
-      # Tier 1 (~17 min) + tier 2 (~15 min) nominal, plus a worst case that adds
-      # Step 7's 900s ACME gate and a repair pass. 60 was sized for tier 1 alone
-      # and would now be reached on a merely slow run rather than a broken one.
-      TimeoutInMinutes: 180
+      TimeoutInMinutes: 60
       LogsConfig:
         CloudWatchLogs:
           Status: ENABLED
@@ -378,8 +208,8 @@ Resources:
 
   # ─── IAM: Lambda trigger execution role ────────────────────────────────────
   # Lambda role for the Custom::CodeBuildTrigger function.
-  # AWSLambdaBasicExecutionRole for CloudWatch Logs + build control on THIS project only.
-  # Threat T-11-06: every action scoped to this project's ARN (never "*").
+  # AWSLambdaBasicExecutionRole for CloudWatch Logs + StartBuild on THIS project only.
+  # Threat T-11-06: StartBuild scoped to single project ARN (not "*").
   CodeBuildTriggerExecutionRole:
     Type: "AWS::IAM::Role"
     Properties:
@@ -403,22 +233,8 @@ Resources:
                 Effect: Allow
                 Action:
                   - "codebuild:StartBuild"
-                  - "codebuild:ListBuildsForProject"
                 Resource:
                   - !GetAtt CodeBuildProject.Arn
-              # ConcurrentBuildLimit is 1, so a teardown build cannot start while a
-              # failed create build still holds the slot. The Delete path stops the
-              # in-flight build first (Lambda _free_the_build_slot). BatchGetBuilds and
-              # StopBuild take the *build* resource type, so they are scoped to build
-              # IDs of THIS project — the trailing ":*" matches only the build-id
-              # suffix of "<project-name>:<uuid>", never another project.
-              - Sid: FreeThisProjectsBuildSlot
-                Effect: Allow
-                Action:
-                  - "codebuild:BatchGetBuilds"
-                  - "codebuild:StopBuild"
-                Resource:
-                  - !Sub "arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:build/${CodeBuildProject}:*"
 
   # ─── Lambda: Custom::CodeBuildTrigger function ──────────────────────────────
   # Starts the CodeBuild project on CFN Create/Update/Delete.
@@ -465,88 +281,12 @@ Resources:
 
           import json
           import logging
-          import time
           import traceback
 
           import boto3
           import cfnresponse
 
           codebuild = boto3.client("codebuild")
-
-          # This project runs ConcurrentBuildLimit=1. When a deploy build fails,
-          # CloudFormation begins rolling back and fires the custom resource's Delete
-          # while that build is still finalizing, so StartBuild raises
-          # AccountLimitExceededException, the custom resource goes DELETE_FAILED and the
-          # stack lands in ROLLBACK_FAILED — with the Terraform-created infrastructure
-          # (EKS/RDS/VPC) still standing, because the teardown build never ran. Observed
-          # 2026-08-10 on the first live at-an-event failure. The Delete path therefore
-          # stops whatever is in flight and waits for the slot before starting teardown.
-          TERMINAL_BUILD_STATUSES = ("SUCCEEDED", "FAILED", "FAULT", "TIMED_OUT", "STOPPED")
-          MAX_BUILDS_INSPECTED = 5      # newest N; the slot can only be held by one
-          SLOT_POLL_SECONDS = 10
-          START_BUILD_RETRY_BASE_SECONDS = 5
-          START_BUILD_RETRY_MAX_SECONDS = 30
-          # Leave enough Lambda budget to still PUT a CFN response after giving up.
-          RESPONSE_RESERVE_MS = 60_000
-
-
-          def _in_flight_build_ids(project_name):
-              ids = codebuild.list_builds_for_project(
-                  projectName=project_name, sortOrder="DESCENDING",
-              ).get("ids", [])[:MAX_BUILDS_INSPECTED]
-              if not ids:
-                  return []
-              builds = codebuild.batch_get_builds(ids=ids).get("builds", [])
-              return [
-                  b["id"] for b in builds
-                  if b.get("buildStatus") not in TERMINAL_BUILD_STATUSES
-              ]
-
-
-          def _free_the_build_slot(project_name, context):
-              """Stop in-flight builds of this project and wait until none remain.
-
-              Best-effort: a failure here must not mask the teardown. StartBuild is
-              retried afterwards regardless, so the worst case is the pre-existing
-              behaviour rather than a new failure mode.
-              """
-              try:
-                  in_flight = _in_flight_build_ids(project_name)
-              except Exception:
-                  logging.warning("Could not list in-flight builds; will retry StartBuild instead")
-                  traceback.print_exc()
-                  return
-              for build_id in in_flight:
-                  logging.info("Stopping in-flight build %s to free the concurrency slot", build_id)
-                  try:
-                      codebuild.stop_build(id=build_id)
-                  except Exception:
-                      # Raced to terminal between list and stop — harmless.
-                      logging.warning("stop_build failed for %s (likely already terminal)", build_id)
-                      traceback.print_exc()
-              while context.get_remaining_time_in_millis() > RESPONSE_RESERVE_MS:
-                  try:
-                      if not _in_flight_build_ids(project_name):
-                          return
-                  except Exception:
-                      logging.warning("Poll for in-flight builds failed; retrying")
-                      traceback.print_exc()
-                  time.sleep(SLOT_POLL_SECONDS)
-              logging.warning("Gave up waiting for the CodeBuild concurrency slot")
-
-
-          def _start_build_with_retry(context, **kwargs):
-              """StartBuild, backing off while the project's single slot is still held."""
-              delay = START_BUILD_RETRY_BASE_SECONDS
-              while True:
-                  try:
-                      return codebuild.start_build(**kwargs)
-                  except codebuild.exceptions.AccountLimitExceededException:
-                      if context.get_remaining_time_in_millis() <= RESPONSE_RESERVE_MS:
-                          raise
-                      logging.warning("Concurrency limit hit; retrying StartBuild in %ss", delay)
-                      time.sleep(delay)
-                      delay = min(delay * 2, START_BUILD_RETRY_MAX_SECONDS)
 
 
           def _flag(value):
@@ -626,19 +366,13 @@ Resources:
 
 
           def handle_delete(event, context):
-              logging.info("**Received delete event")
+              logging.info("**Received delete event - no-op")
               res_config = event.get("ResourceProperties", {})
               build_on_delete = _flag(res_config.get("BuildOnDelete"))
               if build_on_delete:
                   codebuild_env_vars = get_cfn_env_var_overrides(event)
-                  project_name = res_config["ProjectName"]
-                  # On a rollback this Delete arrives while the failed build still holds
-                  # the project's only concurrency slot. Clear it before teardown, or the
-                  # stack strands its infrastructure in ROLLBACK_FAILED.
-                  _free_the_build_slot(project_name, context)
-                  _start_build_with_retry(
-                      context,
-                      projectName=project_name,
+                  codebuild.start_build(
+                      projectName=res_config["ProjectName"],
                       environmentVariablesOverride=codebuild_env_vars,
                   )
                   reason = "Deletion build initiated"

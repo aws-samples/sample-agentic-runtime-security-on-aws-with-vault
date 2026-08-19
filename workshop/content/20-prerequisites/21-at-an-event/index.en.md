@@ -54,37 +54,23 @@ In the AWS console, check the region selector in the top-right corner. It must s
 
 ## What Is Already Provisioned for You
 
-::::alert{header="Tier-1 and Tier-2 are pre-provisioned — you run Tier 3" type="info"}
-When your AWS account was provisioned for this event, a **CloudFormation stack** ran a CodeBuild build that deployed the workshop's **Tier 1** foundation **and Tier 2** identity substrate on your behalf.
-
-**Tier 1 — foundation:**
+::::alert{header="Tier-1 infrastructure is pre-provisioned — you run tier-2 and tier-3" type="info"}
+When your AWS account was provisioned for this event, a **CloudFormation stack** ran a CodeBuild build that deployed the workshop's **Tier 1** foundation on your behalf:
 
 - Amazon VPC, EKS cluster (5-node managed node group), and add-ons
 - RDS PostgreSQL with pgaudit
 - Bedrock Knowledge Base and Amazon OpenSearch Serverless collection
 - IAM roles, KMS keys, and audit substrate (CloudTrail, Athena, Firehose)
 
-**Tier 2 — identity substrate:**
+This step takes approximately 17–22 minutes and happens during account setup — not during your lab time.
 
-- HashiCorp Vault Enterprise, HA (3-node Raft), auto-unsealed with KMS — including the **Agent Registry** and the **OAuth resource server** profile
-- IBM Verify Identity Access (the seven-pod IVIA stack plus OpenLDAP)
-- A trusted **Let's Encrypt** certificate for your event's `nip.io` hostnames
-- The Use Case container images, built and pushed to your account's ECR
-
-This takes approximately 40 minutes and happens during account setup — not during your lab time.
-
-**Your hands-on work begins at Tier 3** (Use Case 1, 2, and 3 agent pods). You *verify* the Tier-2 identity substrate rather than deploying it — the checks on the deploy page walk you through what was built and why each piece matters.
+**Your hands-on work begins at Tier 2** (Vault + IBM Verify Identity Access) and **Tier 3** (Use Case 1, 2, and 3 agent pods). Those two tiers are the core of the workshop's security lesson and are what you deploy and explore yourself.
 ::::
 
-::::alert{header="You are never asked for a licensing secret" type="info"}
-Tier 2 needs a Vault Enterprise license and two IBM secrets. Your **organizer supplied all three once** at event setup, and they were used inside the build and then shredded. You do not need them, will not be prompted for them, and by design cannot read them from your account.
-::::
-
-Your `WSParticipantRole` session already has EKS cluster access (granted by the CodeBuild build). You will use that access on the [Deploy — At an Event](../../30-deploy-foundation/31-deploy-at-an-event/) page to pull the pre-provisioned state and run Tier 3.
+Your `WSParticipantRole` session already has EKS cluster access (granted by the CodeBuild build). You will use that access on the [Deploy — At an Event](../../30-deploy-foundation/31-deploy-at-an-event/) page to pull the Tier-1 state and run Tier 2 and Tier 3.
 
 ## Next Steps
 
-1. **Install the IBM Verify app** — Use Case 3 (CIBA mobile push) requires the IBM Verify mobile app. Install it on your phone now — see the [Prerequisites overview](../) for download links.
-2. **Continue to Deploy — At an Event** — [Deploy — At an Event](../../30-deploy-foundation/31-deploy-at-an-event/) is where you pull the pre-provisioned state and run Tier 3.
-
-The [IVIA Licensing](../22-ivia-licensing/) and [Pre-flight Checks](../23-pre-flight-checks/) pages describe what a self-paced deployer has to supply and install. At an event both are already handled — read them for background if you are curious, but there is nothing for you to do on either.
+1. **IVIA licensing** — [IVIA Licensing](../22-ivia-licensing/) covers the IBM-supplied artifacts the IVIA deployment needs. You supply the IBM Container Registry entitlement key (and, for Use Case 3, the MMFA push client secret) at deploy time; the trial activation certificate is already included with the workshop. Tier 2 also needs a **Vault Enterprise license** (`.hclic`) your organizer provides — save it to `~/Downloads/vault-ent.hclic`. Have your entitlement key and license file ready before you deploy Tier 2.
+2. **Install the IBM Verify app** — Use Case 3 (CIBA mobile push) requires the IBM Verify mobile app. Install it on your phone now — see the [Prerequisites overview](../) for download links.
+3. **Continue to Deploy — At an Event** — [Deploy — At an Event](../../30-deploy-foundation/31-deploy-at-an-event/) is where you pull the Tier-1 state and run Tier 2 and Tier 3.

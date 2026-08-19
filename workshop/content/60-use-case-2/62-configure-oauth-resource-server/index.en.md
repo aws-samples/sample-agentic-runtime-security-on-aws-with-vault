@@ -152,17 +152,17 @@ vault read database/roles/uc2-personal-readonly
 Expected output (key fields):
 
 ```
-Key                      Value
----                      -----
-creation_statements      [CREATE ROLE "{{name}}" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}'; ALTER ROLE "{{name}}" SET search_path TO banking,public; GRANT USAGE ON SCHEMA banking TO "{{name}}"; GRANT SELECT ON ALL TABLES IN SCHEMA banking TO "{{name}}"; ALTER DEFAULT PRIVILEGES IN SCHEMA banking GRANT SELECT ON TABLES TO "{{name}}";]
-credential_type          password
-db_name                  workshop-pg
-default_ttl              15m
-max_ttl                  30m
-revocation_statements    [REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA banking FROM "{{name}}"; … DROP ROLE IF EXISTS "{{name}}";]
+Key                    Value
+---                    -----
+db_name                workshop-pg
+default_ttl            15m
+max_ttl                30m
+creation_statements    ["CREATE ROLE \"{{name}}\" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}';",
+                        "ALTER ROLE \"{{name}}\" SET search_path TO banking,public;",
+                        "GRANT USAGE ON SCHEMA banking TO \"{{name}}\";",
+                        "GRANT SELECT ON ALL TABLES IN SCHEMA banking TO \"{{name}}\";",
+                        "ALTER DEFAULT PRIVILEGES IN SCHEMA banking GRANT SELECT ON TABLES TO \"{{name}}\";"]
 ```
-
-The whole `creation_statements` value prints as **one** bracketed, semicolon-separated string on a single (very wide) line — Vault stores the five SQL statements as a single template, not as five separate array elements.
 
 Each ephemeral role is created with login credentials scoped to the banking schema, read-only, with a 15-minute TTL. There is no permanent Postgres role — grants are applied directly to the ephemeral role, and no INSERT/UPDATE/DELETE is granted.
 
@@ -170,12 +170,12 @@ Each ephemeral role is created with login credentials scoped to the banking sche
 
 To confirm the native path, present a real user JWT to Vault via `X-Vault-Token` and watch Vault vend a credential in a **single** call — no login step.
 
-The Banking UI keeps the user's IVIA-issued JWTs in HttpOnly cookies. The one you want is **`access_token`** — see the warning below for why it must not be `id_token`. To grab it:
+The Banking UI keeps the user's IVIA-issued access JWT in an HttpOnly cookie named `access_token`. This is the token that carries the `act.sub = agent-uc2` actor claim Vault needs; the `id_token` does not carry it and Vault will reject it. To grab it:
 
 1. Sign in to the Banking UI as `oscar` or `jaime`.
 2. Open Chrome DevTools (F12) → **Application** tab.
 3. Storage → Cookies → click the workshop hostname.
-4. Find the row **`access_token`** and copy the **Value** column.
+4. Find the row `access_token` and copy the **Value** column.
 
 Then present it as the Vault token — the JWT **is** the credential:
 
@@ -190,18 +190,10 @@ Key                Value
 ---                -----
 lease_id           database/creds/uc2-personal-readonly/<opaque>
 lease_duration     15m
-lease_renewable    false
+lease_renewable    true
 password           <ephemeral>
 username           v-JWT Toke-uc2-pers-<random>-<timestamp>
 ```
-
-::::alert{header="Use access_token, not id_token — the id_token cannot work here" type="warning"}
-If you grab the `id_token` cookie by mistake, this command fails with `Code: 403 … permission denied`, and the token itself looks perfectly fine — right issuer, right `sub`, not expired.
-
-The reason is a single missing claim. Vault's Agent Registry resolves the **acting agent** from `act.sub`, and IVIA stamps `act` onto the **access token only** (the `isvaop_pretoken` mapping rule). An `id_token` carries `sub` but no `act`, so no agent identity resolves, the on-behalf-of authorization has nothing to intersect, and Vault fails closed.
-
-This is not a workshop quirk — it is the same reason the Banking UI's own chat proxy forwards the access token (`applications/banking-app/ui/src/routes/api/chat/+server.ts`). Failing closed on a missing actor claim is the correct behaviour: a token that cannot name its agent cannot act on anyone's behalf.
-::::
 
 There is no `vault write auth/jwt/login` in that sequence. Vault validated the OAuth JWT against the resource server profile, resolved `sub` (the human) and `act.sub = agent-uc2` (the agent actor), applied `uc2-human-baseline ∩ uc2-agent-ceiling`, and vended the credential — all in the one `database/creds` read. The `username` is derived from the presented token's Vault display name (`JWT Token with JTI:…`, truncated to 8 chars) — it identifies the token/agent, never the human `sub`; human attribution is recovered by correlating the lease with the IVIA OAuth plane. The MCP Server uses exactly this credential for the user's session.
 

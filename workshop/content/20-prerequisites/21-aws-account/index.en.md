@@ -93,7 +93,7 @@ The deploy script needs these inputs on its first run. Have them ready:
 | **Let's Encrypt contact email** (`acme_email`) | A real, deliverable email address for TLS certificate issuance and renewal notices. The placeholder `example.com` is rejected by Let's Encrypt. |
 | **IBM Container Registry entitlement key** | From [Obtain IVIA Licenses](../22-ivia-licensing/) — the key to pull the IVIA container image from `icr.io`. Input is hidden when pasted, or set `ICR_ENTITLEMENT_KEY` to skip the prompt. |
 | **IBM Verify MMFA push client secret** | From [Obtain IVIA Licenses](../22-ivia-licensing/) — required by Use Case 3 (CIBA mobile push). Input is hidden when pasted, or set `IVIA_MMFA_PUSH_CLIENT_SECRET` to skip the prompt. |
-| **Vault Enterprise license** (`.hclic`) | From [Obtain IVIA Licenses](../22-ivia-licensing/#vault-enterprise-license-self-paced-you-supply-this) — Tier 2 runs Vault in Enterprise mode. Read from a **file**, not prompted: save it to `~/Downloads/vault-ent.hclic` or set `VAULT_ENTERPRISE_LICENSE_PATH`. |
+| **Vault Enterprise license** (`.hclic`) | From [Obtain IVIA Licenses](../22-ivia-licensing/#vault-enterprise-license-you-supply-this) — Tier 2 runs Vault in Enterprise mode. Read from a **file**, not prompted: save it to `~/Downloads/vault-ent.hclic` or set `VAULT_ENTERPRISE_LICENSE_PATH`. |
 
 The script writes the prompted values into the gitignored `terraform.tfvars` files; subsequent tiers and re-runs reuse them silently. The Vault Enterprise license is re-read from its file on every run.
 

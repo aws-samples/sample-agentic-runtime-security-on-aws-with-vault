@@ -71,9 +71,9 @@ sequenceDiagram
     rect rgba(186, 230, 255, 0.3)
     Note over User,RDS: Banking query — identity propagation
     User->>UI: "What are my accounts?"
-    UI->>Agent: POST /chat + Authorization: Bearer access_token<br/>(carries act.sub — the id_token does not)
+    UI->>Agent: POST /chat + Authorization: Bearer id_token
     Agent->>Agent: Extract JWT from header
-    Agent->>MCP: JSON-RPC tools/call get_accounts<br/>Authorization: Bearer access_token
+    Agent->>MCP: JSON-RPC tools/call get_accounts<br/>Authorization: Bearer id_token
     MCP->>MCP: Decode JWT → read sub claim (for RLS only)
 
     MCP->>Vault: GET /v1/database/creds/uc2-personal-readonly<br/>X-Vault-Token: IVIA JWT (no login round-trip)
@@ -110,7 +110,7 @@ sequenceDiagram
 5. The Banking UI's `/callback` handler validates that the returned `state` matches the `pkce` cookie, then POSTs to the OIDC Provider's `/oauth2/token` endpoint over the in-cluster Kubernetes Service URL (`https://iviaop.verify-access.svc.cluster.local:8436`) — bypassing the WebSEAL ALB. The POST carries HTTP Basic auth (`agent-uc2:<client_secret>`) plus the `code` and `code_verifier`.
 6. The OIDC Provider verifies the code, checks the PKCE proof against the original challenge, runs the post-token mapping rule, and returns an `access_token` plus `id_token` (JWTs with the `sub` claim).
 7. The Banking UI stores the tokens in httpOnly cookies (`access_token`, `id_token`, optional `refresh_token`) and 302s the browser to `/dashboard`.
-8. When the user asks a banking question, the UI's server-side proxy reads the **`access_token`** cookie and forwards it to the Banking Agent as a Bearer token. It must be the access token, not the `id_token`: IVIA stamps the `act.sub = agent-uc2` delegation claim onto the access token only, and that claim is what Vault resolves the acting agent from. The `id_token` is used for display purposes only — decoding the user's name for the dashboard header.
+8. When the user asks a banking question, the UI's server-side proxy reads the `id_token` cookie and forwards it to the Banking Agent as a Bearer token.
 9. The Banking Agent forwards the JWT unchanged to the MCP Server for each tool invocation.
 10. The MCP Server presents the JWT **directly** to Vault as the `X-Vault-Token` header on a single `GET database/creds/uc2-personal-readonly` read — there is no `auth/jwt/login` round-trip and no intermediate Vault token. Vault's OAuth resource server validates the signature against IVIA's JWKS endpoint.
 11. Vault resolves the human `sub` and the agent actor `act.sub = agent-uc2` (against the Agent Registry) and applies the On-Behalf-Of intersection `uc2-human-baseline ∩ uc2-agent-ceiling`.
@@ -118,24 +118,24 @@ sequenceDiagram
 13. The MCP Server opens a Postgres connection, sets `app.current_user_sub` to the JWT's `sub` claim, and executes `SELECT` queries. PostgreSQL Row-Level Security filters results to the authenticated user's rows only.
 14. The credential expires at TTL; Vault revokes the Postgres role automatically.
 
-Both tokens carry the same `sub` claim (e.g. `oscar`), but they travel to different places. The `id_token` stops at the Banking UI; the **`access_token`** is the one that flows down the call chain, because it is the only one carrying `act.sub`:
+The `sub` claim in the `id_token` (e.g. `oscar`) flows to:
 
-1. The **Banking UI** — decodes the `id_token` to identify the logged-in user for display.
-2. The **Strands agent** — the `access_token` is forwarded in the `Authorization: Bearer` header to the MCP server.
+1. The **Banking UI** — identifies the logged-in user for display.
+2. The **Strands agent** — forwarded in the `Authorization: Bearer` header to the MCP server.
 3. **Vault OAuth resource server** — the MCP server presents the JWT directly via `X-Vault-Token`; Vault resolves `sub` and the actor `act.sub = agent-uc2` and applies `uc2-human-baseline ∩ uc2-agent-ceiling`.
 4. **PostgreSQL RLS** — the `app.current_user_sub` session variable is set from `sub`; the RLS policy filters `banking.accounts` rows to the authenticated user.
 
 ## Step 1 — Get the Banking UI URL
+
+:::alert{header="Use an incognito / private browser window" type="info"}
+Open the Banking UI in a fresh incognito / private window. Stale WebSEAL/IVIA session cookies from a previous login can prevent a clean sign-in, and this workshop has you log in as more than one user. Open a new incognito window for each user (Oscar, then Jaime) so each login starts from a clean session.
+:::
 
 At the end of `bash infrastructure/scripts/deploy-workshop.sh`, the script prints `NIP_FQDN_BANKING` — the banking-UI nip.io URL backed by a Let's Encrypt certificate served on the shared workshop ALB. Print the full HTTPS URL (read back from `infrastructure/.acme-state`) and open it in your browser:
 
 ```bash
 echo "https://$(grep '^NIP_FQDN_BANKING=' infrastructure/.acme-state | cut -d= -f2)/"
 ```
-
-:::alert{header="Open it in a fresh Incognito / Private window" type="info"}
-Start this sign-in in a new Incognito / Private window. A WebSEAL or IVIA session cookie left over from an earlier visit is presented before you get a credential prompt, so the login either skips silently or fails in a way that looks like a broken OAuth flow. A fresh window guarantees the PKCE exchange you are about to trace starts from no session at all. You will open a second one later to sign in as Jaime.
-:::
 
 :::alert{header="HTTPS with HTTP redirect — trusted Let's Encrypt cert" type="info"}
 The Banking UI ALB listens on both HTTP (port 80) and HTTPS (port 443). HTTP requests are automatically redirected to HTTPS (ssl-redirect annotation). The certificate is a Let's Encrypt-issued cert bound to the nip.io FQDN and imported into ACM. You should see a lock icon in your browser address bar — the cert is trusted by every major OS/browser out of the box. If you see a "Your connection is not private" warning, this is a regression — re-run `bash infrastructure/scripts/deploy-workshop.sh` to re-issue the cert.
@@ -158,13 +158,13 @@ This workshop uses OpenLDAP as the user registry, with two pre-provisioned users
 
 ## Step 3 — Inspect the Banking UI logs
 
-The Banking UI logs the OAuth code exchange outcome. View the logs:
+View the Banking UI pod logs to confirm it is running and serving:
 
 ```bash
 kubectl logs -n banking-app -l app=banking-ui --tail=30
 ```
 
-You will not see credentials in these logs — only the outcome of the token exchange. Credentials never reach the Banking UI; they are entered on the WebSEAL login page and validated by WebSEAL via LDAP bind.
+Credentials never reach the Banking UI — they are entered on the WebSEAL login page and validated by WebSEAL via LDAP bind. The OAuth code-for-token exchange happens between the browser and IVIA/WebSEAL, so its detail is not in these UI logs; the authoritative record of the downstream credential issuance is the Vault audit log (queried via Athena in [Credential Revocation](../65-credential-revocation/)).
 
 ## Step 4 — Confirm personalized dashboard data
 

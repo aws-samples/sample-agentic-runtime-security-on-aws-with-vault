@@ -17,15 +17,13 @@ EKS authorization is separate from the kubeconfig this command writes. **Self-pa
 **Expected output** — five nodes in `Ready` state:
 
 ```
-NAME                         STATUS   ROLES    AGE   VERSION
-ip-10-1-1-xxx.ec2.internal   Ready    <none>   5m    v1.34.x-eks-xxxx
-ip-10-1-2-xxx.ec2.internal   Ready    <none>   5m    v1.34.x-eks-xxxx
-ip-10-1-3-xxx.ec2.internal   Ready    <none>   5m    v1.34.x-eks-xxxx
-ip-10-1-4-xxx.ec2.internal   Ready    <none>   5m    v1.34.x-eks-xxxx
-ip-10-1-5-xxx.ec2.internal   Ready    <none>   5m    v1.34.x-eks-xxxx
+NAME                                       STATUS   ROLES    AGE   VERSION
+ip-10-1-1-xxx.<region>.compute.internal    Ready    <none>   5m    v1.34.x-eks-xxxx
+ip-10-1-2-xxx.<region>.compute.internal    Ready    <none>   5m    v1.34.x-eks-xxxx
+ip-10-1-3-xxx.<region>.compute.internal    Ready    <none>   5m    v1.34.x-eks-xxxx
+ip-10-1-4-xxx.<region>.compute.internal    Ready    <none>   5m    v1.34.x-eks-xxxx
+ip-10-1-5-xxx.<region>.compute.internal    Ready    <none>   5m    v1.34.x-eks-xxxx
 ```
-
-Node names use the region's internal DNS suffix — `ec2.internal` in `us-east-1`, and `<region>.compute.internal` everywhere else.
 
 If a node is `NotReady`, check the `vpc-cni` Pod Identity Association — the most common failure is `before_compute` ordering when a manual reapply skips the Pod Identity Agent.
 

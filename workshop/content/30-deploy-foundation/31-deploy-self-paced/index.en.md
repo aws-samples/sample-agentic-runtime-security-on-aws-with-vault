@@ -31,13 +31,20 @@ VPC, EKS cluster, managed add-ons (cert-manager, external-dns, AWS Load Balancer
 bash infrastructure/scripts/deploy-workshop.sh --tier 1
 ```
 
-**Tier 1 prompts for nothing.** After `bootstrap.sh` it runs unattended — the two IBM secrets belong to Tier 2 and are asked for in Step 3 below. The only Tier-1 input is the Let's Encrypt contact email, and it is **optional**: `bootstrap.sh` seeds it empty, and the preflight simply notes that and carries on —
+On your **first run** the script prompts for three values it cannot store in the repo — paste each when asked:
 
-```
-ℹ INFO Preflight: acme_email empty — Let's Encrypt account will be registered with no contact email (accepted by LE)
-```
+- **Let's Encrypt contact email** — a real, deliverable address for TLS certificate issuance/renewal notices (the `example.com` placeholder is rejected).
+- **IBM Container Registry entitlement key** — from [Obtain IVIA Licenses](../../20-prerequisites/22-ivia-licensing/) (input hidden).
+- **IBM Verify MMFA push client secret** — required by Use Case 3 (input hidden).
 
-Let's Encrypt turned off account emails in June 2025 and accepts no-contact accounts, so an empty value is the supported default, not a gap. If you want renewal notices, set a real address in `infrastructure/terraform.tfvars` before this step. You will only be *prompted* if the file somehow contains an `@example.com` placeholder, and even then pressing Enter clears it back to no-contact.
+The script writes them into the gitignored `terraform.tfvars` files, so subsequent tiers and re-runs reuse them silently.
+
+The two IBM secrets can also be supplied via environment variables instead of the prompts — useful for non-interactive or scripted runs. When set, the preflight uses them and skips the prompt:
+
+```bash
+export ICR_ENTITLEMENT_KEY="<entitlement key>"
+export IVIA_MMFA_PUSH_CLIENT_SECRET=[REDACTED_PASSWORD] secret>"
+```
 
 ::::alert{header="Tier 1 timing" type="info"}
 ~25–35 min on first run — EKS ~12 min, RDS ~10 min (incl. pgaudit reboot), Bedrock KB ~3 min, add-ons ~5 min, image build + ECR push ~3–5 min. Timing tracks AWS API response.
@@ -47,21 +54,7 @@ Let's Encrypt turned off account emails in June 2025 and accepts no-contact acco
 
 Applies Vault HA + IVIA, initializes Vault (`~/vault-init.json`), issues the Let's Encrypt `nip.io` cert, imports it into ACM, re-applies IVIA on the trusted host, configures Vault auth/policies/secrets engines, and verifies the IVIA OIDC discovery endpoint.
 
-**This is the step that asks you for secrets.** On your first Tier-2 run the preflight prompts for two values it cannot store in the repo — paste each when asked (input is hidden for both):
-
-- **IBM Container Registry entitlement key** — from [Obtain IVIA Licenses](../../20-prerequisites/22-ivia-licensing/). Without it the IVIA images cannot be pulled (`ImagePullBackOff`).
-- **IBM Verify MMFA push client secret** — required by Use Case 3's approval push.
-
-The script writes both into the gitignored `infrastructure/services/terraform.tfvars`, so re-runs reuse them silently (`ℹ INFO Preflight: icr_entitlement_key already set — reusing`).
-
-Both can be supplied as environment variables instead of the prompts — useful for non-interactive or scripted runs. When set, the preflight uses them and skips the prompt:
-
-```bash
-export ICR_ENTITLEMENT_KEY="<entitlement key>"
-export IVIA_MMFA_PUSH_CLIENT_SECRET=[REDACTED_PASSWORD] secret>"
-```
-
-Tier 2 also requires a **Vault Enterprise license** — Vault runs in Enterprise mode for the native Agent Registry. The preflight reads it from a **file**, never a prompt: save your HashiCorp Vault Enterprise `.hclic` to `~/Downloads/vault-ent.hclic`, or point `VAULT_ENTERPRISE_LICENSE_PATH` at it, before running. The deploy fails fast (and tells you the path) if the file is missing.
+Tier 2 requires a **Vault Enterprise license** — Vault runs in Enterprise mode for the native Agent Registry. The preflight reads it from a **file**, not a prompt: save your HashiCorp Vault Enterprise `.hclic` to `~/Downloads/vault-ent.hclic`, or point `VAULT_ENTERPRISE_LICENSE_PATH` at it, before running. The deploy fails fast (and tells you the path) if the file is missing.
 
 ```bash
 # save your Vault Enterprise license to the default path...
@@ -113,7 +106,7 @@ On the Tier 2 deploy you may see this in the Step 7 summary:
    Fix: cert-manager did not mark workshop-le-tls Ready within 900s
 ```
 
-**What happened:** Let's Encrypt issuance for the fresh `nip.io` host occasionally takes longer than Step 7's 15-minute readiness gate. When the gate trips, the deploy records the failure and continues — but the "re-apply IVIA on the trusted host" sub-step is skipped, so Vault's OAuth resource server stays bound to the internal load-balancer hostname instead of the public `nip.io` issuer. Use Case 2 and Use Case 3 token validation depend on that issuer, so correct this before Tier 3.
+**What happened:** Let's Encrypt issuance for the fresh `nip.io` host occasionally takes longer than Step 7's 15-minute readiness gate. When the gate trips, the deploy records the failure and continues — but the "re-apply IVIA on the trusted host" sub-step is skipped, so Vault's `jwt` auth stays bound to the internal load-balancer hostname instead of the public `nip.io` issuer. Use Case 2 and Use Case 3 token validation depend on that issuer, so correct this before Tier 3.
 
 **1. Confirm the certificate finished issuing** (wait a minute or two after the gate trips), until `READY` shows `True`:
 
