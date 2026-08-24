@@ -309,7 +309,15 @@ step_generate_tfvars_and_init() {
     fi
 
     # --- terraform init all 3 roots (bare init, NEVER -upgrade) ---------------
-    echo -e "${BLUE}  Running terraform init in all 3 roots (local state)...${NC}"
+
+    # Ensure shared plugin cache exists (mirrors common-checks.sh logic).
+    # Without this, three `terraform init` runs each download ~700 MB of
+    # providers to the home volume, overflowing CloudShell's fixed ~1 GB disk.
+    if [ -z "${TF_PLUGIN_CACHE_DIR:-}" ]; then
+        export TF_PLUGIN_CACHE_DIR="${TMPDIR:-/tmp}/tf-plugin-cache"
+        mkdir -p "$TF_PLUGIN_CACHE_DIR"
+    fi
+
     # When TF_PLUGIN_CACHE_DIR points at an ephemeral volume (e.g. /tmp in
     # CloudShell), a session reset can wipe the cache while each root's
     # .terraform/providers symlinks into it survive on the persistent home
