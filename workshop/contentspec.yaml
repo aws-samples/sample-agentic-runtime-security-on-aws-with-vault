@@ -1,6 +1,6 @@
 # AWS Workshop Studio v2 manifest for the Agentic Runtime Security on AWS workshop.
 # Schema: https://docs.aws.amazon.com/workshop-studio/latest/
-# rebuild marker: 2026-08-24 (bootstrap TF_PLUGIN_CACHE_DIR fix)
+# rebuild marker: 2026-08-25 (PR#28 content fixes + bootstrap cache fix)
 
 version: 2.0
 
