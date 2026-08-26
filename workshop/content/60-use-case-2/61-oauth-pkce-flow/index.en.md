@@ -58,12 +58,13 @@ sequenceDiagram
     LDAP-->>WRP: Bind OK
     WRP->>WRP: Create WebSEAL session
     WRP->>OP: Proxy /oauth2/authorize + iv-user header
-    OP->>OP: Resolve user, run pretoken rule
+    OP->>OP: Resolve authenticated user to sub
     OP-->>User: 302 to /callback?code=...&state=...
     User->>UI: GET /callback?code=...
     UI->>UI: Validate state matches pkce.state
     UI->>OP: POST /oauth2/token (in-cluster DNS)<br/>code, code_verifier, Basic auth
-    OP-->>UI: access_token + id_token (JWT with sub claim)
+    OP->>OP: Pre-token rule stamps act.sub=agent-uc2
+    OP-->>UI: access_token (sub + act.sub) + id_token (sub only)
     UI->>UI: Store tokens in httpOnly cookies
     UI-->>User: 302 to /dashboard
     end
@@ -71,9 +72,9 @@ sequenceDiagram
     rect rgba(186, 230, 255, 0.3)
     Note over User,RDS: Banking query — identity propagation
     User->>UI: "What are my accounts?"
-    UI->>Agent: POST /chat + Authorization: Bearer id_token
+    UI->>Agent: POST /chat + Authorization: Bearer access_token
     Agent->>Agent: Extract JWT from header
-    Agent->>MCP: JSON-RPC tools/call get_accounts<br/>Authorization: Bearer id_token
+    Agent->>MCP: JSON-RPC tools/call get_accounts<br/>Authorization: Bearer access_token
     MCP->>MCP: Decode JWT → read sub claim (for RLS only)
 
     MCP->>Vault: GET /v1/database/creds/uc2-personal-readonly<br/>X-Vault-Token: IVIA JWT (no login round-trip)
@@ -106,11 +107,11 @@ sequenceDiagram
 1. The user opens the Banking UI URL. The SvelteKit server load on `/` sees no `access_token` cookie, generates a PKCE pair (`code_verifier` + `code_challenge` via S256), persists `codeVerifier` and CSRF `state` to a short-lived `pkce` cookie, and 302s the browser to IVIA `/oauth2/authorize` with the public `code_challenge` and `state`.
 2. The WebSEAL Reverse Proxy intercepts the unauthenticated request to `/isvaop/oauth2/authorize` and serves its built-in login page.
 3. The user submits username + password to WebSEAL. WebSEAL performs an LDAP bind against OpenLDAP (`cn=<user>,dc=ibm,dc=com`). On success, WebSEAL creates a session and proxies the authorize request to the OIDC Provider with the `iv-user` header carrying the authenticated identity.
-4. The OIDC Provider runs the pre-token mapping rule, issues a one-time authorization code, and 302s the browser back to the Banking UI's `/callback?code=...&state=...`.
+4. The OIDC Provider resolves the WebSEAL-authenticated identity into the `sub` claim, issues a one-time authorization code, and 302s the browser back to the Banking UI's `/callback?code=...&state=...`.
 5. The Banking UI's `/callback` handler validates that the returned `state` matches the `pkce` cookie, then POSTs to the OIDC Provider's `/oauth2/token` endpoint over the in-cluster Kubernetes Service URL (`https://iviaop.verify-access.svc.cluster.local:8436`) — bypassing the WebSEAL ALB. The POST carries HTTP Basic auth (`agent-uc2:<client_secret>`) plus the `code` and `code_verifier`.
-6. The OIDC Provider verifies the code, checks the PKCE proof against the original challenge, runs the post-token mapping rule, and returns an `access_token` plus `id_token` (JWTs with the `sub` claim).
+6. The OIDC Provider verifies the code, checks the PKCE proof against the original challenge, and runs the pre-token mapping rule (`pre_mappingrule_id: isvaop_pretoken`), which stamps `act.sub = agent-uc2` onto the access token. It returns an `access_token` carrying both `sub` and `act.sub`, plus an `id_token` carrying `sub` only.
 7. The Banking UI stores the tokens in httpOnly cookies (`access_token`, `id_token`, optional `refresh_token`) and 302s the browser to `/dashboard`.
-8. When the user asks a banking question, the UI's server-side proxy reads the `id_token` cookie and forwards it to the Banking Agent as a Bearer token.
+8. When the user asks a banking question, the UI's server-side proxy reads the **`access_token`** cookie and forwards it to the Banking Agent as a Bearer token. It must be the access token, not the `id_token` — IVIA's pre-token mapping rule stamps `act.sub = agent-uc2` onto the access token only. The `id_token` carries no `act` claim, so Vault would resolve no acting agent and deny the `database/creds` read.
 9. The Banking Agent forwards the JWT unchanged to the MCP Server for each tool invocation.
 10. The MCP Server presents the JWT **directly** to Vault as the `X-Vault-Token` header on a single `GET database/creds/uc2-personal-readonly` read — there is no `auth/jwt/login` round-trip and no intermediate Vault token. Vault's OAuth resource server validates the signature against IVIA's JWKS endpoint.
 11. Vault resolves the human `sub` and the agent actor `act.sub = agent-uc2` (against the Agent Registry) and applies the On-Behalf-Of intersection `uc2-human-baseline ∩ uc2-agent-ceiling`.
@@ -118,7 +119,7 @@ sequenceDiagram
 13. The MCP Server opens a Postgres connection, sets `app.current_user_sub` to the JWT's `sub` claim, and executes `SELECT` queries. PostgreSQL Row-Level Security filters results to the authenticated user's rows only.
 14. The credential expires at TTL; Vault revokes the Postgres role automatically.
 
-The `sub` claim in the `id_token` (e.g. `oscar`) flows to:
+The `sub` claim in the `access_token` (e.g. `oscar`) flows to:
 
 1. The **Banking UI** — identifies the logged-in user for display.
 2. The **Strands agent** — forwarded in the `Authorization: Bearer` header to the MCP server.
