@@ -1436,25 +1436,61 @@ _run_post_tier3_step() {
 
     # (2) iviaop agent-uc2 redirect_uri reconcile — tier 3 applied the
     # iviaop_clients_patch (agent-uc2 redirect_uri = banking nip FQDN) +
-    # null_resource.iviaop_rollout_restart. The restart only fires when its
-    # sha256 trigger changes; probe the live in-memory clients.yml and force a
-    # recycle if iviaop is still on a stale redirect_uri.
+    # null_resource.iviaop_rollout_restart. That restart only fires when its
+    # sha256 trigger changes, so a pod that was rolled by the TIER-2 apply and
+    # then patched by tier 3 keeps serving the placeholder registry.
+    #
+    # ISVAOP reads clients.yml ONCE at startup. The file at
+    # /var/isvaop/config/clients.yml is a projected volume the kubelet keeps in
+    # sync, so it is ALWAYS current and says nothing about what the running
+    # process believes — reading it is the wrong oracle and reports healthy on a
+    # stale pod. Ask ISVAOP itself instead: an authorize call carrying the
+    # expected redirect_uri returns 302 when the client is registered with it and
+    # 400 "does not match any of the OAuth 2.0 Client's pre-registered redirect
+    # urls" when it is not. That is in-memory state, which is what actually
+    # breaks the banking login.
     if [[ -n "${NIP_FQDN_BANKING:-}" ]]; then
-        local expected_redirect_uri live_redirect_uri
+        local expected_redirect_uri
         expected_redirect_uri="https://${NIP_FQDN_BANKING}/callback"
-        live_redirect_uri=$(kubectl --context workshop -n verify-access exec deploy/iviaop -- \
-            grep -A1 "client_id: agent-uc2" /var/isvaop/config/clients.yml 2>/dev/null \
-            | grep -oE 'https://[^"]+/callback' | head -1 || echo "")
-        if [[ -n "${live_redirect_uri}" ]] && [[ "${live_redirect_uri}" != "${expected_redirect_uri}" ]]; then
-            print_info "Step 11: iviaop in-memory clients.yml stale (${live_redirect_uri} != ${expected_redirect_uri}); recycling iviaop pod"
+        if _iviaop_accepts_redirect_uri "${expected_redirect_uri}"; then
+            print_pass "Step 11: iviaop accepts agent-uc2 redirect_uri ${expected_redirect_uri}"
+        else
+            print_info "Step 11: iviaop rejects ${expected_redirect_uri} — its in-memory client registry predates the tier-3 patch; recycling the pod"
             kubectl --context workshop -n verify-access delete pod -l app=iviaop --wait=true >/dev/null 2>&1 || true
             kubectl --context workshop -n verify-access rollout status deploy/iviaop --timeout=180s >/dev/null 2>&1 || true
-            print_pass "Step 11: iviaop recycled — agent-uc2 redirect_uri now ${expected_redirect_uri}"
-        else
-            print_pass "Step 11: iviaop agent-uc2 redirect_uri already on ${NIP_FQDN_BANKING:-<unset>}"
+            if _iviaop_accepts_redirect_uri "${expected_redirect_uri}"; then
+                print_pass "Step 11: iviaop recycled — agent-uc2 redirect_uri now ${expected_redirect_uri}"
+            else
+                _die "Step 11: iviaop redirect_uri reconcile" \
+                    "iviaop still rejects ${expected_redirect_uri} after a pod recycle, so the banking-ui OAuth login will dead-end. The registry lives in the iviaop-clients Secret; confirm the tier-3 patch landed: kubectl --context workshop get secret -n verify-access iviaop-clients -o jsonpath='{.data.clients\\.yml}' | base64 -d | grep -A2 redirect_uris"
+            fi
         fi
     fi
     return 0
+}
+
+# _iviaop_accepts_redirect_uri <redirect_uri> — ask the RUNNING ISVAOP process
+# whether agent-uc2 is registered with this redirect_uri, by making an authorize
+# request against its own listener from inside its pod. Returns 0 when accepted.
+#
+# This probes in-memory state, which is the thing that breaks: ISVAOP parses
+# clients.yml at startup only, so a pod started before the tier-3 patch serves a
+# stale registry while the file on disk already reads correctly.
+_iviaop_accepts_redirect_uri() {
+    local redirect_uri="$1" encoded status
+    encoded=$(printf '%s' "${redirect_uri}" | sed -e 's|:|%3A|g' -e 's|/|%2F|g')
+    # NOTE the path: ISVAOP serves /oauth2/authorize on its own listener. The
+    # /isvaop prefix attendees see in the browser is added by the WRP junction —
+    # using it here returns 404, which must NOT be mistaken for acceptance.
+    status=$(kubectl --context workshop -n verify-access exec deploy/iviaop -- \
+        curl -sk -o /dev/null -w '%{http_code}' --max-time 20 \
+        "https://localhost:8436/oauth2/authorize?response_type=code&client_id=agent-uc2&redirect_uri=${encoded}&scope=openid&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256&state=deploy-probe-0001" \
+        2>/dev/null || echo "000")
+    # 302 = registered (ISVAOP redirects on to authentication). 400 = the
+    # redirect_uri is not in this client's registry. Anything else (404 wrong
+    # path, 000 probe failed) means we cannot confirm, so fail closed and let the
+    # caller recycle + re-probe rather than pass blind.
+    [ "${status}" = "302" ]
 }
 
 step_11_post_tier3_reconcile() {
