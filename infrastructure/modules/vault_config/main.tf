@@ -364,24 +364,32 @@ resource "vault_policy" "uc1_readonly" {
   EOT
 }
 
+# The MCP server's OWN workload identity, obtained by Kubernetes auth login with
+# the uc2-mcp-server-sa ServiceAccount (vault_kubernetes_auth_backend_role.uc2).
+#
+# It has exactly one job: hand back the dynamic database credential as soon as
+# the query it was issued for is done, so the ephemeral Postgres role is dropped
+# immediately instead of living out its TTL (issue #32).
+#
+# It deliberately does NOT grant database/creds/uc2-personal-readonly. The
+# credential is fetched with the USER's OAuth JWT presented as X-Vault-Token, so
+# the workload identity never needs to read it — granting it anyway would be a
+# standing path to personal data on an identity that only revokes. It does not
+# grant aws/sts/bedrock-reader either: the MCP server calls no AWS API, the
+# banking-agent does that under uc2-agent.
+#
+# Revocation is a workload action, not a delegated one: it stays here rather than
+# on uc2-human-baseline / uc2-agent-ceiling, so the user's envelope is unchanged.
 resource "vault_policy" "uc2_personal" {
   name = "uc2-personal"
 
   policy = <<-EOT
-    # UC2: Personal-data agent policy (ENFC-02)
-    # Allows: kubernetes auth + OAuth resource server (X-Vault-Token), database creds (R/O), AWS (Bedrock) STS creds
-    # database/creds/uc2-personal-readonly only — no write DB roles accessible
-    path "database/creds/uc2-personal-readonly" {
-      capabilities = ["read"]
-    }
-    path "aws/sts/bedrock-reader" {
-      capabilities = ["read", "update"]
+    # UC2 MCP server workload identity — lease revocation only.
+    path "sys/leases/revoke" {
+      capabilities = ["update"]
     }
     path "auth/token/lookup-self" {
       capabilities = ["read"]
-    }
-    path "sys/leases/renew" {
-      capabilities = ["update"]
     }
   EOT
 }

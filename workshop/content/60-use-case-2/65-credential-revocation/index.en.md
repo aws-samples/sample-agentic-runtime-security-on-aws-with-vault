@@ -7,7 +7,7 @@ weight: 65
 
 In this module you observe the full credential lifecycle for a Use Case 2 session: a Postgres credential is issued, used to confirm its existence, then explicitly revoked, and you verify three things in succession — (a) the Postgres role is gone, (b) Vault's active-leases list no longer contains your lease, (c) both the issuance and the revocation appear in the audit log keyed by `lease_id`.
 
-**The production code path** is `POST /v1/sys/leases/revoke` against Vault. An MCP server, banking-agent, or any session-end handler calls that endpoint when a session terminates. In this page you exercise the same API directly via the `vault lease revoke` CLI — identical mechanism, no UI dependency, immediate evidence.
+**The production code path** is `POST /v1/sys/leases/revoke` against Vault, and the MCP server calls it itself: every credential it obtains is revoked as soon as the query it was issued for returns, using its own Kubernetes-auth Vault token rather than the caller's. In this page you issue a credential by hand and exercise the same API directly via the `vault lease revoke` CLI — identical mechanism, no UI dependency, immediate evidence.
 
 Load the Vault root token once at the start of the page — several admin-only paths (`database/creds/...`, `sys/leases/...`) are unreachable from the `uc2-personal` policy and require the root token for inspection:
 
@@ -245,7 +245,7 @@ What this proves:
 
 - **`revoke_path` ends with your captured `LEASE_ID`** — the audit log records the exact lease the revoke API call targeted.
 - **`time`** — the moment Vault executed the revocation; on a real incident response timeline this is the "session terminated" anchor.
-- **`revoked_by=root`** — in this demo you invoked the API as the root token. In a production flow this would be the service-account-bound Vault token the MCP server uses (`display_name=token-uc2-mcp-server-sa` or similar) — exactly identifying the workload that ended the session.
+- **`revoked_by=root`** — in this demo *you* invoked the API as the root token, so root is what the audit log records. Revocations the MCP server performs on its own credentials appear the same way but attributed to its ServiceAccount-bound token, exactly identifying the workload that handed the credential back. Query without the `AND request.path = ...` filter to see both kinds side by side.
 
 **The audit-trail story is now closed:** Step 6 shows the ephemeral credential was issued to the resolved *agent* identity (`agent-uc2`), authenticated by its token JTI — the Vault plane deliberately records the agent, never the human `sub`. Step 7 ties the revocation to the same `lease_id`. To attribute the session to a person, correlate the Vault lease timeline with the IVIA OAuth plane (which holds the authenticated `sub`) by credential path and time-proximity. Together they reconstruct "agent-uc2 obtained `lease_id` X at 19:24 on behalf of the user who authenticated moments earlier; the MCP server revoked X at 20:19" — start-to-end attribution for a single session.
 

@@ -72,3 +72,16 @@ This matches the official SDK example (`simpleStatelessStreamableHttp.ts` in `@m
 **References:**
 - SDK source: `@modelcontextprotocol/sdk/server/mcp.js` — `connect()` method
 - Official example: `examples/servers/everything/simpleStatelessStreamableHttp.ts`
+
+## Credential lifecycle
+
+The database credential is fetched with the **user's** OAuth JWT (`X-Vault-Token`)
+and revoked with the **server's own** identity: at startup-on-demand the server
+performs a Vault Kubernetes auth login as `uc2-mcp-server-sa` (role `uc2`,
+policy `uc2-personal`), whose single capability is `sys/leases/revoke`.
+
+Every tool call ends by closing the Postgres connection and revoking its lease,
+so the ephemeral role is dropped immediately rather than living out its TTL.
+Revocation is best-effort: the query has already returned, so a failed revoke is
+logged (`vault_lease_revoke_failed`) and the credential falls back to expiring on
+its TTL — it never turns a successful query into an error.

@@ -11,7 +11,9 @@
  *      current_setting('app.current_user_sub', true) returns NULL and RLS
  *      filters out ALL rows — queries return empty results.
  *   5. Run the SELECT query.
- *   6. Return results + credential metadata for OBJ-5 audit correlation.
+ *   6. Close the connection AND revoke the Vault lease, so the ephemeral Postgres
+ *      role is dropped now rather than lingering until its TTL expires.
+ *   7. Return results + credential metadata for OBJ-5 audit correlation.
  *
  * The agent never sees DB credentials. Only JWTs cross the agent→MCP boundary,
  * and the jwt each tool receives is the one index.ts read from the request's
@@ -19,7 +21,7 @@
  */
 
 import { Client as PgClient } from 'pg';
-import { getDbCreds, type DbCredentials } from './vault-client.js';
+import { getDbCreds, revokeLease, type DbCredentials } from './vault-client.js';
 
 const DB_HOST = process.env.RDS_ADDRESS ?? process.env.DB_HOST ?? 'localhost';
 const DB_PORT = parseInt(process.env.RDS_PORT ?? process.env.DB_PORT ?? '5432', 10);
@@ -122,6 +124,8 @@ export async function getAccounts(jwt: string): Promise<object> {
     };
   } finally {
     await client.end();
+    // The credential existed for exactly this query. Hand it back now.
+    await revokeLease(creds.leaseId);
   }
 }
 
@@ -172,5 +176,7 @@ export async function getTransactions(jwt: string, accountId?: string): Promise<
     };
   } finally {
     await client.end();
+    // The credential existed for exactly this query. Hand it back now.
+    await revokeLease(creds.leaseId);
   }
 }
