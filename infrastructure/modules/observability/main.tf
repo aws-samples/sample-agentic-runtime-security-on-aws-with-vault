@@ -958,7 +958,7 @@ locals {
         ivia.db_credential_ttl                                       AS db_credential_ttl
     FROM workshop_logs.ivia_decisions ivia
     JOIN workshop_logs.vault_audit vault
-        ON vault.request.headers['x-correlation-id'][1] = ivia.request_id
+        ON element_at(element_at(vault.request.headers, 'x-correlation-id'), 1) = ivia.request_id
         AND vault.request.path = 'database/creds/uc3-refund-writer'
         AND vault.type = 'response'
     LEFT JOIN workshop_logs.pgaudit_logs rds

@@ -154,11 +154,11 @@ athena_query "SELECT
   auth.metadata['jwt_issuer']                     AS issuer,
   auth.metadata['jwt_unique_id']                  AS jti,
   auth.metadata['jwt_authorization_details']      AS authorization_details,
-  request.headers['x-correlation-id'][1]          AS correlation_id
+  element_at(element_at(request.headers, 'x-correlation-id'), 1) AS correlation_id
 FROM workshop_logs.vault_audit
 WHERE type = 'response'
   AND request.path = 'database/creds/uc3-refund-writer'
-  AND request.headers['x-correlation-id'][1] = '${REQUEST_ID}'
+  AND element_at(element_at(request.headers, 'x-correlation-id'), 1) = '${REQUEST_ID}'
 LIMIT 1;"
 ```
 
