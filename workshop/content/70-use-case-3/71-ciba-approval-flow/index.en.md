@@ -222,8 +222,13 @@ kubectl get pods -n banking-app -l app=uc3-agent
 
 ```bash
 # Watch the mobile-push flow in the agent logs (push fired, then check-status polls)
-kubectl logs -n banking-app -l app=uc3-agent --tail=50 | grep -E 'mmfa_push_fired|ciba_status_polled'
+kubectl logs -n banking-app -l app=uc3-agent --tail=-1 | grep -E 'mmfa_push_fired|ciba_status_polled'
 ```
+
+Two things about that command. `--tail=-1` reads the whole log: with a label selector `kubectl
+logs` otherwise returns only the last few lines per pod, and the agent's polling chatter pushes
+the push line out of a short window within seconds. And it returns **nothing at all** until you
+have actually run a refund — that is the expected state on a fresh deployment, not a fault.
 
 ```bash
 # Confirm the IVIA CIBA endpoint is reachable from the vault pod (direct ClusterIP path)
