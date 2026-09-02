@@ -36,7 +36,8 @@
 #
 # Bypass mode (--bypass) — the native enforcement done-gate (jwt/ backend GONE).
 # SELF-MINTING: the suite headlessly mints a REAL IVIA-issued delegated token via
-# the production path (PKCE login + RFC 8693 token-exchange) for a workshop persona,
+# the production path (a REAL CIBA approval, then an RFC 8693 token-exchange) for a
+# workshop persona,
 # so Checks 15-18 run WITHOUT an operator hand-capturing a browser token:
 #   14. Untrusted-signer control: a self-minted HS256 JWT must be rejected at
 #       Vault's signature layer (Vault trusts only IVIA's RS256 JWKS). Self-generated.
@@ -148,7 +149,8 @@ Normal mode checks (19 total):
        workshop/content/70-use-case-3/70-test-refund/.
 
 Bypass mode (--bypass) runs the native enforcement done-gate. Checks 15-18
-SELF-MINT a real IVIA-issued delegated token (PKCE login + RFC 8693 exchange) —
+SELF-MINT a real IVIA-issued delegated token by driving an ACTUAL approval with a
+virtual authenticator, then exchanging it (RFC 8693) —
 no manual browser capture needed:
   14. Untrusted-signer control — self-minted HS256 JWT rejected at signature layer
   15. REAL delegated token jti (phase-done gate) + act.sub=uc3-actor (self-minted)
@@ -159,6 +161,11 @@ no manual browser capture needed:
   19. (optional) TRUE wrong-actor → DENY (UC3_WRONG_ACTOR_TOKEN) — production IVIA
       only signs act.sub=uc3-actor, so this is operator-supplied; absent = SKIP (WARN)
       A self-mint failure is a HARD FAIL (skip = not-proven != pass), never silent.
+      The mint drives a REAL approval (virtual authenticator) rather than a plain
+      login: minting a delegated token WITHOUT an approval is the very bypass the
+      idmap CIBA-provenance gate refuses (issue #29), so the suite must not depend
+      on it. This mode therefore needs the persona to have no real phone enrolled,
+      exactly like --no-phone.
 
 No-phone mode (--no-phone) — ADMIN ONLY, runs standalone. Drives the LIVE Use Case 3
 refund end-to-end when nobody has the IBM Verify app installed, then prints the full
@@ -188,7 +195,7 @@ Env-var overrides:
   VAULT_ROOT_TOKEN        (optional)
   IVIA_ISSUER             (default: https://iviaop.verify-access.svc.cluster.local:8436/oauth2)
   AWS_REGION              (default: resolved from terraform.tfvars)
-  UC3_PERSONA             (--bypass — workshop persona to self-mint the delegated
+  UC3_PERSONA             (--bypass — workshop persona whose APPROVAL mints the delegated
                            token for; default: oscar. Any user in base_layer.yaml.tftpl)
   UC3_NOPHONE_PERSONA     (--no-phone — persona whose refund is driven end-to-end;
                            default: jaime, the persona the workshop pages use)
@@ -349,20 +356,27 @@ assert_native_allow() {
     fi
 }
 
-# _mint_uc3_tokens <user> — headlessly mint a REAL IVIA-issued delegated OBO token
-# (and its underlying subject token) for <user>, exercising the EXACT production
-# path the UC3 agent uses: PKCE authorization_code login at WebSEAL, then an
-# RFC 8693 token-exchange (uc3-actor client). Populates two globals:
-#   MINTED_SUBJECT_TOKEN   — sub=<user>, NO act claim (a bare human subject).
+# _mint_uc3_tokens <user> — obtain a REAL IVIA-issued delegated OBO token (and the
+# subject token underneath it) for <user> by driving an ACTUAL human approval.
+# Populates two globals:
+#   MINTED_SUBJECT_TOKEN   — the genuine CIBA access token: sub=<user>, issued to
+#                            the CIBA client, NO act claim (a first-party token).
 #   MINTED_DELEGATED_TOKEN — sub=<user>, act.sub=uc3-actor, a native jti, and a
 #                            vault:path_access RAR = database/creds/uc3-refund-writer.
 # Returns 0 on success, 1 on any failure (so a check HARD-FAILs, never silent-passes).
 #
+# WHY THIS IS NOT A PKCE LOGIN ANY MORE (issue #29): this function used to mint the
+# subject token from a plain authorization_code login and hand it to the token
+# exchange. That is exactly the bypass the idmap CIBA-provenance gate now refuses —
+# the workshop's own enforcement suite was relying on the vulnerability it exists to
+# disprove. There is deliberately no way to mint a delegated token outside an
+# approval; that IS the control. So the suite earns one the way the product does.
+#
 # Every secret/host is sourced at RUNTIME (never hardcoded — global no-hardcoded-
 # identity/auth rule): WRP host ← infrastructure/.acme-state; redirect_uri + client
 # ids ← banking-app config maps; client secret ← uc3-agent-config; persona password
-# ← base_layer.yaml.tftpl (its single source of truth). The mint runs INSIDE the
-# uc3-agent pod (has httpx + in-cluster iviaop DNS + egress to the public WRP ALB);
+# ← base_layer.yaml.tftpl (its single source of truth). Both network legs run INSIDE
+# the uc3-agent pod (httpx + in-cluster iviaop DNS + egress to the public WRP ALB);
 # the tokens are presented to Vault separately via _present_native_token.
 _mint_uc3_tokens() {
     local user="$1"
@@ -370,61 +384,99 @@ _mint_uc3_tokens() {
 
     local acme_state="${SCRIPT_DIR}/../.acme-state"
     local base_layer="${SCRIPT_DIR}/../modules/verify_access/base_layer/base_layer.yaml.tftpl"
-    local wrp ru secret agent_client actor_client persona_pw pod mint_out
+    local helper="${SCRIPT_DIR}/uc3-virtual-authenticator.py"
+    local wrp ru secret agent_client actor_client ciba_client persona_pw pod op_url
+    local approve_log auth_req_id mint_out
 
     wrp=$(grep -E '^NIP_FQDN_WRP=' "${acme_state}" 2>/dev/null | cut -d= -f2)
     ru=$(kubectl get configmap -n "${BANKING_NAMESPACE}" banking-ui-config -o jsonpath='{.data.REDIRECT_URI}' 2>/dev/null)
     secret=$(kubectl get configmap -n "${BANKING_NAMESPACE}" uc3-agent-config -o jsonpath='{.data.IVIA_CLIENT_SECRET}' 2>/dev/null)
     agent_client=$(kubectl get configmap -n "${BANKING_NAMESPACE}" banking-ui-config -o jsonpath='{.data.IVIA_CLIENT_ID}' 2>/dev/null)
     actor_client=$(kubectl get configmap -n "${BANKING_NAMESPACE}" uc3-agent-config -o jsonpath='{.data.IVIA_ACTOR_CLIENT_ID}' 2>/dev/null)
+    ciba_client=$(kubectl get configmap -n "${BANKING_NAMESPACE}" uc3-agent-config -o jsonpath='{.data.IVIA_CLIENT_ID}' 2>/dev/null)
+    op_url=$(kubectl get configmap -n "${BANKING_NAMESPACE}" uc3-agent-config -o jsonpath='{.data.IVIA_BASE_URL}' 2>/dev/null)
     persona_pw=$(grep -oE 'password:[[:space:]]*"[^"]+"' "${base_layer}" 2>/dev/null | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
     pod=$(kubectl get pod -n "${BANKING_NAMESPACE}" -l app=uc3-agent -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    [ -n "${wrp}" ] && wrp="https://${wrp#https://}"
 
-    if [ -z "${wrp}" ] || [ -z "${ru}" ] || [ -z "${secret}" ] || [ -z "${persona_pw}" ] || [ -z "${pod}" ]; then
-        MINT_ERR="could not source mint inputs (wrp='${wrp}' ru='${ru}' secret=$([ -n "${secret}" ] && echo set || echo MISSING) pw=$([ -n "${persona_pw}" ] && echo set || echo MISSING) pod='${pod}')"
+    if [ -z "${wrp}" ] || [ -z "${ru}" ] || [ -z "${secret}" ] || [ -z "${persona_pw}" ] || [ -z "${pod}" ] ||
+       [ -z "${ciba_client}" ] || [ -z "${actor_client}" ] || [ -z "${op_url}" ]; then
+        MINT_ERR="could not source mint inputs (wrp='${wrp}' ru='${ru}' secret=$([ -n "${secret}" ] && echo set || echo MISSING) pw=$([ -n "${persona_pw}" ] && echo set || echo MISSING) ciba_client='${ciba_client}' actor_client='${actor_client}' op='${op_url}' pod='${pod}')"
+        return 1
+    fi
+    if [ ! -f "${helper}" ]; then
+        MINT_ERR="uc3-virtual-authenticator.py not found at ${helper}"
         return 1
     fi
 
+    # Step 1 — a REAL approval. `approveonly` enrols a virtual authenticator, drives
+    # the refund turn so the agent fires the MMFA push, signs the user-presence
+    # challenge, and STOPS with the CIBA grant unredeemed. The agent only polls CIBA
+    # when asked to finish the refund, which we never ask for — so nothing races us
+    # for the single-issue token.
+    approve_log="${TMPDIR:-/tmp}/verify-uc3-mint-approve-$$.log"
+    kubectl exec -i -n "${BANKING_NAMESPACE}" "${pod}" -- python3 - approveonly \
+        "${wrp}" "${user}" "${persona_pw}" "${agent_client}" \
+        "${secret}" "${ru}" "${op_url}" \
+        <"${helper}" >"${approve_log}" 2>&1
+    if ! grep -q '^APPROVED_NOT_REDEEMED=1' "${approve_log}"; then
+        MINT_ERR=$(sed -n 's/^ERR=//p' "${approve_log}" | tail -1)
+        [ -z "${MINT_ERR}" ] && MINT_ERR="the virtual authenticator did not reach an approval (see ${approve_log})"
+        return 1
+    fi
+
+    # Step 2 — recover the auth_req_id. The agent is the only component that holds
+    # it; it emits it on ciba_mobile_push_sent (issue #37 made those fields render).
+    auth_req_id=$(kubectl logs -n "${BANKING_NAMESPACE}" "${pod}" --tail=4000 2>&1 |
+        grep 'ciba_mobile_push_sent' | tail -1 |
+        python3 -c 'import json,sys
+line = sys.stdin.readline().strip()
+try:
+    print(json.loads(line).get("auth_req_id", "") or "")
+except Exception:
+    print("")' 2>/dev/null)
+    if [ -z "${auth_req_id}" ]; then
+        MINT_ERR="approved, but no auth_req_id in the agent log — is the uc3-agent image built with the structured logger (issue #37)? Check: kubectl logs -n ${BANKING_NAMESPACE} ${pod} | grep ciba_mobile_push_sent"
+        return 1
+    fi
+
+    # Step 3 — redeem the approved grant, then exchange it (RFC 8693). The subject
+    # is now a first-party CIBA token, which is what the idmap gate requires.
     mint_out=$(kubectl exec -i -n "${BANKING_NAMESPACE}" "${pod}" -- python3 - \
-        "${user}" "${wrp}" "${ru}" "${agent_client}" "${actor_client}" "${secret}" "${persona_pw}" <<'PYEOF' 2>/dev/null
-import base64,hashlib,os,re,sys,urllib.parse
+        "${op_url}" "${ciba_client}" "${actor_client}" "${secret}" "${auth_req_id}" <<'PYEOF' 2>/dev/null
+import sys, time
 try:
     import httpx
 except Exception as e:
     print("MINT_ERR import httpx: %s" % e); sys.exit(1)
-user,wrp,ru,agent_client,actor_client,secret,pw = sys.argv[1:8]
-if not wrp.startswith("http"): wrp = "https://" + wrp
-op = "https://iviaop.verify-access.svc.cluster.local:8436"
-def b64u(b): return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
-try:
-    cv = b64u(os.urandom(48)); cc = b64u(hashlib.sha256(cv.encode()).digest()); st = b64u(os.urandom(12))
-    c = httpx.Client(verify=False, follow_redirects=False, timeout=30.0)
-    az = (wrp + "/isvaop/oauth2/authorize?response_type=code&client_id=" + agent_client
-          + "&redirect_uri=" + urllib.parse.quote(ru, safe='') + "&code_challenge=" + cc
-          + "&code_challenge_method=S256&state=" + st + "&scope=openid+profile+email")
-    c.get(az)
-    c.post(wrp + "/pkmslogin.form",
-           data={"username": user, "password": pw, "login-form-type": "pwd", "login-response-type": "original_url"})
-    loc = c.get(az).headers.get("location", "")
-    m = re.search(r"[?&]code=([^&]+)", loc)
-    if not m:
-        print("MINT_ERR no auth code returned (WebSEAL login failed for user=%s)" % user); sys.exit(1)
-    code = urllib.parse.unquote(m.group(1))
-    r = c.post(op + "/oauth2/token", auth=(agent_client, secret),
-               data={"grant_type": "authorization_code", "code": code, "redirect_uri": ru, "code_verifier": cv})
-    if r.status_code != 200:
-        print("MINT_ERR authcode exchange %d %s" % (r.status_code, r.text[:200])); sys.exit(1)
-    subj = r.json()["access_token"]
-    r = c.post(op + "/oauth2/token", auth=(actor_client, secret),
-               data={"grant_type": "urn:ietf:params:oauth:grant-type:token-exchange", "subject_token": subj,
-                     "subject_token_type": "urn:ietf:params:oauth:token-type:access_token",
-                     "requested_token_type": "urn:ietf:params:oauth:token-type:access_token"})
-    if r.status_code != 200:
-        print("MINT_ERR token-exchange %d %s" % (r.status_code, r.text[:200])); sys.exit(1)
-    print("SUBJECT=" + subj)
-    print("DELEGATED=" + r.json()["access_token"])
-except Exception as e:
-    print("MINT_ERR %s" % e); sys.exit(1)
+
+op, ciba_client, actor_client, secret, auth_req_id = sys.argv[1:6]
+token_url = op.rstrip("/") + "/oauth2/token"
+c = httpx.Client(verify=False, timeout=30.0)
+
+subject = None
+for _ in range(10):
+    r = c.post(token_url, auth=(ciba_client, secret),
+               data={"grant_type": "urn:openid:params:grant-type:ciba",
+                     "auth_req_id": auth_req_id})
+    if r.status_code == 200:
+        subject = r.json().get("access_token")
+        break
+    if r.status_code == 400 and "authorization_pending" in r.text:
+        time.sleep(3); continue
+    print("MINT_ERR ciba redeem %d %s" % (r.status_code, r.text[:200])); sys.exit(1)
+if not subject:
+    print("MINT_ERR ciba redeem timed out (still authorization_pending)"); sys.exit(1)
+
+r = c.post(token_url, auth=(actor_client, secret),
+           data={"grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+                 "subject_token": subject,
+                 "subject_token_type": "urn:ietf:params:oauth:token-type:access_token",
+                 "requested_token_type": "urn:ietf:params:oauth:token-type:access_token"})
+if r.status_code != 200:
+    print("MINT_ERR token-exchange %d %s" % (r.status_code, r.text[:200])); sys.exit(1)
+print("SUBJECT=" + subject)
+print("DELEGATED=" + r.json()["access_token"])
 PYEOF
 )
     MINTED_SUBJECT_TOKEN=$(printf '%s\n' "${mint_out}" | sed -n 's/^SUBJECT=//p')
