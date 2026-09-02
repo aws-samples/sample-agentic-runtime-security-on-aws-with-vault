@@ -951,7 +951,7 @@ _run_acme_step() {
             -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
         if [[ -n "$LIVE_ALB_HOST" ]]; then
             LIVE_ALB_IPS=$(_resolve_host_ips "$LIVE_ALB_HOST")
-            if [[ -n "$LIVE_ALB_IPS" ]] && ! echo "$LIVE_ALB_IPS" | grep -qx "$ALB_IP"; then
+            if [[ -n "$LIVE_ALB_IPS" ]] && ! grep -qx "$ALB_IP" <<<"$LIVE_ALB_IPS"; then
                 LIVE_LIST=$(echo "$LIVE_ALB_IPS" | tr '\n' ',' | sed 's/,$//')
                 print_info "Step 7: ALB IP drift detected (.acme-state=${ALB_IP} no longer in live ALB set [${LIVE_LIST}]). Clearing stale .acme-state and forcing re-issuance."
                 rm -f "$ACME_STATE_FILE"
@@ -972,7 +972,7 @@ _run_acme_step() {
             --certificate-arn "$STABLE_ACM_ARN" \
             --region "$REGION" \
             --query 'Certificate.Issuer' --output text 2>/dev/null || echo "")
-        if echo "$CURRENT_ISSUER" | grep -q "Let's Encrypt"; then
+        if grep -q "Let's Encrypt" <<<"$CURRENT_ISSUER"; then
             print_info "Step 7: ACME cert already Let's Encrypt-trusted; skipping issuance + import (D-12 idempotency floor) but running catch-up tier-2 module.ivia apply"
             _acme_apply_ivia || return 1
             _reconcile_mmfa_authenticator_client
@@ -1093,9 +1093,9 @@ EOF
     local _cert_deadline=$(( $(date +%s) + 900 ))   # 15 min hard ceiling
     local _cert_ready=false _cert_recovery_rounds=0
     while [[ $(date +%s) -lt ${_cert_deadline} ]]; do
-        if kubectl --context workshop get certificate workshop-le-tls -n cert-manager \
-                -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null \
-                | grep -q "^True$"; then
+        _cert_ready_cond=$(kubectl --context workshop get certificate workshop-le-tls -n cert-manager \
+                -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)
+        if grep -q "^True$" <<<"${_cert_ready_cond}"; then
             _cert_ready=true
             break
         fi
@@ -1253,7 +1253,8 @@ step_09_configure_ivia() {
     else
         if _run_subscript "Step 9: ivia-configure" "${SCRIPT_DIR}/ivia-configure.sh"; then
             IVIA_HEALTH=""
-            if kubectl --context workshop get pods -n verify-access --no-headers 2>/dev/null | grep -q Running; then
+            _va_pods=$(kubectl --context workshop get pods -n verify-access --no-headers 2>/dev/null || true)
+            if grep -q Running <<<"${_va_pods}"; then
                 kubectl --context workshop port-forward \
                     svc/iviaop -n verify-access 8436:8436 \
                     >/dev/null 2>&1 &
@@ -1511,9 +1512,13 @@ step_12_verify_ldap_user() {
         print_pass "Step 12: OpenLDAP user check (dry-run)"
     else
         LDAP_PW=$(kubectl --context workshop get secret openldap-creds -n verify-access -o jsonpath='{.data.admin_password}' 2>/dev/null | base64 --decode 2>/dev/null || echo "")
-        if [ -n "${LDAP_PW}" ] && kubectl --context workshop exec -n verify-access deploy/openldap -- \
+        LDAP_ENTRY=""
+        if [ -n "${LDAP_PW}" ]; then
+            LDAP_ENTRY=$(kubectl --context workshop exec -n verify-access deploy/openldap -- \
                 ldapsearch -x -H ldapi:/// -D "cn=admin,dc=ibm,dc=com" -w "${LDAP_PW}" \
-                -b "dc=ibm,dc=com" "(cn=oscar)" dn 2>/dev/null | grep -q '^dn:'; then
+                -b "dc=ibm,dc=com" "(cn=oscar)" dn 2>/dev/null || true)
+        fi
+        if grep -q '^dn:' <<<"${LDAP_ENTRY}"; then
             print_pass "Step 12: OpenLDAP user 'oscar' present (seeded by IVIA autoconf)"
         else
             print_warn "Step 12: OpenLDAP user 'oscar' NOT found — re-run the tier-2 apply or inspect ivia-autoconf job logs"
