@@ -148,6 +148,7 @@ The script checks all Use Case 2 success criteria:
 | DB read works | SELECT from `banking.accounts` with `app.current_user_sub = 'oscar'` returns ≥ 2 rows |
 | ENFC-02 enforced | INSERT with JIT creds returns `ERROR: permission denied for table` |
 | ENFC-03 enforced | Egress curl from MCP pod to external URL times out (NetworkPolicy blocks) |
+| MCP tool contract | `tools/list` declares no `jwt` argument on any tool — identity can only arrive in the `Authorization` header |
 | Agent /health | Banking Agent returns `{"status":"healthy"}` |
 | IVIA JWKS reachable | JWKS endpoint returns at least one signing key |
 | Active lease exists | At least one active lease for `uc2-personal-readonly` |
@@ -174,13 +175,14 @@ Expected summary output — a clean deploy self-mints the OBO token, so every ch
   ✓ PASS DB read: SELECT from banking.accounts returned 2 row(s) for user 'oscar' (>= 2 expected)
   ✓ PASS ENFC-02: INSERT rejected by PostgreSQL (permission denied for table)
   ✓ PASS ENFC-03: NetworkPolicy egress blocked from MCP server pod (external curl timed out)
+  ✓ PASS MCP tool contract: no tool accepts a jwt argument — identity can only come from the Authorization header
   ✓ PASS Agent /health endpoint: healthy
   ✓ PASS IVIA JWKS endpoint reachable (N key(s) returned) — OAuth pre-check passed
   ✓ PASS Active Vault lease exists for uc2-personal-readonly (N lease(s))
   ✓ PASS OAuth discovery: IVIA OIDC Provider reachable (issuer=https://<wrp-alb-host>)
 
 ===============================================================================
- ✓ 20 check(s) passed
+ ✓ 21 check(s) passed
 ===============================================================================
 ```
 

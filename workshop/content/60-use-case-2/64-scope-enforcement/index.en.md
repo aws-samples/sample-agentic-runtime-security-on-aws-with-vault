@@ -7,7 +7,7 @@ weight: 64
 
 Use Case 2 enforces the principle of least privilege at two independent layers:
 
-- **Vault policy (Layer 2a):** The `uc2-personal` policy grants only `database/creds/uc2-personal-readonly`. Attempts to read write-capable credential roles are rejected by Vault with a 403.
+- **Vault policy (Layer 2a):** The MCP server's own workload policy, `uc2-personal`, grants nothing but lease revocation. Every credential it uses is authorized by the *user's* OAuth token, not by its workload identity. Attempts to read any credential role with the workload token — write-capable or not — are rejected by Vault with a 403.
 - **Postgres GRANTs (Layer 2b):** Each Vault-vended ephemeral Postgres role is created with `GRANT SELECT` only — no INSERT, UPDATE, or DELETE is ever granted (these capabilities are not in the `creation_statements` Vault runs at issuance time). Because there is no shared permanent role behind the ephemeral roles, an attacker has no parent role to GRANT through either: every credential is a fresh role with the same SELECT-only ceiling.
 
 This defense-in-depth means that a single control being misconfigured does not open a write path. Both layers must be bypassed for a write to succeed.
@@ -24,30 +24,37 @@ kubectl exec -n vault vault-0 -- sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault 
 Expected output:
 
 ```hcl
-# UC2: Personal-data agent policy (ENFC-02)
-# Allows: kubernetes auth + OAuth resource server (X-Vault-Token), database creds (R/O), AWS (Bedrock) STS creds
-# database/creds/uc2-personal-readonly only — no write DB roles accessible
-path "database/creds/uc2-personal-readonly" {
-  capabilities = ["read"]
-}
-path "aws/sts/bedrock-reader" {
-  capabilities = ["read", "update"]
+# UC2 MCP server workload identity — lease revocation only.
+path "sys/leases/revoke" {
+  capabilities = ["update"]
 }
 path "auth/token/lookup-self" {
   capabilities = ["read"]
 }
-path "sys/leases/renew" {
-  capabilities = ["update"]
-}
 ```
 
-Note: there is no path for any Use Case 3 write-capable role (e.g., `database/creds/uc3-refund-writer`). The policy grants `read` on exactly **one** database credential path — `uc2-personal-readonly`. The other three paths give the agent its Vault-vended Bedrock STS credentials (`aws/sts/bedrock-reader`), let it inspect its own Vault token (`auth/token/lookup-self`), and let it extend an in-flight DB credential lease (`sys/leases/renew`). None of these grant write access to banking data.
+Two paths. That is the entire workload identity of the MCP server.
 
-This `uc2-personal` policy is the MCP server's own **workload** policy — the token its `uc2-mcp-server-sa` Kubernetes identity receives. It is distinct from `uc2-human-baseline`, the per-user policy Vault intersects with the agent ceiling in the OBO path shown on the previous pages (that one has no Bedrock path). Both correctly lack any Use Case 3 write path — which is exactly what the next step proves.
+Read what is *missing* rather than what is there: no `database/creds/uc2-personal-readonly`, no
+Use Case 3 write role, no path to any credential at all. The MCP server cannot ask Vault for a
+database credential using its own identity. Every credential it uses is authorized by the
+**user's** OAuth token, presented per request — which is why a request with no user attached
+gets no data rather than the agent's own data.
+
+So what is `sys/leases/revoke` for? It is the one thing the server must do as itself: hand the
+credential back the moment the query finishes. Revoking a lease requires a Vault identity, and
+the user's token is not the right one to use — the credential should die even if the user's
+session is already gone. That single grant is the whole reason this policy still exists, and
+the [Credential Revocation](../65-credential-revocation/) page watches it happen.
+
+This is distinct from `uc2-human-baseline`, the per-user policy Vault intersects with the agent
+ceiling on the on-behalf-of path shown on the previous pages. Neither carries a Use Case 3 write
+path — which is what the next step proves.
 
 ### Step 1.2 — Attempt to read a write-capable credential role
 
-Obtain a Vault token using the `uc2-personal` policy and attempt to read a Use Case 3 credential:
+Obtain a Vault token carrying the `uc2-personal` policy — the same policy the MCP server's
+ServiceAccount receives — and attempt to read a Use Case 3 credential with it:
 
 ```bash
 # Get a Vault token bound to uc2-personal policy (creating a token requires the root token)
