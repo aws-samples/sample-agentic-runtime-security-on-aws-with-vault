@@ -13,7 +13,9 @@
  *   5. Run the SELECT query.
  *   6. Return results + credential metadata for OBJ-5 audit correlation.
  *
- * The agent never sees DB credentials. Only JWTs cross the agent→MCP boundary.
+ * The agent never sees DB credentials. Only JWTs cross the agent→MCP boundary,
+ * and the jwt each tool receives is the one index.ts read from the request's
+ * Authorization header — never a value taken from the tool arguments.
  */
 
 import { Client as PgClient } from 'pg';
