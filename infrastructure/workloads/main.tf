@@ -197,10 +197,10 @@ module "uc3_agent" {
 # (tier 2) the iviaop-config ConfigMap is created before its own Ingress
 # reconciles — so neither place can read the final banking-ui ALB hostname.
 # Resolution: tier 2 ships provider.yml + clients.yml with placeholder hosts;
-# after module.uc2_app completes here (ALB hostname known), this root-level
-# patch overwrites just those two ConfigMap keys with the real hosts, then
-# rolls the iviaop Deployment so it reloads them at startup. agent-uc1/agent-uc3
-# entries are unaffected.
+# after module.uc2_app completes here (ALB hostname known), these two root-level
+# patches overwrite provider.yml in the iviaop-config ConfigMap and clients.yml in
+# the iviaop-clients Secret with the real hosts, then roll the iviaop Deployment so
+# it reloads them at startup. agent-uc1/agent-uc3 entries are unaffected.
 #-------------------------------------------------------------------------------
 
 resource "kubernetes_config_map_v1_data" "iviaop_clients_patch" {
@@ -211,7 +211,24 @@ resource "kubernetes_config_map_v1_data" "iviaop_clients_patch" {
 
   data = {
     "provider.yml" = local.iviaop_provider_yml_resolved
-    "clients.yml"  = local.iviaop_clients_yml_resolved
+  }
+
+  field_manager = "root-tf-clients-patch"
+  force         = true
+
+  depends_on = [module.uc2_app]
+}
+
+# clients.yml lives in the iviaop-clients Secret, not the ConfigMap — it carries
+# every client_secret (issue #30) — so its redirect_uri patch is a Secret patch.
+resource "kubernetes_secret_v1_data" "iviaop_clients_patch" {
+  metadata {
+    name      = "iviaop-clients"
+    namespace = "verify-access"
+  }
+
+  data = {
+    "clients.yml" = local.iviaop_clients_yml_resolved
   }
 
   field_manager = "root-tf-clients-patch"
@@ -236,5 +253,8 @@ resource "null_resource" "iviaop_rollout_restart" {
     command = "aws eks update-kubeconfig --region ${local.infra.region} --name ${local.infra.cluster_name} && kubectl rollout restart deploy/iviaop -n verify-access && kubectl rollout status deploy/iviaop -n verify-access --timeout=180s"
   }
 
-  depends_on = [kubernetes_config_map_v1_data.iviaop_clients_patch]
+  depends_on = [
+    kubernetes_config_map_v1_data.iviaop_clients_patch,
+    kubernetes_secret_v1_data.iviaop_clients_patch,
+  ]
 }
