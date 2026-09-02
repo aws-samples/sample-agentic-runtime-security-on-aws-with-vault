@@ -195,7 +195,8 @@ Find the most recent issuance events for `uc2-personal-readonly`. Under the nati
 athena_query "SELECT
   substr(timestamp, 1, 19) AS time,
   auth.display_name AS identity,
-  auth.metadata['actor_entity_name'] AS agent
+  auth.metadata['actor_entity_name'] AS agent,
+  auth.entity_id AS human_entity
 FROM workshop_logs.vault_audit
 WHERE type = 'response'
   AND request.path = 'database/creds/uc2-personal-readonly'
@@ -206,17 +207,32 @@ LIMIT 10;"
 Expected output — one row per recent issuance:
 
 ```
-time                 identity                                                  agent
-2026-07-28T03:20:48  root                                                      -
-2026-07-28T02:53:25  JWT Token with JTI: f77a2c34-61f5-406b-8669-8fb4ecb9c40c  agent-uc2
-2026-07-28T02:47:12  JWT Token with JTI: da65bce9-4846-4da0-8a24-9dc45e8654d1  agent-uc2
+time                 identity                                                  agent      human_entity
+2026-09-02T23:24:18  root                                                      -          -
+2026-09-02T23:17:10  JWT Token with JTI: 5a9564c0-cce3-4442-8a8f-a8d7d1339eb0  agent-uc2  2979d2cd-f25e-2915-a9f8-e6e23d87e047
+2026-09-02T23:14:25  JWT Token with JTI: f82c6e27-33d2-4ec2-94e8-29a3b63173a5  agent-uc2  2979d2cd-f25e-2915-a9f8-e6e23d87e047
 ...
 ```
 
 Two row patterns appear:
 
 - **`identity=root`, `agent=-`** — the credential was issued via the Vault root token (the inspection commands on the previous pages, including your Step 1 above, and the `verify-uc2.sh` checks). Root-token issuance resolves no Agent Registry identity, so the `agent` column is empty (the helper renders empty fields as `-`).
-- **`identity=JWT Token with JTI: <jti>`, `agent=agent-uc2`** — the credential was issued by presenting a real user's IVIA OAuth JWT directly as the `X-Vault-Token` on the `database/creds` read. Vault's OAuth resource server validated the JWT and resolved it to the `agent-uc2` Agent Registry identity; the audit device records the token by its unique **JTI**, never the human `sub`. **These rows appear after you sign in through the Banking UI and run a banking query** (the browser flow in [OAuth Login Flow](../61-oauth-pkce-flow/)) — one fresh row per tool call. The human user behind the token is tied back through the IVIA decision plane (the `request_id` correlation shown on the [three-plane audit](../../70-use-case-3/74-three-plane-audit/) page), not a Vault entity id — native Vault audit records the token JTI + resolved agent, not the human sub. If you have not yet driven a signed-in query, only the `root` rows are present.
+- **`identity=JWT Token with JTI: <jti>`, `agent=agent-uc2`, and a `human_entity`** — the credential was issued by presenting a real user's IVIA OAuth JWT directly as the `X-Vault-Token` on the `database/creds` read. Vault's OAuth resource server validated the JWT, resolved it to the `agent-uc2` Agent Registry identity, and recorded the token by its unique **JTI** rather than its raw value. **These rows appear after you sign in through the Banking UI and run a banking query** (the browser flow in [OAuth Login Flow](../61-oauth-pkce-flow/)) — one fresh row per tool call. If you have not yet driven a signed-in query, only the `root` rows are present.
+
+Note the `human_entity` column on those rows. It is Vault's own identity entity for the **person**, recorded on the same authorization decision as the agent — two identities on one request, which is what on-behalf-of means. Ask Vault whose it is:
+
+```bash
+kubectl exec -n vault vault-0 -- \
+  sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read -format=json identity/entity/id/<human_entity from above>" \
+  | jq '{id: .data.id, name: .data.name}'
+```
+
+```json
+{
+  "id": "2979d2cd-f25e-2915-a9f8-e6e23d87e047",
+  "name": "oscar"
+}
+```
 
 ## Step 7 — Find the revocation event for the lease you revoked
 
@@ -247,7 +263,13 @@ What this proves:
 - **`time`** — the moment Vault executed the revocation; on a real incident response timeline this is the "session terminated" anchor.
 - **`revoked_by=root`** — in this demo *you* invoked the API as the root token, so root is what the audit log records. Revocations the MCP server performs on its own credentials appear the same way but attributed to its ServiceAccount-bound token, exactly identifying the workload that handed the credential back. Query without the `AND request.path = ...` filter to see both kinds side by side.
 
-**The audit-trail story is now closed:** Step 6 shows the ephemeral credential was issued to the resolved *agent* identity (`agent-uc2`), authenticated by its token JTI — the Vault plane deliberately records the agent, never the human `sub`. Step 7 ties the revocation to the same `lease_id`. To attribute the session to a person, correlate the Vault lease timeline with the IVIA OAuth plane (which holds the authenticated `sub`) by credential path and time-proximity. Together they reconstruct "agent-uc2 obtained `lease_id` X at 19:24 on behalf of the user who authenticated moments earlier; the MCP server revoked X at 20:19" — start-to-end attribution for a single session.
+**The audit-trail story is now closed:** Step 6 shows the ephemeral credential issued on one
+authorization decision that names *both* parties — the `agent-uc2` Agent Registry identity and
+the human entity it acted for, plus the token's JTI instead of the token itself. Step 7 ties the
+revocation to the same `lease_id`. Together they reconstruct "agent-uc2, acting for oscar,
+obtained `lease_id` X at 23:17; the MCP server handed X back seconds later" — start-to-end
+attribution for a single session, from the Vault plane alone, with no timestamp guessing
+involved.
 
 ## Step 8 — Watch the MCP server hand a credential back on its own
 
