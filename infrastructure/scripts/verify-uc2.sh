@@ -631,6 +631,40 @@ else
 fi
 
 #-------------------------------------------------------------------------------
+# Check 10b — the MCP tool contract has no place to put an identity
+#
+# The token the MCP server acts on must come from the Authorization header and
+# nowhere else. A `jwt` tool parameter would make the header decoration: anything
+# able to reach the server would choose the identity Vault sees, and the OBO
+# intersection, the RLS predicate and the audit record would all faithfully
+# enforce the caller's choice of user. tools/list needs no real user (it touches
+# neither Vault nor the database), so any non-empty bearer gets past the 401 gate.
+#
+# This is the scripted half of the attendee exercise on the OAuth Login Flow page.
+#-------------------------------------------------------------------------------
+tools_probe_pod="verify-uc2-tools-$$"
+kubectl delete pod "${tools_probe_pod}" -n "${BANKING_NAMESPACE}" --ignore-not-found --now &>/dev/null
+tools_json=$(kubectl run "${tools_probe_pod}" --rm -i --quiet --restart=Never \
+    --image=curlimages/curl:8.11.1 -n "${BANKING_NAMESPACE}" --command -- \
+    curl -s -X POST http://banking-mcp-svc:3001/mcp \
+      -H 'Authorization: Bearer schema-probe' \
+      -H 'Content-Type: application/json' \
+      -H 'Accept: application/json, text/event-stream' \
+      -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' 2>/dev/null || echo "PROBE_FAILED")
+
+if [ "${tools_json}" = "PROBE_FAILED" ] || [ -z "${tools_json}" ]; then
+    print_warn "MCP tool-contract check skipped — tools/list probe returned nothing (is banking-mcp-svc up?)"
+elif ! echo "${tools_json}" | grep -q '"get_accounts"'; then
+    print_fail "MCP tool contract: tools/list did not list get_accounts" \
+        "tools/list returned: ${tools_json:0:300}. Expected the banking-tools server to advertise get_accounts and get_transactions."
+elif echo "${tools_json}" | grep -q '"jwt"'; then
+    print_fail "MCP tool contract: a tool still declares a jwt parameter" \
+        "tools/list advertises a 'jwt' input — the caller could then choose the identity Vault sees, making the Authorization header decorative. Remove the parameter and close over the header token in createMcpServer(). Response: ${tools_json:0:400}"
+else
+    print_pass "MCP tool contract: no tool accepts a jwt argument — identity can only come from the Authorization header"
+fi
+
+#-------------------------------------------------------------------------------
 # Check 11 — Agent /health endpoint returns "healthy"
 #-------------------------------------------------------------------------------
 agent_pod=$(kubectl get pods -n "${BANKING_NAMESPACE}" -l app=banking-agent \

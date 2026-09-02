@@ -837,6 +837,60 @@ print(jwt.encode(payload, 'forged-secret', algorithm='HS256'))
         fi
     fi
 
+    #---------------------------------------------------------------------------
+    # Bypass Check 20 — the RFC 8693 exchange is gated on the CLIENT
+    #
+    # The usual objection to any delegation story is that act.sub is stamped on by
+    # a mapping rule, so anything that reaches the token endpoint could ask for a
+    # delegated token. Both requests below send an identical junk subject_token and
+    # differ only in the client credentials, so the difference in the answers is
+    # attributable to the client alone:
+    #
+    #   agent-uc2  -> unauthorized_client   (refused before the token is examined)
+    #   uc3-actor  -> invalid_request       (past the client gate, dies on the token)
+    #
+    # The uc3-actor leg is the positive control: without it, an unauthorized_client
+    # response could just as well mean the endpoint is refusing everything. This is
+    # the scripted half of the attendee exercise on the CIBA Approval Flow page.
+    #---------------------------------------------------------------------------
+    print_info "Bypass Check 20: the token-exchange grant must be allowlisted per client — agent-uc2 DENIED, uc3-actor reaching the token check"
+
+    _exchange_probe() {
+        local client_id="$1" secret="$2" pod="verify-uc3-exch-$$-${client_id}"
+        kubectl delete pod "${pod}" -n verify-access --ignore-not-found --now &>/dev/null
+        kubectl run "${pod}" --rm -i --quiet --restart=Never \
+            --image=curlimages/curl:8.11.1 -n verify-access --command -- \
+            curl -sk -X POST "https://iviaop.verify-access.svc.cluster.local:8436/oauth2/token" \
+              -u "${client_id}:${secret}" \
+              -d 'grant_type=urn:ietf:params:oauth:grant-type:token-exchange' \
+              -d 'subject_token=not-a-real-ciba-token' \
+              -d 'subject_token_type=urn:ietf:params:oauth:token-type:access_token' \
+              -d 'requested_token_type=urn:ietf:params:oauth:token-type:access_token' \
+            2>/dev/null || echo '{"error":"PROBE_FAILED"}'
+    }
+
+    _uc2_secret=$(ivia_client_secret agent-uc2 || true)
+    _actor_secret=$(ivia_client_secret uc3-actor || true)
+
+    if [ -z "${_uc2_secret}" ] || [ -z "${_actor_secret}" ]; then
+        print_warn "Bypass Check 20: SKIPPED — could not read the agent-uc2 and uc3-actor client secrets from their Kubernetes Secrets (banking-ui-oidc / uc3-oidc-clients in ${BANKING_NAMESPACE})."
+    else
+        _wrong_client_resp=$(_exchange_probe "agent-uc2" "${_uc2_secret}")
+        _right_client_resp=$(_exchange_probe "uc3-actor" "${_actor_secret}")
+
+        if ! echo "${_right_client_resp}" | grep -q '"invalid_request"'; then
+            # Positive control first: if the allowlisted client does NOT reach the
+            # token check, the negative leg proves nothing about the client gate.
+            print_fail "Bypass Check 20: the uc3-actor positive control did not reach the token check" \
+                "uc3-actor should get past the client gate and fail on the junk subject_token (invalid_request / FBTAQ5226E). Got: ${_right_client_resp:0:300}. Without this leg an unauthorized_client answer from agent-uc2 is not attributable to the client allowlist."
+        elif echo "${_wrong_client_resp}" | grep -q '"unauthorized_client"'; then
+            print_pass "Bypass Check 20 PASSED: an identical exchange request was refused as agent-uc2 with unauthorized_client (the grant is not allowlisted for that client) while uc3-actor got past the client gate and failed only on the token — delegation cannot be requested by any client that happens to reach the endpoint"
+        else
+            print_fail "Bypass Check 20: agent-uc2 was NOT refused the token-exchange grant" \
+                "agent-uc2 must not hold urn:ietf:params:oauth:grant-type:token-exchange. Got: ${_wrong_client_resp:0:300}. Check the grant_types list for agent-uc2 in verify_access/iviaop-config/clients.yml.tftpl — a UC2 client able to exchange tokens could mint UC3 delegated tokens."
+        fi
+    fi
+
     # Summary is printed automatically by the common-checks.sh EXIT trap.
     # Keep a terminating exit so bypass mode does not fall through into the
     # normal-mode checks (the trap still overrides the code with the real result).
