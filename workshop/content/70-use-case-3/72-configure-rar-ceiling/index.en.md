@@ -128,13 +128,16 @@ resource "vault_activation_flags" "oauth_resource_server" {
 }
 
 resource "vault_agent_registration" "uc3_actor" {
+  entity_id                      = vault_identity_entity.uc3_actor.id
   display_name                   = "uc3-actor"
-  ceiling_policies               = [vault_policy.uc3_ceiling.name]
+  ceiling_policies               = [vault_policy.uc3_agent_ceiling.name]
   optional_authorization_details = false   # RAR MANDATORY for UC3
 }
 ```
 
-The `uc3-actor` registration is resolved from the delegated token's `act.sub` claim. The human `jaime` has a subject alias keyed on `sub`; the agent has an actor alias keyed on `act.sub = uc3-actor`. On the on-behalf-of request Vault resolves **both** and intersects the human baseline with the agent ceiling, then narrows by the `vault:path_access` RAR. Use Case 3 keeps a separate Kubernetes auth role only for the agent's initial CIBA-initiation calls, before any delegation exists.
+The `uc3-actor` registration is resolved from the delegated token's `act.sub` claim. The human `jaime` has a subject alias keyed on `sub`; the agent has an actor alias keyed on `act.sub = uc3-actor`. On the on-behalf-of request Vault resolves **both** and intersects the human baseline with the agent ceiling, then narrows by the `vault:path_access` RAR.
+
+Use Case 3 also keeps a **separate Kubernetes auth role (`uc3`)** for everything the agent does as *itself*, with no human in the picture: reading the model credentials it needs to answer at all (`aws/sts/bedrock-reader`), the credentials it writes its own audit records with (`aws/sts/uc3-logs-writer`), and read-only database credentials for listing transactions. That workload identity runs for the life of the pod and is deliberately powerless over refunds — `uc3-refund-writer` is reachable only through the delegated token, never through the Kubernetes role. CIBA initiation itself involves no Vault call at all; it is a request to IVIA.
 :::
 
 :::expand{header="Agent Dev Track — present the delegated JWT via X-Vault-Token"}

@@ -38,7 +38,7 @@ All three pods run in the `banking-app` namespace. Separate ALB Ingress exposes 
 - How per-user Postgres credentials are scoped using Vault's database secrets engine and PostgreSQL Row-Level Security
 - How the MCP Server (not the agent) holds the credential-fetching responsibility — the agent never sees a DB credential
 - How Layer 2 (DB GRANTs) and Layer 3 (NetworkPolicy) enforcement work in combination as defense-in-depth
-- How Vault credential revocation cascades from user logout to lease expiry to Postgres role removal
+- How the MCP Server revokes each database credential itself, using its own Kubernetes-auth Vault token, the moment the query it was issued for returns — and how that revoke removes the Postgres role immediately rather than at lease expiry
 - How the Vault audit log links a `sub` claim to a `database/creds` issuance — OBJ-5 audit correlation
 
 ## Prerequisites

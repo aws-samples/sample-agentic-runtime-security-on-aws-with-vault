@@ -84,8 +84,21 @@ IVIA returns a delegated JWT containing:
 
 The delegated JWT is what the agent presents to Vault via `X-Vault-Token`. Vault's OAuth resource server resolves `act.sub` (= `uc3-actor`) against the Agent Registry and narrows the token per request from its `vault:path_access` RAR before issuing any DB credentials.
 
-:::alert{header="The approved amount is NOT a token claim — and that is correct" type="info"}
-The amount and currency the user approved at consent time (e.g. `$88.30 USD`) are **not** carried on the exchanged JWT. IBM Verify (ISVAOP 25.10) exposes the consent-time `authorization_details` only as a context attribute on the request that *carries* it (`bc-authorize`) and as a token-*response* field — it is **not** available to any mapping rule at the CIBA mint or the token-exchange stage, so it cannot be stamped as a Vault-validated claim. (Confirmed against the live system and IBM's `tasks-rar` / `js_ciba_mapping_rule` docs, 2026-05-29.) Vault's `vault:path_access` RAR is a path match and could not numerically enforce an amount in any case. The amount is instead **consent-bound by three-plane audit correlation on `request_id`** — covered on the [Three-Plane Audit Correlation](../74-three-plane-audit/) page. So the CIBA flow still fully works: the user's out-of-band approval is what produced the `subject_token`, and the forensic row proves the approved amount equals the amount written.
+:::alert{header="What the phone actually shows — and what binds the amount" type="warning"}
+Be precise about what the tap on the phone proves, because it is less than it looks and the rest of the design is built around that.
+
+The push the agent fires is a **user-presence challenge**. It reads "Approve your OscarVault request" and it displays **no amount, no merchant and no transaction** — `fire_push()` sends only the username, and IVIA's authentication policy renders a generic approval. So the human is confirming *that they are present and consent to the pending request*, not inspecting terms on the device.
+
+The terms are not carried on the exchanged token either. IBM Verify (ISVAOP 25.10) exposes the consent-time `authorization_details` only as a context attribute on the request that *carries* it (`bc-authorize`) and as a token-*response* field — it is **not** available to any mapping rule at the CIBA mint or the token-exchange stage, so the amount cannot be stamped as a Vault-validated claim. (Confirmed against the live system and IBM's `tasks-rar` / `js_ciba_mapping_rule` docs, 2026-05-29.) Vault's `vault:path_access` RAR is a path match and could not range-check a number in any case.
+
+What actually binds the amount to the approval is two things you can check yourself:
+
+1. **The agent records the terms when it asks, and re-reads them when it completes.** `initiate_refund` stores the account, transaction, amount, currency and approver against the `auth_req_id`; `complete_refund` takes only the `auth_req_id` and the `request_id` and reads everything else back from that record. The model is never asked for the amount a second time, so it cannot change it between the ask and the write.
+2. **The database allows exactly one refund per approval.** A unique index on `banking.refunds (request_id)` makes a second write under the same approval impossible — you prove this by hand on the [Bypass Test](../73-bypass-test/) page, under "One Approval Pays Once".
+
+Together those mean the row written under a `request_id` is the row that was approved, and there is never a second one. That is a real binding, and it is enforced by the agent and the database rather than by the token — which is exactly the sort of thing worth knowing about a system before you trust it.
+
+**The honest limitation:** a user who taps Approve without reading the chat has approved a refund whose amount they were never shown. Displaying the amount on the device needs IVIA's transaction-detail push surface rather than the authentication policy this workshop uses, and that is not deployed here.
 :::
 
 :::expand{header="Platform Track — IVIA CIBA Configuration"}
