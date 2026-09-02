@@ -249,6 +249,79 @@ What this proves:
 
 **The audit-trail story is now closed:** Step 6 shows the ephemeral credential was issued to the resolved *agent* identity (`agent-uc2`), authenticated by its token JTI — the Vault plane deliberately records the agent, never the human `sub`. Step 7 ties the revocation to the same `lease_id`. To attribute the session to a person, correlate the Vault lease timeline with the IVIA OAuth plane (which holds the authenticated `sub`) by credential path and time-proximity. Together they reconstruct "agent-uc2 obtained `lease_id` X at 19:24 on behalf of the user who authenticated moments earlier; the MCP server revoked X at 20:19" — start-to-end attribution for a single session.
 
+## Step 8 — Watch the MCP server hand a credential back on its own
+
+Steps 1 through 7 revoked a credential *you* issued, as root, from your terminal. That proves the API works. This step proves the workshop's actual claim: that no operator is involved, and every credential the application obtains is returned the moment the query it was issued for finishes.
+
+**Trigger a real query.** In the browser tab where you signed in on the [OAuth Login Flow](../61-oauth-pkce-flow/) page, ask the banking chat:
+
+> What are my account balances?
+
+**Read the MCP server's log.** Two lines tell the whole story — the server authenticating to Vault as itself, and the lease it just used going back:
+
+```bash
+kubectl logs -n banking-app -l app=banking-mcp-server --tail=20 \
+  | grep -E 'vault_k8s_auth_success|vault_lease_revoked|vault_lease_revoke_'
+```
+
+Expected output:
+
+```
+vault_k8s_auth_success role=uc2 ttl_seconds=3600
+vault_lease_revoked lease_id=database/creds/uc2-personal-readonly/vMLGghj7dj6JbXuwlQC7kH8j
+```
+
+`role=uc2` is the Kubernetes auth role bound to `uc2-mcp-server-sa` — the pod's own ServiceAccount, not the user's OAuth token. Your `lease_id` suffix will differ.
+
+**Confirm Vault agrees.** Take the suffix from your own `vault_lease_revoked` line and check it is not in the active-leases list:
+
+```bash
+LEASE_SUFFIX=<the suffix from your log line>
+
+kubectl exec -n vault vault-0 -- \
+  sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' \
+  vault list sys/leases/lookup/database/creds/uc2-personal-readonly" 2>&1 \
+  | grep -F "${LEASE_SUFFIX}" \
+  && echo "FAIL: lease ${LEASE_SUFFIX} is still active" \
+  || echo "PASS: lease ${LEASE_SUFFIX} is no longer in the active-leases list"
+```
+
+Expected output:
+
+```
+PASS: lease vMLGghj7dj6JbXuwlQC7kH8j is no longer in the active-leases list
+```
+
+Other suffixes will still be listed — those belong to credentials issued by root (your Step 1, the earlier pages, `verify-uc2.sh`), which nothing revokes automatically. That contrast is the point: the ones the application issued are already gone.
+
+**Confirm the audit log names the workload, not you.** Same query as Step 7 without the lease filter, so both kinds of revocation appear side by side:
+
+```bash
+athena_query "SELECT
+  substr(timestamp, 1, 19) AS time,
+  request.path AS revoke_path,
+  auth.display_name AS revoked_by
+FROM workshop_logs.vault_audit
+WHERE type = 'response'
+  AND request.path LIKE 'sys/leases/revoke%'
+ORDER BY timestamp DESC
+LIMIT 6;"
+```
+
+Expected output — every revocation the **application** performed is attributed to its ServiceAccount-bound identity. Your own Step 3 revocation appears here too, as `revoked_by = root` with the lease id in the path; the sample run below happened to have two application revocations and no recent root one:
+
+```
+time                 revoke_path        revoked_by
+2026-09-02T21:10:24  sys/leases/revoke  kubernetes-banking-app-uc2-mcp-server-sa
+2026-09-02T15:09:28  sys/leases/revoke  kubernetes-banking-app-uc2-mcp-server-sa
+```
+
+Note the two `revoke_path` shapes. The `vault lease revoke` CLI you used in Step 3 addresses the lease in the URL (`sys/leases/revoke/<lease_id>`); the MCP server POSTs to `sys/leases/revoke` with the `lease_id` in the request body. Same endpoint, two calling conventions — which is why this query matches on a prefix and Step 7's matched the exact path.
+
+:::alert{type="info" header="If you see no revocation lines"}
+The revoke happens only after a credential is issued, which happens only when a **signed-in** user runs a banking query. If the log shows nothing, you are probably looking at a request that failed before Vault was reached — check for a `get_accounts error` line above it. Firehose also buffers for up to 60 seconds, so re-run the Athena query if the newest row is missing.
+:::
+
 :::expand{header="Platform Track — Vault lease lifecycle: explicit revoke vs TTL expiry"}
 
 Vault supports two credential termination paths:

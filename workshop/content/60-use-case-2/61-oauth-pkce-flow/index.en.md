@@ -189,6 +189,72 @@ To act as a different user, open a **new Incognito / Private browser window** an
 
 The dashboard now shows Jaime's accounts and transactions — not Oscar's. The `sub` claim changed, activating a different RLS filter in PostgreSQL.
 
+## Step 6 — Confirm the tool contract has nowhere to put an identity
+
+Steps 1 through 5 proved the login works. This step proves the claim that makes it worth anything: the token the MCP server acts on comes from the `Authorization` header and from nothing else.
+
+Ask the MCP server to describe its own tools. `tools/list` needs no user — any non-empty bearer value gets past the auth gate, because listing tools touches neither Vault nor the database:
+
+```bash
+kubectl delete pod mcp-probe -n banking-app --ignore-not-found --now >/dev/null 2>&1
+kubectl run mcp-probe --rm -i --quiet --restart=Never --image=curlimages/curl:8.11.1 -n banking-app \
+  --command -- curl -s -X POST http://banking-mcp-svc:3001/mcp \
+    -H 'Authorization: Bearer schema-probe' \
+    -H 'Content-Type: application/json' \
+    -H 'Accept: application/json, text/event-stream' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
+  | jq '.result.tools[] | {name, properties: .inputSchema.properties, required: .inputSchema.required}'
+```
+
+Expected output — `get_accounts` takes **no arguments at all**, `get_transactions` takes only an optional `account_id`, and neither requires anything:
+
+```json
+{
+  "name": "get_accounts",
+  "properties": {},
+  "required": null
+}
+{
+  "name": "get_transactions",
+  "properties": {
+    "account_id": {
+      "type": "string",
+      "description": "Optional account ID to filter transactions to a single account"
+    }
+  },
+  "required": null
+}
+```
+
+There is no `jwt` field. A caller cannot name the user it wants to be, because the contract has no field for it.
+
+### Now prove it behaves that way
+
+A schema is a promise. This request tests it: it puts a **JWT-shaped** token in the tool arguments and a string that is obviously **not a JWT** in the header. Whichever one the server acts on decides the error you get back.
+
+```bash
+kubectl delete pod mcp-probe -n banking-app --ignore-not-found --now >/dev/null 2>&1
+kubectl run mcp-probe --rm -i --quiet --restart=Never --image=curlimages/curl:8.11.1 -n banking-app \
+  --command -- curl -s -X POST http://banking-mcp-svc:3001/mcp \
+    -H 'Authorization: Bearer not-a-jwt-at-all' \
+    -H 'Content-Type: application/json' \
+    -H 'Accept: application/json, text/event-stream' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_accounts",
+         "arguments":{"jwt":"eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJvc2NhciJ9.not-a-real-signature"}}}'
+```
+
+Expected output:
+
+```json
+{"result":{"content":[{"type":"text","text":"Error fetching accounts: Invalid JWT format: expected header.payload.signature"}],"isError":true},"jsonrpc":"2.0","id":1}
+```
+
+`not-a-jwt-at-all` is the header value, and `expected header.payload.signature` is the complaint about it. The server tried to use the **header** and never looked at the argument — even though the argument was the well-formed one.
+
+:::alert{type="info" header="What the other answer would have meant"}
+If the server had acted on the tool argument instead, that argument *is* JWT-shaped, so it would have travelled all the way to Vault and come back `Vault DB creds fetch failed [403]: {"errors":["permission denied"]}` — Vault rejecting an unsigned token. Same request, completely different error, and the header would have been decoration. Anything that could reach the MCP server would then be choosing the identity Vault saw, and the OBO intersection, the RLS predicate and the audit record would all faithfully enforce the *caller's* choice of user.
+:::
+
 ## How the login is split between Banking UI and IVIA
 
 IBM Verify Identity Access has two components in this deployment:
