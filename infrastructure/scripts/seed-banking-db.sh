@@ -9,10 +9,20 @@
 #   - Retrieves RDS master credentials from Secrets Manager
 #   - Creates a ConfigMap from seed.sql in the banking-app namespace
 #   - Runs a disposable postgres:16-alpine pod (--rm) that mounts the
-#     ConfigMap and executes psql against the RDS endpoint
+#     ConfigMap and executes psql -v ON_ERROR_STOP=1 against the RDS endpoint
+#
+# Fail-loud:
+#   psql's default is to keep going after a failed statement and still exit 0,
+#   so a constraint that could not be created (e.g. the refunds one-approval-
+#   one-refund unique index, blocked by pre-existing duplicate rows) would be
+#   skipped while this script printed "Database seeded successfully". The
+#   workshop then claims an enforcement the database is not doing. ON_ERROR_STOP=1
+#   makes psql exit non-zero on the first failed statement so the deploy stops
+#   and names it.
 #
 # Idempotency:
-#   - seed.sql uses IF NOT EXISTS + ON CONFLICT DO NOTHING
+#   - seed.sql uses IF NOT EXISTS + ON CONFLICT DO NOTHING, so a re-run is
+#     error-free and ON_ERROR_STOP=1 stays silent on the happy path
 #   - ConfigMap is replaced on every run (kubectl apply)
 #   - Temp pod auto-deletes (--rm + restartPolicy: Never)
 #
@@ -177,6 +187,7 @@ kubectl run "$SEED_POD_NAME" \
             \"-p\", \"${RDS_PORT}\",
             \"-U\", \"${MASTER_USER}\",
             \"-d\", \"${RDS_DB_NAME}\",
+            \"-v\", \"ON_ERROR_STOP=1\",
             \"-f\", \"/seed/seed.sql\"
           ],
           \"volumeMounts\": [{\"name\": \"seed\", \"mountPath\": \"/seed\"}],
