@@ -127,7 +127,13 @@ IVIA_BASE_URL = os.getenv("IVIA_BASE_URL", "https://iviaop.verify-access.svc.clu
 IVIA_CLIENT_ID = os.getenv("IVIA_CLIENT_ID", "uc3-agent")
 IVIA_CLIENT_SECRET = os.getenv("IVIA_CLIENT_SECRET", "")
 IVIA_ACTOR_CLIENT_ID = os.getenv("IVIA_ACTOR_CLIENT_ID", "uc3-actor")
-IVIA_ACTOR_CLIENT_SECRET = os.getenv("IVIA_ACTOR_CLIENT_SECRET", IVIA_CLIENT_SECRET)
+# uc3-actor is a SEPARATE client with its OWN secret, and it must stay that way:
+# uc3-actor is the only client allowed to perform the RFC 8693 exchange that mints
+# the delegated refund token, so falling back to agent-uc3's secret here would
+# hand every holder of agent-uc3's credential the ability to act as uc3-actor.
+# No default — an unset value fails the exchange loudly instead of silently
+# authenticating as the wrong client.
+IVIA_ACTOR_CLIENT_SECRET = os.getenv("IVIA_ACTOR_CLIENT_SECRET", "")
 # Path to the iviaop self-signed CA PEM mounted at /etc/ssl/ivia/iviaop.pem.
 # All outbound IVIA TLS calls (CIBA bc-authorize, token poll, token exchange)
 # verify against this file — TLS verification is never disabled in this module.

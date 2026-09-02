@@ -9,12 +9,15 @@ Session management:
   Conversation history is persisted/loaded automatically via Strands
   FileSessionManager keyed on sessionId.
 
-Env vars consumed (set via Kubernetes ConfigMap):
-  VAULT_ADDR           — Vault endpoint
-  VAULT_ROLE           — Vault K8s auth role (default: uc3)
-  IVIA_BASE_URL        — IVIA base URL for OAuth/CIBA endpoints
-  IVIA_CLIENT_ID       — OAuth client ID registered in IVIA
-  IVIA_CLIENT_SECRET   — OAuth client secret
+Env vars consumed (non-secret values via the uc3-agent-config ConfigMap; the two
+OAuth client secrets and the SCIM password via Kubernetes Secrets):
+  VAULT_ADDR               — Vault endpoint
+  VAULT_ROLE               — Vault K8s auth role (default: uc3)
+  IVIA_BASE_URL            — IVIA base URL for OAuth/CIBA endpoints
+  IVIA_CLIENT_ID           — OAuth client ID registered in IVIA (agent-uc3)
+  IVIA_CLIENT_SECRET       — agent-uc3's client secret          (Secret uc3-oidc-clients)
+  IVIA_ACTOR_CLIENT_ID     — token-exchange client ID (uc3-actor)
+  IVIA_ACTOR_CLIENT_SECRET — uc3-actor's OWN client secret      (Secret uc3-oidc-clients)
   DB_HOST              — PostgreSQL host
   DB_PORT              — PostgreSQL port (default: 5432)
   DB_NAME              — PostgreSQL database name (default: workshop)
