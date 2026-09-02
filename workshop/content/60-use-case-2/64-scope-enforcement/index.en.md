@@ -80,13 +80,16 @@ The URL field shows `http://127.0.0.1:8200` (rather than the cluster-DNS address
 The audit log streams every Vault request and response. Filter the last 10 minutes for any denied response targeting a `uc3` path:
 
 ```bash
-kubectl logs -n vault vault-0 --since=10m \
+kubectl logs -n vault -l app.kubernetes.io/name=vault --since=10m --tail=-1 \
   | grep '"type":"response"' \
   | jq 'select(.response.data.error != null and (.request.path | contains("uc3")))' \
   | jq '{time: .time, path: .request.path, error: .response.data.error}'
 ```
 
-(`--since=10m` rather than `--tail=N` because on a live cluster the agents are continuously calling `auth/token/lookup-self` and similar heartbeat paths, so a small `--tail` window will scroll the deny out of view within seconds. Bounding by time keeps the command deterministic from the attendee's perspective.)
+(The label selector reads all three Vault nodes: only the node that served the denied request
+logged it, so naming a single pod returns nothing whenever another node took the call. `--tail=-1`
+is required alongside `-l` — with a selector `kubectl logs` otherwise returns just 10 lines per pod.
+`--since=10m` rather than `--tail=N` because on a live cluster the agents are continuously calling `auth/token/lookup-self` and similar heartbeat paths, so a small `--tail` window will scroll the deny out of view within seconds. Bounding by time keeps the command deterministic from the attendee's perspective.)
 
 Expected output:
 

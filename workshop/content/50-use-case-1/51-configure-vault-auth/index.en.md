@@ -33,21 +33,23 @@ vault read auth/kubernetes/role/uc1
 Expected output:
 
 ```
-Key                                 Value
----                                 -----
-alias_name_source                   serviceaccount_uid
-bound_service_account_names         [uc1-retriever-sa]
-bound_service_account_namespaces    [uc1]
-policies                            [uc1-readonly]
-token_ttl                           1h
-token_max_ttl                       2h
-token_type                          default
+Key                                         Value
+---                                         -----
+alias_name_source                           serviceaccount_name
+bound_service_account_names                 [uc1-retriever-sa]
+bound_service_account_namespaces            [uc1]
+token_max_ttl                               2h
+token_policies                              [uc1-readonly]
+token_ttl                                   1h
+token_type                                  default
 ```
+
+Vault prints several more fields than the ones shown here; these are the ones that matter.
 
 Key observations:
 
 - `bound_service_account_names` is `[uc1-retriever-sa]` — only this SA in namespace `uc1` can obtain this role.
-- `policies` is `[uc1-readonly]` — the Vault token issued after login is scoped to this policy only.
+- `token_policies` is `[uc1-readonly]` — the Vault token issued after login is scoped to this policy only.
 - `token_ttl` is 1 hour — the Vault session (not the database credential) lifetime.
 
 ## Step 2 — Inspect the uc1-readonly policy
@@ -151,9 +153,10 @@ Expected (key fields):
 ```
 Key                               Value
 ---                               -----
-display_name                      uc1-agent
 ceiling_policies                  [uc1-ceiling]
-optional_authorization_details    true
+display_name                      uc1-agent
+optional_authorization_details    false
+owner                             uc1-retriever-service
 ```
 
 Two things distinguish Use Case 1 from Use Cases 2 and 3:
