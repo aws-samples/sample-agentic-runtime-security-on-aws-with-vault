@@ -206,6 +206,26 @@ ALTER TABLE banking.refunds
   ADD COLUMN IF NOT EXISTS transaction_id UUID REFERENCES banking.transactions(id);
 
 -- ---------------------------------------------------------------------------
+-- One refund per approval — enforced by the database, not by application code.
+--
+-- request_id is the id of the human approval the refund was granted under. The
+-- agent obtains a Vault credential per approval, but a credential can be used
+-- for as many INSERTs as its TTL allows: without this constraint one phone
+-- approval could be redeemed repeatedly, and was (issue #31).
+--
+-- Deliberately NOT self-healing: if the table already holds two rows for one
+-- request_id, this CREATE fails and names the duplicate key. That failure is the
+-- truth — the data contradicts the invariant — and the rows are audit records
+-- the uc3-refund-writer role is intentionally not permitted to DELETE. Resolve
+-- it by inspecting the duplicates, never by dropping the constraint:
+--   SELECT request_id, count(*), sum(amount) FROM banking.refunds
+--    GROUP BY 1 HAVING count(*) > 1;
+-- ---------------------------------------------------------------------------
+
+CREATE UNIQUE INDEX IF NOT EXISTS refunds_request_id_key
+  ON banking.refunds (request_id);
+
+-- ---------------------------------------------------------------------------
 -- Owner-bound RLS epilogue
 --
 -- Binds the table owner (vault_root) to the same RLS policies as any other

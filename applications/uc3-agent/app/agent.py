@@ -48,11 +48,16 @@ _vault_client = None
 
 
 class RefundAuthorizationError(Exception):
-    """Raised when the authenticated user does not own the targeted account.
+    """Raised when a refund may not proceed on authorization grounds.
 
-    Defense-in-depth check that fires INDEPENDENTLY inside both initiate_refund
-    and complete_refund. Must be raised (not returned) so the LLM cannot observe
-    the failure as a normal tool result and act on it.
+    Covers the account-ownership check that fires INDEPENDENTLY inside both
+    initiate_refund and complete_refund, and the approval-binding checks in
+    complete_refund (issue #31): no approval record for this auth_req_id, a
+    request_id naming a different approval, an approval granted by a different
+    human, and an approval already redeemed.
+
+    Must be raised (not returned) so the LLM cannot observe the failure as a
+    normal tool result and act on it.
     """
 
 
@@ -509,8 +514,10 @@ def initiate_refund(
     details. Returns immediately with auth_req_id and consent marker so the
     banking UI can show the Approve/Deny button to the user.
 
-    After the user approves, call complete_refund with the same parameters
-    plus auth_req_id and request_id to finish the flow.
+    After the user approves, call complete_refund with the auth_req_id and
+    request_id returned here. It takes no other arguments — the refund terms are
+    bound to the approval at this point and read back from the store, never
+    re-supplied by the model.
 
     Args:
         account_id: Account to credit the refund to.
@@ -562,7 +569,23 @@ def initiate_refund(
     # /api/ciba/status, which reads this user's OWN SCIM transaction (the EXACT one
     # fired here) to decide approval. complete_refund's CIBA token poll drives that.
     txn_id = mmfa.fire_push(authenticated_sub)
-    ciba_store.put_txn(auth_req_id, authenticated_sub, txn_id)
+    # Bind the terms to the approval (issue #31). These are the values the human
+    # is being asked to approve; complete_refund reads them back from here rather
+    # than taking them from its own tool arguments, so the model cannot substitute
+    # a different figure once the approval has been granted.
+    ciba_store.put_txn(
+        auth_req_id,
+        authenticated_sub,
+        txn_id,
+        {
+            "request_id": request_id,
+            "account_id": account_id,
+            "transaction_id": transaction_id,
+            "amount": amount,
+            "currency": currency,
+            "approver_sub": authenticated_sub,
+        },
+    )
 
     logger.info(
         "ciba_mobile_push_sent",
@@ -589,18 +612,18 @@ def initiate_refund(
 
 
 @tool
-def complete_refund(
-    auth_req_id: str,
-    request_id: str,
-    account_id: str,
-    transaction_id: str,
-    amount: float,
-    currency: str,
-) -> dict:
+def complete_refund(auth_req_id: str, request_id: str) -> dict:
     """Complete a refund after CIBA consent is granted (step 2 of 2).
 
     Identity is sourced from the verified id_token's `sub` claim (ContextVar).
     The LLM has no input here.
+
+    The refund TERMS are not arguments either (issue #31). account_id,
+    transaction_id, amount and currency are read back from the approval record
+    initiate_refund wrote when it fired the push — the values the human actually
+    approved. Passing them in would let a non-deterministic model have $88.30
+    approved on the phone and write $8,830.00 to the ledger; the only things this
+    tool accepts are the two identifiers naming WHICH approval to redeem.
 
     Polls IVIA for consent approval, then executes:
       1. CIBA token poll (user already approved via banking UI)
@@ -612,10 +635,6 @@ def complete_refund(
     Args:
         auth_req_id: CIBA auth_req_id from initiate_refund.
         request_id: Audit correlation UUID from initiate_refund.
-        account_id: Account to credit the refund to.
-        transaction_id: Original transaction being refunded.
-        amount: Refund amount (positive float).
-        currency: ISO 4217 currency code (e.g. "USD").
 
     Returns:
         Dict with refund_id, request_id, status, and audit fields.
@@ -625,13 +644,58 @@ def complete_refund(
         raise RuntimeError("UC3 vault client not initialized")
 
     authenticated_sub = _AUTHENTICATED_SUB.get()
+
+    # The approved terms, recovered from the approval this auth_req_id names.
+    # Fail closed: no record means this process never fired that push (or it has
+    # aged out of the store), and there is no safe value to fall back on.
+    terms = ciba_store.get_terms(auth_req_id)
+    if terms is None:
+        logger.warning(
+            "complete_refund_no_approval_record",
+            extra={"request_id": request_id, "auth_req_id": auth_req_id},
+        )
+        raise RefundAuthorizationError("refund_approval_not_found")
+
+    # request_id identifies the flow for audit correlation; it must name the SAME
+    # approval, otherwise the caller is redeeming one approval under another's id.
+    if terms.get("request_id") != request_id:
+        logger.warning(
+            "complete_refund_request_id_mismatch",
+            extra={
+                "request_id": request_id,
+                "auth_req_id": auth_req_id,
+                "approved_request_id": terms.get("request_id"),
+            },
+        )
+        raise RefundAuthorizationError("refund_request_id_mismatch")
+
+    # An approval belongs to the human who granted it — a different authenticated
+    # session must not be able to redeem it.
+    if terms.get("approver_sub") != authenticated_sub:
+        logger.warning(
+            "complete_refund_approver_mismatch",
+            extra={"request_id": request_id, "auth_req_id": auth_req_id},
+        )
+        raise RefundAuthorizationError("refund_approver_mismatch")
+
+    account_id = terms["account_id"]
+    transaction_id = terms["transaction_id"]
+    amount = terms["amount"]
+    currency = terms["currency"]
+
     _check_account_owner(
         account_id, authenticated_sub, request_id, "complete_refund"
     )
 
     logger.info(
         "complete_refund_started",
-        extra={"request_id": request_id, "auth_req_id": auth_req_id},
+        extra={
+            "request_id": request_id,
+            "auth_req_id": auth_req_id,
+            "approved_amount": amount,
+            "approved_currency": currency,
+            "approved_account_id": account_id,
+        },
     )
 
     ciba_token = _poll_ciba(auth_req_id, request_id)
@@ -653,53 +717,63 @@ def complete_refund(
         },
     )
 
-    with psycopg2.connect(
-        host=write_creds["host"],
-        port=write_creds["port"],
-        dbname=write_creds["dbname"],
-        user=write_creds["username"],
-        password=write_creds["password"],
-    ) as conn:
-        with conn.cursor() as cur:
-            # RLS WITH CHECK gate: banking.refunds is FORCE ROW LEVEL SECURITY and the
-            # refund_insert_own policy verifies account_id belongs to
-            # current_setting('app.current_user_sub'). Set it transaction-local (SET
-            # LOCAL semantics — third arg true) BEFORE the INSERT so the check can
-            # confirm ownership. authenticated_sub is the verified id_token sub and
-            # _check_account_owner already proved it owns account_id; the GUC is RLS
-            # request-context, not the security boundary (defense-in-depth).
-            cur.execute(
-                "SELECT set_config('app.current_user_sub', %s, true)",
-                (authenticated_sub,),
-            )
-            # OBJ-5 PLANE-A: thread request_id into the pgaudit STATEMENT field via
-            # an inline SQL comment. pgaudit (log='write') captures the full statement
-            # text verbatim, so the audit_correlation VIEW can regexp-extract this
-            # request_id (token form uc3_request_id=<uuid>) and LEFT JOIN pgaudit_logs
-            # to the ivia_decisions anchor. Zero semantics impact: comment only — the
-            # 8-column INSERT tuple and placeholders are unchanged. The token value is
-            # an agent-generated uuid4 (T-071-04 accept: a tampered value simply fails
-            # to join, it does not escalate).
-            cur.execute(
-                f"""
-                /* uc3_request_id={request_id} */
-                INSERT INTO banking.refunds
-                    (refund_id, account_id, transaction_id, amount, currency,
-                     approved_by, request_id, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                """,
-                (
-                    refund_id,
-                    account_id,
-                    transaction_id,
-                    amount,
-                    currency,
-                    approved_by,
-                    request_id,
-                    created_at,
-                ),
-            )
-        conn.commit()
+    # refunds_request_id_key (applications/banking-app/db/seed.sql) makes one
+    # approval redeemable exactly once. Catch the violation and say WHY, rather
+    # than letting a raw psycopg2 error surface as a 500 nobody can interpret.
+    try:
+        with psycopg2.connect(
+            host=write_creds["host"],
+            port=write_creds["port"],
+            dbname=write_creds["dbname"],
+            user=write_creds["username"],
+            password=write_creds["password"],
+        ) as conn:
+            with conn.cursor() as cur:
+                # RLS WITH CHECK gate: banking.refunds is FORCE ROW LEVEL SECURITY and the
+                # refund_insert_own policy verifies account_id belongs to
+                # current_setting('app.current_user_sub'). Set it transaction-local (SET
+                # LOCAL semantics — third arg true) BEFORE the INSERT so the check can
+                # confirm ownership. authenticated_sub is the verified id_token sub and
+                # _check_account_owner already proved it owns account_id; the GUC is RLS
+                # request-context, not the security boundary (defense-in-depth).
+                cur.execute(
+                    "SELECT set_config('app.current_user_sub', %s, true)",
+                    (authenticated_sub,),
+                )
+                # OBJ-5 PLANE-A: thread request_id into the pgaudit STATEMENT field via
+                # an inline SQL comment. pgaudit (log='write') captures the full statement
+                # text verbatim, so the audit_correlation VIEW can regexp-extract this
+                # request_id (token form uc3_request_id=<uuid>) and LEFT JOIN pgaudit_logs
+                # to the ivia_decisions anchor. Zero semantics impact: comment only — the
+                # 8-column INSERT tuple and placeholders are unchanged. The token value is
+                # an agent-generated uuid4 (T-071-04 accept: a tampered value simply fails
+                # to join, it does not escalate).
+                cur.execute(
+                    f"""
+                    /* uc3_request_id={request_id} */
+                    INSERT INTO banking.refunds
+                        (refund_id, account_id, transaction_id, amount, currency,
+                         approved_by, request_id, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        refund_id,
+                        account_id,
+                        transaction_id,
+                        amount,
+                        currency,
+                        approved_by,
+                        request_id,
+                        created_at,
+                    ),
+                )
+            conn.commit()
+    except psycopg2.errors.UniqueViolation:
+        logger.warning(
+            "refund_already_redeemed",
+            extra={"request_id": request_id, "auth_req_id": auth_req_id},
+        )
+        raise RefundAuthorizationError("refund_already_redeemed") from None
 
     # OBJ-5 Branch B: emit the ivia_decisions ANCHOR record for the three-plane
     # audit_correlation VIEW. The VIEW INNER-JOINs on ivia_decisions, so without
@@ -909,9 +983,11 @@ def build_uc3_agent(vault_client=None, session_id: str = "default") -> Agent:
         "   Tell the user EXACTLY: 'I've sent an approval request to your IBM Verify app. Open the\n"
         "   app and tap Approve, then reply here and I'll finish the refund.' Do NOT print any\n"
         "   internal IDs, tokens, or URLs.\n"
-        "7. When the user says they approved (or sends any follow-up), call complete_refund with the\n"
-        "   auth_req_id, request_id, account_id, transaction_id, amount, currency from the\n"
-        "   initiate_refund result (these are in the tool result; never invent them).\n"
+        "7. When the user says they approved (or sends any follow-up), call complete_refund with\n"
+        "   ONLY the auth_req_id and request_id from the initiate_refund result (they are in the\n"
+        "   tool result; never invent them). It takes no other arguments — the amount, currency,\n"
+        "   account and transaction are the ones the user approved on their phone and are read\n"
+        "   from the approval itself.\n"
         "8. Report exactly what the complete_refund tool returns to the user.\n\n"
         "CRITICAL RULES:\n"
         "- NEVER generate URLs, consent links, request_ids, or refund_ids yourself.\n"
