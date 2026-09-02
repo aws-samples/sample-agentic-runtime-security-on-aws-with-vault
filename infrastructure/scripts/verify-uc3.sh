@@ -257,6 +257,24 @@ else
 fi
 echo ""
 
+# ivia_client_secret <client_id> — read ONE OIDC client's secret from the Kubernetes
+# Secret that carries it. Every client (agent-uc2, agent-uc3, uc3-actor) has its OWN
+# secret and none of them live in a ConfigMap any more (issue #30), so a caller must
+# name the client it intends to authenticate as. An unknown client_id returns empty,
+# which every call site treats as a hard mint failure.
+ivia_client_secret() {
+    local client_id="$1" secret_name key
+    case "${client_id}" in
+        agent-uc2) secret_name="banking-ui-oidc"; key="IVIA_CLIENT_SECRET" ;;
+        agent-uc3) secret_name="uc3-oidc-clients"; key="IVIA_CLIENT_SECRET" ;;
+        uc3-actor) secret_name="uc3-oidc-clients"; key="IVIA_ACTOR_CLIENT_SECRET" ;;
+        *) return 1 ;;
+    esac
+    kubectl get secret -n "${BANKING_NAMESPACE}" "${secret_name}" \
+        -o "jsonpath={.data.${key}}" 2>/dev/null | base64 -d 2>/dev/null
+}
+
+
 # --- Native-model helpers (Phase 9 cutover — the jwt/ auth backend is GONE) ---
 #
 # UC3 now presents the IVIA-issued delegated JWT DIRECTLY as the Vault token
@@ -385,23 +403,29 @@ _mint_uc3_tokens() {
     local acme_state="${SCRIPT_DIR}/../.acme-state"
     local base_layer="${SCRIPT_DIR}/../modules/verify_access/base_layer/base_layer.yaml.tftpl"
     local helper="${SCRIPT_DIR}/uc3-virtual-authenticator.py"
-    local wrp ru secret agent_client actor_client ciba_client persona_pw pod op_url
+    local wrp ru agent_client actor_client ciba_client persona_pw pod op_url
+    local login_secret ciba_secret actor_secret
     local approve_log auth_req_id mint_out
 
     wrp=$(grep -E '^NIP_FQDN_WRP=' "${acme_state}" 2>/dev/null | cut -d= -f2)
     ru=$(kubectl get configmap -n "${BANKING_NAMESPACE}" banking-ui-config -o jsonpath='{.data.REDIRECT_URI}' 2>/dev/null)
-    secret=$(kubectl get configmap -n "${BANKING_NAMESPACE}" uc3-agent-config -o jsonpath='{.data.IVIA_CLIENT_SECRET}' 2>/dev/null)
     agent_client=$(kubectl get configmap -n "${BANKING_NAMESPACE}" banking-ui-config -o jsonpath='{.data.IVIA_CLIENT_ID}' 2>/dev/null)
     actor_client=$(kubectl get configmap -n "${BANKING_NAMESPACE}" uc3-agent-config -o jsonpath='{.data.IVIA_ACTOR_CLIENT_ID}' 2>/dev/null)
     ciba_client=$(kubectl get configmap -n "${BANKING_NAMESPACE}" uc3-agent-config -o jsonpath='{.data.IVIA_CLIENT_ID}' 2>/dev/null)
+    # Three clients, three secrets (issue #30): the browser login runs as agent-uc2,
+    # the CIBA redemption as agent-uc3, and the RFC 8693 exchange as uc3-actor.
+    login_secret=$(ivia_client_secret "${agent_client}")
+    ciba_secret=$(ivia_client_secret "${ciba_client}")
+    actor_secret=$(ivia_client_secret "${actor_client}")
     op_url=$(kubectl get configmap -n "${BANKING_NAMESPACE}" uc3-agent-config -o jsonpath='{.data.IVIA_BASE_URL}' 2>/dev/null)
     persona_pw=$(grep -oE 'password:[[:space:]]*"[^"]+"' "${base_layer}" 2>/dev/null | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
     pod=$(kubectl get pod -n "${BANKING_NAMESPACE}" -l app=uc3-agent -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
     [ -n "${wrp}" ] && wrp="https://${wrp#https://}"
 
-    if [ -z "${wrp}" ] || [ -z "${ru}" ] || [ -z "${secret}" ] || [ -z "${persona_pw}" ] || [ -z "${pod}" ] ||
-       [ -z "${ciba_client}" ] || [ -z "${actor_client}" ] || [ -z "${op_url}" ]; then
-        MINT_ERR="could not source mint inputs (wrp='${wrp}' ru='${ru}' secret=$([ -n "${secret}" ] && echo set || echo MISSING) pw=$([ -n "${persona_pw}" ] && echo set || echo MISSING) ciba_client='${ciba_client}' actor_client='${actor_client}' op='${op_url}' pod='${pod}')"
+    if [ -z "${wrp}" ] || [ -z "${ru}" ] || [ -z "${persona_pw}" ] || [ -z "${pod}" ] ||
+       [ -z "${ciba_client}" ] || [ -z "${actor_client}" ] || [ -z "${op_url}" ] ||
+       [ -z "${login_secret}" ] || [ -z "${ciba_secret}" ] || [ -z "${actor_secret}" ]; then
+        MINT_ERR="could not source mint inputs (wrp='${wrp}' ru='${ru}' pw=$([ -n "${persona_pw}" ] && echo set || echo MISSING) ciba_client='${ciba_client}' actor_client='${actor_client}' op='${op_url}' pod='${pod}' login_secret=$([ -n "${login_secret}" ] && echo set || echo MISSING) ciba_secret=$([ -n "${ciba_secret}" ] && echo set || echo MISSING) actor_secret=$([ -n "${actor_secret}" ] && echo set || echo MISSING)). Fix: the per-client secrets live in the banking-ui-oidc and uc3-oidc-clients Secrets. Check: kubectl get secret -n ${BANKING_NAMESPACE} banking-ui-oidc uc3-oidc-clients"
         return 1
     fi
     if [ ! -f "${helper}" ]; then
@@ -417,7 +441,7 @@ _mint_uc3_tokens() {
     approve_log="${TMPDIR:-/tmp}/verify-uc3-mint-approve-$$.log"
     kubectl exec -i -n "${BANKING_NAMESPACE}" "${pod}" -- python3 - approveonly \
         "${wrp}" "${user}" "${persona_pw}" "${agent_client}" \
-        "${secret}" "${ru}" "${op_url}" \
+        "${login_secret}" "${ru}" "${op_url}" \
         <"${helper}" >"${approve_log}" 2>&1
     if ! grep -q '^APPROVED_NOT_REDEEMED=1' "${approve_log}"; then
         MINT_ERR=$(sed -n 's/^ERR=//p' "${approve_log}" | tail -1)
@@ -443,20 +467,20 @@ except Exception:
     # Step 3 — redeem the approved grant, then exchange it (RFC 8693). The subject
     # is now a first-party CIBA token, which is what the idmap gate requires.
     mint_out=$(kubectl exec -i -n "${BANKING_NAMESPACE}" "${pod}" -- python3 - \
-        "${op_url}" "${ciba_client}" "${actor_client}" "${secret}" "${auth_req_id}" <<'PYEOF' 2>/dev/null
+        "${op_url}" "${ciba_client}" "${ciba_secret}" "${actor_client}" "${actor_secret}" "${auth_req_id}" <<'PYEOF' 2>/dev/null
 import sys, time
 try:
     import httpx
 except Exception as e:
     print("MINT_ERR import httpx: %s" % e); sys.exit(1)
 
-op, ciba_client, actor_client, secret, auth_req_id = sys.argv[1:6]
+op, ciba_client, ciba_secret, actor_client, actor_secret, auth_req_id = sys.argv[1:7]
 token_url = op.rstrip("/") + "/oauth2/token"
 c = httpx.Client(verify=False, timeout=30.0)
 
 subject = None
 for _ in range(10):
-    r = c.post(token_url, auth=(ciba_client, secret),
+    r = c.post(token_url, auth=(ciba_client, ciba_secret),
                data={"grant_type": "urn:openid:params:grant-type:ciba",
                      "auth_req_id": auth_req_id})
     if r.status_code == 200:
@@ -468,7 +492,7 @@ for _ in range(10):
 if not subject:
     print("MINT_ERR ciba redeem timed out (still authorization_pending)"); sys.exit(1)
 
-r = c.post(token_url, auth=(actor_client, secret),
+r = c.post(token_url, auth=(actor_client, actor_secret),
            data={"grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
                  "subject_token": subject,
                  "subject_token_type": "urn:ietf:params:oauth:token-type:access_token",
@@ -508,15 +532,15 @@ _mint_uc2_login_token() {
 
     wrp=$(grep -E '^NIP_FQDN_WRP=' "${acme_state}" 2>/dev/null | cut -d= -f2)
     ru=$(kubectl get configmap -n "${BANKING_NAMESPACE}" banking-ui-config -o jsonpath='{.data.REDIRECT_URI}' 2>/dev/null)
-    secret=$(kubectl get configmap -n "${BANKING_NAMESPACE}" uc3-agent-config -o jsonpath='{.data.IVIA_CLIENT_SECRET}' 2>/dev/null)
     agent_client=$(kubectl get configmap -n "${BANKING_NAMESPACE}" banking-ui-config -o jsonpath='{.data.IVIA_CLIENT_ID}' 2>/dev/null)
+    secret=$(ivia_client_secret "${agent_client}")
     op_url=$(kubectl get configmap -n "${BANKING_NAMESPACE}" uc3-agent-config -o jsonpath='{.data.IVIA_BASE_URL}' 2>/dev/null)
     persona_pw=$(grep -oE 'password:[[:space:]]*"[^"]+"' "${base_layer}" 2>/dev/null | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
     pod=$(kubectl get pod -n "${BANKING_NAMESPACE}" -l app=uc3-agent -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
     [ -n "${wrp}" ] && wrp="https://${wrp#https://}"
 
     if [ -z "${wrp}" ] || [ -z "${ru}" ] || [ -z "${secret}" ] || [ -z "${persona_pw}" ] || [ -z "${pod}" ] || [ -z "${op_url}" ]; then
-        UC2_MINT_ERR="could not source UC2 login mint inputs"
+        UC2_MINT_ERR="could not source UC2 login mint inputs (agent-uc2 secret=$([ -n "${secret}" ] && echo set || echo MISSING); it lives in the banking-ui-oidc Secret)"
         return 1
     fi
 
@@ -847,14 +871,15 @@ if [ "${NOPHONE_MODE}" = true ]; then
 
     # Every host/secret is sourced at RUNTIME (never hardcoded), exactly like
     # _mint_uc3_tokens: WRP host <- infrastructure/.acme-state; redirect_uri +
-    # client id <- banking-app config maps; client secret <- uc3-agent-config;
+    # client id <- banking-app config maps; agent-uc2's client secret <- the
+    # banking-ui-oidc Secret (per-client secrets, issue #30);
     # persona password <- base_layer.yaml.tftpl (its single source of truth).
     np_acme_state="${SCRIPT_DIR}/../.acme-state"
     np_base_layer="${SCRIPT_DIR}/../modules/verify_access/base_layer/base_layer.yaml.tftpl"
     np_wrp=$(grep -E '^NIP_FQDN_WRP=' "${np_acme_state}" 2>/dev/null | cut -d= -f2)
     np_redirect=$(kubectl get configmap -n "${BANKING_NAMESPACE}" banking-ui-config -o jsonpath='{.data.REDIRECT_URI}' 2>/dev/null)
     np_client=$(kubectl get configmap -n "${BANKING_NAMESPACE}" banking-ui-config -o jsonpath='{.data.IVIA_CLIENT_ID}' 2>/dev/null)
-    np_secret=$(kubectl get configmap -n "${BANKING_NAMESPACE}" uc3-agent-config -o jsonpath='{.data.IVIA_CLIENT_SECRET}' 2>/dev/null)
+    np_secret=$(ivia_client_secret "${np_client}")
     np_password=$(grep -oE 'password:[[:space:]]*"[^"]+"' "${np_base_layer}" 2>/dev/null | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
     np_pod=$(kubectl get pod -n "${BANKING_NAMESPACE}" -l app=uc3-agent -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
     np_op="${IVIA_ISSUER%/oauth2}"
@@ -868,7 +893,7 @@ if [ "${NOPHONE_MODE}" = true ]; then
     if [ -z "${np_wrp}" ] || [ -z "${np_redirect}" ] || [ -z "${np_client}" ] ||
         [ -z "${np_secret}" ] || [ -z "${np_password}" ] || [ -z "${np_pod}" ]; then
         print_fail "Check N1: could not resolve the inputs the live refund needs" \
-            "wrp='${np_wrp}' redirect_uri='${np_redirect}' client='${np_client}' secret=$([ -n "${np_secret}" ] && echo set || echo MISSING) password=$([ -n "${np_password}" ] && echo set || echo MISSING) uc3-agent pod='${np_pod}'. Fix: deploy tier 3 and confirm the banking-ui-config / uc3-agent-config ConfigMaps exist. Check: kubectl get configmap -n ${BANKING_NAMESPACE}"
+            "wrp='${np_wrp}' redirect_uri='${np_redirect}' client='${np_client}' secret=$([ -n "${np_secret}" ] && echo set || echo MISSING) password=$([ -n "${np_password}" ] && echo set || echo MISSING) uc3-agent pod='${np_pod}'. Fix: deploy tier 3 and confirm the banking-ui-config ConfigMap and the banking-ui-oidc Secret exist. Check: kubectl get configmap,secret -n ${BANKING_NAMESPACE}"
         exit 0
     fi
 
