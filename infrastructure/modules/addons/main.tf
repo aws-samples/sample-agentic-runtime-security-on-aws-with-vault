@@ -141,36 +141,36 @@ resource "kubectl_manifest" "letsencrypt_prod_issuer" {
       # in conditionally rather than always setting it.
       acme = merge(
         {
-        # D-08 — Let's Encrypt PRODUCTION ACME endpoint (literal, hardcoded;
-        # no staging knob, no attendee-facing override).
-        server = "https://acme-v02.api.letsencrypt.org/directory"
-        privateKeySecretRef = {
-          name = "letsencrypt-prod-account-key"
-        }
-        solvers = [
-          {
-            http01 = {
-              ingress = {
-                ingressClassName = "alb"
-                ingressTemplate = {
-                  metadata = {
-                    annotations = {
-                      "alb.ingress.kubernetes.io/scheme"       = "internet-facing"
-                      "alb.ingress.kubernetes.io/target-type"  = "ip"
-                      "alb.ingress.kubernetes.io/group.name"   = "workshop-acme"
-                      "alb.ingress.kubernetes.io/group.order"  = "1"
-                      "alb.ingress.kubernetes.io/listen-ports" = "[{\"HTTP\":80}]"
-                      # Note: the HTTPS-redirect annotation is intentionally
-                      # OMITTED here — RESEARCH Pitfall 1. LE's HTTP-01
-                      # validator does NOT follow 301s; if the solver
-                      # Ingress 301'd to HTTPS the challenge fails.
+          # D-08 — Let's Encrypt PRODUCTION ACME endpoint (literal, hardcoded;
+          # no staging knob, no attendee-facing override).
+          server = "https://acme-v02.api.letsencrypt.org/directory"
+          privateKeySecretRef = {
+            name = "letsencrypt-prod-account-key"
+          }
+          solvers = [
+            {
+              http01 = {
+                ingress = {
+                  ingressClassName = "alb"
+                  ingressTemplate = {
+                    metadata = {
+                      annotations = {
+                        "alb.ingress.kubernetes.io/scheme"       = "internet-facing"
+                        "alb.ingress.kubernetes.io/target-type"  = "ip"
+                        "alb.ingress.kubernetes.io/group.name"   = "workshop-acme"
+                        "alb.ingress.kubernetes.io/group.order"  = "1"
+                        "alb.ingress.kubernetes.io/listen-ports" = "[{\"HTTP\":80}]"
+                        # Note: the HTTPS-redirect annotation is intentionally
+                        # OMITTED here — RESEARCH Pitfall 1. LE's HTTP-01
+                        # validator does NOT follow 301s; if the solver
+                        # Ingress 301'd to HTTPS the challenge fails.
+                      }
                     }
                   }
                 }
               }
             }
-          }
-        ]
+          ]
         },
         var.acme_email != "" ? { email = var.acme_email } : {}
       )
