@@ -674,6 +674,19 @@ resource "aws_glue_catalog_table" "vault_audit" {
       name = "response"
       type = "struct<data:map<string,string>>"
     }
+    # A Vault HA cluster runs one active node and performance standbys. A
+    # credential issue must be served by the active node, so when the agent's
+    # request lands on a standby, that standby audits it with
+    # error = "please forward to the active node" and answers a redirect; the
+    # client follows it and the active node audits the request again and serves
+    # it. Both hops are real audit records carrying the same correlation header,
+    # so without this column the three-plane VIEW cannot tell the refused hop
+    # from the one that issued the credential, and returns two rows per refund —
+    # one of them half-empty, because a refused response carries no auth block.
+    columns {
+      name = "error"
+      type = "string"
+    }
   }
 }
 
@@ -961,6 +974,7 @@ locals {
         ON element_at(element_at(vault.request.headers, 'x-correlation-id'), 1) = ivia.request_id
         AND vault.request.path = 'database/creds/uc3-refund-writer'
         AND vault.type = 'response'
+        AND (vault.error IS NULL OR vault.error = '')
     LEFT JOIN workshop_logs.pgaudit_logs rds
         ON regexp_extract(rds.line, 'uc3_request_id=([0-9a-f-]{36})', 1) = ivia.request_id
   SQL

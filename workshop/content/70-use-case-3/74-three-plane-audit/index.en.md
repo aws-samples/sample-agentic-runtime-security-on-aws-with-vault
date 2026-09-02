@@ -86,6 +86,7 @@ athena_record "SELECT
   ciba_binding_message,
   substr(vault_auth_time,1,19) AS vault_auth_time,
   vault_principal,
+  vault_human_entity_id,
   vault_agent_registry_id,
   vault_rar_path,
   substr(db_write_time,1,19)   AS db_write_time,
@@ -97,20 +98,32 @@ FROM workshop_logs.audit_correlation WHERE request_id = '${REQUEST_ID}' LIMIT 1"
 You should see one row spanning all three planes — the user who approved, the agent that authenticated and the claims it was bound to, the database write, and the credential TTL:
 
 ```text
-request_id                  2f50b532-2ea2-4eef-b591-71250b5470c3
-approval_time               2026-05-29T15:20:47
-user_approved_sub           jaime
-ciba_binding_message        2f50b532-2ea2-4eef-b591-71250b5470c3
-vault_auth_time             2026-05-29T15:20:47
-vault_principal             uc3-actor (on behalf of jaime)
-vault_agent_registry_id     uc3-actor
-vault_rar_path              database/creds/uc3-refund-writer
-db_write_time               2026-05-29 15:20:47
-db_command                  WRITE,INSERT
-db_credential_ttl           300
+request_id               21e88164-d561-43c8-9157-e6c8f732d070
+approval_time            2026-09-02T22:21:50
+user_approved_sub        jaime
+ciba_binding_message     21e88164-d561-43c8-9157-e6c8f732d070
+vault_auth_time          2026-09-02T22:21:49
+vault_principal          uc3-actor (on behalf of jaime)
+vault_human_entity_id    6edd531a-371a-7bb1-2290-fe520b73e0e8
+vault_agent_registry_id  uc3-actor
+vault_rar_path           database/creds/uc3-refund-writer
+db_write_time            2026-09-02 22:21:50
+db_command               WRITE,INSERT
+db_credential_ttl        300
 ```
 
+Your ids and timestamps differ; the shape does not. Read the three timestamps together — Vault
+authorized the credential at `22:21:49`, the approval and the database write both landed at
+`22:21:50`. The whole privileged window is about a second wide, and the credential that opened
+it expires 300 seconds later whether or not anything else happens.
+
 Every field maps directly to one of the five workshop objectives — `vault_principal` (verifiable agent identity), `db_credential_ttl` of `300` (no standing privilege, 5-minute lease), `user_approved_sub` (action tied to user intent), `vault_agent_registry_id` + `vault_rar_path` (enforcement at point of use — the Agent Registry identity Vault resolved and the exact path it scoped the token to), and the correlation across all three planes — one `request_id` carried by the IVIA approval, the Vault authorization and the Postgres write alike (correlated audit evidence).
+
+`vault_human_entity_id` is the column that answers the question people actually ask after an
+incident: *which person was this done for?* It is Vault's own identity entity for the human,
+recorded on the same authorization decision as the agent — not inferred from the approval log
+next to it. The [Read the Vault Record Yourself](#read-the-vault-record-yourself) section below
+turns that id into a name.
 
 ## Run the Correlation Query — Athena Console
 
@@ -142,12 +155,13 @@ WHERE request_id = 'PASTE_REQUEST_ID_HERE'
 
 The correlation row is a summary. This section opens the underlying Vault audit record for your refund, so you can see what Vault actually validated rather than trusting a VIEW that someone else wrote.
 
-Use the `athena_query` helper from the [Credential Revocation](../../60-use-case-2/65-credential-revocation/) page (it is defined there in Step 6), and the `request_id` from your own refund:
+`REQUEST_ID` is still set from Step 1 above, and `athena_record` is the helper you defined at
+the top of this page — the row is wide, so print it vertically:
 
 ```bash
-export REQUEST_ID=<your request_id>
+echo "tracing: ${REQUEST_ID}"
 
-athena_query "SELECT
+athena_record "SELECT
   auth.entity_id                                  AS human_entity,
   auth.metadata['actor_entity_name']              AS agent,
   auth.metadata['jwt_audience_claim']             AS audience,
@@ -158,8 +172,29 @@ athena_query "SELECT
 FROM workshop_logs.vault_audit
 WHERE type = 'response'
   AND request.path = 'database/creds/uc3-refund-writer'
+  AND (error IS NULL OR error = '')
   AND element_at(element_at(request.headers, 'x-correlation-id'), 1) = '${REQUEST_ID}'
 LIMIT 1;"
+```
+
+The `error IS NULL` line is not boilerplate, and it is worth understanding before you read the
+result. Your Vault cluster runs three nodes: one **active**, two **performance standbys**.
+Standbys serve reads, but issuing a database credential creates a lease, and only the active
+node may do that. So when the agent's request happens to land on a standby, that standby audits
+the request, answers `please forward to the active node`, and redirects; the client follows the
+redirect and the active node audits the same request again and issues the credential. Both hops
+are genuine audit records and both carry your correlation header — but only one of them issued
+anything, and the refused hop has no `auth` block at all. Filtering on `error` selects the hop
+that did the work. Drop that line and re-run the query to see both.
+
+```text
+human_entity           6edd531a-371a-7bb1-2290-fe520b73e0e8
+agent                  uc3-actor
+audience               ["uc3-actor"]
+issuer                 https://wrp.kp3v5q.100-62-248-6.nip.io
+jti                    06d75bf8-3a8b-4d69-a110-001f424e05ec
+authorization_details  [{"type":"refund_approval"},{"capabilities":["read"],"path":"database/creds/uc3-refund-writer","type":"vault:path_access"}]
+correlation_id         21e88164-d561-43c8-9157-e6c8f732d070
 ```
 
 Six things are worth finding in that output:
