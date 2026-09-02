@@ -489,6 +489,79 @@ PYEOF
     return 0
 }
 
+# _mint_uc2_login_token <user> — mint ONLY the agent-uc2 authorization_code LOGIN
+# token for <user> (sub=<user>, act.sub=agent-uc2). Populates MINTED_UC2_LOGIN_TOKEN.
+#
+# This is deliberately a plain PKCE login and nothing more. Minting a UC2 login token
+# was never the Use Case 3 bypass — FEEDING one to the token exchange was, and the
+# idmap CIBA-provenance gate now refuses exactly that (issue #29). Check 18 needs a
+# genuine UC2 OBO token (a valid delegation for the WRONG agent) to prove cross-use-case
+# ceiling isolation, so it mints one here instead of borrowing the UC3 subject token,
+# which is now a first-party CIBA token carrying no act claim at all.
+_mint_uc2_login_token() {
+    local user="$1"
+    MINTED_UC2_LOGIN_TOKEN=""; UC2_MINT_ERR=""
+
+    local acme_state="${SCRIPT_DIR}/../.acme-state"
+    local base_layer="${SCRIPT_DIR}/../modules/verify_access/base_layer/base_layer.yaml.tftpl"
+    local wrp ru secret agent_client persona_pw pod op_url out
+
+    wrp=$(grep -E '^NIP_FQDN_WRP=' "${acme_state}" 2>/dev/null | cut -d= -f2)
+    ru=$(kubectl get configmap -n "${BANKING_NAMESPACE}" banking-ui-config -o jsonpath='{.data.REDIRECT_URI}' 2>/dev/null)
+    secret=$(kubectl get configmap -n "${BANKING_NAMESPACE}" uc3-agent-config -o jsonpath='{.data.IVIA_CLIENT_SECRET}' 2>/dev/null)
+    agent_client=$(kubectl get configmap -n "${BANKING_NAMESPACE}" banking-ui-config -o jsonpath='{.data.IVIA_CLIENT_ID}' 2>/dev/null)
+    op_url=$(kubectl get configmap -n "${BANKING_NAMESPACE}" uc3-agent-config -o jsonpath='{.data.IVIA_BASE_URL}' 2>/dev/null)
+    persona_pw=$(grep -oE 'password:[[:space:]]*"[^"]+"' "${base_layer}" 2>/dev/null | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+    pod=$(kubectl get pod -n "${BANKING_NAMESPACE}" -l app=uc3-agent -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    [ -n "${wrp}" ] && wrp="https://${wrp#https://}"
+
+    if [ -z "${wrp}" ] || [ -z "${ru}" ] || [ -z "${secret}" ] || [ -z "${persona_pw}" ] || [ -z "${pod}" ] || [ -z "${op_url}" ]; then
+        UC2_MINT_ERR="could not source UC2 login mint inputs"
+        return 1
+    fi
+
+    out=$(kubectl exec -i -n "${BANKING_NAMESPACE}" "${pod}" -- python3 - \
+        "${user}" "${wrp}" "${ru}" "${agent_client}" "${secret}" "${persona_pw}" "${op_url}" <<'PYEOF' 2>/dev/null
+import base64, hashlib, os, re, sys, urllib.parse
+try:
+    import httpx
+except Exception as e:
+    print("MINT_ERR import httpx: %s" % e); sys.exit(1)
+user, wrp, ru, agent_client, secret, pw, op = sys.argv[1:8]
+if not wrp.startswith("http"): wrp = "https://" + wrp
+def b64u(b): return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+try:
+    cv = b64u(os.urandom(48)); cc = b64u(hashlib.sha256(cv.encode()).digest()); st = b64u(os.urandom(12))
+    c = httpx.Client(verify=False, follow_redirects=False, timeout=30.0)
+    az = (wrp + "/isvaop/oauth2/authorize?response_type=code&client_id=" + agent_client
+          + "&redirect_uri=" + urllib.parse.quote(ru, safe='') + "&code_challenge=" + cc
+          + "&code_challenge_method=S256&state=" + st + "&scope=openid+profile+email")
+    c.get(az)
+    c.post(wrp + "/pkmslogin.form",
+           data={"username": user, "password": pw, "login-form-type": "pwd", "login-response-type": "original_url"})
+    loc = c.get(az).headers.get("location", "")
+    m = re.search(r"[?&]code=([^&]+)", loc)
+    if not m:
+        print("MINT_ERR no auth code returned (WebSEAL login failed for user=%s)" % user); sys.exit(1)
+    code = urllib.parse.unquote(m.group(1))
+    r = c.post(op.rstrip("/") + "/oauth2/token", auth=(agent_client, secret),
+               data={"grant_type": "authorization_code", "code": code, "redirect_uri": ru, "code_verifier": cv})
+    if r.status_code != 200:
+        print("MINT_ERR authcode exchange %d %s" % (r.status_code, r.text[:200])); sys.exit(1)
+    print("UC2LOGIN=" + r.json()["access_token"])
+except Exception as e:
+    print("MINT_ERR %s" % e); sys.exit(1)
+PYEOF
+)
+    MINTED_UC2_LOGIN_TOKEN=$(printf '%s\n' "${out}" | sed -n 's/^UC2LOGIN=//p')
+    if [ -z "${MINTED_UC2_LOGIN_TOKEN}" ]; then
+        UC2_MINT_ERR=$(printf '%s\n' "${out}" | grep 'MINT_ERR' | head -1)
+        [ -z "${UC2_MINT_ERR}" ] && UC2_MINT_ERR="UC2 login mint produced no token"
+        return 1
+    fi
+    return 0
+}
+
 if [ "${BYPASS_MODE}" = true ]; then
     #===========================================================================
     # Native enforcement suite (Phase 9 — the jwt/ backend is GONE, decision (e)).
@@ -519,12 +592,19 @@ if [ "${BYPASS_MODE}" = true ]; then
     UC3_PERSONA="${UC3_PERSONA:-oscar}"
     RAR_OUT_PATH="database/creds/uc3-readonly"   # in ACL+ceiling, NOT in the token RAR
 
-    print_info "Self-mint: obtaining a REAL delegated OBO token for '${UC3_PERSONA}' (PKCE login + RFC 8693 token-exchange, all secrets sourced at runtime)"
+    print_info "Self-mint: obtaining a REAL delegated OBO token for '${UC3_PERSONA}' — driving an ACTUAL approval with a virtual authenticator, then RFC 8693 token-exchange (all secrets sourced at runtime). Takes ~2-4 minutes."
     if _mint_uc3_tokens "${UC3_PERSONA}"; then
         print_pass "Self-mint: minted a real IVIA-issued delegated token + subject token for '${UC3_PERSONA}'"
     else
         print_fail "Self-mint: could NOT mint a real delegated token — Checks 14-18 cannot run" \
             "The headless mint failed: ${MINT_ERR:-unknown}. Confirm the uc3-agent pod is Running, the WRP ALB is reachable, and persona '${UC3_PERSONA}' can log in. Re-run: bash infrastructure/scripts/verify-uc3.sh --bypass"
+    fi
+
+    # Check 18 needs a genuine UC2 OBO token (act.sub=agent-uc2) — a valid delegation
+    # for the WRONG agent. The UC3 subject token can no longer serve: it is now a
+    # first-party CIBA token and deliberately carries no act claim.
+    if ! _mint_uc2_login_token "${UC3_PERSONA}"; then
+        print_warn "Self-mint: could not mint the UC2 login token for Check 18 — ${UC2_MINT_ERR:-unknown}"
     fi
 
     # Prefer an operator-supplied delegated token (Part B) over the minted one.
@@ -658,7 +738,8 @@ print(jwt.encode(payload, 'forged-secret', algorithm='HS256'))
     #---------------------------------------------------------------------------
     # Bypass Check 18 — cross-UC AGENT-CEILING isolation → DENY
     #
-    # The underlying subject token here is the agent-uc2 UC2 login token: it carries
+    # The token here is a purpose-minted agent-uc2 UC2 LOGIN token (_mint_uc2_login_token):
+    # it carries
     # sub=<persona> AND act.sub=agent-uc2 (the UC2 OBO stamp — see the UC2 pretoken
     # rule; a UC2 login IS a valid OBO delegation, just for a DIFFERENT agent).
     # Present it to the UC3 refund path. Native OBO resolves BOTH the human (sub) and
@@ -675,17 +756,17 @@ print(jwt.encode(payload, 'forged-secret', algorithm='HS256'))
     #---------------------------------------------------------------------------
     print_info "Bypass Check 18: a validly-delegated WRONG-AGENT token (agent-uc2 UC2 login, act.sub=agent-uc2) must be DENIED the UC3 refund read — the agent ceiling isolates use cases even when the human baseline allows it"
 
-    if [ -z "${MINTED_SUBJECT_TOKEN}" ]; then
-        print_fail "Bypass Check 18: no subject token available (mint failed) — the cross-UC ceiling-isolation gate was NOT exercised (skip = HARD FAIL)" \
+    if [ -z "${MINTED_UC2_LOGIN_TOKEN}" ]; then
+        print_fail "Bypass Check 18: no UC2 login token available (mint failed) — the cross-UC ceiling-isolation gate was NOT exercised (skip = HARD FAIL)" \
             "Fix the self-mint (see the Self-mint failure above)."
     else
-        s_sub=$(decode_jwt_claim "${MINTED_SUBJECT_TOKEN}" '.sub // empty')
-        s_act=$(decode_jwt_claim "${MINTED_SUBJECT_TOKEN}" '.act.sub // empty')
+        s_sub=$(decode_jwt_claim "${MINTED_UC2_LOGIN_TOKEN}" '.sub // empty')
+        s_act=$(decode_jwt_claim "${MINTED_UC2_LOGIN_TOKEN}" '.act.sub // empty')
         if [ "${s_act}" != "agent-uc2" ]; then
             print_fail "Bypass Check 18: the UC2 login token's act.sub is '${s_act:-<absent>}' (expected agent-uc2) — cannot exercise cross-UC ceiling isolation" \
                 "The agent-uc2 authorization_code login token must carry act.sub=agent-uc2 (UC2 OBO stamp). Got sub='${s_sub}', act.sub='${s_act:-<absent>}'. If it is absent, the UC2 pretoken client gate regressed; if it is uc3-actor, the wrong token was captured."
         else
-            assert_native_deny "Bypass Check 18 (wrong-agent, sub=${s_sub}, act.sub=agent-uc2)" "${MINTED_SUBJECT_TOKEN}" \
+            assert_native_deny "Bypass Check 18 (wrong-agent, sub=${s_sub}, act.sub=agent-uc2)" "${MINTED_UC2_LOGIN_TOKEN}" \
                 "Bypass Check 18 PASSED: the agent-uc2 UC2 token (sub=${s_sub}, act.sub=agent-uc2) was DENIED reading database/creds/uc3-refund-writer — agent-uc2's ceiling (uc2-agent-ceiling) omits the refund path, so even though ${s_sub}'s human baseline (uc3-human-baseline) permits it, the 3-layer OBO intersection (human baseline ∩ agent ceiling) blocks a UC2 agent from reaching UC3's privileged path (cross-UC ceiling isolation)" \
                 "A UC2 agent token that vends UC3 refund creds means the agent ceiling no longer isolates use cases. Confirm uc2-agent-ceiling lacks database/creds/uc3-refund-writer and native OBO enforces human baseline ∩ agent ceiling." \
                 'permission denied|denied' \
