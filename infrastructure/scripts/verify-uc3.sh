@@ -856,7 +856,11 @@ print(jwt.encode(payload, 'forged-secret', algorithm='HS256'))
     print_info "Bypass Check 20: the token-exchange grant must be allowlisted per client — agent-uc2 DENIED, uc3-actor reaching the token check"
 
     _exchange_probe() {
-        local client_id="$1" secret="$2" pod="verify-uc3-exch-$$-${client_id}"
+        local client_id="$1" secret="$2"
+        # Separate declaration: bash expands every word of a `local` line before
+        # any of its assignments take effect, so referencing client_id on the
+        # same line is an unbound-variable error under `set -u`.
+        local pod="verify-uc3-exch-$$-${client_id}"
         kubectl delete pod "${pod}" -n verify-access --ignore-not-found --now &>/dev/null
         kubectl run "${pod}" --rm -i --quiet --restart=Never \
             --image=curlimages/curl:8.11.1 -n verify-access --command -- \
