@@ -243,7 +243,15 @@ grant_type=authorization_code
 &code_verifier=<original PKCE verifier>
 ```
 
-The `client_secret` is injected into the Banking UI pod via the `banking-ui-config` ConfigMap, populated from the `verify_access` Terraform module output at deploy time.
+The `client_secret` is injected into the Banking UI pod from the `banking-ui-oidc` **Kubernetes Secret** — never a ConfigMap. Each OIDC client registered with the provider (`agent-uc1`, `agent-uc2`, `agent-uc3`, `uc3-actor`) is generated its own distinct secret at deploy time by the `verify_access` Terraform module, so holding one client's credential does not let you authenticate as another.
+
+Confirm both properties on the running cluster:
+
+```bash
+kubectl get configmap -n banking-app banking-ui-config -o yaml | grep -c CLIENT_SECRET; kubectl get secret -n banking-app banking-ui-oidc -o jsonpath='{.data.IVIA_CLIENT_SECRET}' | wc -c
+```
+
+The first number is `0` — no credential in the ConfigMap. The second is non-zero — the secret is present, base64-encoded, in the Secret.
 
 How the Banking UI maps to the SvelteKit file structure:
 
