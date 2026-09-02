@@ -126,13 +126,16 @@ locals {
     # Server-side vars (SvelteKit $env/dynamic/private — login + callback routes)
     IVIA_ISSUER    = local.ivia_external_url
     IVIA_CLIENT_ID = var.ivia_client_id
-    # IVIA_CLIENT_SECRET: workshop stores in ConfigMap for simplicity.
-    # Production deployments should use a Kubernetes Secret with secretKeyRef.
-    IVIA_CLIENT_SECRET     = var.ivia_client_secret
-    IVIA_BASE_URL          = "https://${var.ivia_service_endpoint}:8436"
-    UC3_IVIA_CLIENT_ID     = "agent-uc3"
-    UC3_IVIA_CLIENT_SECRET = var.ivia_client_secret
-    REDIRECT_URI           = "${local.banking_ui_external_url}/callback"
+    # IVIA_CLIENT_SECRET is NOT here — it rides kubernetes_secret.banking_ui_oidc
+    # and reaches the container via envFrom.secretRef (issue #30). Nothing in this
+    # ConfigMap is secret, so `kubectl get configmap banking-ui-config -o yaml`
+    # exposes no credential.
+    #
+    # UC3_IVIA_CLIENT_ID / UC3_IVIA_CLIENT_SECRET were removed with it: no code in
+    # banking-ui read either, so they were a second plaintext copy of a credential
+    # for a client this pod never authenticates as.
+    IVIA_BASE_URL = "https://${var.ivia_service_endpoint}:8436"
+    REDIRECT_URI  = "${local.banking_ui_external_url}/callback"
     # Client-side vars (SvelteKit PUBLIC_ prefix — auth.ts PKCE upgrade path)
     PUBLIC_IVIA_ISSUER    = local.ivia_external_url
     PUBLIC_IVIA_CLIENT_ID = var.ivia_client_id
@@ -146,6 +149,32 @@ locals {
     # SvelteKit CSRF protection: ORIGIN must match the browser's Origin header
     ORIGIN = local.banking_ui_external_url
   }
+}
+
+################################################################################
+# 4a. Secret — banking-ui-oidc (agent-uc2 client_secret)
+#
+# The banking-ui is a confidential OAuth client: /callback authenticates to the
+# OIDC Provider's /oauth2/token endpoint with HTTP Basic agent-uc2:<secret>.
+# That secret is delivered as a Kubernetes Secret and mounted with
+# envFrom.secretRef so the app still reads env.IVIA_CLIENT_SECRET unchanged.
+#
+# It used to sit in the banking-ui-config ConfigMap, where any principal with
+# configmap read in the namespace could lift it (issue #30). It is also
+# agent-uc2's secret ALONE — each client_id now has its own.
+################################################################################
+
+resource "kubernetes_secret" "banking_ui_oidc" {
+  metadata {
+    name      = "banking-ui-oidc"
+    namespace = kubernetes_namespace.banking_app.metadata[0].name
+  }
+
+  data = {
+    IVIA_CLIENT_SECRET = var.ivia_client_secret
+  }
+
+  depends_on = [kubernetes_namespace.banking_app]
 }
 
 ################################################################################
@@ -286,6 +315,13 @@ resource "kubernetes_deployment" "banking_ui" {
             }
           }
 
+          # agent-uc2's client_secret — Secret, not ConfigMap (issue #30).
+          env_from {
+            secret_ref {
+              name = kubernetes_secret.banking_ui_oidc.metadata[0].name
+            }
+          }
+
           env {
             name  = "NODE_EXTRA_CA_CERTS"
             value = "/etc/ssl/ivia/iviaop.pem"
@@ -340,6 +376,7 @@ resource "kubernetes_deployment" "banking_ui" {
   depends_on = [
     kubernetes_service_account.uc2_ui_sa,
     kubernetes_config_map.banking_ui_config,
+    kubernetes_secret.banking_ui_oidc,
     kubernetes_secret.ivia_oidc_ca,
   ]
 }

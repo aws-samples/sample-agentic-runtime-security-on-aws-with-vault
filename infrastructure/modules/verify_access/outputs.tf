@@ -23,9 +23,9 @@ output "ivia_service_endpoint" {
   value       = "${kubernetes_service.iviaop.metadata[0].name}.${kubernetes_namespace.verify_access.metadata[0].name}.svc.cluster.local"
 }
 
-output "ivia_client_secret" {
-  description = "IVIA OAuth client secret used by uc2_app and uc3_agent (and uc3-actor) to authenticate to IVIA token + ciba endpoints."
-  value       = random_password.ivia_oauth_client_secret.result
+output "ivia_client_secrets" {
+  description = "Per-client IVIA OAuth secrets, keyed by client_id (agent-uc1, agent-uc2, agent-uc3, uc3-actor). Each client has its OWN secret (issue #30) — index the map, never reuse one client's value for another."
+  value       = { for cid, pw in random_password.ivia_oauth_client_secret : cid => pw.result }
   sensitive   = true
 }
 

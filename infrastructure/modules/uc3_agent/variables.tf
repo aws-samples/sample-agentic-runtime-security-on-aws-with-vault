@@ -34,10 +34,15 @@ variable "ivia_client_id" {
 }
 
 variable "ivia_client_secret" {
-  description = "IVIA OAuth client secret for the agent-uc3 client. Workshop: stored in ConfigMap (acceptable for lab). Production: use a Kubernetes Secret."
+  description = "OAuth client secret for the agent-uc3 CIBA client. Delivered to the pod via kubernetes_secret.uc3_oidc_clients, never a ConfigMap. Required — no default, so a missing wiring fails the plan instead of silently authenticating with an empty credential."
   type        = string
   sensitive   = true
-  default     = ""
+}
+
+variable "ivia_actor_client_secret" {
+  description = "OAuth client secret for uc3-actor — the ONLY client permitted to perform the RFC 8693 exchange that mints the delegated refund token. Distinct from ivia_client_secret (agent-uc3) by design (issue #30)."
+  type        = string
+  sensitive   = true
 }
 
 variable "ivia_external_url" {

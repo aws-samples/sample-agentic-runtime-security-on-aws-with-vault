@@ -60,6 +60,12 @@ locals {
   obo_uc3_agent_identity = "uc3-actor"        # clients.yml.tftpl:60  (act.sub for UC3)
   obo_uc3_human_sub      = "jaime"            # base_layer.yaml.tftpl:195 (UC3 CIBA approver)
   obo_uc2_human_subs     = ["oscar", "jaime"] # base_layer.yaml.tftpl:190,195 (UC2 closed set)
+
+  # Every OAuth client registered in iviaop-config/clients.yml.tftpl. Each one
+  # gets its OWN client_secret (random_password.ivia_oauth_client_secret,
+  # for_each over this list) — see the resource comment for why sharing one
+  # secret across the four is a security defect, not a simplification.
+  ivia_oauth_client_ids = ["agent-uc1", "agent-uc2", "agent-uc3", "uc3-actor"]
 }
 
 #-------------------------------------------------------------------------------
@@ -270,14 +276,24 @@ resource "random_password" "sec_master_pwd" {
   special = false
 }
 
-# IVIA OAuth client secret. Consumed by uc2_app + uc3_agent via the
-# ivia_client_secret module output. Stable across applies (rotation is
-# out of scope for Phase 07.1 — no keepers block).
+# IVIA OAuth client secrets — ONE PER CLIENT (issue #30).
+#
+# A single shared secret across all four clients defeats the control this
+# workshop teaches: uc3-actor is the only client permitted to perform the
+# RFC 8693 exchange that mints a delegated refund token, and that restriction
+# is meaningless if every other component holds uc3-actor's credential. Each
+# client_id therefore gets its own random_password, surfaced as the
+# ivia_client_secrets map output and delivered to workloads via Kubernetes
+# Secrets (never ConfigMaps).
+#
+# Stable across applies (rotation is out of scope — no keepers block).
 # special=false: 32 chars provide ample entropy and the secret is sent in
 # HTTP basic auth + form-urlencoded bodies, where special chars complicate
 # consumers without adding meaningful entropy.
 
 resource "random_password" "ivia_oauth_client_secret" {
+  for_each = toset(local.ivia_oauth_client_ids)
+
   length  = 32
   special = false
 }
@@ -1105,8 +1121,11 @@ resource "kubernetes_config_map" "iviaop_config" {
     # breaks the otherwise-circular dep: module.uc2_app depends on module.ivia
     # outputs, so module.ivia cannot in turn read from module.uc2_app.
     "clients.yml" = templatefile("${path.module}/iviaop-config/clients.yml.tftpl", {
-      ivia_client_secret = random_password.ivia_oauth_client_secret.result
-      uc2_redirect_uri   = "http://placeholder.invalid/callback"
+      uc1_client_secret       = random_password.ivia_oauth_client_secret["agent-uc1"].result
+      uc2_client_secret       = random_password.ivia_oauth_client_secret["agent-uc2"].result
+      uc3_client_secret       = random_password.ivia_oauth_client_secret["agent-uc3"].result
+      uc3_actor_client_secret = random_password.ivia_oauth_client_secret["uc3-actor"].result
+      uc2_redirect_uri        = "http://placeholder.invalid/callback"
     })
     # iviaop.key is NOT here — the RS256 signing/serving PRIVATE key lives in
     # kubernetes_secret.iviaop_key (never a ConfigMap, unencrypted at rest). Only

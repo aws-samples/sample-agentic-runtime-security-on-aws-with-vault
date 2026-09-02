@@ -21,8 +21,9 @@
 #     whose may_act + RAR claims are validated by the Vault JWT policy (OBJ-2 + OBJ-3).
 #   - No Ingress / ALB — the UC3 agent is a ClusterIP service reached from
 #     the banking-agent (uc2-agent) or via kubectl port-forward for workshop demos.
-#   - IVIA_CLIENT_SECRET stored in ConfigMap per Phase 5.2 workshop-simplicity decision.
-#     Production deployments should use a Kubernetes Secret with secretKeyRef.
+#   - IVIA_CLIENT_SECRET (agent-uc3) and IVIA_ACTOR_CLIENT_SECRET (uc3-actor) are
+#     two DISTINCT credentials delivered via kubernetes_secret.uc3_oidc_clients,
+#     never the ConfigMap (issue #30).
 ################################################################################
 
 terraform {
@@ -57,9 +58,10 @@ resource "kubernetes_service_account" "uc3_agent" {
 ################################################################################
 # 2. ConfigMap — uc3-agent-config
 #
-# All agent configuration is surfaced here so attendees can inspect the full
-# environment in Terraform HCL without chasing Secrets. The IVIA_CLIENT_SECRET
-# inclusion follows the Phase 5.2 workshop-simplicity decision (comment above).
+# All NON-SECRET agent configuration is surfaced here so attendees can inspect the
+# full environment in Terraform HCL. Credentials are deliberately absent: the two
+# OAuth client secrets live in kubernetes_secret.uc3_oidc_clients and the easuser
+# SCIM password in kubernetes_secret.uc3_scim_cred.
 ################################################################################
 
 resource "kubernetes_config_map" "uc3_agent" {
@@ -77,10 +79,10 @@ resource "kubernetes_config_map" "uc3_agent" {
     VAULT_ROLE     = var.vault_role
     IVIA_BASE_URL  = var.ivia_base_url
     IVIA_CLIENT_ID = var.ivia_client_id
-    # IVIA_CLIENT_SECRET: workshop stores in ConfigMap for simplicity.
-    # Production deployments should use a Kubernetes Secret with secretKeyRef.
-    IVIA_CLIENT_SECRET = var.ivia_client_secret
-    IVIA_EXTERNAL_URL  = var.ivia_external_url
+    # IVIA_CLIENT_SECRET / IVIA_ACTOR_CLIENT_SECRET are NOT here — both ride
+    # kubernetes_secret.uc3_oidc_clients and reach the container via
+    # envFrom.secretRef (issue #30). Nothing in this ConfigMap is secret.
+    IVIA_EXTERNAL_URL = var.ivia_external_url
     # The id_token forwarded from banking-ui carries aud = banking-ui's IVIA
     # client_id (e.g. "agent-uc2"), NOT this agent's own IVIA_CLIENT_ID
     # (agent-uc3). verify_id_token() in auth.py validates aud against this.
@@ -132,6 +134,34 @@ resource "kubernetes_secret" "ivia_oidc_ca" {
     # iviaruntime AAC cert (:9443, CN=isam, no SAN) — PINNED by mmfa.py for the MMFA
     # push-fire + admin SCIM read (check_hostname=False, never verify=False).
     "iviaruntime.pem" = var.ivia_runtime_ca_pem
+  }
+}
+
+################################################################################
+# 2a-bis. Secret — uc3-oidc-clients (agent-uc3 + uc3-actor client secrets)
+#
+# Two DISTINCT credentials for two distinct clients:
+#   IVIA_CLIENT_SECRET       — agent-uc3, the CIBA client that asks the human to
+#                              approve the refund.
+#   IVIA_ACTOR_CLIENT_SECRET — uc3-actor, the only client allowed to perform the
+#                              RFC 8693 exchange that mints the delegated token
+#                              Vault accepts for database/creds/uc3-refund-writer.
+#
+# Keeping them separate is the point of issue #30: the exchange is a privileged
+# step, and holding agent-uc3's credential must not be enough to perform it.
+# Both are Secrets, never ConfigMap keys, so the values do not appear in
+# `kubectl get configmap uc3-agent-config -o yaml`.
+################################################################################
+
+resource "kubernetes_secret" "uc3_oidc_clients" {
+  metadata {
+    name      = "uc3-oidc-clients"
+    namespace = var.namespace
+  }
+
+  data = {
+    IVIA_CLIENT_SECRET       = var.ivia_client_secret
+    IVIA_ACTOR_CLIENT_SECRET = var.ivia_actor_client_secret
   }
 }
 
@@ -222,6 +252,13 @@ resource "kubernetes_deployment" "uc3_agent" {
             }
           }
 
+          # agent-uc3 + uc3-actor client secrets — Secret, not ConfigMap (issue #30).
+          env_from {
+            secret_ref {
+              name = kubernetes_secret.uc3_oidc_clients.metadata[0].name
+            }
+          }
+
           # easuser SCIM password — Secret, not ConfigMap (paired with IVIA_SCIM_USER).
           env {
             name = "IVIA_SCIM_PASSWORD"
@@ -283,6 +320,7 @@ resource "kubernetes_deployment" "uc3_agent" {
     kubernetes_service_account.uc3_agent,
     kubernetes_config_map.uc3_agent,
     kubernetes_secret.ivia_oidc_ca,
+    kubernetes_secret.uc3_oidc_clients,
     kubernetes_secret.uc3_scim_cred,
   ]
 }
