@@ -226,7 +226,23 @@ Expected output — the person who tapped Approve on their phone:
 }
 ```
 
-Run the same command against the agent's entity id and it answers `uc3-actor`. That pair — a named human and a named agent on one authorization decision, with the exact path it was narrowed to — is the record an incident responder needs, and it came out of Vault without any application help beyond the correlation header.
+The agent has an identity entity too, but the audit record names it rather than giving you its
+id — so look that one up by name:
+
+```bash
+kubectl exec -n vault vault-0 -- \
+  sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read -format=json identity/entity/name/uc3-actor" \
+  | jq '{id: .data.id, name: .data.name}'
+```
+
+```json
+{
+  "id": "392ac41d-fb15-8041-2d9d-869c4c48517b",
+  "name": "uc3-actor"
+}
+```
+
+That pair — a named human and a named agent on one authorization decision, with the exact path it was narrowed to — is the record an incident responder needs, and it came out of Vault without any application help beyond the correlation header.
 
 :::alert{type="info" header="Why the correlation header exists at all"}
 Everything above comes from Vault's own view of the token. The one thing Vault has no way to know is *which refund* this was, because `request_id` is the application's concept and never appears in the token — IBM Verify does not carry the consent-time detail through the exchange (see the [CIBA Approval Flow](../71-ciba-approval-flow/) page). So the agent sends it explicitly, as an `X-Correlation-Id` header on the credential request, and Vault records it because a `vault_audit_request_header` resource allowlists that header with `hmac = false`. Without the allowlist Vault drops the header silently; without the header the Vault plane could only be matched to the other two by credential path and a time window, which stops being trustworthy the moment two refunds overlap.
