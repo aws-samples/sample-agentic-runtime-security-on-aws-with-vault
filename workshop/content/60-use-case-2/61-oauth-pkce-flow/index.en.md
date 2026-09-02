@@ -75,7 +75,8 @@ sequenceDiagram
     UI->>Agent: POST /chat + Authorization: Bearer access_token
     Agent->>Agent: Extract JWT from header
     Agent->>MCP: JSON-RPC tools/call get_accounts<br/>Authorization: Bearer access_token
-    MCP->>MCP: Decode JWT → read sub claim (for RLS only)
+    Note over Agent,MCP: The tool takes no arguments —<br/>identity travels in the header alone
+    MCP->>MCP: Decode header JWT → read sub claim (for RLS only)
 
     MCP->>Vault: GET /v1/database/creds/uc2-personal-readonly<br/>X-Vault-Token: IVIA JWT (no login round-trip)
     Vault->>OP: Validate JWT signature via JWKS
@@ -97,8 +98,9 @@ sequenceDiagram
     UI-->>User: "Checking: $4,250 · Savings: $18,750"
 
     rect rgba(167, 240, 186, 0.3)
-    Note over Vault,RDS: Credential lifecycle
-    Vault->>RDS: TTL expires → DROP ROLE (auto-revocation)
+    Note over MCP,RDS: Credential lifecycle
+    MCP->>Vault: POST /v1/sys/leases/revoke<br/>X-Vault-Token: MCP server's own k8s-auth token
+    Vault->>RDS: DROP ROLE (immediately, not at TTL)
     end
 ```
 
@@ -112,12 +114,12 @@ sequenceDiagram
 6. The OIDC Provider verifies the code, checks the PKCE proof against the original challenge, and runs the pre-token mapping rule (`pre_mappingrule_id: isvaop_pretoken`), which stamps `act.sub = agent-uc2` onto the access token. It returns an `access_token` carrying both `sub` and `act.sub`, plus an `id_token` carrying `sub` only.
 7. The Banking UI stores the tokens in httpOnly cookies (`access_token`, `id_token`, optional `refresh_token`) and 302s the browser to `/dashboard`.
 8. When the user asks a banking question, the UI's server-side proxy reads the **`access_token`** cookie and forwards it to the Banking Agent as a Bearer token. It must be the access token, not the `id_token` — IVIA's pre-token mapping rule stamps `act.sub = agent-uc2` onto the access token only. The `id_token` carries no `act` claim, so Vault would resolve no acting agent and deny the `database/creds` read.
-9. The Banking Agent forwards the JWT unchanged to the MCP Server for each tool invocation.
+9. The Banking Agent forwards the JWT unchanged to the MCP Server for each tool invocation — in the `Authorization: Bearer` header, and nowhere else. The tools take no `jwt` parameter: `get_accounts` accepts no arguments at all and `get_transactions` accepts only an optional `account_id`. If the acted-on token came from the tool arguments, the identity Vault saw would be whatever the caller typed into the payload and the header would constrain nothing.
 10. The MCP Server presents the JWT **directly** to Vault as the `X-Vault-Token` header on a single `GET database/creds/uc2-personal-readonly` read — there is no `auth/jwt/login` round-trip and no intermediate Vault token. Vault's OAuth resource server validates the signature against IVIA's JWKS endpoint.
 11. Vault resolves the human `sub` and the agent actor `act.sub = agent-uc2` (against the Agent Registry) and applies the On-Behalf-Of intersection `uc2-human-baseline ∩ uc2-agent-ceiling`.
 12. In that same call Vault issues a JIT Postgres credential with a 15-minute TTL.
 13. The MCP Server opens a Postgres connection, sets `app.current_user_sub` to the JWT's `sub` claim, and executes `SELECT` queries. PostgreSQL Row-Level Security filters results to the authenticated user's rows only.
-14. The credential expires at TTL; Vault revokes the Postgres role automatically.
+14. The MCP Server revokes the lease as soon as the query returns — `POST /v1/sys/leases/revoke`, authenticated with the server's **own** Kubernetes-auth Vault token rather than the caller's, so the revoke still works when the user's JWT has already expired. Vault drops the Postgres role immediately. The 15-minute TTL remains only as a backstop for the case where the server dies mid-request.
 
 The `sub` claim in the `access_token` (e.g. `oscar`) flows to:
 

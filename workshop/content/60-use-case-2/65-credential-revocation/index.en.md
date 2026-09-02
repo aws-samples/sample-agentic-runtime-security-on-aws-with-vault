@@ -285,38 +285,49 @@ DROP ROLE IF EXISTS "{{name}}";
 The `ALTER DEFAULT PRIVILEGES REVOKE` line matches the `ALTER DEFAULT PRIVILEGES GRANT` from issuance. Without that exact mirror, `DROP ROLE` would fail with `cannot be dropped because some objects depend on it` (the GRANT leaves a `pg_default_acl` dependent row that the symmetric REVOKE clears). Symmetric construction means every credential issued is also fully cleanly destroyable — no orphan roles, no escalation surface left behind.
 :::
 
-:::expand{header="Agent Developer Track — calling /v1/sys/leases/revoke from a production session-end handler"}
+:::expand{header="Agent Developer Track — how the MCP server calls /v1/sys/leases/revoke"}
 
-In a production agent, the session-end handler calls Vault's revoke API directly. Here is the same flow expressed in TypeScript (the same pattern the banking-app MCP server would use on logout or token expiry):
+This is not a pattern to adopt later — it is the code running in the cluster right now. `applications/banking-app/mcp-server/src/vault-client.ts` ships this, and `tools.ts` calls it from the `finally` block of both `get_accounts` and `get_transactions`, so the credential is handed back on the error path as well as the success path:
 
 ```typescript
-async function revokeLeaseOnSessionEnd(leaseId: string): Promise<void> {
-  // Re-authenticate with the workload's k8s ServiceAccount token (not the
-  // user's JWT) — keeps the revoke path working even if the user's JWT has
-  // already expired by the time the session-end handler runs.
-  const vaultToken = await vaultClient.loginWithK8sSA('uc2-mcp-server-sa');
+export async function revokeLease(leaseId: string): Promise<boolean> {
+  if (!leaseId || leaseId === 'unknown') return false;
 
-  const resp = await fetch(`${VAULT_ADDR}/v1/sys/leases/revoke`, {
-    method: 'POST',
-    headers: {
-      'X-Vault-Token': vaultToken,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ lease_id: leaseId }),
-  });
+  const attempt = async (token: string) =>
+    fetch(`${VAULT_ADDR}/v1/sys/leases/revoke`, {
+      method: 'POST',
+      headers: { 'X-Vault-Token': token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lease_id: leaseId }),
+    });
 
-  if (!resp.ok) {
-    // Log but don't throw — the lease will still TTL-expire as a safety net.
-    console.warn(`Revoke failed for ${leaseId}: ${resp.status}`);
+  try {
+    let res = await attempt(await getServiceToken());
+    // A 403 means the cached token is gone or was revoked out from under us —
+    // log in again once before giving up.
+    if (res.status === 403) {
+      res = await attempt(await getServiceToken(true));
+    }
+    if (!res.ok) {
+      const body = await res.text();
+      console.error(`vault_lease_revoke_failed lease_id=${leaseId} status=${res.status} body=${body}`);
+      return false;
+    }
+    console.log(`vault_lease_revoked lease_id=${leaseId}`);
+    return true;
+  } catch (err) {
+    console.error(`vault_lease_revoke_error lease_id=${leaseId} error=${String(err)}`);
+    return false;
   }
 }
 ```
 
-**Why workload identity (k8s auth) and not the user's JWT for the revoke?** The user's JWT might have already expired (browser tab idle for hours, refresh token gone). The MCP server's Kubernetes ServiceAccount is always available — its `uc2-mcp-server-sa` token authenticates to Vault via the `uc2` k8s auth role. The `uc2-personal` policy grants `update` on `sys/leases/revoke` exactly for this purpose.
+**Why workload identity (k8s auth) and not the user's JWT for the revoke?** The user's JWT may already have expired by the time the query returns, and revoking is not something the user authorized — it is the server disposing of its own resource. `getServiceToken()` logs in at `auth/kubernetes/login` with the pod's projected `uc2-mcp-server-sa` ServiceAccount token, caches the result, and renews it before expiry. The `uc2-personal` policy grants `update` on `sys/leases/revoke` and `read` on `auth/token/lookup-self` — nothing else — so a stolen copy of that token can hand credentials back and learn its own TTL, and can do nothing else.
 
-**Where does the `lease_id` come from?** The MCP server stored it in its per-request context the moment it issued the credential (the `lease_id` field returned from `vault read database/creds/uc2-personal-readonly`). On session end the handler revokes whatever leases it tracked. Session state is server-side only — the browser never sees a `lease_id`.
+**Why best-effort?** By the time `finally` runs, the query has succeeded and the caller's data is already on its way back. A revoke failure is logged and swallowed rather than turned into a user-visible error: the credential still expires on its TTL, so the failure degrades to TTL-only behaviour instead of breaking the response. The `console.error` lines above are what an operator alerts on.
 
-The audit-log query in Step 7 is exactly the operator's tool for confirming that a production session-end handler is calling this API as expected: the revocation events should appear with `display_name=token-uc2-mcp-server-sa` (the workload identity) and a `lease_id` that joins back to a user JWT issuance from the same time window.
+**Where does the `lease_id` come from?** `getDbCreds()` returns it alongside the username and password from the `database/creds/uc2-personal-readonly` read, and it stays in the request's local scope — one credential, one query, one revoke. The browser never sees a `lease_id`.
+
+Step 8 below is where you watch all of this happen against your own cluster.
 :::
 
 ---
