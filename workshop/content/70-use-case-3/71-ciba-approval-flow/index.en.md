@@ -101,6 +101,59 @@ Together those mean the row written under a `request_id` is the row that was app
 **The honest limitation:** a user who taps Approve without reading the chat has approved a refund whose amount they were never shown. Displaying the amount on the device needs IVIA's transaction-detail push surface rather than the authentication policy this workshop uses, and that is not deployed here.
 :::
 
+### Prove the exchange is gated on the client, not just the token
+
+A fair objection to any delegation story is that the `act.sub` claim is simply stamped on by a mapping rule, so anything that can reach the token endpoint can mint a delegated token. Check it. Both requests below send the **same** junk `subject_token`; only the client credentials differ, so the difference in the answers is attributable to the client alone.
+
+First, resolve both clients' secrets from the cluster — each OAuth client has its own, and they are never in a ConfigMap:
+
+```bash
+UC2_SECRET=$(kubectl get secret -n banking-app banking-ui-oidc \
+  -o jsonpath='{.data.IVIA_CLIENT_SECRET}' | base64 -d)
+ACTOR_SECRET=$(kubectl get secret -n banking-app uc3-oidc-clients \
+  -o jsonpath='{.data.IVIA_ACTOR_CLIENT_SECRET}' | base64 -d)
+```
+
+Now attempt the RFC 8693 exchange as `agent-uc2` — the Use Case 2 banking client, which is not allowlisted for the token-exchange grant:
+
+```bash
+kubectl delete pod ivia-exch-probe -n verify-access --ignore-not-found --now >/dev/null 2>&1
+kubectl run ivia-exch-probe --rm -i --quiet --restart=Never --image=curlimages/curl:8.11.1 -n verify-access \
+  --command -- curl -sk -X POST https://iviaop.verify-access.svc.cluster.local:8436/oauth2/token \
+    -u "agent-uc2:${UC2_SECRET}" \
+    -d 'grant_type=urn:ietf:params:oauth:grant-type:token-exchange' \
+    -d 'subject_token=not-a-real-ciba-token' \
+    -d 'subject_token_type=urn:ietf:params:oauth:token-type:access_token' \
+    -d 'requested_token_type=urn:ietf:params:oauth:token-type:access_token'
+```
+
+Expected output — refused on the client, before the token is looked at:
+
+```json
+{"error":"unauthorized_client","error_description":"FBTAQ5091E The OAuth 2.0 Client is not allowed to use authorization grant 'urn:ietf:params:oauth:grant-type:token-exchange'."}
+```
+
+Now the same request as `uc3-actor`, the client that *is* allowlisted:
+
+```bash
+kubectl delete pod ivia-exch-probe -n verify-access --ignore-not-found --now >/dev/null 2>&1
+kubectl run ivia-exch-probe --rm -i --quiet --restart=Never --image=curlimages/curl:8.11.1 -n verify-access \
+  --command -- curl -sk -X POST https://iviaop.verify-access.svc.cluster.local:8436/oauth2/token \
+    -u "uc3-actor:${ACTOR_SECRET}" \
+    -d 'grant_type=urn:ietf:params:oauth:grant-type:token-exchange' \
+    -d 'subject_token=not-a-real-ciba-token' \
+    -d 'subject_token_type=urn:ietf:params:oauth:token-type:access_token' \
+    -d 'requested_token_type=urn:ietf:params:oauth:token-type:access_token'
+```
+
+Expected output — it gets past the client check and dies on the token, which is the *only* thing left to object to:
+
+```json
+{"error":"invalid_request","error_description":"FBTAQ5226E Token is not valid or has expired."}
+```
+
+Two different refusals from one identical request body. Delegation is not something any caller can ask for: the exchange grant is allowlisted per client, and `uc3-actor` is the only client in this deployment that holds it. A compromised Use Case 2 banking client cannot mint a Use Case 3 delegated token even with a genuine user token in hand — and if it somehow could, `agent-uc2`'s ceiling still omits the refund path, which the [Bypass Test](../73-bypass-test/) proves separately.
+
 :::expand{header="Platform Track — IVIA CIBA Configuration"}
 The IVIA CIBA client (`agent-uc3`) is configured in the `verify_access` Terraform module:
 

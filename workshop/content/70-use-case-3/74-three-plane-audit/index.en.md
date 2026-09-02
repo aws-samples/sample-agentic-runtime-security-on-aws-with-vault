@@ -3,9 +3,9 @@ title: 'Three-Plane Audit Correlation'
 weight: 74
 ---
 
-Each plane logs the same refund independently: IVIA records *who approved*, Vault records *which agent authenticated — by its Agent Registry identity — and the exact path it was scoped to*, and Postgres records *the write that landed*. The `audit_correlation` Athena VIEW stitches all three together: `request_id` is the shared key between the IVIA approval and the Postgres write, and the Vault authentication binds into the same row by its credential path and its sub-second time-proximity to the approval. A single query returns one forensic row spanning approval, authentication, and database write. It was created automatically during Use Case 3 deployment — you only query it.
+Each plane logs the same refund independently: IVIA records *who approved*, Vault records *which agent was authorized, for which human, and the exact path it was scoped to*, and Postgres records *the write that landed*. The `audit_correlation` Athena VIEW stitches all three together on **one shared key** — the agent's `request_id`, which reaches the Vault plane because the agent stamps it on the credential request as an `X-Correlation-Id` header that Vault is configured to audit. A single query returns one forensic row spanning approval, authorization, and database write. It was created automatically during Use Case 3 deployment — you only query it.
 
-Under the native OAuth resource server model, the Vault audit event no longer carries a hand-rolled `may_act` bound-claim; it carries the **agent-registry** identity Vault resolved from the delegated token's `act.sub` claim (`uc3-actor`) and the per-request `vault:path_access` path Vault enforced. Those two fields are what surface in the correlation row below.
+Under the native OAuth resource server model, the Vault audit event no longer carries a hand-rolled `may_act` bound-claim. It carries **both halves of the on-behalf-of pair**: the agent-registry identity Vault resolved from the delegated token's `act.sub` claim (`uc3-actor`), and the identity entity of the human the token was issued for (`auth.entity_id`, which resolves to `jaime`). It also carries the per-request `vault:path_access` path Vault enforced, the token's audience, its issuer and its `jti`. You will read those fields out of the record yourself further down this page, rather than taking this paragraph's word for it.
 
 ## The Pedagogical Money Shot
 
@@ -13,11 +13,11 @@ Use Case 3 culminates in a single Athena query that answers all five workshop ob
 
 | Objective | Column | What It Proves |
 |---|---|---|
-| OBJ-1 — Verifiable agent identity | `vault_principal` | The agent authenticated with a specific Vault role |
+| OBJ-1 — Verifiable agent identity | `vault_principal` + `vault_human_entity_id` | Vault resolved a registered agent acting for a specific human identity entity |
 | OBJ-2 — No standing privileges | `db_credential_ttl` | DB credentials lived for 5 minutes only |
 | OBJ-3 — Action tied to user intent | `user_approved_sub` + `ciba_binding_message` | The user approved this exact `request_id` out-of-band |
 | OBJ-4 — Enforcement at point of use | `vault_agent_registry_id` + `vault_rar_path` | Vault resolved the agent from the Agent Registry and narrowed the token to an exact path per request |
-| OBJ-5 — Correlated audit evidence | `request_id` (IVIA approval ↔ pgaudit write) + Vault bound by path & time | One forensic row spans approval, authentication, and the database write |
+| OBJ-5 — Correlated audit evidence | `request_id` — the same value in all three planes | One forensic row spans approval, authorization, and the database write, joined on a shared id rather than inferred from timing |
 
 ## Run the Correlation Query — CLI
 
@@ -110,7 +110,7 @@ db_command                  WRITE,INSERT
 db_credential_ttl           300
 ```
 
-Every field maps directly to one of the five workshop objectives — `vault_principal` (verifiable agent identity), `db_credential_ttl` of `300` (no standing privilege, 5-minute lease), `user_approved_sub` (action tied to user intent), `vault_agent_registry_id` + `vault_rar_path` (enforcement at point of use — the Agent Registry identity Vault resolved and the exact path it scoped the token to), and the correlation across all three planes — `request_id` shared by the IVIA approval and the Postgres write, with the Vault authentication bound in by credential path and time-proximity (correlated audit evidence).
+Every field maps directly to one of the five workshop objectives — `vault_principal` (verifiable agent identity), `db_credential_ttl` of `300` (no standing privilege, 5-minute lease), `user_approved_sub` (action tied to user intent), `vault_agent_registry_id` + `vault_rar_path` (enforcement at point of use — the Agent Registry identity Vault resolved and the exact path it scoped the token to), and the correlation across all three planes — one `request_id` carried by the IVIA approval, the Vault authorization and the Postgres write alike (correlated audit evidence).
 
 ## Run the Correlation Query — Athena Console
 
@@ -138,11 +138,70 @@ FROM audit_correlation
 WHERE request_id = 'PASTE_REQUEST_ID_HERE'
 ```
 
+## Read the Vault Record Yourself
+
+The correlation row is a summary. This section opens the underlying Vault audit record for your refund, so you can see what Vault actually validated rather than trusting a VIEW that someone else wrote.
+
+Use the `athena_query` helper from the [Credential Revocation](../../60-use-case-2/65-credential-revocation/) page (it is defined there in Step 6), and the `request_id` from your own refund:
+
+```bash
+export REQUEST_ID=<your request_id>
+
+athena_query "SELECT
+  auth.entity_id                                  AS human_entity,
+  auth.metadata['actor_entity_name']              AS agent,
+  auth.metadata['jwt_audience_claim']             AS audience,
+  auth.metadata['jwt_issuer']                     AS issuer,
+  auth.metadata['jwt_unique_id']                  AS jti,
+  auth.metadata['jwt_authorization_details']      AS authorization_details,
+  request.headers['x-correlation-id'][1]          AS correlation_id
+FROM workshop_logs.vault_audit
+WHERE type = 'response'
+  AND request.path = 'database/creds/uc3-refund-writer'
+  AND request.headers['x-correlation-id'][1] = '${REQUEST_ID}'
+LIMIT 1;"
+```
+
+Six things are worth finding in that output:
+
+- **`human_entity`** — a Vault identity entity id. This is the human the token was issued for. The claim that Vault records only the agent and never the person is simply false, and the next command proves whose id it is.
+- **`agent`** — `uc3-actor`, the Agent Registry entity Vault resolved from the token's `act.sub`. Two identities, one request: that *is* on-behalf-of.
+- **`audience`** — the token names `uc3-actor` as its audience. A token minted for a different audience is not accepted here.
+- **`issuer`** — your IVIA OIDC Provider. Vault validated the signature against that issuer's JWKS before any of the above mattered.
+- **`jti`** — the token's unique id. This is what the audit trail names instead of the raw token, so the record identifies the credential without containing it.
+- **`authorization_details`** — the `vault:path_access` entry naming `database/creds/uc3-refund-writer` with capability `read`, alongside the `refund_approval` type. This is the per-request narrowing Vault enforced, recorded in the same breath as the request it authorized.
+
+### Resolve the human entity to a name
+
+The entity id is deliberately opaque in the log. Ask Vault who it is:
+
+```bash
+export VAULT_ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)
+kubectl exec -n vault vault-0 -- \
+  sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read -format=json identity/entity/id/<human_entity from above>" \
+  | jq '{id: .data.id, name: .data.name}'
+```
+
+Expected output — the person who tapped Approve on their phone:
+
+```json
+{
+  "id": "6edd531a-371a-7bb1-2290-fe520b73e0e8",
+  "name": "jaime"
+}
+```
+
+Run the same command against the agent's entity id and it answers `uc3-actor`. That pair — a named human and a named agent on one authorization decision, with the exact path it was narrowed to — is the record an incident responder needs, and it came out of Vault without any application help beyond the correlation header.
+
+:::alert{type="info" header="Why the correlation header exists at all"}
+Everything above comes from Vault's own view of the token. The one thing Vault has no way to know is *which refund* this was, because `request_id` is the application's concept and never appears in the token — IBM Verify does not carry the consent-time detail through the exchange (see the [CIBA Approval Flow](../71-ciba-approval-flow/) page). So the agent sends it explicitly, as an `X-Correlation-Id` header on the credential request, and Vault records it because a `vault_audit_request_header` resource allowlists that header with `hmac = false`. Without the allowlist Vault drops the header silently; without the header the Vault plane could only be matched to the other two by credential path and a time window, which stops being trustworthy the moment two refunds overlap.
+:::
+
 ## Interpreting the Result
 
 A complete row demonstrates that:
 
-1. The same `request_id` appears in the IVIA decision log (user approved) and the pgaudit log (data was written to `banking.refunds`). The Vault audit log (agent authenticated by its Agent Registry identity and scoped to an exact path per request) deliberately records neither the `request_id` nor the human subject — it is correlated into the same forensic row by its credential path and the sub-second time-proximity of its authentication to the approval.
+1. The same `request_id` appears in **all three** logs: the IVIA decision log (who approved), the Vault audit log (which agent was authorized, for which human, scoped to which path), and the pgaudit log (the write that landed in `banking.refunds`). The Vault plane carries it because the agent sends it as `X-Correlation-Id` and Vault is configured to audit that header — so the row is an equality join on one id, not three logs lined up by clock.
 2. The `approval_time`, `vault_auth_time`, and `db_write_time` columns show a linear causal chain — approval before auth before write.
 3. The `db_credential_ttl` carries the integer lease TTL in seconds (300 = 5 minutes) the agent observed when Vault issued the per-refund database credential — proof the credential expires shortly after the write, not a standing one.
 4. The `vault_agent_registry_id` column shows the exact agent (`uc3-actor`) Vault resolved from the delegated token's `act.sub` against the Agent Registry, and `vault_rar_path` shows the exact path (`database/creds/uc3-refund-writer`) the per-request `vault:path_access` RAR narrowed the token to — the enforcement Vault applied at the point of use, provable and not assumed.

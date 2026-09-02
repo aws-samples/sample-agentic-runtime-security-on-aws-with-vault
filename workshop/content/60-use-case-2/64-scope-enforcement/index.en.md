@@ -192,8 +192,81 @@ pod "pg-grants" deleted
 What to read from this output:
 
 - **`vault_root=arwdDxtm/vault_root`** — the master role holds the full `arwdDxtm` privilege set on this table: **a** insert, **r** select, **w** update, **d** delete, **D** truncate, **x** references, **t** trigger, **m** maintain (Postgres 17 added `m`). The trailing `/vault_root` means *granted by* `vault_root`.
-- **Each `"v-…"=r/vault_root` row** is a live Vault-vended ephemeral role. The `=r/` means *only the `r` (SELECT) privilege is granted* — no `a` for insert, no `w` for update, no `d` for delete. That's why your Step 2.2 INSERT got rejected. This is also the direct evidence of JIT identity at the DB layer: every active credential is visible as its own row, and the list shrinks as leases expire and Vault's `revocation_statements` drop the roles.
+- **Each `"v-…"=r/vault_root` row** is a live Vault-vended ephemeral role. The `=r/` means *only the `r` (SELECT) privilege is granted* — no `a` for insert, no `w` for update, no `d` for delete. That's why your Step 2.2 INSERT got rejected. This is also the direct evidence of JIT identity at the DB layer: every active credential is visible as its own row, and the list shrinks as roles are dropped — immediately when the MCP server revokes the lease at the end of a query, or at lease expiry for the credentials you issued by hand with the root token on these pages, which nothing revokes for you.
 - **`Policies` column** — the RLS predicate from the previous page. The `(u)` USING clause is the SELECT filter; `(r)` indicates it applies to `SELECT` (read).
+
+## Section 3 — What a Stolen Token Gets You
+
+Sections 1 and 2 showed what the token **cannot** reach. This one shows what it *can* — including when it is presented by someone who is not you. Every claim a workshop makes about token security is worth less than the five minutes it takes to check, so check this one.
+
+### Step 3.1 — Get your own access token
+
+The Banking UI keeps the token in an `httpOnly` cookie, which JavaScript cannot read but DevTools can show you.
+
+In the browser tab where you are signed in as Oscar: open DevTools (**F12**), go to **Application** → **Storage** → **Cookies**, select the banking site, and copy the value of the **`access_token`** cookie. Then put it in a shell variable:
+
+```bash
+read -r -s ACCESS_TOKEN   # paste the cookie value, press Enter (input is hidden)
+export ACCESS_TOKEN
+echo "token length: ${#ACCESS_TOKEN}"
+```
+
+A Use Case 2 access token is roughly 800 characters. If you got something much shorter you copied the wrong cookie — `id_token` and `pkce` also live there.
+
+### Step 3.2 — Present it to Vault twice
+
+This is the exact call the MCP server makes: the token *is* the Vault token. Run it twice.
+
+```bash
+for attempt in 1 2; do
+  kubectl delete pod vault-replay -n banking-app --ignore-not-found --now >/dev/null 2>&1
+  kubectl run vault-replay --rm -i --quiet --restart=Never --image=curlimages/curl:8.11.1 -n banking-app \
+    --command -- curl -s -H "X-Vault-Token: ${ACCESS_TOKEN}" \
+      http://vault.vault.svc.cluster.local:8200/v1/database/creds/uc2-personal-readonly \
+    | sed -e "s/.*\"username\":\"\([^\"]*\)\".*/attempt ${attempt} username=\1/"
+done
+```
+
+Expected output — **both** succeed, with two different credentials:
+
+```
+attempt 1 username=v-JWT Toke-uc2-pers-DiVXIMGjGIeX0uV8sFm9-1788385620
+attempt 2 username=v-JWT Toke-uc2-pers-gFzxJVMgIqTvaHP3K9R9-1788385654
+```
+
+### What this means, stated plainly
+
+**Vault has no replay cache.** The delegated token is a bearer credential: whoever holds it can present it as many times as they like until it expires, and each presentation issues a fresh database credential. Nothing about the OAuth resource server model changes that, and the workshop is not going to pretend otherwise.
+
+What limits the damage is everything *around* the token, and you have already proved each piece:
+
+- **The credential is read-only.** Section 2's INSERT was rejected by a Postgres `GRANT`, and a replayed token gets exactly the same read-only credential.
+- **It only sees one user's rows.** Row-level security scopes every result to the `sub` in the token, so a stolen token is a window onto that user's data and no one else's — you proved this on the [Verify User Access](../63-verify-user-access/) page.
+- **The audience is pinned.** The token names `agent-uc2` as its audience; Vault's resource server profile rejects a token minted for a different audience.
+- **The agent ceiling still applies.** Section 1 showed the same token being refused the Use Case 3 write path. Replaying it does not widen it.
+- **For Use Case 3, the path is pinned per request.** The mandatory `vault:path_access` RAR narrows each delegated token to one path — the [Bypass Test](../73-bypass-test/) proves a token whose RAR names a different path is denied.
+- **And a replayed Use Case 3 token still cannot pay a refund twice.** It could obtain the writer credential again, but the unique index on `banking.refunds (request_id)` refuses the second write — proved under "One Approval Pays Once".
+
+**The honest gap:** the token's own lifetime. Check it yourself:
+
+```bash
+python3 -c "
+import base64, json, os, time
+p = os.environ['ACCESS_TOKEN'].split('.')[1]; p += '=' * (-len(p) % 4)
+c = json.loads(base64.urlsafe_b64decode(p))
+print('lifetime:', (c['exp'] - c['iat']) // 60, 'minutes')
+print('expires in:', int((c['exp'] - time.time()) // 60), 'minutes')
+"
+```
+
+Expected output on this deployment — `lifetime` is fixed by the IVIA client configuration; `expires in` counts down from whenever you signed in:
+
+```
+lifetime: 120 minutes
+expires in: 79 minutes
+```
+
+Two hours is a long replay window for a bearer token, and it is set by the IVIA client configuration, not by Vault. Shortening it — and pairing it with the credential revocation you saw on the next page, which closes the *credential's* window in milliseconds — is the lever a production deployment pulls. That is the difference between a control the system enforces and a parameter someone chose; both are worth knowing which is which.
 
 :::expand{header="Platform Track — Defense-in-depth: how Vault policy and DB GRANTs create independent enforcement layers"}
 
@@ -237,6 +310,8 @@ async function writeAccount(params: { user_sub: string; amount: number }) {
     throw err;
   } finally {
     await client.end();
+    // The credential existed for exactly this query. Hand it back now.
+    await revokeLease(creds.leaseId);
   }
 }
 ```
