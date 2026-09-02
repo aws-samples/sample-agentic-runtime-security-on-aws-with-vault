@@ -651,13 +651,24 @@ resource "aws_glue_catalog_table" "vault_audit" {
       name = "type"
       type = "string"
     }
+    # auth.entity_id is the Vault identity entity the request resolved to. On a
+    # Use Case 3 refund that is the HUMAN who approved it (entity name "jaime"),
+    # sitting alongside the agent in metadata['actor_entity_name'] — Vault records
+    # both halves of the on-behalf-of pair. It was missing from this struct, which
+    # is the only reason the human looked absent from the Vault plane; the record
+    # always carried it.
     columns {
       name = "auth"
-      type = "struct<client_token:string,accessor:string,display_name:string,policies:array<string>,metadata:map<string,string>>"
+      type = "struct<client_token:string,accessor:string,display_name:string,entity_id:string,policies:array<string>,metadata:map<string,string>>"
     }
+    # request.headers holds the headers Vault was told to audit (see
+    # vault_audit_request_header "correlation_id" in the vault_config module). The
+    # Use Case 3 agent stamps X-Correlation-Id = its request_id on the
+    # database/creds read, which is what lets the three-plane VIEW join the Vault
+    # plane on the SAME id as the other two instead of on a time window.
     columns {
       name = "request"
-      type = "struct<id:string,path:string,operation:string,namespace:struct<id:string>,data:map<string,string>>"
+      type = "struct<id:string,path:string,operation:string,namespace:struct<id:string>,data:map<string,string>,headers:map<string,array<string>>>"
     }
     columns {
       name = "response"
@@ -876,36 +887,42 @@ locals {
   # MUST populate >=1 row per request_id or the whole capstone returns zero rows.
   #
   # Probe-driven decisions baked in here (results in 07.1-capstone-SUMMARY.md):
-  #   P1 = Alt-A vault join, NATIVE MODEL (Phase 9 cutover, corrected 2026-07-27): anchor
-  #        ivia_decisions, join vault_audit on the refund-writer cred path + a time window.
-  #        EMPIRICAL (live us-east-1 audit): the native OAuth resource server does NOT log
-  #        the human sub as the audited principal. vault.auth.display_name is the delegated
-  #        access token's JTI identifier ("JWT Token with JTI: <jti>"); the bare human sub
-  #        ('jaime') appears NOWHERE queryable in the vault_audit record. The two planes
-  #        share NO per-request key — ivia_decisions has request_id but not the jti;
-  #        vault_audit has the jti but neither request_id nor the human sub. So IVIA<->Vault
-  #        correlate on what they DO share: the refund-writer cred path (request.path =
-  #        'database/creds/uc3-refund-writer'), the completed operation (vault.type =
-  #        'response'), and a 30s window around the approval — restricted to native OBO
-  #        tokens via display_name LIKE 'JWT Token%'. To stay deterministic when two refunds
-  #        land in one 30s window, row_number() keeps only the vault response NEAREST in time
-  #        to each approval (partition by request_id, order by |vault.ts - ivia.ts|); the
-  #        real approval/response pair is ~50ms apart, so nearest-match is unambiguous. The
-  #        vault.timestamp column is SerDe-mapped to the record's "time" key
-  #        (mapping.timestamp=time on the vault_audit Glue table) — without that map the
-  #        column reads NULL and the time window cannot fire. vault_agent_registry_id and the
-  #        agent half of vault_principal come from vault.auth.metadata['actor_entity_name']
-  #        (= 'uc3-actor'), the native Agent-Registry actor entity Vault resolved from the
+  #   P1 = Vault join on the shared correlation id (corrected 2026-09-02, issue #34).
+  #        The earlier note here claimed the native OAuth resource server "does not log
+  #        the human sub" and that "the bare human sub appears NOWHERE queryable in the
+  #        vault_audit record". That was wrong, and it was wrong in a way that hid our
+  #        own gap: the record carries auth.entity_id, which resolves to the approving
+  #        human (entity name "jaime"), alongside the agent in
+  #        metadata['actor_entity_name']. It was not queryable because THIS TABLE's auth
+  #        struct omitted entity_id — a schema we wrote, not a decision Vault made. The
+  #        column is now declared, and nothing about the omission was ever deliberate.
+  #        What genuinely was absent is our application-level request_id, because the
+  #        agent never sent it. It does now: vault_client.get_refund_credentials()
+  #        stamps X-Correlation-Id = request_id on the database/creds read, and
+  #        vault_audit_request_header "correlation_id" (vault_config module, hmac=false)
+  #        is what makes Vault write it verbatim into request.headers. So the two planes
+  #        now share a real per-request key and the join is an equality on it —
+  #        deterministic, and correct when two refunds land in the same second. The old
+  #        join matched on the credential path plus a 30-second window plus a
+  #        nearest-in-time row_number(); with one refund at a time it produced the right
+  #        row, but it was inference, and the workshop was teaching it as correlation.
+  #        vault_human_entity_id surfaces auth.entity_id so an attendee can resolve it
+  #        with `vault read identity/entity/id/<id>` and see the human Vault itself
+  #        recorded; vault_agent_registry_id stays metadata['actor_entity_name']
+  #        (= 'uc3-actor'), the Agent Registry actor entity Vault resolved from the
   #        delegated token's act.sub — NOT ivia.client_id ('agent-uc3', the CIBA exchange
   #        client that never authenticates to Vault; sourcing it would teach a false
-  #        correlation). actor_entity_name is a DIFFERENT native metadata key from the retired
-  #        jwt may_act_sub/rar_type mappings (empty in Phase 9); native OBO populates it.
-  #        vault_principal composes agent + human ("uc3-actor (on behalf of jaime)") from that
-  #        metadata + ivia.user_identity; vault_rar_path = vault.request.path (the exact path
-  #        the per-request vault:path_access RAR scoped the token to). The column NAMES match
-  #        the attendee query in workshop/content/70-use-case-3/74-three-plane-audit — keep
-  #        them in lockstep. VERIFY e2e: after a native refund, verify-uc3.sh Check 14 asserts
+  #        correlation). vault_principal composes the pair; vault_rar_path =
+  #        vault.request.path (the exact path the per-request vault:path_access RAR
+  #        scoped the token to). The vault.timestamp column is SerDe-mapped to the
+  #        record's "time" key (mapping.timestamp=time on the vault_audit Glue table) —
+  #        without that map the column reads NULL. The column NAMES match the attendee
+  #        query in workshop/content/70-use-case-3/74-three-plane-audit — keep them in
+  #        lockstep. VERIFY e2e: after a native refund, verify-uc3.sh Check 14 asserts
   #        SELECT * FROM audit_correlation WHERE request_id='<id>' returns exactly ONE row.
+  #        NOTE: refunds created BEFORE this change carry no correlation header and will
+  #        not appear in the VIEW. That is deliberate — a row that cannot be joined on
+  #        identity is exactly the row the old time-window join was inventing.
   #   P2 = pgaudit Fork B (chosen 2026-05-25). The agent's INSERT is a MULTI-LINE
   #        statement, and the log pipeline splits it on newlines into separate S3 rows,
   #        so the row carrying the uc3_request_id comment also carries the AUDIT header
@@ -927,46 +944,25 @@ locals {
   athena_view_sql = <<-SQL
     CREATE OR REPLACE VIEW audit_correlation AS
     SELECT
-        request_id,
-        approval_time,
-        user_approved_sub,
-        ciba_binding_message,
-        vault_auth_time,
-        vault_principal,
-        vault_agent_registry_id,
-        vault_rar_path,
-        db_write_time,
-        db_command,
-        db_credential_ttl
-    FROM (
-        SELECT
-            ivia.request_id                                              AS request_id,
-            ivia.timestamp                                               AS approval_time,
-            ivia.user_identity                                           AS user_approved_sub,
-            ivia.request_id                                              AS ciba_binding_message,
-            vault.timestamp                                              AS vault_auth_time,
-            vault.auth.metadata['actor_entity_name'] || ' (on behalf of ' || ivia.user_identity || ')' AS vault_principal,
-            vault.auth.metadata['actor_entity_name']                     AS vault_agent_registry_id,
-            vault.request.path                                           AS vault_rar_path,
-            regexp_extract(rds.line, '^([0-9-]+ [0-9:]+ UTC)', 1)        AS db_write_time,
-            regexp_extract(rds.line, 'AUDIT: SESSION,[0-9]+,[0-9]+,([A-Z]+,[A-Z]+),', 1) AS db_command,
-            ivia.db_credential_ttl                                       AS db_credential_ttl,
-            row_number() OVER (
-                PARTITION BY ivia.request_id
-                ORDER BY ABS(to_unixtime(from_iso8601_timestamp(vault.timestamp))
-                           - to_unixtime(from_iso8601_timestamp(ivia.timestamp)))
-            )                                                            AS rn
-        FROM workshop_logs.ivia_decisions ivia
-        JOIN workshop_logs.vault_audit vault
-            ON vault.request.path = 'database/creds/uc3-refund-writer'
-            AND vault.type = 'response'
-            AND vault.auth.display_name LIKE 'JWT Token%'
-            AND ABS(to_unixtime(from_iso8601_timestamp(vault.timestamp))
-                  - to_unixtime(from_iso8601_timestamp(ivia.timestamp))) < 30
-        LEFT JOIN workshop_logs.pgaudit_logs rds
-            ON regexp_extract(rds.line, 'uc3_request_id=([0-9a-f-]{36})', 1) = ivia.request_id
-    )
-    WHERE rn = 1
+        ivia.request_id                                              AS request_id,
+        ivia.timestamp                                               AS approval_time,
+        ivia.user_identity                                           AS user_approved_sub,
+        ivia.request_id                                              AS ciba_binding_message,
+        vault.timestamp                                              AS vault_auth_time,
+        vault.auth.metadata['actor_entity_name'] || ' (on behalf of ' || ivia.user_identity || ')' AS vault_principal,
+        vault.auth.entity_id                                         AS vault_human_entity_id,
+        vault.auth.metadata['actor_entity_name']                     AS vault_agent_registry_id,
+        vault.request.path                                           AS vault_rar_path,
+        regexp_extract(rds.line, '^([0-9-]+ [0-9:]+ UTC)', 1)        AS db_write_time,
+        regexp_extract(rds.line, 'AUDIT: SESSION,[0-9]+,[0-9]+,([A-Z]+,[A-Z]+),', 1) AS db_command,
+        ivia.db_credential_ttl                                       AS db_credential_ttl
+    FROM workshop_logs.ivia_decisions ivia
+    JOIN workshop_logs.vault_audit vault
+        ON vault.request.headers['x-correlation-id'][1] = ivia.request_id
+        AND vault.request.path = 'database/creds/uc3-refund-writer'
+        AND vault.type = 'response'
+    LEFT JOIN workshop_logs.pgaudit_logs rds
+        ON regexp_extract(rds.line, 'uc3_request_id=([0-9a-f-]{36})', 1) = ivia.request_id
   SQL
 
   # SELECT query for verify-uc3.sh consumption — the verify script substitutes the

@@ -146,6 +146,16 @@ class UC3VaultClient:
         # Present the OAuth JWT directly as the Vault token (X-Vault-Token).
         oauth_client = hvac.Client(url=self._addr, token=oauth_jwt)
 
+        # Stamp the flow's request_id onto the Vault request so the Vault audit
+        # plane carries the SAME id as the IVIA approval and the Postgres write.
+        # Vault records this header because vault_audit_request_header
+        # "correlation_id" allowlists it (hmac=false, so the value is verbatim);
+        # without the allowlist Vault drops it silently. This is the join key the
+        # audit_correlation VIEW uses — before it existed the VIEW had to guess,
+        # matching the Vault record to the approval by credential path and a 30s
+        # time window, which is ambiguous the moment two refunds overlap.
+        oauth_client.session.headers["X-Correlation-Id"] = request_id
+
         vault_db_path = "database/creds/uc3-refund-writer"
         db_response = oauth_client.read(vault_db_path)
         data = db_response["data"]

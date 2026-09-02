@@ -59,6 +59,27 @@ resource "vault_audit" "stdout" {
 }
 
 ################################################################################
+# Audit request-header allowlist — the three-plane correlation join key
+#
+# Vault's audit device records only the request headers it has been told to
+# record. The Use Case 3 agent stamps its application-level request_id onto the
+# database/creds/uc3-refund-writer read as X-Correlation-Id; this allowlist is
+# what makes Vault write it into the audit record, so the IVIA approval, the
+# Vault authorization and the Postgres write all carry the SAME id and the
+# three-plane VIEW can join on it instead of guessing from a time window.
+#
+# hmac = false is deliberate and safe: the value is a UUID the agent generated
+# for correlation. It identifies a refund flow, never a person and never a
+# secret. Hashing it would defeat the entire purpose — the id has to match the
+# one in the other two planes to be worth logging at all.
+################################################################################
+
+resource "vault_audit_request_header" "correlation_id" {
+  name = "x-correlation-id"
+  hmac = false
+}
+
+################################################################################
 # Kubernetes auth backend — CONF-01
 # Bound to EKS cluster CA + OIDC issuer; roles use ServiceAccount binding
 ################################################################################
