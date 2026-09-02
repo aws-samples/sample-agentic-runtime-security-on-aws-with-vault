@@ -256,3 +256,103 @@ kubectl run pg-owner-test --rm -i --restart=Never --image=postgres:16-alpine -n 
 ```
 
 The cross-owner read returns zero rows because of the `AND a.user_sub = <authenticated_sub>` predicate — the same one `check_refund_status` applies on every call. That is why asking the agent for a refund you don't own returns `{"error": "Refund <id> not found"}` instead of another user's data: a cross-tenant refund is made indistinguishable from one that does not exist (no information disclosure). `list_transactions` and account lookups use the same pattern — they set `app.current_user_sub` to the verified `sub` from the bearer token before querying, so RLS filters cross-tenant rows before they ever reach the agent.
+
+## One Approval Pays Once
+
+The sections above prove a delegated token cannot be repurposed. This one proves the **approval itself cannot be spent twice**.
+
+When you approved the refund on your phone, the agent obtained a `uc3-refund-writer` credential with a 5-minute TTL. A short TTL limits *how long* the credential lives — it does not limit *how many rows* it can write. Within those five minutes the same credential can `INSERT` as many times as it likes, so "the credential is short-lived" is not an answer to replay. Two layers answer it:
+
+| Layer | Mechanism | What it stops |
+|---|---|---|
+| Agent | `complete_refund` re-reads the terms recorded when the approval was requested and refuses if the `request_id` or the approver does not match (`applications/uc3-agent/app/agent.py`) | A refund being completed under an approval that was granted for different terms |
+| Database | `refunds_request_id_key` — a unique index on `banking.refunds (request_id)` (`applications/banking-app/db/seed.sql`) | A second refund row ever existing for one approval, even if the agent is bypassed entirely |
+
+This section exercises the **database** layer directly — with a real write-capable credential and real SQL, no agent in the path — because that is the layer that still holds when the application layer is the thing that failed.
+
+:::alert{type="info" header="Complete a refund first"}
+These steps replay *your* refund, so run the **Test the Refund Flow** page first. If `banking.refunds` is empty the `SELECT` feeding the `INSERT` returns no rows and you will see `INSERT 0 0` — nothing was tested.
+:::
+
+### Step 1 — Obtain a write-capable credential
+
+The read-path sections above used `uc3-readonly`. Replay is a write, so this step reads `database/creds/uc3-refund-writer` with the workshop's admin Vault token. That is deliberate: the delegation path that normally gates this role was already proven above — here we are testing **Postgres**, and taking the agent and Vault's authorization out of the picture is what makes the result attributable to the database alone.
+
+```bash
+export VAULT_ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)
+CREDS_JSON=$(kubectl exec -n vault vault-0 -- \
+  sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read database/creds/uc3-refund-writer -format=json")
+
+export PG_USER=$(echo "$CREDS_JSON" | jq -r '.data.username')
+export PG_PASS=$(echo "$CREDS_JSON" | jq -r '.data.password')
+export RDS_HOST=$(kubectl get configmap uc3-agent-config -n banking-app -o jsonpath='{.data.DB_HOST}')
+
+echo "$CREDS_JSON" | jq '{username: .data.username}'
+```
+
+:::alert{type="warning" header="Credential TTL: 5 minutes"}
+`uc3-refund-writer` is the shortest-lived role in the workshop. If Step 3 fails with `password authentication failed`, re-run Step 1 and continue.
+:::
+
+### Step 2 — Positive control: the credential really can write
+
+Before proving a write is refused, prove this credential can write at all — otherwise a rejection in Step 5.3 could just as easily be a missing privilege. This inserts a copy of your most recent refund with a **fresh** `request_id`, then rolls it back, so nothing is left behind (the `uc3-refund-writer` role has no `DELETE` — refund rows are audit records).
+
+```bash
+kubectl delete pod pg-replay-uc3 -n banking-app --ignore-not-found --now >/dev/null 2>&1
+kubectl run pg-replay-uc3 --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
+  --env="PGPASSWORD=${PG_PASS}" \
+  --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop -c "
+    SELECT set_config('app.current_user_sub','jaime',false);
+    BEGIN;
+    INSERT INTO banking.refunds (account_id, transaction_id, amount, approved_by, request_id)
+    SELECT account_id, transaction_id, amount, approved_by, gen_random_uuid()
+      FROM banking.refunds ORDER BY created_at DESC LIMIT 1;
+    ROLLBACK;"
+```
+
+Expected output — `INSERT 0 1` is the write being accepted, `ROLLBACK` is it being discarded:
+
+```
+ set_config
+------------
+ jaime
+(1 row)
+
+BEGIN
+INSERT 0 1
+ROLLBACK
+pod "pg-replay-uc3" deleted
+```
+
+### Step 3 — The replay: same approval, second refund
+
+Identical statement, one column changed: `request_id` is now carried over from the existing row instead of generated. This is precisely the replay — the same human approval, redeemed a second time.
+
+```bash
+kubectl delete pod pg-replay-uc3 -n banking-app --ignore-not-found --now >/dev/null 2>&1
+kubectl run pg-replay-uc3 --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
+  --env="PGPASSWORD=${PG_PASS}" \
+  --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop -c "
+    SELECT set_config('app.current_user_sub','jaime',false);
+    INSERT INTO banking.refunds (account_id, transaction_id, amount, approved_by, request_id)
+    SELECT account_id, transaction_id, amount, approved_by, request_id
+      FROM banking.refunds ORDER BY created_at DESC LIMIT 1;"
+```
+
+Expected output — the write is refused by name:
+
+```
+ set_config
+------------
+ jaime
+ERROR:  duplicate key value violates unique constraint "refunds_request_id_key"
+(1 row)
+
+pod "pg-replay-uc3" deleted
+pod banking-app/pg-replay-uc3 terminated (Error)
+```
+
+The `ERROR:` line arrives on stderr and the `set_config` table on stdout, so the two may interleave differently in your terminal — what matters is the constraint name. `psql` exits non-zero, so `kubectl` also reports `terminated (Error)`; that non-zero exit **is** the replay being correctly rejected.
+
+**Why this is a genuine negative test.** Every column is copied from a row Postgres already accepted, so the values are schema-valid and the foreign keys resolve. The privilege is present — Step 2 just wrote with this exact credential. The RLS `WITH CHECK` policy is satisfied — the GUC names the account owner, the same way it did for the row that succeeded. Nothing is left that can reject this statement except `refunds_request_id_key`. And it is a *unique index*, not application code: no bug in the agent, no compromised pod, and no stolen 5-minute credential can write a second refund for an approval that has already been paid.
