@@ -177,26 +177,33 @@ SECRET_JSON=$(aws secretsmanager get-secret-value --region "${REGION}" \
 MASTER_USER=$(echo "${SECRET_JSON}" | jq -r '.username')
 MASTER_PASS=$(echo "${SECRET_JSON}" | jq -r '.password')
 
+kubectl create secret generic db-master -n banking-app \
+  --from-literal=password="${MASTER_PASS}" --dry-run=client -o yaml | kubectl apply -f -
+
 kubectl delete pod pg-grants -n banking-app --ignore-not-found --now >/dev/null 2>&1
 kubectl run pg-grants --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
-  --env="PGPASSWORD=${MASTER_PASS}" \
-  --command -- psql -h "${RDS_HOST}" -U "${MASTER_USER}" -d workshop \
-    -c "\dp banking.accounts"
+  --overrides="$(jq -n --arg host "${RDS_HOST}" --arg user "${MASTER_USER}" \
+    --arg sql "\dp banking.accounts" \
+    '{spec:{containers:[{name:"pg-grants",image:"postgres:16-alpine",env:[{name:"PGPASSWORD",valueFrom:{secretKeyRef:{name:"db-master",key:"password"}}}],command:["psql","-h",$host,"-U",$user,"-d","workshop","-c",$sql]}],restartPolicy:"Never"}}')"
+
+kubectl delete secret db-master -n banking-app
 ```
 
 Expected output — one `vault_root=arwdDxtm/vault_root` line followed by one row per **currently-active** Vault-vended credential (every active lease maps to one Postgres role, each granted `=r/vault_root`). The exact number of `v-…` rows depends on how many leases are still live — every issuance you made on pages 62 and 63 contributes one:
 
 ```
+secret/db-master created
                                                                                           Access privileges
  Schema  |   Name   | Type  |                         Access privileges                          | Column privileges |                                    Policies
 ---------+----------+-------+--------------------------------------------------------------------+-------------------+---------------------------------------------------------------------------------
  banking | accounts | table | vault_root=arwdDxtm/vault_root                                    +|                   | user_accounts (r):                                                             +
-         |          |       | "v-root-uc2-pers-<random>-<timestamp>"=r/vault_root               +|                   |   (u): ((user_sub)::text = current_setting('app.current_user_sub'::text, true))
+         |          |       | "v-JWT Toke-uc2-pers-<random>-<timestamp>"=r/vault_root           +|                   |   (u): ((user_sub)::text = current_setting('app.current_user_sub'::text, true))
          |          |       | "v-root-uc2-pers-<random>-<timestamp>"=r/vault_root               +|                   |
          |          |       | "v-root-uc2-pers-<random>-<timestamp>"=r/vault_root                |                   |
 (1 row)
 
 pod "pg-grants" deleted
+secret "db-master" deleted
 ```
 
 What to read from this output:

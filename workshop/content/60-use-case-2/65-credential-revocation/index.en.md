@@ -53,16 +53,20 @@ SECRET_JSON=$(aws secretsmanager get-secret-value --region "${REGION}" \
 MASTER_USER=$(echo "${SECRET_JSON}" | jq -r '.username')
 MASTER_PASS=$(echo "${SECRET_JSON}" | jq -r '.password')
 
+kubectl create secret generic db-master -n banking-app \
+  --from-literal=password="${MASTER_PASS}" --dry-run=client -o yaml | kubectl apply -f -
+
 kubectl delete pod pg-role-before -n banking-app --ignore-not-found --now >/dev/null 2>&1
 kubectl run pg-role-before --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
-  --env="PGPASSWORD=${MASTER_PASS}" \
-  --command -- psql -h "${RDS_HOST}" -U "${MASTER_USER}" -d workshop \
-    -c "SELECT rolname FROM pg_roles WHERE rolname='${PG_USER}';"
+  --overrides="$(jq -n --arg host "${RDS_HOST}" --arg user "${MASTER_USER}" \
+    --arg sql "SELECT rolname FROM pg_roles WHERE rolname='${PG_USER}';" \
+    '{spec:{containers:[{name:"pg-role-before",image:"postgres:16-alpine",env:[{name:"PGPASSWORD",valueFrom:{secretKeyRef:{name:"db-master",key:"password"}}}],command:["psql","-h",$host,"-U",$user,"-d","workshop","-c",$sql]}],restartPolicy:"Never"}}')"
 ```
 
 Expected output — exactly one row, your fresh ephemeral role:
 
 ```
+secret/db-master created
                      rolname
 -------------------------------------------------
  v-root-uc2-pers-IwaMUs8kxzRLvjsvSjwO-1780000048
@@ -95,9 +99,11 @@ Re-run the role check. The lease's ephemeral Postgres role should be gone:
 ```bash
 kubectl delete pod pg-role-after -n banking-app --ignore-not-found --now >/dev/null 2>&1
 kubectl run pg-role-after --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
-  --env="PGPASSWORD=${MASTER_PASS}" \
-  --command -- psql -h "${RDS_HOST}" -U "${MASTER_USER}" -d workshop \
-    -c "SELECT rolname FROM pg_roles WHERE rolname='${PG_USER}';"
+  --overrides="$(jq -n --arg host "${RDS_HOST}" --arg user "${MASTER_USER}" \
+    --arg sql "SELECT rolname FROM pg_roles WHERE rolname='${PG_USER}';" \
+    '{spec:{containers:[{name:"pg-role-after",image:"postgres:16-alpine",env:[{name:"PGPASSWORD",valueFrom:{secretKeyRef:{name:"db-master",key:"password"}}}],command:["psql","-h",$host,"-U",$user,"-d","workshop","-c",$sql]}],restartPolicy:"Never"}}')"
+
+kubectl delete secret db-master -n banking-app
 ```
 
 Expected output:
@@ -108,6 +114,7 @@ Expected output:
 (0 rows)
 
 pod "pg-role-after" deleted
+secret "db-master" deleted
 ```
 
 Zero rows. The ephemeral role has been dropped. Any open Postgres connection that was using this credential is now broken at its next query — `password authentication failed`. **This is the credential-revocation enforcement payoff: the moment the lease is revoked, the database access it granted is physically impossible.** No grace period, no rollback path, no orphan role left behind.
