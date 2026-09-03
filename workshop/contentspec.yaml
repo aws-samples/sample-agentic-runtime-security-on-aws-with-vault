@@ -1,6 +1,6 @@
 # AWS Workshop Studio v2 manifest for the Agentic Runtime Security on AWS workshop.
 # Schema: https://docs.aws.amazon.com/workshop-studio/latest/
-# rebuild marker: 2026-09-03 (PR#38 CIBA enforcement + content fixes)
+# rebuild marker: 2026-09-03b (PR#42 RDS secret via secretKeyRef)
 
 version: 2.0
 
