@@ -322,7 +322,7 @@ echo "$CREDS_JSON" | jq '{username: .data.username}'
 
 ### Step 2 — Positive control: the credential really can write
 
-Before proving a write is refused, prove this credential can write at all — otherwise a rejection in Step 5.3 could just as easily be a missing privilege. This inserts a copy of your most recent refund with a **fresh** `request_id`, then rolls it back, so nothing is left behind (the `uc3-refund-writer` role has no `DELETE` — refund rows are audit records).
+Before proving a write is refused, prove this credential can write at all — otherwise the rejection in Step 3 could just as easily be a missing privilege. This inserts a copy of your most recent refund with a **fresh** `request_id`, then rolls it back, so nothing is left behind (the `uc3-refund-writer` role has no `DELETE` — refund rows are audit records).
 
 ```bash
 kubectl delete pod pg-replay-uc3 -n banking-app --ignore-not-found --now >/dev/null 2>&1
