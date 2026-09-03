@@ -5,9 +5,10 @@ weight: 73
 
 ## Where Enforcement Now Lives: at Vault, per request
 
-Vault Enterprise's OAuth resource server enforces the delegation itself. When the delegated JWT is presented via `X-Vault-Token`, Vault resolves the agent actor from `act.sub` and narrows the token per request from the `vault:path_access` RAR. Two forged-token attacks fail **at Vault** — before any credential is issued:
+Vault Enterprise's OAuth resource server enforces the delegation itself. When the delegated JWT is presented via `X-Vault-Token`, Vault resolves the agent actor from `act.sub` and narrows the token per request from the `vault:path_access` RAR. Three attacks on a token fail **at Vault** — before any credential is issued, and you run all three below:
 
-- **Wrong actor** — a token whose `act.sub` names an agent Vault does not have registered fails closed: no agent entity resolves, so the on-behalf-of authorization is denied.
+- **Forged signature** — a token whose claims match a genuine one exactly, differing only in that the attacker signed it. Vault trusts only IVIA's RS256 JWKS, so it dies at the signature layer.
+- **Wrong agent** — a genuine, IVIA-signed token for the same human, but carrying a *different registered* agent in `act.sub`. That agent's ceiling bounds what the token can reach, and the refund path is outside it. (A token naming an agent Vault has never registered fails even earlier — no agent entity resolves at all — but your IVIA cannot mint one to try, so the run proves the layer with the registered case.)
 - **Wrong RAR path** — a token whose `vault:path_access` RAR names a path *other than* the one being requested is denied **even though the human baseline and the agent ceiling both permit the target path**. The per-request RAR is a hard, in-Vault narrowing.
 
 ## Run the Bypass Test
