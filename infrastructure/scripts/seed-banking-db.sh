@@ -8,6 +8,13 @@
 # Mechanism:
 #   - Retrieves RDS master credentials from Secrets Manager
 #   - Creates a ConfigMap from seed.sql in the banking-app namespace
+#   - Delivers the master password to the pod via a transient Kubernetes
+#     Secret (secretKeyRef), never as a literal env value: kubelet runs
+#     $(VAR) expansion on literal env values, where "$$" collapses to "$",
+#     so an AWS-generated password containing "$$" reaches psql corrupted.
+#     secretKeyRef values bypass expansion. A literal value would also land
+#     verbatim in the EKS control-plane audit log (pods are audited at
+#     RequestResponse level); Secret contents are audited at Metadata only.
 #   - Runs a disposable postgres:16-alpine pod (--rm) that mounts the
 #     ConfigMap and executes psql -v ON_ERROR_STOP=1 against the RDS endpoint
 #
@@ -24,6 +31,7 @@
 #   - seed.sql uses IF NOT EXISTS + ON CONFLICT DO NOTHING, so a re-run is
 #     error-free and ON_ERROR_STOP=1 stays silent on the happy path
 #   - ConfigMap is replaced on every run (kubectl apply)
+#   - Transient Secret is replaced on every run and deleted after seeding
 #   - Temp pod auto-deletes (--rm + restartPolicy: Never)
 #
 # Usage:
@@ -61,6 +69,7 @@ unset _WORKSHOP_CLUSTER _WORKSHOP_REGION
 NAMESPACE="banking-app"
 SEED_SQL="${PROJECT_ROOT}/applications/banking-app/db/seed.sql"
 CONFIGMAP_NAME="seed-sql"
+SEED_SECRET_NAME="db-seed-master"
 SEED_POD_NAME="db-seed-uc2"
 SEED_POD_IMAGE="postgres:16-alpine"
 DRY_RUN=false
@@ -137,6 +146,7 @@ print_pass "RDS: ${RDS_ADDRESS}:${RDS_PORT} db=${RDS_DB_NAME}"
 if [[ "$DRY_RUN" == true ]]; then
     print_info "[DRY-RUN] Would retrieve master credentials from Secrets Manager"
     print_info "[DRY-RUN] Would create ConfigMap '${CONFIGMAP_NAME}' in namespace '${NAMESPACE}'"
+    print_info "[DRY-RUN] Would create transient Secret '${SEED_SECRET_NAME}' in namespace '${NAMESPACE}'"
     print_info "[DRY-RUN] Would run '${SEED_POD_NAME}' pod with psql to seed database"
     print_pass "Dry-run complete"
     exit 0
@@ -168,7 +178,48 @@ if kubectl get pod "$SEED_POD_NAME" -n "$NAMESPACE" &>/dev/null; then
     sleep 3
 fi
 
+print_info "Creating transient Secret for the master credential..."
+# Password travels via Secret + secretKeyRef, never a literal env value —
+# see the "Mechanism" header. Deleted after seeding.
+kubectl create secret generic "$SEED_SECRET_NAME" \
+    --namespace="$NAMESPACE" \
+    --from-literal="password=${MASTER_PASSWORD}" \
+    --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+print_pass "Secret '${SEED_SECRET_NAME}' applied"
+
 print_info "Seeding database via temporary pod..."
+# Overrides JSON is built with jq --arg (not shell splicing) so no runtime
+# value can break or inject into the document.
+SEED_OVERRIDES=$(jq -n \
+    --arg name "$SEED_POD_NAME" \
+    --arg image "$SEED_POD_IMAGE" \
+    --arg host "$RDS_ADDRESS" \
+    --arg port "$RDS_PORT" \
+    --arg user "$MASTER_USER" \
+    --arg db "$RDS_DB_NAME" \
+    --arg cm "$CONFIGMAP_NAME" \
+    --arg secret "$SEED_SECRET_NAME" \
+    '{
+      spec: {
+        containers: [{
+          name: $name,
+          image: $image,
+          command: [
+            "psql",
+            "-h", $host,
+            "-p", $port,
+            "-U", $user,
+            "-d", $db,
+            "-v", "ON_ERROR_STOP=1",
+            "-f", "/seed/seed.sql"
+          ],
+          volumeMounts: [{name: "seed", mountPath: "/seed"}],
+          env: [{name: "PGPASSWORD", valueFrom: {secretKeyRef: {name: $secret, key: "password"}}}]
+        }],
+        volumes: [{name: "seed", configMap: {name: $cm}}],
+        restartPolicy: "Never"
+      }
+    }')
 kubectl run "$SEED_POD_NAME" \
     --namespace="$NAMESPACE" \
     --image="$SEED_POD_IMAGE" \
@@ -176,30 +227,12 @@ kubectl run "$SEED_POD_NAME" \
     --rm \
     -i \
     --timeout=120s \
-    --overrides="{
-      \"spec\": {
-        \"containers\": [{
-          \"name\": \"${SEED_POD_NAME}\",
-          \"image\": \"${SEED_POD_IMAGE}\",
-          \"command\": [
-            \"psql\",
-            \"-h\", \"${RDS_ADDRESS}\",
-            \"-p\", \"${RDS_PORT}\",
-            \"-U\", \"${MASTER_USER}\",
-            \"-d\", \"${RDS_DB_NAME}\",
-            \"-v\", \"ON_ERROR_STOP=1\",
-            \"-f\", \"/seed/seed.sql\"
-          ],
-          \"volumeMounts\": [{\"name\": \"seed\", \"mountPath\": \"/seed\"}],
-          \"env\": [{\"name\": \"PGPASSWORD\", \"value\": \"${MASTER_PASSWORD}\"}]
-        }],
-        \"volumes\": [{\"name\": \"seed\", \"configMap\": {\"name\": \"${CONFIGMAP_NAME}\"}}],
-        \"restartPolicy\": \"Never\"
-      }
-    }" 2>&1 || {
+    --overrides="$SEED_OVERRIDES" 2>&1 || {
+      kubectl delete secret "$SEED_SECRET_NAME" -n "$NAMESPACE" --ignore-not-found >/dev/null 2>&1 || true
       print_fail "Database seed failed. Check pod logs: kubectl logs ${SEED_POD_NAME} -n ${NAMESPACE}"
       exit 1
     }
+kubectl delete secret "$SEED_SECRET_NAME" -n "$NAMESPACE" --ignore-not-found >/dev/null 2>&1 || true
 
 print_pass "Database seeded successfully"
 print_pass "Banking schema + RLS policies + test data for Oscar and Jaime"

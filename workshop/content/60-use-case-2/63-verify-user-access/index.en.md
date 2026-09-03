@@ -101,14 +101,16 @@ SECRET_JSON=$(aws secretsmanager get-secret-value --region "${REGION}" \
 MASTER_USER=$(echo "${SECRET_JSON}" | jq -r '.username')
 MASTER_PASS=$(echo "${SECRET_JSON}" | jq -r '.password')
 
+kubectl create secret generic db-master -n banking-app \
+  --from-literal=password="${MASTER_PASS}" --dry-run=client -o yaml | kubectl apply -f -
+
 kubectl delete pod pg-client-policy -n banking-app --ignore-not-found --now >/dev/null 2>&1
 kubectl run pg-client-policy --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
-  --env="PGPASSWORD=${MASTER_PASS}" \
-  --command -- psql -h "${RDS_HOST}" -U "${MASTER_USER}" -d workshop \
-    -c "SELECT polname, polcmd, polroles, pg_get_expr(polqual, polrelid) AS policy_expr
-        FROM pg_policy
-        JOIN pg_class ON pg_class.oid = pg_policy.polrelid
-        WHERE pg_class.relname = 'accounts';"
+  --overrides="$(jq -n --arg host "${RDS_HOST}" --arg user "${MASTER_USER}" \
+    --arg sql "SELECT polname, polcmd, polroles, pg_get_expr(polqual, polrelid) AS policy_expr FROM pg_policy JOIN pg_class ON pg_class.oid = pg_policy.polrelid WHERE pg_class.relname = 'accounts';" \
+    '{spec:{containers:[{name:"pg-client-policy",image:"postgres:16-alpine",env:[{name:"PGPASSWORD",valueFrom:{secretKeyRef:{name:"db-master",key:"password"}}}],command:["psql","-h",$host,"-U",$user,"-d","workshop","-c",$sql]}],restartPolicy:"Never"}}')"
+
+kubectl delete secret db-master -n banking-app
 ```
 
 Expected output:
