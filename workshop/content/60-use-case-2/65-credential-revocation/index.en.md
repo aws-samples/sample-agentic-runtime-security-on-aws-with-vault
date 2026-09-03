@@ -66,6 +66,7 @@ kubectl run pg-role-before --rm -i --restart=Never --image=postgres:16-alpine -n
 Expected output — exactly one row, your fresh ephemeral role:
 
 ```
+secret/db-master created
                      rolname
 -------------------------------------------------
  v-root-uc2-pers-IwaMUs8kxzRLvjsvSjwO-1780000048
@@ -113,6 +114,7 @@ Expected output:
 (0 rows)
 
 pod "pg-role-after" deleted
+secret "db-master" deleted
 ```
 
 Zero rows. The ephemeral role has been dropped. Any open Postgres connection that was using this credential is now broken at its next query — `password authentication failed`. **This is the credential-revocation enforcement payoff: the moment the lease is revoked, the database access it granted is physically impossible.** No grace period, no rollback path, no orphan role left behind.

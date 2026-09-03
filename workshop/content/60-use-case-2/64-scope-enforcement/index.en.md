@@ -192,16 +192,18 @@ kubectl delete secret db-master -n banking-app
 Expected output — one `vault_root=arwdDxtm/vault_root` line followed by one row per **currently-active** Vault-vended credential (every active lease maps to one Postgres role, each granted `=r/vault_root`). The exact number of `v-…` rows depends on how many leases are still live — every issuance you made on pages 62 and 63 contributes one:
 
 ```
+secret/db-master created
                                                                                           Access privileges
  Schema  |   Name   | Type  |                         Access privileges                          | Column privileges |                                    Policies
 ---------+----------+-------+--------------------------------------------------------------------+-------------------+---------------------------------------------------------------------------------
  banking | accounts | table | vault_root=arwdDxtm/vault_root                                    +|                   | user_accounts (r):                                                             +
-         |          |       | "v-root-uc2-pers-<random>-<timestamp>"=r/vault_root               +|                   |   (u): ((user_sub)::text = current_setting('app.current_user_sub'::text, true))
+         |          |       | "v-JWT Toke-uc2-pers-<random>-<timestamp>"=r/vault_root           +|                   |   (u): ((user_sub)::text = current_setting('app.current_user_sub'::text, true))
          |          |       | "v-root-uc2-pers-<random>-<timestamp>"=r/vault_root               +|                   |
          |          |       | "v-root-uc2-pers-<random>-<timestamp>"=r/vault_root                |                   |
 (1 row)
 
 pod "pg-grants" deleted
+secret "db-master" deleted
 ```
 
 What to read from this output:

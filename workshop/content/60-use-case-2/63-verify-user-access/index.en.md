@@ -116,12 +116,14 @@ kubectl delete secret db-master -n banking-app
 Expected output:
 
 ```
+secret/db-master created
     polname    | polcmd | polroles |                               policy_expr
 ---------------+--------+----------+--------------------------------------------------------------------------
  user_accounts | r      | {0}      | ((user_sub)::text = current_setting('app.current_user_sub'::text, true))
 (1 row)
 
 pod "pg-client-policy" deleted
+secret "db-master" deleted
 ```
 
 The `policy_expr` column shows the RLS predicate (PostgreSQL has normalised the column reference to `(user_sub)::text` and the setting name to `'app.current_user_sub'::text` — same semantic). Every `SELECT` on `banking.accounts` is automatically filtered by this predicate. If `app.current_user_sub` is not set, `current_setting(..., true)` returns `NULL` and no rows are returned — a safe default. The `polroles = {0}` value is Postgres's convention in `pg_policy` for "applies to every role" — the policy is not scoped to a specific role list, so any non-superuser role that touches the table is subject to it (the master `vault_root` role bypasses RLS because it is a superuser, which is why Step 3 reads `pg_policy` successfully).
