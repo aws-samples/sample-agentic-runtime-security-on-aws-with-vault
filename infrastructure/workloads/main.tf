@@ -77,8 +77,11 @@ locals {
   iviaop_clients_yml_resolved = templatefile(
     "${path.module}/../modules/verify_access/iviaop-config/clients.yml.tftpl",
     {
-      ivia_client_secret = local.services.ivia_client_secret
-      uc2_redirect_uri   = local.uc2_redirect_uri
+      uc1_client_secret       = local.services.ivia_client_secrets["agent-uc1"]
+      uc2_client_secret       = local.services.ivia_client_secrets["agent-uc2"]
+      uc3_client_secret       = local.services.ivia_client_secrets["agent-uc3"]
+      uc3_actor_client_secret = local.services.ivia_client_secrets["uc3-actor"]
+      uc2_redirect_uri        = local.uc2_redirect_uri
     }
   )
 }
@@ -130,7 +133,7 @@ module "uc2_app" {
   ivia_ingress_hostname = local.services.ivia_ingress_hostname
   ivia_service_endpoint = local.services.ivia_service_endpoint
   ivia_client_id        = "agent-uc2"
-  ivia_client_secret    = local.services.ivia_client_secret
+  ivia_client_secret    = local.services.ivia_client_secrets["agent-uc2"]
   tls_certificate_arn   = local.infra.tls_certificate_arn
   # CR-01 fix: use LE-trusted nip.io FQDN when available; raw ALB only as
   # pre-ACME bootstrap fallback. effective_ivia_host is resolved in tier 2.
@@ -155,7 +158,11 @@ module "uc3_agent" {
   ivia_base_url          = "https://${local.services.ivia_service_endpoint}:8436"
   ivia_client_id         = "agent-uc3"
   ivia_id_token_audience = "agent-uc2"
-  ivia_client_secret     = local.services.ivia_client_secret
+  ivia_client_secret     = local.services.ivia_client_secrets["agent-uc3"]
+  # uc3-actor performs the RFC 8693 exchange and authenticates with its OWN
+  # secret — the whole point of issue #30 is that holding agent-uc3's secret
+  # must not let a caller act as uc3-actor.
+  ivia_actor_client_secret = local.services.ivia_client_secrets["uc3-actor"]
   # CR-01 fix: use LE-trusted nip.io FQDN when available; raw ALB only as
   # pre-ACME bootstrap fallback. effective_ivia_host is resolved in tier 2.
   ivia_external_url   = "https://${local.effective_ivia_host}"
@@ -190,10 +197,10 @@ module "uc3_agent" {
 # (tier 2) the iviaop-config ConfigMap is created before its own Ingress
 # reconciles — so neither place can read the final banking-ui ALB hostname.
 # Resolution: tier 2 ships provider.yml + clients.yml with placeholder hosts;
-# after module.uc2_app completes here (ALB hostname known), this root-level
-# patch overwrites just those two ConfigMap keys with the real hosts, then
-# rolls the iviaop Deployment so it reloads them at startup. agent-uc1/agent-uc3
-# entries are unaffected.
+# after module.uc2_app completes here (ALB hostname known), these two root-level
+# patches overwrite provider.yml in the iviaop-config ConfigMap and clients.yml in
+# the iviaop-clients Secret with the real hosts, then roll the iviaop Deployment so
+# it reloads them at startup. agent-uc1/agent-uc3 entries are unaffected.
 #-------------------------------------------------------------------------------
 
 resource "kubernetes_config_map_v1_data" "iviaop_clients_patch" {
@@ -204,7 +211,24 @@ resource "kubernetes_config_map_v1_data" "iviaop_clients_patch" {
 
   data = {
     "provider.yml" = local.iviaop_provider_yml_resolved
-    "clients.yml"  = local.iviaop_clients_yml_resolved
+  }
+
+  field_manager = "root-tf-clients-patch"
+  force         = true
+
+  depends_on = [module.uc2_app]
+}
+
+# clients.yml lives in the iviaop-clients Secret, not the ConfigMap — it carries
+# every client_secret (issue #30) — so its redirect_uri patch is a Secret patch.
+resource "kubernetes_secret_v1_data" "iviaop_clients_patch" {
+  metadata {
+    name      = "iviaop-clients"
+    namespace = "verify-access"
+  }
+
+  data = {
+    "clients.yml" = local.iviaop_clients_yml_resolved
   }
 
   field_manager = "root-tf-clients-patch"
@@ -229,5 +253,8 @@ resource "null_resource" "iviaop_rollout_restart" {
     command = "aws eks update-kubeconfig --region ${local.infra.region} --name ${local.infra.cluster_name} && kubectl rollout restart deploy/iviaop -n verify-access && kubectl rollout status deploy/iviaop -n verify-access --timeout=180s"
   }
 
-  depends_on = [kubernetes_config_map_v1_data.iviaop_clients_patch]
+  depends_on = [
+    kubernetes_config_map_v1_data.iviaop_clients_patch,
+    kubernetes_secret_v1_data.iviaop_clients_patch,
+  ]
 }

@@ -36,7 +36,8 @@
 #
 # Bypass mode (--bypass) — the native enforcement done-gate (jwt/ backend GONE).
 # SELF-MINTING: the suite headlessly mints a REAL IVIA-issued delegated token via
-# the production path (PKCE login + RFC 8693 token-exchange) for a workshop persona,
+# the production path (a REAL CIBA approval, then an RFC 8693 token-exchange) for a
+# workshop persona,
 # so Checks 15-18 run WITHOUT an operator hand-capturing a browser token:
 #   14. Untrusted-signer control: a self-minted HS256 JWT must be rejected at
 #       Vault's signature layer (Vault trusts only IVIA's RS256 JWKS). Self-generated.
@@ -148,7 +149,8 @@ Normal mode checks (19 total):
        workshop/content/70-use-case-3/70-test-refund/.
 
 Bypass mode (--bypass) runs the native enforcement done-gate. Checks 15-18
-SELF-MINT a real IVIA-issued delegated token (PKCE login + RFC 8693 exchange) —
+SELF-MINT a real IVIA-issued delegated token by driving an ACTUAL approval with a
+virtual authenticator, then exchanging it (RFC 8693) —
 no manual browser capture needed:
   14. Untrusted-signer control — self-minted HS256 JWT rejected at signature layer
   15. REAL delegated token jti (phase-done gate) + act.sub=uc3-actor (self-minted)
@@ -159,6 +161,11 @@ no manual browser capture needed:
   19. (optional) TRUE wrong-actor → DENY (UC3_WRONG_ACTOR_TOKEN) — production IVIA
       only signs act.sub=uc3-actor, so this is operator-supplied; absent = SKIP (WARN)
       A self-mint failure is a HARD FAIL (skip = not-proven != pass), never silent.
+      The mint drives a REAL approval (virtual authenticator) rather than a plain
+      login: minting a delegated token WITHOUT an approval is the very bypass the
+      idmap CIBA-provenance gate refuses (issue #29), so the suite must not depend
+      on it. This mode therefore needs the persona to have no real phone enrolled,
+      exactly like --no-phone.
 
 No-phone mode (--no-phone) — ADMIN ONLY, runs standalone. Drives the LIVE Use Case 3
 refund end-to-end when nobody has the IBM Verify app installed, then prints the full
@@ -188,7 +195,7 @@ Env-var overrides:
   VAULT_ROOT_TOKEN        (optional)
   IVIA_ISSUER             (default: https://iviaop.verify-access.svc.cluster.local:8436/oauth2)
   AWS_REGION              (default: resolved from terraform.tfvars)
-  UC3_PERSONA             (--bypass — workshop persona to self-mint the delegated
+  UC3_PERSONA             (--bypass — workshop persona whose APPROVAL mints the delegated
                            token for; default: oscar. Any user in base_layer.yaml.tftpl)
   UC3_NOPHONE_PERSONA     (--no-phone — persona whose refund is driven end-to-end;
                            default: jaime, the persona the workshop pages use)
@@ -249,6 +256,24 @@ else
     print_info "${SCRIPT_DESCRIPTION}"
 fi
 echo ""
+
+# ivia_client_secret <client_id> — read ONE OIDC client's secret from the Kubernetes
+# Secret that carries it. Every client (agent-uc2, agent-uc3, uc3-actor) has its OWN
+# secret and none of them live in a ConfigMap any more (issue #30), so a caller must
+# name the client it intends to authenticate as. An unknown client_id returns empty,
+# which every call site treats as a hard mint failure.
+ivia_client_secret() {
+    local client_id="$1" secret_name key
+    case "${client_id}" in
+        agent-uc2) secret_name="banking-ui-oidc"; key="IVIA_CLIENT_SECRET" ;;
+        agent-uc3) secret_name="uc3-oidc-clients"; key="IVIA_CLIENT_SECRET" ;;
+        uc3-actor) secret_name="uc3-oidc-clients"; key="IVIA_ACTOR_CLIENT_SECRET" ;;
+        *) return 1 ;;
+    esac
+    kubectl get secret -n "${BANKING_NAMESPACE}" "${secret_name}" \
+        -o "jsonpath={.data.${key}}" 2>/dev/null | base64 -d 2>/dev/null
+}
+
 
 # --- Native-model helpers (Phase 9 cutover — the jwt/ auth backend is GONE) ---
 #
@@ -349,20 +374,27 @@ assert_native_allow() {
     fi
 }
 
-# _mint_uc3_tokens <user> — headlessly mint a REAL IVIA-issued delegated OBO token
-# (and its underlying subject token) for <user>, exercising the EXACT production
-# path the UC3 agent uses: PKCE authorization_code login at WebSEAL, then an
-# RFC 8693 token-exchange (uc3-actor client). Populates two globals:
-#   MINTED_SUBJECT_TOKEN   — sub=<user>, NO act claim (a bare human subject).
+# _mint_uc3_tokens <user> — obtain a REAL IVIA-issued delegated OBO token (and the
+# subject token underneath it) for <user> by driving an ACTUAL human approval.
+# Populates two globals:
+#   MINTED_SUBJECT_TOKEN   — the genuine CIBA access token: sub=<user>, issued to
+#                            the CIBA client, NO act claim (a first-party token).
 #   MINTED_DELEGATED_TOKEN — sub=<user>, act.sub=uc3-actor, a native jti, and a
 #                            vault:path_access RAR = database/creds/uc3-refund-writer.
 # Returns 0 on success, 1 on any failure (so a check HARD-FAILs, never silent-passes).
 #
+# WHY THIS IS NOT A PKCE LOGIN ANY MORE (issue #29): this function used to mint the
+# subject token from a plain authorization_code login and hand it to the token
+# exchange. That is exactly the bypass the idmap CIBA-provenance gate now refuses —
+# the workshop's own enforcement suite was relying on the vulnerability it exists to
+# disprove. There is deliberately no way to mint a delegated token outside an
+# approval; that IS the control. So the suite earns one the way the product does.
+#
 # Every secret/host is sourced at RUNTIME (never hardcoded — global no-hardcoded-
 # identity/auth rule): WRP host ← infrastructure/.acme-state; redirect_uri + client
 # ids ← banking-app config maps; client secret ← uc3-agent-config; persona password
-# ← base_layer.yaml.tftpl (its single source of truth). The mint runs INSIDE the
-# uc3-agent pod (has httpx + in-cluster iviaop DNS + egress to the public WRP ALB);
+# ← base_layer.yaml.tftpl (its single source of truth). Both network legs run INSIDE
+# the uc3-agent pod (httpx + in-cluster iviaop DNS + egress to the public WRP ALB);
 # the tokens are presented to Vault separately via _present_native_token.
 _mint_uc3_tokens() {
     local user="$1"
@@ -370,31 +402,157 @@ _mint_uc3_tokens() {
 
     local acme_state="${SCRIPT_DIR}/../.acme-state"
     local base_layer="${SCRIPT_DIR}/../modules/verify_access/base_layer/base_layer.yaml.tftpl"
-    local wrp ru secret agent_client actor_client persona_pw pod mint_out
+    local helper="${SCRIPT_DIR}/uc3-virtual-authenticator.py"
+    local wrp ru agent_client actor_client ciba_client persona_pw pod op_url
+    local login_secret ciba_secret actor_secret
+    local approve_log auth_req_id mint_out
 
     wrp=$(grep -E '^NIP_FQDN_WRP=' "${acme_state}" 2>/dev/null | cut -d= -f2)
     ru=$(kubectl get configmap -n "${BANKING_NAMESPACE}" banking-ui-config -o jsonpath='{.data.REDIRECT_URI}' 2>/dev/null)
-    secret=$(kubectl get configmap -n "${BANKING_NAMESPACE}" uc3-agent-config -o jsonpath='{.data.IVIA_CLIENT_SECRET}' 2>/dev/null)
     agent_client=$(kubectl get configmap -n "${BANKING_NAMESPACE}" banking-ui-config -o jsonpath='{.data.IVIA_CLIENT_ID}' 2>/dev/null)
     actor_client=$(kubectl get configmap -n "${BANKING_NAMESPACE}" uc3-agent-config -o jsonpath='{.data.IVIA_ACTOR_CLIENT_ID}' 2>/dev/null)
+    ciba_client=$(kubectl get configmap -n "${BANKING_NAMESPACE}" uc3-agent-config -o jsonpath='{.data.IVIA_CLIENT_ID}' 2>/dev/null)
+    # Three clients, three secrets (issue #30): the browser login runs as agent-uc2,
+    # the CIBA redemption as agent-uc3, and the RFC 8693 exchange as uc3-actor.
+    login_secret=$(ivia_client_secret "${agent_client}")
+    ciba_secret=$(ivia_client_secret "${ciba_client}")
+    actor_secret=$(ivia_client_secret "${actor_client}")
+    op_url=$(kubectl get configmap -n "${BANKING_NAMESPACE}" uc3-agent-config -o jsonpath='{.data.IVIA_BASE_URL}' 2>/dev/null)
     persona_pw=$(grep -oE 'password:[[:space:]]*"[^"]+"' "${base_layer}" 2>/dev/null | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
     pod=$(kubectl get pod -n "${BANKING_NAMESPACE}" -l app=uc3-agent -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    [ -n "${wrp}" ] && wrp="https://${wrp#https://}"
 
-    if [ -z "${wrp}" ] || [ -z "${ru}" ] || [ -z "${secret}" ] || [ -z "${persona_pw}" ] || [ -z "${pod}" ]; then
-        MINT_ERR="could not source mint inputs (wrp='${wrp}' ru='${ru}' secret=$([ -n "${secret}" ] && echo set || echo MISSING) pw=$([ -n "${persona_pw}" ] && echo set || echo MISSING) pod='${pod}')"
+    if [ -z "${wrp}" ] || [ -z "${ru}" ] || [ -z "${persona_pw}" ] || [ -z "${pod}" ] ||
+       [ -z "${ciba_client}" ] || [ -z "${actor_client}" ] || [ -z "${op_url}" ] ||
+       [ -z "${login_secret}" ] || [ -z "${ciba_secret}" ] || [ -z "${actor_secret}" ]; then
+        MINT_ERR="could not source mint inputs (wrp='${wrp}' ru='${ru}' pw=$([ -n "${persona_pw}" ] && echo set || echo MISSING) ciba_client='${ciba_client}' actor_client='${actor_client}' op='${op_url}' pod='${pod}' login_secret=$([ -n "${login_secret}" ] && echo set || echo MISSING) ciba_secret=$([ -n "${ciba_secret}" ] && echo set || echo MISSING) actor_secret=$([ -n "${actor_secret}" ] && echo set || echo MISSING)). Fix: the per-client secrets live in the banking-ui-oidc and uc3-oidc-clients Secrets. Check: kubectl get secret -n ${BANKING_NAMESPACE} banking-ui-oidc uc3-oidc-clients"
+        return 1
+    fi
+    if [ ! -f "${helper}" ]; then
+        MINT_ERR="uc3-virtual-authenticator.py not found at ${helper}"
         return 1
     fi
 
+    # Step 1 — a REAL approval. `approveonly` enrols a virtual authenticator, drives
+    # the refund turn so the agent fires the MMFA push, signs the user-presence
+    # challenge, and STOPS with the CIBA grant unredeemed. The agent only polls CIBA
+    # when asked to finish the refund, which we never ask for — so nothing races us
+    # for the single-issue token.
+    approve_log="${TMPDIR:-/tmp}/verify-uc3-mint-approve-$$.log"
+    kubectl exec -i -n "${BANKING_NAMESPACE}" "${pod}" -- python3 - approveonly \
+        "${wrp}" "${user}" "${persona_pw}" "${agent_client}" \
+        "${login_secret}" "${ru}" "${op_url}" \
+        <"${helper}" >"${approve_log}" 2>&1
+    if ! grep -q '^APPROVED_NOT_REDEEMED=1' "${approve_log}"; then
+        MINT_ERR=$(sed -n 's/^ERR=//p' "${approve_log}" | tail -1)
+        [ -z "${MINT_ERR}" ] && MINT_ERR="the virtual authenticator did not reach an approval (see ${approve_log})"
+        return 1
+    fi
+
+    # Step 2 — recover the auth_req_id. The agent is the only component that holds
+    # it; it emits it on ciba_mobile_push_sent (issue #37 made those fields render).
+    auth_req_id=$(kubectl logs -n "${BANKING_NAMESPACE}" "${pod}" --tail=4000 2>&1 |
+        grep 'ciba_mobile_push_sent' | tail -1 |
+        python3 -c 'import json,sys
+line = sys.stdin.readline().strip()
+try:
+    print(json.loads(line).get("auth_req_id", "") or "")
+except Exception:
+    print("")' 2>/dev/null)
+    if [ -z "${auth_req_id}" ]; then
+        MINT_ERR="approved, but no auth_req_id in the agent log — is the uc3-agent image built with the structured logger (issue #37)? Check: kubectl logs -n ${BANKING_NAMESPACE} ${pod} | grep ciba_mobile_push_sent"
+        return 1
+    fi
+
+    # Step 3 — redeem the approved grant, then exchange it (RFC 8693). The subject
+    # is now a first-party CIBA token, which is what the idmap gate requires.
     mint_out=$(kubectl exec -i -n "${BANKING_NAMESPACE}" "${pod}" -- python3 - \
-        "${user}" "${wrp}" "${ru}" "${agent_client}" "${actor_client}" "${secret}" "${persona_pw}" <<'PYEOF' 2>/dev/null
-import base64,hashlib,os,re,sys,urllib.parse
+        "${op_url}" "${ciba_client}" "${ciba_secret}" "${actor_client}" "${actor_secret}" "${auth_req_id}" <<'PYEOF' 2>/dev/null
+import sys, time
 try:
     import httpx
 except Exception as e:
     print("MINT_ERR import httpx: %s" % e); sys.exit(1)
-user,wrp,ru,agent_client,actor_client,secret,pw = sys.argv[1:8]
+
+op, ciba_client, ciba_secret, actor_client, actor_secret, auth_req_id = sys.argv[1:7]
+token_url = op.rstrip("/") + "/oauth2/token"
+c = httpx.Client(verify=False, timeout=30.0)
+
+subject = None
+for _ in range(10):
+    r = c.post(token_url, auth=(ciba_client, ciba_secret),
+               data={"grant_type": "urn:openid:params:grant-type:ciba",
+                     "auth_req_id": auth_req_id})
+    if r.status_code == 200:
+        subject = r.json().get("access_token")
+        break
+    if r.status_code == 400 and "authorization_pending" in r.text:
+        time.sleep(3); continue
+    print("MINT_ERR ciba redeem %d %s" % (r.status_code, r.text[:200])); sys.exit(1)
+if not subject:
+    print("MINT_ERR ciba redeem timed out (still authorization_pending)"); sys.exit(1)
+
+r = c.post(token_url, auth=(actor_client, actor_secret),
+           data={"grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+                 "subject_token": subject,
+                 "subject_token_type": "urn:ietf:params:oauth:token-type:access_token",
+                 "requested_token_type": "urn:ietf:params:oauth:token-type:access_token"})
+if r.status_code != 200:
+    print("MINT_ERR token-exchange %d %s" % (r.status_code, r.text[:200])); sys.exit(1)
+print("SUBJECT=" + subject)
+print("DELEGATED=" + r.json()["access_token"])
+PYEOF
+)
+    MINTED_SUBJECT_TOKEN=$(printf '%s\n' "${mint_out}" | sed -n 's/^SUBJECT=//p')
+    MINTED_DELEGATED_TOKEN=$(printf '%s\n' "${mint_out}" | sed -n 's/^DELEGATED=//p')
+    if [ -z "${MINTED_DELEGATED_TOKEN}" ]; then
+        MINT_ERR=$(printf '%s\n' "${mint_out}" | grep 'MINT_ERR' | head -1)
+        [ -z "${MINT_ERR}" ] && MINT_ERR="mint produced no delegated token (output: ${mint_out:0:200})"
+        return 1
+    fi
+    return 0
+}
+
+# _mint_uc2_login_token <user> — mint ONLY the agent-uc2 authorization_code LOGIN
+# token for <user> (sub=<user>, act.sub=agent-uc2). Populates MINTED_UC2_LOGIN_TOKEN.
+#
+# This is deliberately a plain PKCE login and nothing more. Minting a UC2 login token
+# was never the Use Case 3 bypass — FEEDING one to the token exchange was, and the
+# idmap CIBA-provenance gate now refuses exactly that (issue #29). Check 18 needs a
+# genuine UC2 OBO token (a valid delegation for the WRONG agent) to prove cross-use-case
+# ceiling isolation, so it mints one here instead of borrowing the UC3 subject token,
+# which is now a first-party CIBA token carrying no act claim at all.
+_mint_uc2_login_token() {
+    local user="$1"
+    MINTED_UC2_LOGIN_TOKEN=""; UC2_MINT_ERR=""
+
+    local acme_state="${SCRIPT_DIR}/../.acme-state"
+    local base_layer="${SCRIPT_DIR}/../modules/verify_access/base_layer/base_layer.yaml.tftpl"
+    local wrp ru secret agent_client persona_pw pod op_url out
+
+    wrp=$(grep -E '^NIP_FQDN_WRP=' "${acme_state}" 2>/dev/null | cut -d= -f2)
+    ru=$(kubectl get configmap -n "${BANKING_NAMESPACE}" banking-ui-config -o jsonpath='{.data.REDIRECT_URI}' 2>/dev/null)
+    agent_client=$(kubectl get configmap -n "${BANKING_NAMESPACE}" banking-ui-config -o jsonpath='{.data.IVIA_CLIENT_ID}' 2>/dev/null)
+    secret=$(ivia_client_secret "${agent_client}")
+    op_url=$(kubectl get configmap -n "${BANKING_NAMESPACE}" uc3-agent-config -o jsonpath='{.data.IVIA_BASE_URL}' 2>/dev/null)
+    persona_pw=$(grep -oE 'password:[[:space:]]*"[^"]+"' "${base_layer}" 2>/dev/null | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+    pod=$(kubectl get pod -n "${BANKING_NAMESPACE}" -l app=uc3-agent -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    [ -n "${wrp}" ] && wrp="https://${wrp#https://}"
+
+    if [ -z "${wrp}" ] || [ -z "${ru}" ] || [ -z "${secret}" ] || [ -z "${persona_pw}" ] || [ -z "${pod}" ] || [ -z "${op_url}" ]; then
+        UC2_MINT_ERR="could not source UC2 login mint inputs (agent-uc2 secret=$([ -n "${secret}" ] && echo set || echo MISSING); it lives in the banking-ui-oidc Secret)"
+        return 1
+    fi
+
+    out=$(kubectl exec -i -n "${BANKING_NAMESPACE}" "${pod}" -- python3 - \
+        "${user}" "${wrp}" "${ru}" "${agent_client}" "${secret}" "${persona_pw}" "${op_url}" <<'PYEOF' 2>/dev/null
+import base64, hashlib, os, re, sys, urllib.parse
+try:
+    import httpx
+except Exception as e:
+    print("MINT_ERR import httpx: %s" % e); sys.exit(1)
+user, wrp, ru, agent_client, secret, pw, op = sys.argv[1:8]
 if not wrp.startswith("http"): wrp = "https://" + wrp
-op = "https://iviaop.verify-access.svc.cluster.local:8436"
 def b64u(b): return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
 try:
     cv = b64u(os.urandom(48)); cc = b64u(hashlib.sha256(cv.encode()).digest()); st = b64u(os.urandom(12))
@@ -410,28 +568,19 @@ try:
     if not m:
         print("MINT_ERR no auth code returned (WebSEAL login failed for user=%s)" % user); sys.exit(1)
     code = urllib.parse.unquote(m.group(1))
-    r = c.post(op + "/oauth2/token", auth=(agent_client, secret),
+    r = c.post(op.rstrip("/") + "/oauth2/token", auth=(agent_client, secret),
                data={"grant_type": "authorization_code", "code": code, "redirect_uri": ru, "code_verifier": cv})
     if r.status_code != 200:
         print("MINT_ERR authcode exchange %d %s" % (r.status_code, r.text[:200])); sys.exit(1)
-    subj = r.json()["access_token"]
-    r = c.post(op + "/oauth2/token", auth=(actor_client, secret),
-               data={"grant_type": "urn:ietf:params:oauth:grant-type:token-exchange", "subject_token": subj,
-                     "subject_token_type": "urn:ietf:params:oauth:token-type:access_token",
-                     "requested_token_type": "urn:ietf:params:oauth:token-type:access_token"})
-    if r.status_code != 200:
-        print("MINT_ERR token-exchange %d %s" % (r.status_code, r.text[:200])); sys.exit(1)
-    print("SUBJECT=" + subj)
-    print("DELEGATED=" + r.json()["access_token"])
+    print("UC2LOGIN=" + r.json()["access_token"])
 except Exception as e:
     print("MINT_ERR %s" % e); sys.exit(1)
 PYEOF
 )
-    MINTED_SUBJECT_TOKEN=$(printf '%s\n' "${mint_out}" | sed -n 's/^SUBJECT=//p')
-    MINTED_DELEGATED_TOKEN=$(printf '%s\n' "${mint_out}" | sed -n 's/^DELEGATED=//p')
-    if [ -z "${MINTED_DELEGATED_TOKEN}" ]; then
-        MINT_ERR=$(printf '%s\n' "${mint_out}" | grep 'MINT_ERR' | head -1)
-        [ -z "${MINT_ERR}" ] && MINT_ERR="mint produced no delegated token (output: ${mint_out:0:200})"
+    MINTED_UC2_LOGIN_TOKEN=$(printf '%s\n' "${out}" | sed -n 's/^UC2LOGIN=//p')
+    if [ -z "${MINTED_UC2_LOGIN_TOKEN}" ]; then
+        UC2_MINT_ERR=$(printf '%s\n' "${out}" | grep 'MINT_ERR' | head -1)
+        [ -z "${UC2_MINT_ERR}" ] && UC2_MINT_ERR="UC2 login mint produced no token"
         return 1
     fi
     return 0
@@ -467,12 +616,19 @@ if [ "${BYPASS_MODE}" = true ]; then
     UC3_PERSONA="${UC3_PERSONA:-oscar}"
     RAR_OUT_PATH="database/creds/uc3-readonly"   # in ACL+ceiling, NOT in the token RAR
 
-    print_info "Self-mint: obtaining a REAL delegated OBO token for '${UC3_PERSONA}' (PKCE login + RFC 8693 token-exchange, all secrets sourced at runtime)"
+    print_info "Self-mint: obtaining a REAL delegated OBO token for '${UC3_PERSONA}' — driving an ACTUAL approval with a virtual authenticator, then RFC 8693 token-exchange (all secrets sourced at runtime). Takes ~2-4 minutes."
     if _mint_uc3_tokens "${UC3_PERSONA}"; then
         print_pass "Self-mint: minted a real IVIA-issued delegated token + subject token for '${UC3_PERSONA}'"
     else
         print_fail "Self-mint: could NOT mint a real delegated token — Checks 14-18 cannot run" \
             "The headless mint failed: ${MINT_ERR:-unknown}. Confirm the uc3-agent pod is Running, the WRP ALB is reachable, and persona '${UC3_PERSONA}' can log in. Re-run: bash infrastructure/scripts/verify-uc3.sh --bypass"
+    fi
+
+    # Check 18 needs a genuine UC2 OBO token (act.sub=agent-uc2) — a valid delegation
+    # for the WRONG agent. The UC3 subject token can no longer serve: it is now a
+    # first-party CIBA token and deliberately carries no act claim.
+    if ! _mint_uc2_login_token "${UC3_PERSONA}"; then
+        print_warn "Self-mint: could not mint the UC2 login token for Check 18 — ${UC2_MINT_ERR:-unknown}"
     fi
 
     # Prefer an operator-supplied delegated token (Part B) over the minted one.
@@ -606,7 +762,8 @@ print(jwt.encode(payload, 'forged-secret', algorithm='HS256'))
     #---------------------------------------------------------------------------
     # Bypass Check 18 — cross-UC AGENT-CEILING isolation → DENY
     #
-    # The underlying subject token here is the agent-uc2 UC2 login token: it carries
+    # The token here is a purpose-minted agent-uc2 UC2 LOGIN token (_mint_uc2_login_token):
+    # it carries
     # sub=<persona> AND act.sub=agent-uc2 (the UC2 OBO stamp — see the UC2 pretoken
     # rule; a UC2 login IS a valid OBO delegation, just for a DIFFERENT agent).
     # Present it to the UC3 refund path. Native OBO resolves BOTH the human (sub) and
@@ -623,17 +780,17 @@ print(jwt.encode(payload, 'forged-secret', algorithm='HS256'))
     #---------------------------------------------------------------------------
     print_info "Bypass Check 18: a validly-delegated WRONG-AGENT token (agent-uc2 UC2 login, act.sub=agent-uc2) must be DENIED the UC3 refund read — the agent ceiling isolates use cases even when the human baseline allows it"
 
-    if [ -z "${MINTED_SUBJECT_TOKEN}" ]; then
-        print_fail "Bypass Check 18: no subject token available (mint failed) — the cross-UC ceiling-isolation gate was NOT exercised (skip = HARD FAIL)" \
+    if [ -z "${MINTED_UC2_LOGIN_TOKEN}" ]; then
+        print_fail "Bypass Check 18: no UC2 login token available (mint failed) — the cross-UC ceiling-isolation gate was NOT exercised (skip = HARD FAIL)" \
             "Fix the self-mint (see the Self-mint failure above)."
     else
-        s_sub=$(decode_jwt_claim "${MINTED_SUBJECT_TOKEN}" '.sub // empty')
-        s_act=$(decode_jwt_claim "${MINTED_SUBJECT_TOKEN}" '.act.sub // empty')
+        s_sub=$(decode_jwt_claim "${MINTED_UC2_LOGIN_TOKEN}" '.sub // empty')
+        s_act=$(decode_jwt_claim "${MINTED_UC2_LOGIN_TOKEN}" '.act.sub // empty')
         if [ "${s_act}" != "agent-uc2" ]; then
             print_fail "Bypass Check 18: the UC2 login token's act.sub is '${s_act:-<absent>}' (expected agent-uc2) — cannot exercise cross-UC ceiling isolation" \
                 "The agent-uc2 authorization_code login token must carry act.sub=agent-uc2 (UC2 OBO stamp). Got sub='${s_sub}', act.sub='${s_act:-<absent>}'. If it is absent, the UC2 pretoken client gate regressed; if it is uc3-actor, the wrong token was captured."
         else
-            assert_native_deny "Bypass Check 18 (wrong-agent, sub=${s_sub}, act.sub=agent-uc2)" "${MINTED_SUBJECT_TOKEN}" \
+            assert_native_deny "Bypass Check 18 (wrong-agent, sub=${s_sub}, act.sub=agent-uc2)" "${MINTED_UC2_LOGIN_TOKEN}" \
                 "Bypass Check 18 PASSED: the agent-uc2 UC2 token (sub=${s_sub}, act.sub=agent-uc2) was DENIED reading database/creds/uc3-refund-writer — agent-uc2's ceiling (uc2-agent-ceiling) omits the refund path, so even though ${s_sub}'s human baseline (uc3-human-baseline) permits it, the 3-layer OBO intersection (human baseline ∩ agent ceiling) blocks a UC2 agent from reaching UC3's privileged path (cross-UC ceiling isolation)" \
                 "A UC2 agent token that vends UC3 refund creds means the agent ceiling no longer isolates use cases. Confirm uc2-agent-ceiling lacks database/creds/uc3-refund-writer and native OBO enforces human baseline ∩ agent ceiling." \
                 'permission denied|denied' \
@@ -680,6 +837,64 @@ print(jwt.encode(payload, 'forged-secret', algorithm='HS256'))
         fi
     fi
 
+    #---------------------------------------------------------------------------
+    # Bypass Check 20 — the RFC 8693 exchange is gated on the CLIENT
+    #
+    # The usual objection to any delegation story is that act.sub is stamped on by
+    # a mapping rule, so anything that reaches the token endpoint could ask for a
+    # delegated token. Both requests below send an identical junk subject_token and
+    # differ only in the client credentials, so the difference in the answers is
+    # attributable to the client alone:
+    #
+    #   agent-uc2  -> unauthorized_client   (refused before the token is examined)
+    #   uc3-actor  -> invalid_request       (past the client gate, dies on the token)
+    #
+    # The uc3-actor leg is the positive control: without it, an unauthorized_client
+    # response could just as well mean the endpoint is refusing everything. This is
+    # the scripted half of the attendee exercise on the CIBA Approval Flow page.
+    #---------------------------------------------------------------------------
+    print_info "Bypass Check 20: the token-exchange grant must be allowlisted per client — agent-uc2 DENIED, uc3-actor reaching the token check"
+
+    _exchange_probe() {
+        local client_id="$1" secret="$2"
+        # Separate declaration: bash expands every word of a `local` line before
+        # any of its assignments take effect, so referencing client_id on the
+        # same line is an unbound-variable error under `set -u`.
+        local pod="verify-uc3-exch-$$-${client_id}"
+        kubectl delete pod "${pod}" -n verify-access --ignore-not-found --now &>/dev/null
+        kubectl run "${pod}" --rm -i --quiet --restart=Never \
+            --image=curlimages/curl:8.11.1 -n verify-access --command -- \
+            curl -sk -X POST "https://iviaop.verify-access.svc.cluster.local:8436/oauth2/token" \
+              -u "${client_id}:${secret}" \
+              -d 'grant_type=urn:ietf:params:oauth:grant-type:token-exchange' \
+              -d 'subject_token=not-a-real-ciba-token' \
+              -d 'subject_token_type=urn:ietf:params:oauth:token-type:access_token' \
+              -d 'requested_token_type=urn:ietf:params:oauth:token-type:access_token' \
+            2>/dev/null || echo '{"error":"PROBE_FAILED"}'
+    }
+
+    _uc2_secret=$(ivia_client_secret agent-uc2 || true)
+    _actor_secret=$(ivia_client_secret uc3-actor || true)
+
+    if [ -z "${_uc2_secret}" ] || [ -z "${_actor_secret}" ]; then
+        print_warn "Bypass Check 20: SKIPPED — could not read the agent-uc2 and uc3-actor client secrets from their Kubernetes Secrets (banking-ui-oidc / uc3-oidc-clients in ${BANKING_NAMESPACE})."
+    else
+        _wrong_client_resp=$(_exchange_probe "agent-uc2" "${_uc2_secret}")
+        _right_client_resp=$(_exchange_probe "uc3-actor" "${_actor_secret}")
+
+        if ! echo "${_right_client_resp}" | grep -q '"invalid_request"'; then
+            # Positive control first: if the allowlisted client does NOT reach the
+            # token check, the negative leg proves nothing about the client gate.
+            print_fail "Bypass Check 20: the uc3-actor positive control did not reach the token check" \
+                "uc3-actor should get past the client gate and fail on the junk subject_token (invalid_request / FBTAQ5226E). Got: ${_right_client_resp:0:300}. Without this leg an unauthorized_client answer from agent-uc2 is not attributable to the client allowlist."
+        elif echo "${_wrong_client_resp}" | grep -q '"unauthorized_client"'; then
+            print_pass "Bypass Check 20 PASSED: an identical exchange request was refused as agent-uc2 with unauthorized_client (the grant is not allowlisted for that client) while uc3-actor got past the client gate and failed only on the token — delegation cannot be requested by any client that happens to reach the endpoint"
+        else
+            print_fail "Bypass Check 20: agent-uc2 was NOT refused the token-exchange grant" \
+                "agent-uc2 must not hold urn:ietf:params:oauth:grant-type:token-exchange. Got: ${_wrong_client_resp:0:300}. Check the grant_types list for agent-uc2 in verify_access/iviaop-config/clients.yml.tftpl — a UC2 client able to exchange tokens could mint UC3 delegated tokens."
+        fi
+    fi
+
     # Summary is printed automatically by the common-checks.sh EXIT trap.
     # Keep a terminating exit so bypass mode does not fall through into the
     # normal-mode checks (the trap still overrides the code with the real result).
@@ -714,14 +929,15 @@ if [ "${NOPHONE_MODE}" = true ]; then
 
     # Every host/secret is sourced at RUNTIME (never hardcoded), exactly like
     # _mint_uc3_tokens: WRP host <- infrastructure/.acme-state; redirect_uri +
-    # client id <- banking-app config maps; client secret <- uc3-agent-config;
+    # client id <- banking-app config maps; agent-uc2's client secret <- the
+    # banking-ui-oidc Secret (per-client secrets, issue #30);
     # persona password <- base_layer.yaml.tftpl (its single source of truth).
     np_acme_state="${SCRIPT_DIR}/../.acme-state"
     np_base_layer="${SCRIPT_DIR}/../modules/verify_access/base_layer/base_layer.yaml.tftpl"
     np_wrp=$(grep -E '^NIP_FQDN_WRP=' "${np_acme_state}" 2>/dev/null | cut -d= -f2)
     np_redirect=$(kubectl get configmap -n "${BANKING_NAMESPACE}" banking-ui-config -o jsonpath='{.data.REDIRECT_URI}' 2>/dev/null)
     np_client=$(kubectl get configmap -n "${BANKING_NAMESPACE}" banking-ui-config -o jsonpath='{.data.IVIA_CLIENT_ID}' 2>/dev/null)
-    np_secret=$(kubectl get configmap -n "${BANKING_NAMESPACE}" uc3-agent-config -o jsonpath='{.data.IVIA_CLIENT_SECRET}' 2>/dev/null)
+    np_secret=$(ivia_client_secret "${np_client}")
     np_password=$(grep -oE 'password:[[:space:]]*"[^"]+"' "${np_base_layer}" 2>/dev/null | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
     np_pod=$(kubectl get pod -n "${BANKING_NAMESPACE}" -l app=uc3-agent -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
     np_op="${IVIA_ISSUER%/oauth2}"
@@ -735,7 +951,7 @@ if [ "${NOPHONE_MODE}" = true ]; then
     if [ -z "${np_wrp}" ] || [ -z "${np_redirect}" ] || [ -z "${np_client}" ] ||
         [ -z "${np_secret}" ] || [ -z "${np_password}" ] || [ -z "${np_pod}" ]; then
         print_fail "Check N1: could not resolve the inputs the live refund needs" \
-            "wrp='${np_wrp}' redirect_uri='${np_redirect}' client='${np_client}' secret=$([ -n "${np_secret}" ] && echo set || echo MISSING) password=$([ -n "${np_password}" ] && echo set || echo MISSING) uc3-agent pod='${np_pod}'. Fix: deploy tier 3 and confirm the banking-ui-config / uc3-agent-config ConfigMaps exist. Check: kubectl get configmap -n ${BANKING_NAMESPACE}"
+            "wrp='${np_wrp}' redirect_uri='${np_redirect}' client='${np_client}' secret=$([ -n "${np_secret}" ] && echo set || echo MISSING) password=$([ -n "${np_password}" ] && echo set || echo MISSING) uc3-agent pod='${np_pod}'. Fix: deploy tier 3 and confirm the banking-ui-config ConfigMap and the banking-ui-oidc Secret exist. Check: kubectl get configmap,secret -n ${BANKING_NAMESPACE}"
         exit 0
     fi
 

@@ -44,8 +44,10 @@ WRP="https://${NIP_FQDN_WRP}"
 RU="https://${NIP_FQDN_BANKING}/callback"
 cfg() { kubectl get configmap -n banking-app banking-ui-config -o jsonpath="{.data.$1}"; }
 CID="$(cfg IVIA_CLIENT_ID)"
-CSEC="$(cfg IVIA_CLIENT_SECRET)"
-[ -n "$CID" ] && [ -n "$CSEC" ] || { echo "could not read agent-uc2 client creds from banking-ui-config" >&2; exit 1; }
+# agent-uc2's client secret is a Kubernetes Secret, not a ConfigMap key — each OIDC
+# client has its own credential and none of them are readable via `get configmap`.
+CSEC="$(kubectl get secret -n banking-app banking-ui-oidc -o jsonpath='{.data.IVIA_CLIENT_SECRET}' | base64 -d)"
+[ -n "$CID" ] && [ -n "$CSEC" ] || { echo "could not read agent-uc2 client creds (client_id <- banking-ui-config, secret <- banking-ui-oidc Secret)" >&2; exit 1; }
 
 # --- in-cluster OP token endpoint via port-forward (bypasses the WRP junction)
 LPORT=18436

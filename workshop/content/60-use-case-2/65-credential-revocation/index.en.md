@@ -7,7 +7,7 @@ weight: 65
 
 In this module you observe the full credential lifecycle for a Use Case 2 session: a Postgres credential is issued, used to confirm its existence, then explicitly revoked, and you verify three things in succession — (a) the Postgres role is gone, (b) Vault's active-leases list no longer contains your lease, (c) both the issuance and the revocation appear in the audit log keyed by `lease_id`.
 
-**The production code path** is `POST /v1/sys/leases/revoke` against Vault. An MCP server, banking-agent, or any session-end handler calls that endpoint when a session terminates. In this page you exercise the same API directly via the `vault lease revoke` CLI — identical mechanism, no UI dependency, immediate evidence.
+**The production code path** is `POST /v1/sys/leases/revoke` against Vault, and the MCP server calls it itself: every credential it obtains is revoked as soon as the query it was issued for returns, using its own Kubernetes-auth Vault token rather than the caller's. In this page you issue a credential by hand and exercise the same API directly via the `vault lease revoke` CLI — identical mechanism, no UI dependency, immediate evidence.
 
 Load the Vault root token once at the start of the page — several admin-only paths (`database/creds/...`, `sys/leases/...`) are unreachable from the `uc2-personal` policy and require the root token for inspection:
 
@@ -195,7 +195,8 @@ Find the most recent issuance events for `uc2-personal-readonly`. Under the nati
 athena_query "SELECT
   substr(timestamp, 1, 19) AS time,
   auth.display_name AS identity,
-  auth.metadata['actor_entity_name'] AS agent
+  auth.metadata['actor_entity_name'] AS agent,
+  auth.entity_id AS human_entity
 FROM workshop_logs.vault_audit
 WHERE type = 'response'
   AND request.path = 'database/creds/uc2-personal-readonly'
@@ -206,17 +207,32 @@ LIMIT 10;"
 Expected output — one row per recent issuance:
 
 ```
-time                 identity                                                  agent
-2026-07-28T03:20:48  root                                                      -
-2026-07-28T02:53:25  JWT Token with JTI: f77a2c34-61f5-406b-8669-8fb4ecb9c40c  agent-uc2
-2026-07-28T02:47:12  JWT Token with JTI: da65bce9-4846-4da0-8a24-9dc45e8654d1  agent-uc2
+time                 identity                                                  agent      human_entity
+2026-09-02T23:24:18  root                                                      -          -
+2026-09-02T23:17:10  JWT Token with JTI: 5a9564c0-cce3-4442-8a8f-a8d7d1339eb0  agent-uc2  2979d2cd-f25e-2915-a9f8-e6e23d87e047
+2026-09-02T23:14:25  JWT Token with JTI: f82c6e27-33d2-4ec2-94e8-29a3b63173a5  agent-uc2  2979d2cd-f25e-2915-a9f8-e6e23d87e047
 ...
 ```
 
 Two row patterns appear:
 
 - **`identity=root`, `agent=-`** — the credential was issued via the Vault root token (the inspection commands on the previous pages, including your Step 1 above, and the `verify-uc2.sh` checks). Root-token issuance resolves no Agent Registry identity, so the `agent` column is empty (the helper renders empty fields as `-`).
-- **`identity=JWT Token with JTI: <jti>`, `agent=agent-uc2`** — the credential was issued by presenting a real user's IVIA OAuth JWT directly as the `X-Vault-Token` on the `database/creds` read. Vault's OAuth resource server validated the JWT and resolved it to the `agent-uc2` Agent Registry identity; the audit device records the token by its unique **JTI**, never the human `sub`. **These rows appear after you sign in through the Banking UI and run a banking query** (the browser flow in [OAuth Login Flow](../61-oauth-pkce-flow/)) — one fresh row per tool call. The human user behind the token is tied back through the IVIA decision plane (the `request_id` correlation shown on the [three-plane audit](../../70-use-case-3/74-three-plane-audit/) page), not a Vault entity id — native Vault audit records the token JTI + resolved agent, not the human sub. If you have not yet driven a signed-in query, only the `root` rows are present.
+- **`identity=JWT Token with JTI: <jti>`, `agent=agent-uc2`, and a `human_entity`** — the credential was issued by presenting a real user's IVIA OAuth JWT directly as the `X-Vault-Token` on the `database/creds` read. Vault's OAuth resource server validated the JWT, resolved it to the `agent-uc2` Agent Registry identity, and recorded the token by its unique **JTI** rather than its raw value. **These rows appear after you sign in through the Banking UI and run a banking query** (the browser flow in [OAuth Login Flow](../61-oauth-pkce-flow/)) — one fresh row per tool call. If you have not yet driven a signed-in query, only the `root` rows are present.
+
+Note the `human_entity` column on those rows. It is Vault's own identity entity for the **person**, recorded on the same authorization decision as the agent — two identities on one request, which is what on-behalf-of means. Ask Vault whose it is:
+
+```bash
+kubectl exec -n vault vault-0 -- \
+  sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read -format=json identity/entity/id/<human_entity from above>" \
+  | jq '{id: .data.id, name: .data.name}'
+```
+
+```json
+{
+  "id": "2979d2cd-f25e-2915-a9f8-e6e23d87e047",
+  "name": "oscar"
+}
+```
 
 ## Step 7 — Find the revocation event for the lease you revoked
 
@@ -245,9 +261,88 @@ What this proves:
 
 - **`revoke_path` ends with your captured `LEASE_ID`** — the audit log records the exact lease the revoke API call targeted.
 - **`time`** — the moment Vault executed the revocation; on a real incident response timeline this is the "session terminated" anchor.
-- **`revoked_by=root`** — in this demo you invoked the API as the root token. In a production flow this would be the service-account-bound Vault token the MCP server uses (`display_name=token-uc2-mcp-server-sa` or similar) — exactly identifying the workload that ended the session.
+- **`revoked_by=root`** — in this demo *you* invoked the API as the root token, so root is what the audit log records. Revocations the MCP server performs on its own credentials appear the same way but attributed to its ServiceAccount-bound token, exactly identifying the workload that handed the credential back. Query without the `AND request.path = ...` filter to see both kinds side by side.
 
-**The audit-trail story is now closed:** Step 6 shows the ephemeral credential was issued to the resolved *agent* identity (`agent-uc2`), authenticated by its token JTI — the Vault plane deliberately records the agent, never the human `sub`. Step 7 ties the revocation to the same `lease_id`. To attribute the session to a person, correlate the Vault lease timeline with the IVIA OAuth plane (which holds the authenticated `sub`) by credential path and time-proximity. Together they reconstruct "agent-uc2 obtained `lease_id` X at 19:24 on behalf of the user who authenticated moments earlier; the MCP server revoked X at 20:19" — start-to-end attribution for a single session.
+**The audit-trail story is now closed:** Step 6 shows the ephemeral credential issued on one
+authorization decision that names *both* parties — the `agent-uc2` Agent Registry identity and
+the human entity it acted for, plus the token's JTI instead of the token itself. Step 7 ties the
+revocation to the same `lease_id`. Together they reconstruct "agent-uc2, acting for oscar,
+obtained `lease_id` X at 23:17; the MCP server handed X back seconds later" — start-to-end
+attribution for a single session, from the Vault plane alone, with no timestamp guessing
+involved.
+
+## Step 8 — Watch the MCP server hand a credential back on its own
+
+Steps 1 through 7 revoked a credential *you* issued, as root, from your terminal. That proves the API works. This step proves the workshop's actual claim: that no operator is involved, and every credential the application obtains is returned the moment the query it was issued for finishes.
+
+**Trigger a real query.** In the browser tab where you signed in on the [OAuth Login Flow](../61-oauth-pkce-flow/) page, ask the banking chat:
+
+> What are my account balances?
+
+**Read the MCP server's log.** Two lines tell the whole story — the server authenticating to Vault as itself, and the lease it just used going back:
+
+```bash
+kubectl logs -n banking-app -l app=banking-mcp-server --tail=20 \
+  | grep -E 'vault_k8s_auth_success|vault_lease_revoked|vault_lease_revoke_'
+```
+
+Expected output:
+
+```
+vault_k8s_auth_success role=uc2 ttl_seconds=3600
+vault_lease_revoked lease_id=database/creds/uc2-personal-readonly/vMLGghj7dj6JbXuwlQC7kH8j
+```
+
+`role=uc2` is the Kubernetes auth role bound to `uc2-mcp-server-sa` — the pod's own ServiceAccount, not the user's OAuth token. Your `lease_id` suffix will differ.
+
+**Confirm Vault agrees.** Take the suffix from your own `vault_lease_revoked` line and check it is not in the active-leases list:
+
+```bash
+LEASE_SUFFIX=<the suffix from your log line>
+
+kubectl exec -n vault vault-0 -- \
+  sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' \
+  vault list sys/leases/lookup/database/creds/uc2-personal-readonly" 2>&1 \
+  | grep -F "${LEASE_SUFFIX}" \
+  && echo "FAIL: lease ${LEASE_SUFFIX} is still active" \
+  || echo "PASS: lease ${LEASE_SUFFIX} is no longer in the active-leases list"
+```
+
+Expected output:
+
+```
+PASS: lease vMLGghj7dj6JbXuwlQC7kH8j is no longer in the active-leases list
+```
+
+Other suffixes will still be listed — those belong to credentials issued by root (your Step 1, the earlier pages, `verify-uc2.sh`), which nothing revokes automatically. That contrast is the point: the ones the application issued are already gone.
+
+**Confirm the audit log names the workload, not you.** Same query as Step 7 without the lease filter, so both kinds of revocation appear side by side:
+
+```bash
+athena_query "SELECT
+  substr(timestamp, 1, 19) AS time,
+  request.path AS revoke_path,
+  auth.display_name AS revoked_by
+FROM workshop_logs.vault_audit
+WHERE type = 'response'
+  AND request.path LIKE 'sys/leases/revoke%'
+ORDER BY timestamp DESC
+LIMIT 6;"
+```
+
+Expected output — every revocation the **application** performed is attributed to its ServiceAccount-bound identity. Your own Step 3 revocation appears here too, as `revoked_by = root` with the lease id in the path; the sample run below happened to have two application revocations and no recent root one:
+
+```
+time                 revoke_path        revoked_by
+2026-09-02T21:10:24  sys/leases/revoke  kubernetes-banking-app-uc2-mcp-server-sa
+2026-09-02T15:09:28  sys/leases/revoke  kubernetes-banking-app-uc2-mcp-server-sa
+```
+
+Note the two `revoke_path` shapes. The `vault lease revoke` CLI you used in Step 3 addresses the lease in the URL (`sys/leases/revoke/<lease_id>`); the MCP server POSTs to `sys/leases/revoke` with the `lease_id` in the request body. Same endpoint, two calling conventions — which is why this query matches on a prefix and Step 7's matched the exact path.
+
+:::alert{type="info" header="If you see no revocation lines"}
+The revoke happens only after a credential is issued, which happens only when a **signed-in** user runs a banking query. If the log shows nothing, you are probably looking at a request that failed before Vault was reached — check for a `get_accounts error` line above it. Firehose also buffers for up to 60 seconds, so re-run the Athena query if the newest row is missing.
+:::
 
 :::expand{header="Platform Track — Vault lease lifecycle: explicit revoke vs TTL expiry"}
 
@@ -285,38 +380,49 @@ DROP ROLE IF EXISTS "{{name}}";
 The `ALTER DEFAULT PRIVILEGES REVOKE` line matches the `ALTER DEFAULT PRIVILEGES GRANT` from issuance. Without that exact mirror, `DROP ROLE` would fail with `cannot be dropped because some objects depend on it` (the GRANT leaves a `pg_default_acl` dependent row that the symmetric REVOKE clears). Symmetric construction means every credential issued is also fully cleanly destroyable — no orphan roles, no escalation surface left behind.
 :::
 
-:::expand{header="Agent Developer Track — calling /v1/sys/leases/revoke from a production session-end handler"}
+:::expand{header="Agent Developer Track — how the MCP server calls /v1/sys/leases/revoke"}
 
-In a production agent, the session-end handler calls Vault's revoke API directly. Here is the same flow expressed in TypeScript (the same pattern the banking-app MCP server would use on logout or token expiry):
+This is not a pattern to adopt later — it is the code running in the cluster right now. `applications/banking-app/mcp-server/src/vault-client.ts` ships this, and `tools.ts` calls it from the `finally` block of both `get_accounts` and `get_transactions`, so the credential is handed back on the error path as well as the success path:
 
 ```typescript
-async function revokeLeaseOnSessionEnd(leaseId: string): Promise<void> {
-  // Re-authenticate with the workload's k8s ServiceAccount token (not the
-  // user's JWT) — keeps the revoke path working even if the user's JWT has
-  // already expired by the time the session-end handler runs.
-  const vaultToken = await vaultClient.loginWithK8sSA('uc2-mcp-server-sa');
+export async function revokeLease(leaseId: string): Promise<boolean> {
+  if (!leaseId || leaseId === 'unknown') return false;
 
-  const resp = await fetch(`${VAULT_ADDR}/v1/sys/leases/revoke`, {
-    method: 'POST',
-    headers: {
-      'X-Vault-Token': vaultToken,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ lease_id: leaseId }),
-  });
+  const attempt = async (token: string) =>
+    fetch(`${VAULT_ADDR}/v1/sys/leases/revoke`, {
+      method: 'POST',
+      headers: { 'X-Vault-Token': token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lease_id: leaseId }),
+    });
 
-  if (!resp.ok) {
-    // Log but don't throw — the lease will still TTL-expire as a safety net.
-    console.warn(`Revoke failed for ${leaseId}: ${resp.status}`);
+  try {
+    let res = await attempt(await getServiceToken());
+    // A 403 means the cached token is gone or was revoked out from under us —
+    // log in again once before giving up.
+    if (res.status === 403) {
+      res = await attempt(await getServiceToken(true));
+    }
+    if (!res.ok) {
+      const body = await res.text();
+      console.error(`vault_lease_revoke_failed lease_id=${leaseId} status=${res.status} body=${body}`);
+      return false;
+    }
+    console.log(`vault_lease_revoked lease_id=${leaseId}`);
+    return true;
+  } catch (err) {
+    console.error(`vault_lease_revoke_error lease_id=${leaseId} error=${String(err)}`);
+    return false;
   }
 }
 ```
 
-**Why workload identity (k8s auth) and not the user's JWT for the revoke?** The user's JWT might have already expired (browser tab idle for hours, refresh token gone). The MCP server's Kubernetes ServiceAccount is always available — its `uc2-mcp-server-sa` token authenticates to Vault via the `uc2` k8s auth role. The `uc2-personal` policy grants `update` on `sys/leases/revoke` exactly for this purpose.
+**Why workload identity (k8s auth) and not the user's JWT for the revoke?** The user's JWT may already have expired by the time the query returns, and revoking is not something the user authorized — it is the server disposing of its own resource. `getServiceToken()` logs in at `auth/kubernetes/login` with the pod's projected `uc2-mcp-server-sa` ServiceAccount token, caches the result, and renews it before expiry. The `uc2-personal` policy grants `update` on `sys/leases/revoke` and `read` on `auth/token/lookup-self` — nothing else — so a stolen copy of that token can hand credentials back and learn its own TTL, and can do nothing else.
 
-**Where does the `lease_id` come from?** The MCP server stored it in its per-request context the moment it issued the credential (the `lease_id` field returned from `vault read database/creds/uc2-personal-readonly`). On session end the handler revokes whatever leases it tracked. Session state is server-side only — the browser never sees a `lease_id`.
+**Why best-effort?** By the time `finally` runs, the query has succeeded and the caller's data is already on its way back. A revoke failure is logged and swallowed rather than turned into a user-visible error: the credential still expires on its TTL, so the failure degrades to TTL-only behaviour instead of breaking the response. The `console.error` lines above are what an operator alerts on.
 
-The audit-log query in Step 7 is exactly the operator's tool for confirming that a production session-end handler is calling this API as expected: the revocation events should appear with `display_name=token-uc2-mcp-server-sa` (the workload identity) and a `lease_id` that joins back to a user JWT issuance from the same time window.
+**Where does the `lease_id` come from?** `getDbCreds()` returns it alongside the username and password from the `database/creds/uc2-personal-readonly` read, and it stays in the request's local scope — one credential, one query, one revoke. The browser never sees a `lease_id`.
+
+Step 8 below is where you watch all of this happen against your own cluster.
 :::
 
 ---

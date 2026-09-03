@@ -49,9 +49,9 @@ output "ivia_service_endpoint" {
   value       = module.ivia.ivia_service_endpoint
 }
 
-output "ivia_client_secret" {
-  description = "OAuth client secret for agent-uc2/agent-uc3. Consumed by tier-3 uc2/uc3 + the iviaop clients patch."
-  value       = module.ivia.ivia_client_secret
+output "ivia_client_secrets" {
+  description = "Per-client OAuth secrets keyed by client_id (agent-uc1, agent-uc2, agent-uc3, uc3-actor). Consumed by tier-3 uc2/uc3 + the iviaop clients patch."
+  value       = module.ivia.ivia_client_secrets
   sensitive   = true
 }
 

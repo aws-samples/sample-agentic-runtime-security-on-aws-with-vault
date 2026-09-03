@@ -9,7 +9,7 @@
 # the new clients.yml is re-read at startup.
 clients:
   - client_id: agent-uc1
-    client_secret: "${ivia_client_secret}"
+    client_secret: "${uc1_client_secret}"
     client_name: Agentic Runtime UC1 — Non-Personalized Read-Only
     enabled: true
     grant_types:
@@ -17,7 +17,7 @@ clients:
     token_endpoint_auth_method: client_secret_basic
 
   - client_id: agent-uc2
-    client_secret: "${ivia_client_secret}"
+    client_secret: "${uc2_client_secret}"
     client_name: Agentic Runtime UC2 — OAuth Personalized Read-Only
     enabled: true
     grant_types:
@@ -43,7 +43,7 @@ clients:
     token_endpoint_auth_method: client_secret_basic
 
   - client_id: agent-uc3
-    client_secret: "${ivia_client_secret}"
+    client_secret: "${uc3_client_secret}"
     client_name: Agentic Runtime UC3 — CIBA Privileged Refund Writer
     enabled: true
     grant_types:
@@ -70,7 +70,7 @@ clients:
   # plus the may_act delegation claim injected by the isvaop_pretoken rule, which
   # Vault's uc3-jwt role validates. Matches the agent's IVIA_ACTOR_CLIENT_ID.
   - client_id: uc3-actor
-    client_secret: "${ivia_client_secret}"
+    client_secret: "${uc3_actor_client_secret}"
     client_name: Agentic Runtime UC3 Actor — Token Exchange Performer
     enabled: true
     grant_types:

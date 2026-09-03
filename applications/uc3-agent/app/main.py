@@ -9,12 +9,15 @@ Session management:
   Conversation history is persisted/loaded automatically via Strands
   FileSessionManager keyed on sessionId.
 
-Env vars consumed (set via Kubernetes ConfigMap):
-  VAULT_ADDR           — Vault endpoint
-  VAULT_ROLE           — Vault K8s auth role (default: uc3)
-  IVIA_BASE_URL        — IVIA base URL for OAuth/CIBA endpoints
-  IVIA_CLIENT_ID       — OAuth client ID registered in IVIA
-  IVIA_CLIENT_SECRET   — OAuth client secret
+Env vars consumed (non-secret values via the uc3-agent-config ConfigMap; the two
+OAuth client secrets and the SCIM password via Kubernetes Secrets):
+  VAULT_ADDR               — Vault endpoint
+  VAULT_ROLE               — Vault K8s auth role (default: uc3)
+  IVIA_BASE_URL            — IVIA base URL for OAuth/CIBA endpoints
+  IVIA_CLIENT_ID           — OAuth client ID registered in IVIA (agent-uc3)
+  IVIA_CLIENT_SECRET       — agent-uc3's client secret          (Secret uc3-oidc-clients)
+  IVIA_ACTOR_CLIENT_ID     — token-exchange client ID (uc3-actor)
+  IVIA_ACTOR_CLIENT_SECRET — uc3-actor's OWN client secret      (Secret uc3-oidc-clients)
   DB_HOST              — PostgreSQL host
   DB_PORT              — PostgreSQL port (default: 5432)
   DB_NAME              — PostgreSQL database name (default: workshop)
@@ -40,10 +43,49 @@ from .agent import build_uc3_agent
 from .vault_client import UC3VaultClient
 from .auth import verify_id_token, _AUTHENTICATED_SUB, AuthenticationError
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s %(message)s",
-)
+class _StructuredFormatter(logging.Formatter):
+    """Render the log record AND every field attached via ``extra={...}``.
+
+    The agent attaches the fields that make a refund traceable — ``request_id``,
+    ``auth_req_id``, ``mmfa_transaction_id``, ``authorization_details``, Vault
+    lease ids — to nearly every log call. The previous format string
+    ("%(asctime)s %(levelname)s %(name)s %(message)s") rendered none of them, so
+    the log recorded a bare event name and dropped everything that identified
+    WHICH refund it referred to. This agent is the only component that knows the
+    application-level ``request_id``, and the workshop's audit story correlates
+    the IVIA, Vault and database planes on exactly that value — so those fields
+    have to survive into the log. See issue #37.
+
+    Emitted as one JSON object per line so the fields are queryable downstream
+    rather than needing to be parsed out of prose.
+    """
+
+    # Everything the logging module itself puts on a record; anything else was
+    # supplied by our own extra={...} and is what we actually want to emit.
+    _RESERVED = frozenset(
+        vars(logging.LogRecord("", 0, "", 0, "", (), None)).keys()
+    ) | {"asctime", "message", "taskName"}
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload = {
+            "ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%S%z"),
+            "level": record.levelname,
+            "logger": record.name,
+            "event": record.getMessage(),
+        }
+        for key, value in vars(record).items():
+            if key not in self._RESERVED and not key.startswith("_"):
+                payload[key] = value
+        if record.exc_info:
+            payload["exc_info"] = self.formatException(record.exc_info)
+        # default=str so a non-serialisable value degrades to its repr instead of
+        # raising inside the logging call and losing the record entirely.
+        return json.dumps(payload, default=str)
+
+
+_handler = logging.StreamHandler()
+_handler.setFormatter(_StructuredFormatter())
+logging.basicConfig(level=logging.INFO, handlers=[_handler], force=True)
 logger = logging.getLogger(__name__)
 
 _vault_client = None

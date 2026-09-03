@@ -82,11 +82,52 @@ rules:
       content: |
         // Mapping rule invoked by the OAuth 2.0 token-exchange grant. ISVAOP binds
         // it by the fixed name `idmap`; it MUST exist or the exchange returns 404
-        // ("Precompiled script mappingrule/idmap.js does not exist"). Used to
-        // validate the incoming subject. Claim enrichment (may_act) happens in the
-        // pre-token rule, not here — tokenData assignments do not land from idmap.
+        // ("Precompiled script mappingrule/idmap.js does not exist"). IBM documents
+        // it as the rule "used to validate the subject or sub of the incoming token
+        // during token exchange" (docs tasks-tokenexchange) — which is exactly what
+        // the CIBA-provenance gate below does. Claim enrichment (may_act) happens in
+        // the pre-token rule, not here — tokenData assignments do not land from idmap.
+        //
+        // CIBA-PROVENANCE GATE (issue #29) — LOAD-BEARING, FAIL-CLOSED.
+        //
+        // Use Case 3 promises that a privileged refund requires an out-of-band human
+        // approval. Without this gate that promise is not enforced: the exchange was
+        // gated on the GRANT TYPE alone, so ANY valid access token for a banking user
+        // — an ordinary browser login token, no push, no approval — was accepted as
+        // the subject and came back stamped with the refund authorization_details,
+        // which Vault then honoured. Reproduced live 2026-09-02.
+        //
+        // WHY THE TEST IS client_id + ABSENCE OF act (both legs verified live):
+        //   * A genuine CIBA access token is FIRST-PARTY: issued to agent-uc3 (the
+        //     only client holding the CIBA grant) and carrying NO act claim, because
+        //     the pre-token rule stamps act only on the token-exchange branch.
+        //   * Gating on client_id ALONE is NOT sufficient and was proven defeatable:
+        //     a login token exchanged AS agent-uc3 comes back with
+        //     client_id=agent-uc3, and chaining THAT through uc3-actor yielded the
+        //     full refund RAR with aud=uc3-actor (both legs HTTP 200). The laundering
+        //     hop is precisely what stamps act, so requiring act to be ABSENT closes
+        //     it — an attacker cannot remove a claim ISVAOP injects downstream of
+        //     this rule.
+        // Throwing here fails the token request closed (verified: the bypass and the
+        // laundered chain are both rejected; a genuine phone-approved refund still
+        // completes end to end). The message must NOT echo caller-supplied values —
+        // ISVAOP surfaces it verbatim in error_description.
         importClass(Packages.com.tivoli.am.fim.trustserver.sts.utilities.IDMappingExtUtils);
         IDMappingExtUtils.traceString("UC3 idmap fired sub=" + stsuu.getPrincipalName());
+
+        var UC3_CIBA_CLIENT = "agent-uc3";
+        var subjectClient = null;
+        var subjectAct    = null;
+        try { subjectClient = stsuu.getAttributeContainer().getAttributeValueByName("client_id"); } catch (e) { subjectClient = null; }
+        try { subjectAct    = stsuu.getAttributeContainer().getAttributeValueByName("act"); } catch (e) { subjectAct = null; }
+
+        if (("" + subjectClient) !== UC3_CIBA_CLIENT || subjectAct !== null) {
+          // Trace carries the detail for the operator; the thrown message does not.
+          IDMappingExtUtils.traceString("UC3 idmap DENY — subject token is not a first-party CIBA token (client_id=" +
+                                        subjectClient + ", act_present=" + (subjectAct !== null) + ")");
+          throw new Error("token exchange requires a CIBA-approved subject token");
+        }
+        IDMappingExtUtils.traceString("UC3 idmap ALLOW — first-party CIBA subject token for sub=" + stsuu.getPrincipalName());
     - name: isvaop_pretoken
       content: |
         // pre_mappingrule_id — runs before every access token is minted. Stamps the

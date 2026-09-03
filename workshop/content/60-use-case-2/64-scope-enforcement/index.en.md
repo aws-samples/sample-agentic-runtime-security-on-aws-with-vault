@@ -7,7 +7,7 @@ weight: 64
 
 Use Case 2 enforces the principle of least privilege at two independent layers:
 
-- **Vault policy (Layer 2a):** The `uc2-personal` policy grants only `database/creds/uc2-personal-readonly`. Attempts to read write-capable credential roles are rejected by Vault with a 403.
+- **Vault policy (Layer 2a):** The MCP server's own workload policy, `uc2-personal`, grants nothing but lease revocation. Every credential it uses is authorized by the *user's* OAuth token, not by its workload identity. Attempts to read any credential role with the workload token — write-capable or not — are rejected by Vault with a 403.
 - **Postgres GRANTs (Layer 2b):** Each Vault-vended ephemeral Postgres role is created with `GRANT SELECT` only — no INSERT, UPDATE, or DELETE is ever granted (these capabilities are not in the `creation_statements` Vault runs at issuance time). Because there is no shared permanent role behind the ephemeral roles, an attacker has no parent role to GRANT through either: every credential is a fresh role with the same SELECT-only ceiling.
 
 This defense-in-depth means that a single control being misconfigured does not open a write path. Both layers must be bypassed for a write to succeed.
@@ -24,30 +24,37 @@ kubectl exec -n vault vault-0 -- sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault 
 Expected output:
 
 ```hcl
-# UC2: Personal-data agent policy (ENFC-02)
-# Allows: kubernetes auth + OAuth resource server (X-Vault-Token), database creds (R/O), AWS (Bedrock) STS creds
-# database/creds/uc2-personal-readonly only — no write DB roles accessible
-path "database/creds/uc2-personal-readonly" {
-  capabilities = ["read"]
-}
-path "aws/sts/bedrock-reader" {
-  capabilities = ["read", "update"]
+# UC2 MCP server workload identity — lease revocation only.
+path "sys/leases/revoke" {
+  capabilities = ["update"]
 }
 path "auth/token/lookup-self" {
   capabilities = ["read"]
 }
-path "sys/leases/renew" {
-  capabilities = ["update"]
-}
 ```
 
-Note: there is no path for any Use Case 3 write-capable role (e.g., `database/creds/uc3-refund-writer`). The policy grants `read` on exactly **one** database credential path — `uc2-personal-readonly`. The other three paths give the agent its Vault-vended Bedrock STS credentials (`aws/sts/bedrock-reader`), let it inspect its own Vault token (`auth/token/lookup-self`), and let it extend an in-flight DB credential lease (`sys/leases/renew`). None of these grant write access to banking data.
+Two paths. That is the entire workload identity of the MCP server.
 
-This `uc2-personal` policy is the MCP server's own **workload** policy — the token its `uc2-mcp-server-sa` Kubernetes identity receives. It is distinct from `uc2-human-baseline`, the per-user policy Vault intersects with the agent ceiling in the OBO path shown on the previous pages (that one has no Bedrock path). Both correctly lack any Use Case 3 write path — which is exactly what the next step proves.
+Read what is *missing* rather than what is there: no `database/creds/uc2-personal-readonly`, no
+Use Case 3 write role, no path to any credential at all. The MCP server cannot ask Vault for a
+database credential using its own identity. Every credential it uses is authorized by the
+**user's** OAuth token, presented per request — which is why a request with no user attached
+gets no data rather than the agent's own data.
+
+So what is `sys/leases/revoke` for? It is the one thing the server must do as itself: hand the
+credential back the moment the query finishes. Revoking a lease requires a Vault identity, and
+the user's token is not the right one to use — the credential should die even if the user's
+session is already gone. That single grant is the whole reason this policy still exists, and
+the [Credential Revocation](../65-credential-revocation/) page watches it happen.
+
+This is distinct from `uc2-human-baseline`, the per-user policy Vault intersects with the agent
+ceiling on the on-behalf-of path shown on the previous pages. Neither carries a Use Case 3 write
+path — which is what the next step proves.
 
 ### Step 1.2 — Attempt to read a write-capable credential role
 
-Obtain a Vault token using the `uc2-personal` policy and attempt to read a Use Case 3 credential:
+Obtain a Vault token carrying the `uc2-personal` policy — the same policy the MCP server's
+ServiceAccount receives — and attempt to read a Use Case 3 credential with it:
 
 ```bash
 # Get a Vault token bound to uc2-personal policy (creating a token requires the root token)
@@ -80,13 +87,16 @@ The URL field shows `http://127.0.0.1:8200` (rather than the cluster-DNS address
 The audit log streams every Vault request and response. Filter the last 10 minutes for any denied response targeting a `uc3` path:
 
 ```bash
-kubectl logs -n vault vault-0 --since=10m \
+kubectl logs -n vault -l app.kubernetes.io/name=vault --since=10m --tail=-1 \
   | grep '"type":"response"' \
   | jq 'select(.response.data.error != null and (.request.path | contains("uc3")))' \
   | jq '{time: .time, path: .request.path, error: .response.data.error}'
 ```
 
-(`--since=10m` rather than `--tail=N` because on a live cluster the agents are continuously calling `auth/token/lookup-self` and similar heartbeat paths, so a small `--tail` window will scroll the deny out of view within seconds. Bounding by time keeps the command deterministic from the attendee's perspective.)
+(The label selector reads all three Vault nodes: only the node that served the denied request
+logged it, so naming a single pod returns nothing whenever another node took the call. `--tail=-1`
+is required alongside `-l` — with a selector `kubectl logs` otherwise returns just 10 lines per pod.
+`--since=10m` rather than `--tail=N` because on a live cluster the agents are continuously calling `auth/token/lookup-self` and similar heartbeat paths, so a small `--tail` window will scroll the deny out of view within seconds. Bounding by time keeps the command deterministic from the attendee's perspective.)
 
 Expected output:
 
@@ -192,8 +202,81 @@ pod "pg-grants" deleted
 What to read from this output:
 
 - **`vault_root=arwdDxtm/vault_root`** — the master role holds the full `arwdDxtm` privilege set on this table: **a** insert, **r** select, **w** update, **d** delete, **D** truncate, **x** references, **t** trigger, **m** maintain (Postgres 17 added `m`). The trailing `/vault_root` means *granted by* `vault_root`.
-- **Each `"v-…"=r/vault_root` row** is a live Vault-vended ephemeral role. The `=r/` means *only the `r` (SELECT) privilege is granted* — no `a` for insert, no `w` for update, no `d` for delete. That's why your Step 2.2 INSERT got rejected. This is also the direct evidence of JIT identity at the DB layer: every active credential is visible as its own row, and the list shrinks as leases expire and Vault's `revocation_statements` drop the roles.
+- **Each `"v-…"=r/vault_root` row** is a live Vault-vended ephemeral role. The `=r/` means *only the `r` (SELECT) privilege is granted* — no `a` for insert, no `w` for update, no `d` for delete. That's why your Step 2.2 INSERT got rejected. This is also the direct evidence of JIT identity at the DB layer: every active credential is visible as its own row, and the list shrinks as roles are dropped — immediately when the MCP server revokes the lease at the end of a query, or at lease expiry for the credentials you issued by hand with the root token on these pages, which nothing revokes for you.
 - **`Policies` column** — the RLS predicate from the previous page. The `(u)` USING clause is the SELECT filter; `(r)` indicates it applies to `SELECT` (read).
+
+## Section 3 — What a Stolen Token Gets You
+
+Sections 1 and 2 showed what the token **cannot** reach. This one shows what it *can* — including when it is presented by someone who is not you. Every claim a workshop makes about token security is worth less than the five minutes it takes to check, so check this one.
+
+### Step 3.1 — Get your own access token
+
+The Banking UI keeps the token in an `httpOnly` cookie, which JavaScript cannot read but DevTools can show you.
+
+In the browser tab where you are signed in as Oscar: open DevTools (**F12**), go to **Application** → **Storage** → **Cookies**, select the banking site, and copy the value of the **`access_token`** cookie. Then put it in a shell variable:
+
+```bash
+read -r -s ACCESS_TOKEN   # paste the cookie value, press Enter (input is hidden)
+export ACCESS_TOKEN
+echo "token length: ${#ACCESS_TOKEN}"
+```
+
+A Use Case 2 access token is roughly 800 characters. If you got something much shorter you copied the wrong cookie — `id_token` and `pkce` also live there.
+
+### Step 3.2 — Present it to Vault twice
+
+This is the exact call the MCP server makes: the token *is* the Vault token. Run it twice.
+
+```bash
+for attempt in 1 2; do
+  kubectl delete pod vault-replay -n banking-app --ignore-not-found --now >/dev/null 2>&1
+  kubectl run vault-replay --rm -i --quiet --restart=Never --image=curlimages/curl:8.11.1 -n banking-app \
+    --command -- curl -s -H "X-Vault-Token: ${ACCESS_TOKEN}" \
+      http://vault.vault.svc.cluster.local:8200/v1/database/creds/uc2-personal-readonly \
+    | sed -e "s/.*\"username\":\"\([^\"]*\)\".*/attempt ${attempt} username=\1/"
+done
+```
+
+Expected output — **both** succeed, with two different credentials:
+
+```
+attempt 1 username=v-JWT Toke-uc2-pers-DiVXIMGjGIeX0uV8sFm9-1788385620
+attempt 2 username=v-JWT Toke-uc2-pers-gFzxJVMgIqTvaHP3K9R9-1788385654
+```
+
+### What this means, stated plainly
+
+**Vault has no replay cache.** The delegated token is a bearer credential: whoever holds it can present it as many times as they like until it expires, and each presentation issues a fresh database credential. Nothing about the OAuth resource server model changes that, and the workshop is not going to pretend otherwise.
+
+What limits the damage is everything *around* the token, and you have already proved each piece:
+
+- **The credential is read-only.** Section 2's INSERT was rejected by a Postgres `GRANT`, and a replayed token gets exactly the same read-only credential.
+- **It only sees one user's rows.** Row-level security scopes every result to the `sub` in the token, so a stolen token is a window onto that user's data and no one else's — you proved this on the [Verify User Access](../63-verify-user-access/) page.
+- **The audience is pinned.** The token names `agent-uc2` as its audience; Vault's resource server profile rejects a token minted for a different audience.
+- **The agent ceiling still applies.** Section 1 showed the same token being refused the Use Case 3 write path. Replaying it does not widen it.
+- **For Use Case 3, the path is pinned per request.** The mandatory `vault:path_access` RAR narrows each delegated token to one path — the [Bypass Test](../73-bypass-test/) proves a token whose RAR names a different path is denied.
+- **And a replayed Use Case 3 token still cannot pay a refund twice.** It could obtain the writer credential again, but the unique index on `banking.refunds (request_id)` refuses the second write — proved under "One Approval Pays Once".
+
+**The honest gap:** the token's own lifetime. Check it yourself:
+
+```bash
+python3 -c "
+import base64, json, os, time
+p = os.environ['ACCESS_TOKEN'].split('.')[1]; p += '=' * (-len(p) % 4)
+c = json.loads(base64.urlsafe_b64decode(p))
+print('lifetime:', (c['exp'] - c['iat']) // 60, 'minutes')
+print('expires in:', int((c['exp'] - time.time()) // 60), 'minutes')
+"
+```
+
+Expected output on this deployment — `lifetime` is fixed by the IVIA client configuration; `expires in` counts down from whenever you signed in:
+
+```
+lifetime: 120 minutes
+expires in: 79 minutes
+```
+
+Two hours is a long replay window for a bearer token, and it is set by the IVIA client configuration, not by Vault. Shortening it — and pairing it with the credential revocation you saw on the next page, which closes the *credential's* window in milliseconds — is the lever a production deployment pulls. That is the difference between a control the system enforces and a parameter someone chose; both are worth knowing which is which.
 
 :::expand{header="Platform Track — Defense-in-depth: how Vault policy and DB GRANTs create independent enforcement layers"}
 
@@ -237,6 +320,8 @@ async function writeAccount(params: { user_sub: string; amount: number }) {
     throw err;
   } finally {
     await client.end();
+    // The credential existed for exactly this query. Hand it back now.
+    await revokeLease(creds.leaseId);
   }
 }
 ```

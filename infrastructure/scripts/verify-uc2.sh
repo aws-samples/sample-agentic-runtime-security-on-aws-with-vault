@@ -143,6 +143,24 @@ decode_jwt_claim() {
         | jq -r "$filter" 2>/dev/null || echo ""
 }
 
+# ivia_client_secret <client_id> — read ONE OIDC client's secret from the Kubernetes
+# Secret that carries it. Every client (agent-uc2, agent-uc3, uc3-actor) has its OWN
+# secret and none of them live in a ConfigMap any more (issue #30), so a caller must
+# name the client it intends to authenticate as. An unknown client_id returns empty,
+# which every call site treats as a hard mint failure.
+ivia_client_secret() {
+    local client_id="$1" secret_name key
+    case "${client_id}" in
+        agent-uc2) secret_name="banking-ui-oidc"; key="IVIA_CLIENT_SECRET" ;;
+        agent-uc3) secret_name="uc3-oidc-clients"; key="IVIA_CLIENT_SECRET" ;;
+        uc3-actor) secret_name="uc3-oidc-clients"; key="IVIA_ACTOR_CLIENT_SECRET" ;;
+        *) return 1 ;;
+    esac
+    kubectl get secret -n "${BANKING_NAMESPACE}" "${secret_name}" \
+        -o "jsonpath={.data.${key}}" 2>/dev/null | base64 -d 2>/dev/null
+}
+
+
 # _mint_uc2_token <user> — headlessly mint a REAL IVIA-issued UC2 OBO login token
 # for <user>, exercising the EXACT production path the banking UI uses: PKCE
 # authorization_code login at WebSEAL, then the token endpoint (client_secret_basic,
@@ -156,8 +174,8 @@ decode_jwt_claim() {
 #
 # Every secret/host is sourced at RUNTIME (never hardcoded — global no-hardcoded-
 # identity/auth rule): WRP host ← infrastructure/.acme-state; redirect_uri + client id
-# ← banking-ui-config; client secret ← uc3-agent-config (all workshop clients share
-# ${ivia_client_secret}); persona password ← base_layer.yaml.tftpl. The mint runs
+# ← banking-ui-config; agent-uc2's client secret ← the banking-ui-oidc Secret (each
+# client has its OWN secret, issue #30); persona password ← base_layer.yaml.tftpl. The mint runs
 # INSIDE the uc3-agent pod (has httpx + in-cluster iviaop DNS + egress to the WRP ALB).
 _mint_uc2_token() {
     local user="$1"
@@ -170,7 +188,7 @@ _mint_uc2_token() {
     wrp=$(grep -E '^NIP_FQDN_WRP=' "${acme_state}" 2>/dev/null | cut -d= -f2)
     ru=$(kubectl get configmap -n "${BANKING_NAMESPACE}" banking-ui-config -o jsonpath='{.data.REDIRECT_URI}' 2>/dev/null)
     agent_client=$(kubectl get configmap -n "${BANKING_NAMESPACE}" banking-ui-config -o jsonpath='{.data.IVIA_CLIENT_ID}' 2>/dev/null)
-    secret=$(kubectl get configmap -n "${BANKING_NAMESPACE}" uc3-agent-config -o jsonpath='{.data.IVIA_CLIENT_SECRET}' 2>/dev/null)
+    secret=$(ivia_client_secret "${agent_client}")
     persona_pw=$(grep -oE 'password:[[:space:]]*"[^"]+"' "${base_layer}" 2>/dev/null | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
     pod=$(kubectl get pod -n "${BANKING_NAMESPACE}" -l app=uc3-agent -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
 
@@ -610,6 +628,40 @@ if [ -n "${mcp_pod}" ]; then
     fi
 else
     print_warn "ENFC-03 check skipped — MCP server pod not found (check 3 above)"
+fi
+
+#-------------------------------------------------------------------------------
+# Check 10b — the MCP tool contract has no place to put an identity
+#
+# The token the MCP server acts on must come from the Authorization header and
+# nowhere else. A `jwt` tool parameter would make the header decoration: anything
+# able to reach the server would choose the identity Vault sees, and the OBO
+# intersection, the RLS predicate and the audit record would all faithfully
+# enforce the caller's choice of user. tools/list needs no real user (it touches
+# neither Vault nor the database), so any non-empty bearer gets past the 401 gate.
+#
+# This is the scripted half of the attendee exercise on the OAuth Login Flow page.
+#-------------------------------------------------------------------------------
+tools_probe_pod="verify-uc2-tools-$$"
+kubectl delete pod "${tools_probe_pod}" -n "${BANKING_NAMESPACE}" --ignore-not-found --now &>/dev/null
+tools_json=$(kubectl run "${tools_probe_pod}" --rm -i --quiet --restart=Never \
+    --image=curlimages/curl:8.11.1 -n "${BANKING_NAMESPACE}" --command -- \
+    curl -s -X POST http://banking-mcp-svc:3001/mcp \
+      -H 'Authorization: Bearer schema-probe' \
+      -H 'Content-Type: application/json' \
+      -H 'Accept: application/json, text/event-stream' \
+      -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' 2>/dev/null || echo "PROBE_FAILED")
+
+if [ "${tools_json}" = "PROBE_FAILED" ] || [ -z "${tools_json}" ]; then
+    print_warn "MCP tool-contract check skipped — tools/list probe returned nothing (is banking-mcp-svc up?)"
+elif ! echo "${tools_json}" | grep -q '"get_accounts"'; then
+    print_fail "MCP tool contract: tools/list did not list get_accounts" \
+        "tools/list returned: ${tools_json:0:300}. Expected the banking-tools server to advertise get_accounts and get_transactions."
+elif echo "${tools_json}" | grep -q '"jwt"'; then
+    print_fail "MCP tool contract: a tool still declares a jwt parameter" \
+        "tools/list advertises a 'jwt' input — the caller could then choose the identity Vault sees, making the Authorization header decorative. Remove the parameter and close over the header token in createMcpServer(). Response: ${tools_json:0:400}"
+else
+    print_pass "MCP tool contract: no tool accepts a jwt argument — identity can only come from the Authorization header"
 fi
 
 #-------------------------------------------------------------------------------

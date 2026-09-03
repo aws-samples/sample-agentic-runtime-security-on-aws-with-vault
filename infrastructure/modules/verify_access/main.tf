@@ -60,6 +60,12 @@ locals {
   obo_uc3_agent_identity = "uc3-actor"        # clients.yml.tftpl:60  (act.sub for UC3)
   obo_uc3_human_sub      = "jaime"            # base_layer.yaml.tftpl:195 (UC3 CIBA approver)
   obo_uc2_human_subs     = ["oscar", "jaime"] # base_layer.yaml.tftpl:190,195 (UC2 closed set)
+
+  # Every OAuth client registered in iviaop-config/clients.yml.tftpl. Each one
+  # gets its OWN client_secret (random_password.ivia_oauth_client_secret,
+  # for_each over this list) — see the resource comment for why sharing one
+  # secret across the four is a security defect, not a simplification.
+  ivia_oauth_client_ids = ["agent-uc1", "agent-uc2", "agent-uc3", "uc3-actor"]
 }
 
 #-------------------------------------------------------------------------------
@@ -270,14 +276,24 @@ resource "random_password" "sec_master_pwd" {
   special = false
 }
 
-# IVIA OAuth client secret. Consumed by uc2_app + uc3_agent via the
-# ivia_client_secret module output. Stable across applies (rotation is
-# out of scope for Phase 07.1 — no keepers block).
+# IVIA OAuth client secrets — ONE PER CLIENT (issue #30).
+#
+# A single shared secret across all four clients defeats the control this
+# workshop teaches: uc3-actor is the only client permitted to perform the
+# RFC 8693 exchange that mints a delegated refund token, and that restriction
+# is meaningless if every other component holds uc3-actor's credential. Each
+# client_id therefore gets its own random_password, surfaced as the
+# ivia_client_secrets map output and delivered to workloads via Kubernetes
+# Secrets (never ConfigMaps).
+#
+# Stable across applies (rotation is out of scope — no keepers block).
 # special=false: 32 chars provide ample entropy and the secret is sent in
 # HTTP basic auth + form-urlencoded bodies, where special chars complicate
 # consumers without adding meaningful entropy.
 
 resource "random_password" "ivia_oauth_client_secret" {
+  for_each = toset(local.ivia_oauth_client_ids)
+
   length  = 32
   special = false
 }
@@ -1098,16 +1114,10 @@ resource "kubernetes_config_map" "iviaop_config" {
     "storage.yml" = templatefile("${path.module}/iviaop-config/storage.yml", {
       postgres_password = random_password.postgresql_pwd.result
     })
-    # clients.yml rendered with a placeholder uc2_redirect_uri. The real ALB
-    # hostname (only known after module.uc2_app deploys the banking-ui Ingress)
-    # is patched in at root level by `kubernetes_config_map_v1_data.iviaop_clients_patch`
-    # followed by `null_resource.iviaop_rollout_restart`. This indirection
-    # breaks the otherwise-circular dep: module.uc2_app depends on module.ivia
-    # outputs, so module.ivia cannot in turn read from module.uc2_app.
-    "clients.yml" = templatefile("${path.module}/iviaop-config/clients.yml.tftpl", {
-      ivia_client_secret = random_password.ivia_oauth_client_secret.result
-      uc2_redirect_uri   = "http://placeholder.invalid/callback"
-    })
+    # clients.yml is NOT here — it carries all four client_secret values, so it
+    # lives in kubernetes_secret.iviaop_clients (issue #30) and is projected into
+    # the same /var/isvaop/config directory alongside this ConfigMap. Keeping it
+    # in a ConfigMap put four live credentials in `kubectl get configmap -o yaml`.
     # iviaop.key is NOT here — the RS256 signing/serving PRIVATE key lives in
     # kubernetes_secret.iviaop_key (never a ConfigMap, unencrypted at rest). Only
     # the PUBLIC cert stays in the ConfigMap. Both are merged into /var/isvaop/config
@@ -1125,17 +1135,58 @@ resource "kubernetes_config_map" "iviaop_config" {
     "templates.zip" = filebase64("${path.module}/iviaop-config/templates.zip")
   }
 
-  # provider.yml and clients.yml are created here with PLACEHOLDER ALB hostnames
-  # (issuer-patched-at-root.invalid / placeholder.invalid), then overwritten
-  # out-of-band by the root-module kubernetes_config_map_v1_data.iviaop_clients_patch
-  # with the real ALB issuer + redirect_uri once the ALBs exist. Without this
-  # ignore_changes the base resource would revert the patched real values back to
-  # the placeholders on every apply — perpetual drift, and a stray apply would
-  # break the live OIDC issuer (iviaop would advertise *.invalid and the banking
-  # login redirect would dead-end). The patch owns these two keys after creation.
+  # provider.yml is created here with a PLACEHOLDER ALB hostname
+  # (issuer-patched-at-root.invalid), then overwritten out-of-band by the
+  # root-module kubernetes_config_map_v1_data.iviaop_clients_patch with the real
+  # ALB issuer once the ALBs exist. Without this ignore_changes the base resource
+  # would revert the patched real value back to the placeholder on every apply —
+  # perpetual drift, and a stray apply would break the live OIDC issuer (iviaop
+  # would advertise *.invalid and the banking login redirect would dead-end). The
+  # patch owns this key after creation. clients.yml gets the same treatment on
+  # kubernetes_secret.iviaop_clients below.
   lifecycle {
     ignore_changes = [
       data["provider.yml"],
+    ]
+  }
+}
+
+#-------------------------------------------------------------------------------
+# iviaop client registry — held in a Secret, NOT the iviaop-config ConfigMap.
+#
+# clients.yml carries the client_secret of every registered OAuth client, so a
+# ConfigMap would publish four live credentials to anyone with configmap read in
+# this namespace (issue #30). Same reasoning, and the same projected-volume
+# mechanism, as kubernetes_secret.iviaop_key below: ISVAOP still sees one flat
+# /var/isvaop/config directory and cannot tell the difference.
+#
+# Rendered here with a placeholder uc2_redirect_uri. The real ALB hostname (only
+# known after module.uc2_app deploys the banking-ui Ingress) is patched in at root
+# level by `kubernetes_secret_v1_data.iviaop_clients_patch`, followed by
+# `null_resource.iviaop_rollout_restart`. That indirection breaks the otherwise
+# circular dep: module.uc2_app depends on module.ivia outputs, so module.ivia
+# cannot in turn read from module.uc2_app.
+#-------------------------------------------------------------------------------
+resource "kubernetes_secret" "iviaop_clients" {
+  metadata {
+    name      = "iviaop-clients"
+    namespace = kubernetes_namespace.verify_access.metadata[0].name
+    labels    = local.common_labels
+  }
+  type = "Opaque"
+  data = {
+    "clients.yml" = templatefile("${path.module}/iviaop-config/clients.yml.tftpl", {
+      uc1_client_secret       = random_password.ivia_oauth_client_secret["agent-uc1"].result
+      uc2_client_secret       = random_password.ivia_oauth_client_secret["agent-uc2"].result
+      uc3_client_secret       = random_password.ivia_oauth_client_secret["agent-uc3"].result
+      uc3_actor_client_secret = random_password.ivia_oauth_client_secret["uc3-actor"].result
+      uc2_redirect_uri        = "http://placeholder.invalid/callback"
+    })
+  }
+
+  # The root-level patch owns this key after creation — see the ConfigMap above.
+  lifecycle {
+    ignore_changes = [
       data["clients.yml"],
     ]
   }
@@ -1315,6 +1366,7 @@ resource "kubernetes_deployment" "iviaop" {
           "checksum/iviaop-config" = sha256(jsonencode(merge(
             kubernetes_config_map.iviaop_config.data,
             kubernetes_secret.iviaop_key.data,
+            kubernetes_secret.iviaop_clients.data,
           )))
         }
       }
@@ -1322,9 +1374,11 @@ resource "kubernetes_deployment" "iviaop" {
         image_pull_secrets { name = kubernetes_secret.dockerlogin.metadata[0].name }
 
         # Projected volume merges the iviaop-config ConfigMap (provider.yml,
-        # clients.yml, iviaop.pem, …) with the iviaop-key Secret (iviaop.key) into
-        # one directory at /var/isvaop/config, so ISVAOP sees the same file layout
-        # while the private key comes from a Secret, not a ConfigMap.
+        # iviaop.pem, …) with the iviaop-key Secret (iviaop.key) and the
+        # iviaop-clients Secret (clients.yml) into one directory at
+        # /var/isvaop/config, so ISVAOP sees the same flat file layout while the
+        # private key and the client registry both come from Secrets rather than
+        # a ConfigMap.
         volume {
           name = "iviaop-config"
           projected {
@@ -1336,6 +1390,11 @@ resource "kubernetes_deployment" "iviaop" {
             sources {
               secret {
                 name = kubernetes_secret.iviaop_key.metadata[0].name
+              }
+            }
+            sources {
+              secret {
+                name = kubernetes_secret.iviaop_clients.metadata[0].name
               }
             }
           }

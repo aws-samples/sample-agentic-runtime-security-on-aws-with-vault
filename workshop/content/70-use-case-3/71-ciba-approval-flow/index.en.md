@@ -84,9 +84,75 @@ IVIA returns a delegated JWT containing:
 
 The delegated JWT is what the agent presents to Vault via `X-Vault-Token`. Vault's OAuth resource server resolves `act.sub` (= `uc3-actor`) against the Agent Registry and narrows the token per request from its `vault:path_access` RAR before issuing any DB credentials.
 
-:::alert{header="The approved amount is NOT a token claim — and that is correct" type="info"}
-The amount and currency the user approved at consent time (e.g. `$88.30 USD`) are **not** carried on the exchanged JWT. IBM Verify (ISVAOP 25.10) exposes the consent-time `authorization_details` only as a context attribute on the request that *carries* it (`bc-authorize`) and as a token-*response* field — it is **not** available to any mapping rule at the CIBA mint or the token-exchange stage, so it cannot be stamped as a Vault-validated claim. (Confirmed against the live system and IBM's `tasks-rar` / `js_ciba_mapping_rule` docs, 2026-05-29.) Vault's `vault:path_access` RAR is a path match and could not numerically enforce an amount in any case. The amount is instead **consent-bound by three-plane audit correlation on `request_id`** — covered on the [Three-Plane Audit Correlation](../74-three-plane-audit/) page. So the CIBA flow still fully works: the user's out-of-band approval is what produced the `subject_token`, and the forensic row proves the approved amount equals the amount written.
+:::alert{header="What the phone actually shows — and what binds the amount" type="warning"}
+Be precise about what the tap on the phone proves, because it is less than it looks and the rest of the design is built around that.
+
+The push the agent fires is a **user-presence challenge**. It reads "Approve your OscarVault request" and it displays **no amount, no merchant and no transaction** — `fire_push()` sends only the username, and IVIA's authentication policy renders a generic approval. So the human is confirming *that they are present and consent to the pending request*, not inspecting terms on the device.
+
+The terms are not carried on the exchanged token either. IBM Verify (ISVAOP 25.10) exposes the consent-time `authorization_details` only as a context attribute on the request that *carries* it (`bc-authorize`) and as a token-*response* field — it is **not** available to any mapping rule at the CIBA mint or the token-exchange stage, so the amount cannot be stamped as a Vault-validated claim. (Confirmed against the live system and IBM's `tasks-rar` / `js_ciba_mapping_rule` docs, 2026-05-29.) Vault's `vault:path_access` RAR is a path match and could not range-check a number in any case.
+
+What actually binds the amount to the approval is two things you can check yourself:
+
+1. **The agent records the terms when it asks, and re-reads them when it completes.** `initiate_refund` stores the account, transaction, amount, currency and approver against the `auth_req_id`; `complete_refund` takes only the `auth_req_id` and the `request_id` and reads everything else back from that record. The model is never asked for the amount a second time, so it cannot change it between the ask and the write.
+2. **The database allows exactly one refund per approval.** A unique index on `banking.refunds (request_id)` makes a second write under the same approval impossible — you prove this by hand on the [Bypass Test](../73-bypass-test/) page, under "One Approval Pays Once".
+
+Together those mean the row written under a `request_id` is the row that was approved, and there is never a second one. That is a real binding, and it is enforced by the agent and the database rather than by the token — which is exactly the sort of thing worth knowing about a system before you trust it.
+
+**The honest limitation:** a user who taps Approve without reading the chat has approved a refund whose amount they were never shown. Displaying the amount on the device needs IVIA's transaction-detail push surface rather than the authentication policy this workshop uses, and that is not deployed here.
 :::
+
+### Prove the exchange is gated on the client, not just the token
+
+A fair objection to any delegation story is that the `act.sub` claim is simply stamped on by a mapping rule, so anything that can reach the token endpoint can mint a delegated token. Check it. Both requests below send the **same** junk `subject_token`; only the client credentials differ, so the difference in the answers is attributable to the client alone.
+
+First, resolve both clients' secrets from the cluster — each OAuth client has its own, and they are never in a ConfigMap:
+
+```bash
+UC2_SECRET=$(kubectl get secret -n banking-app banking-ui-oidc \
+  -o jsonpath='{.data.IVIA_CLIENT_SECRET}' | base64 -d)
+ACTOR_SECRET=$(kubectl get secret -n banking-app uc3-oidc-clients \
+  -o jsonpath='{.data.IVIA_ACTOR_CLIENT_SECRET}' | base64 -d)
+```
+
+Now attempt the RFC 8693 exchange as `agent-uc2` — the Use Case 2 banking client, which is not allowlisted for the token-exchange grant:
+
+```bash
+kubectl delete pod ivia-exch-probe -n verify-access --ignore-not-found --now >/dev/null 2>&1
+kubectl run ivia-exch-probe --rm -i --quiet --restart=Never --image=curlimages/curl:8.11.1 -n verify-access \
+  --command -- curl -sk -X POST https://iviaop.verify-access.svc.cluster.local:8436/oauth2/token \
+    -u "agent-uc2:${UC2_SECRET}" \
+    -d 'grant_type=urn:ietf:params:oauth:grant-type:token-exchange' \
+    -d 'subject_token=not-a-real-ciba-token' \
+    -d 'subject_token_type=urn:ietf:params:oauth:token-type:access_token' \
+    -d 'requested_token_type=urn:ietf:params:oauth:token-type:access_token'
+```
+
+Expected output — refused on the client, before the token is looked at:
+
+```json
+{"error":"unauthorized_client","error_description":"FBTAQ5091E The OAuth 2.0 Client is not allowed to use authorization grant 'urn:ietf:params:oauth:grant-type:token-exchange'."}
+```
+
+Now the same request as `uc3-actor`, the client that *is* allowlisted:
+
+```bash
+kubectl delete pod ivia-exch-probe -n verify-access --ignore-not-found --now >/dev/null 2>&1
+kubectl run ivia-exch-probe --rm -i --quiet --restart=Never --image=curlimages/curl:8.11.1 -n verify-access \
+  --command -- curl -sk -X POST https://iviaop.verify-access.svc.cluster.local:8436/oauth2/token \
+    -u "uc3-actor:${ACTOR_SECRET}" \
+    -d 'grant_type=urn:ietf:params:oauth:grant-type:token-exchange' \
+    -d 'subject_token=not-a-real-ciba-token' \
+    -d 'subject_token_type=urn:ietf:params:oauth:token-type:access_token' \
+    -d 'requested_token_type=urn:ietf:params:oauth:token-type:access_token'
+```
+
+Expected output — it gets past the client check and dies on the token, which is the *only* thing left to object to:
+
+```json
+{"error":"invalid_request","error_description":"FBTAQ5226E Token is not valid or has expired."}
+```
+
+Two different refusals from one identical request body. Delegation is not something any caller can ask for: the exchange grant is allowlisted per client, and `uc3-actor` is the only client in this deployment that holds it. A compromised Use Case 2 banking client cannot mint a Use Case 3 delegated token even with a genuine user token in hand — and if it somehow could, `agent-uc2`'s ceiling still omits the refund path, which the [Bypass Test](../73-bypass-test/) proves separately.
 
 :::expand{header="Platform Track — IVIA CIBA Configuration"}
 The IVIA CIBA client (`agent-uc3`) is configured in the `verify_access` Terraform module:
@@ -156,8 +222,13 @@ kubectl get pods -n banking-app -l app=uc3-agent
 
 ```bash
 # Watch the mobile-push flow in the agent logs (push fired, then check-status polls)
-kubectl logs -n banking-app -l app=uc3-agent --tail=50 | grep -E 'mmfa_push_fired|ciba_status_polled'
+kubectl logs -n banking-app -l app=uc3-agent --tail=-1 | grep -E 'mmfa_push_fired|ciba_status_polled'
 ```
+
+Two things about that command. `--tail=-1` reads the whole log: with a label selector `kubectl
+logs` otherwise returns only the last few lines per pod, and the agent's polling chatter pushes
+the push line out of a short window within seconds. And it returns **nothing at all** until you
+have actually run a refund — that is the expected state on a fresh deployment, not a fault.
 
 ```bash
 # Confirm the IVIA CIBA endpoint is reachable from the vault pod (direct ClusterIP path)

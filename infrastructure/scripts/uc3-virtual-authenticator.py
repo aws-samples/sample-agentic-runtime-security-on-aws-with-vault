@@ -355,7 +355,20 @@ def chat(message, session_id, id_token, timeout):
     return resp.status_code, one_line(resp.text)
 
 
-def run(wrp, user, password, agent_client, client_secret, redirect_uri, op_url):
+def run(wrp, user, password, agent_client, client_secret, redirect_uri, op_url, complete=True):
+    """Drive a real Use Case 3 refund with a virtual authenticator.
+
+    complete=True  (subcommand `run`)         — approve, then tell the agent to
+                                                finish, so the refund is written.
+    complete=False (subcommand `approveonly`) — stop at the approval and leave the
+                                                CIBA grant UNREDEEMED, so a caller
+                                                holding the auth_req_id can poll the
+                                                token endpoint for the genuine CIBA
+                                                access token. Used by
+                                                verify-uc3.sh --bypass, which needs a
+                                                real delegated token and must not
+                                                mint one outside an approval.
+    """
     session_id = f"no-phone-{int(time.time())}"
     emit("PERSONA", user)
     emit("SESSION", session_id)
@@ -425,6 +438,14 @@ def run(wrp, user, password, agent_client, client_secret, redirect_uri, op_url):
         if resolved != "SUCCESS":
             die(f"transaction {txn['transactionId']} did not resolve SUCCESS (got '{resolved or 'nothing'}')")
 
+        if not complete:
+            # Stop here. The approval is real and resolved SUCCESS, and the CIBA
+            # grant has NOT been redeemed — the agent only polls it when asked to
+            # finish, so there is no race for the single-issue token.
+            emit("APPROVED_NOT_REDEEMED", 1)
+            emit("RUN_COMPLETE", 1)
+            return
+
         # --- Turn 3: the agent polls CIBA, exchanges, and writes the refund -----
         status, body = chat("I approved the request on my device", session_id, id_token, 300)
         emit("CHAT3_STATUS", status)
@@ -453,12 +474,16 @@ def cleanup(wrp, user, password):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        die("usage: uc3-virtual-authenticator.py run|cleanup <args>")
+        die("usage: uc3-virtual-authenticator.py run|approveonly|cleanup <args>")
     command = sys.argv[1]
     if command == "run":
         if len(sys.argv) != 9:
             die("usage: run <wrp> <user> <password> <agent_client> <client_secret> <redirect_uri> <op_url>")
         run(*sys.argv[2:9])
+    elif command == "approveonly":
+        if len(sys.argv) != 9:
+            die("usage: approveonly <wrp> <user> <password> <agent_client> <client_secret> <redirect_uri> <op_url>")
+        run(*sys.argv[2:9], complete=False)
     elif command == "cleanup":
         if len(sys.argv) != 5:
             die("usage: cleanup <wrp> <user> <password>")

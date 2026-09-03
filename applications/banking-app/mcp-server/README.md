@@ -1,6 +1,6 @@
 # banking-mcp-server
 
-Express server exposing an MCP endpoint for the UC2 banking agent. Receives agent tool calls with the user's IVIA OAuth JWT, presents that JWT **directly to Vault as the `X-Vault-Token` header** (Phase 9 native cutover — no `jwt_login` round-trip, no intermediate Vault token), obtains per-user-scoped PostgreSQL credentials, and queries RDS with Row-Level Security.
+Express server exposing an MCP endpoint for the UC2 banking agent. Receives agent tool calls carrying the user's IVIA OAuth JWT on the `Authorization: Bearer` header, presents that JWT **directly to Vault as the `X-Vault-Token` header** (Phase 9 native cutover — no `jwt_login` round-trip, no intermediate Vault token), obtains per-user-scoped PostgreSQL credentials, and queries RDS with Row-Level Security.
 
 ## Endpoints
 
@@ -14,7 +14,7 @@ Express server exposing an MCP endpoint for the UC2 banking agent. Receives agen
 - **get_accounts** — Retrieve bank accounts for the authenticated user.
 - **get_transactions** — Retrieve recent transactions, optionally filtered by `account_id`.
 
-Both tools require a `jwt` parameter (IVIA-issued OAuth access token). The server sets this JWT as the `X-Vault-Token` header on the Vault request (`vault-client.ts` — the OAuth resource server profile validates it via its synthetic mount accessor + issuer-bound subject alias; `Authorization: Bearer` is NOT used because Bearer silently resolves to no identity). Vault returns short-lived PostgreSQL credentials scoped to the user's `sub` claim, and the server executes the query with RLS enforced.
+Neither tool takes a `jwt` parameter. The JWT is read from the request's `Authorization: Bearer` header and nowhere else, so the token the server authenticates is the token it acts on. The server sets that JWT as the `X-Vault-Token` header on the Vault request (`vault-client.ts` — the OAuth resource server profile validates it via its synthetic mount accessor + issuer-bound subject alias; `Authorization: Bearer` is NOT used because Bearer silently resolves to no identity). Vault returns short-lived PostgreSQL credentials scoped to the user's `sub` claim, and the server executes the query with RLS enforced.
 
 The former `auth/jwt/login` round-trip is retired: there is no intermediate Vault token — the IVIA OAuth JWT authorizes each Vault call directly. UC2's registration uses `optional_authorization_details=true` (RAR optional). See `infrastructure/modules/vault_config/README.md` for the OAuth resource server profile and Agent Registry model.
 
@@ -72,3 +72,16 @@ This matches the official SDK example (`simpleStatelessStreamableHttp.ts` in `@m
 **References:**
 - SDK source: `@modelcontextprotocol/sdk/server/mcp.js` — `connect()` method
 - Official example: `examples/servers/everything/simpleStatelessStreamableHttp.ts`
+
+## Credential lifecycle
+
+The database credential is fetched with the **user's** OAuth JWT (`X-Vault-Token`)
+and revoked with the **server's own** identity: at startup-on-demand the server
+performs a Vault Kubernetes auth login as `uc2-mcp-server-sa` (role `uc2`,
+policy `uc2-personal`), whose single capability is `sys/leases/revoke`.
+
+Every tool call ends by closing the Postgres connection and revoking its lease,
+so the ephemeral role is dropped immediately rather than living out its TTL.
+Revocation is best-effort: the query has already returned, so a failed revoke is
+logged (`vault_lease_revoke_failed`) and the credential falls back to expiring on
+its TTL — it never turns a successful query into an error.

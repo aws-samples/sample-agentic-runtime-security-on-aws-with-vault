@@ -148,6 +148,7 @@ The script checks all Use Case 2 success criteria:
 | DB read works | SELECT from `banking.accounts` with `app.current_user_sub = 'oscar'` returns ≥ 2 rows |
 | ENFC-02 enforced | INSERT with JIT creds returns `ERROR: permission denied for table` |
 | ENFC-03 enforced | Egress curl from MCP pod to external URL times out (NetworkPolicy blocks) |
+| MCP tool contract | `tools/list` declares no `jwt` argument on any tool — identity can only arrive in the `Authorization` header |
 | Agent /health | Banking Agent returns `{"status":"healthy"}` |
 | IVIA JWKS reachable | JWKS endpoint returns at least one signing key |
 | Active lease exists | At least one active lease for `uc2-personal-readonly` |
@@ -174,13 +175,14 @@ Expected summary output — a clean deploy self-mints the OBO token, so every ch
   ✓ PASS DB read: SELECT from banking.accounts returned 2 row(s) for user 'oscar' (>= 2 expected)
   ✓ PASS ENFC-02: INSERT rejected by PostgreSQL (permission denied for table)
   ✓ PASS ENFC-03: NetworkPolicy egress blocked from MCP server pod (external curl timed out)
+  ✓ PASS MCP tool contract: no tool accepts a jwt argument — identity can only come from the Authorization header
   ✓ PASS Agent /health endpoint: healthy
   ✓ PASS IVIA JWKS endpoint reachable (N key(s) returned) — OAuth pre-check passed
   ✓ PASS Active Vault lease exists for uc2-personal-readonly (N lease(s))
   ✓ PASS OAuth discovery: IVIA OIDC Provider reachable (issuer=https://<wrp-alb-host>)
 
 ===============================================================================
- ✓ 20 check(s) passed
+ ✓ 21 check(s) passed
 ===============================================================================
 ```
 
@@ -247,15 +249,19 @@ The Banking Agent exposes a `/chat` endpoint. When a user asks "What are my acco
 
 ```
 Banking UI
-  POST /api/chat  { message: "What are my account balances?", jwt: "<user_jwt>" }
+  POST /chat  { message: "What are my account balances?" }
+              Authorization: Bearer <access_token>   ← from the httpOnly cookie
     ↓
 Banking Agent (Strands SDK)
+  jwt = request.headers["Authorization"]              ← identity read from the header
   agent.invoke_with_tools("What are my account balances?")
     ↓  (tool routing)
-  MCPClient.call_tool("get_accounts", { jwt: "<user_jwt>" })
+  POST /mcp  tools/call get_accounts  { arguments: {} }
+             Authorization: Bearer <access_token>     ← forwarded unchanged, still the header
     ↓
 MCP Server  POST /mcp
-  handler: "get_accounts"
+  const jwt = req.get('Authorization')                ← the ONLY place the token is read
+  handler: "get_accounts"                             ← takes no arguments at all
     ↓
   vaultClient.getDbCreds(jwt)             ← JWT as X-Vault-Token → DB creds (one call, per request)
     ↓
@@ -263,7 +269,8 @@ MCP Server  POST /mcp
   await pgClient.query("SET app.current_user_sub = $1", [sub])
   await pgClient.query("SELECT * FROM banking.accounts")
     ↓
-  pgClient.end()                           ← connection closed; creds start TTL countdown
+  pgClient.end()
+  await revokeLease(creds.leaseId)         ← credential handed back now, not left to TTL
     ↓
   return accounts                          ← MCP tool response
     ↓
@@ -275,7 +282,9 @@ Key design choices:
 
 - **Per-request credential fetch**: Each `get_accounts` or `get_transactions` tool call presents the user's OAuth JWT via `X-Vault-Token` on a fresh `database/creds` read. This creates one audit log entry per tool invocation — linking user identity to data access at query granularity.
 - **Connection closed after query**: The Postgres connection is opened, used, and closed within the tool handler. No connection pool is used. This ensures the JIT credential's Postgres session variable (`app.current_user_sub`) is set fresh on every connection — no risk of session state leaking between users.
-- **JWT never stored**: The MCP Server extracts the `sub` from the Vault `token_meta` response — it never decodes the JWT itself. Vault is the authority on what the JWT says.
+- **Identity comes from the header, never from the tool arguments**: `get_accounts` declares no parameters and `get_transactions` declares only an optional `account_id`. The token the MCP server acts on is read from `Authorization: Bearer` on the request and closed over by the tool handlers (`createMcpServer(authenticatedJwt)`), so there is no field in the tool contract for a caller to put an identity in. If there were, the identity Vault saw would be whatever the caller typed into the payload and the header would constrain nothing.
+- **The credential is handed back, not left to expire**: after the connection closes, the handler's `finally` block calls `revokeLease()` against `sys/leases/revoke` using the MCP server's own Kubernetes-auth Vault token. The credential exists for the duration of one query. See the [Credential Revocation](../65-credential-revocation/) page.
+- **The `sub` used for RLS is decoded from the JWT, and that is safe here**: `extractSubFromJwt()` base64-decodes the payload to get `sub` for `set_config('app.current_user_sub', ...)` — it does **not** verify the signature, and the code says so. The verification that matters already happened one step earlier: Vault validated the same token against IVIA's JWKS before issuing any credential. A forged token never gets a Postgres credential at all, so a `sub` decoded from one never reaches a live connection. The decode is a convenience on a token Vault has already accepted, not an identity decision.
 :::
 
 ---
@@ -285,6 +294,8 @@ Key design choices:
 **Without workload identity for the MCP Server (OBJ-1 failure):** If the MCP Server pod used the `default` ServiceAccount instead of `uc2-mcp-server-sa`, Vault's Kubernetes auth role binding would reject its startup token request. The MCP Server could not authenticate to Vault with its workload identity — there is no separate `auth/jwt/login` path in the native model, so the workload-identity gate cannot be sidestepped. Vault's `bound_service_account_names = ["uc2-mcp-server-sa"]` is the gating check.
 
 **Without user JWT (OBJ-3 failure):** If the Banking Agent called the MCP Server tools without forwarding the user's JWT, the MCP Server would have no user identity to present to Vault's OAuth resource server. The design choice to make the presented user JWT (via `X-Vault-Token`) the only path to DB credentials means "no JWT" directly translates to "no DB access" — the agent cannot act on behalf of no one.
+
+**With the JWT as a tool argument (OBJ-3 failure, the subtle one):** If `get_accounts` took a `jwt` parameter and the handler acted on it, the `Authorization` header would be decoration. Anything able to reach the MCP server — a prompt injection that talks the agent into passing a different token, a second workload on the pod network — would choose the identity Vault saw, and every downstream control (the OBO intersection, the RLS predicate, the audit record) would faithfully enforce the *attacker's* choice of user. The header would still be checked, and it would still constrain nothing. This is why the tools declare no `jwt` parameter at all: the contract has nowhere to put an identity.
 
 **With shared DB credentials (OBJ-2 failure):** If a single long-lived Postgres password were used for all users, Row-Level Security would still filter rows (because `app.current_user_sub` would still be set), but a compromised credential would give an attacker access to all users' data by simply setting a different `app.current_user_sub` value. JIT credentials limit each credential to a 15-minute window and a specific Vault token entity — a stolen credential self-destructs and the Vault audit log records which user's OAuth JWT it was issued for.
 

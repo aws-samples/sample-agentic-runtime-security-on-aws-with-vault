@@ -34,14 +34,21 @@ MCP_URL = os.getenv("MCP_URL", "http://banking-mcp.banking-app.svc.cluster.local
 
 
 def _call_mcp_tool(tool_name: str, jwt: str, **kwargs: object) -> dict:
-    """Call an MCP server tool, forwarding the user JWT."""
+    """Call an MCP server tool, presenting the user JWT on the Authorization header.
+
+    The JWT travels in the header ONLY. It used to be duplicated into the tool
+    arguments, and the MCP server acted on that copy — so the token it
+    authenticated and the token it used were different values and the header
+    constrained nothing. The tools no longer accept a jwt argument at all, so
+    there is no ignored field left for a caller to believe is honoured.
+    """
     payload = {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
         "params": {
             "name": tool_name,
-            "arguments": {"jwt": jwt, **kwargs},
+            "arguments": {**kwargs},
         },
     }
 

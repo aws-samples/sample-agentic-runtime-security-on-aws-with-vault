@@ -121,10 +121,9 @@ variable "ivia_client_id" {
 }
 
 variable "ivia_client_secret" {
-  description = "IVIA OAuth client secret for the agent-uc2 client (ROPC token endpoint auth). Sourced from verify_access module output (random_password.client_secret). Workshop: stored in ConfigMap (acceptable for lab). Production: use a Kubernetes Secret."
+  description = "OAuth client secret for the agent-uc2 client, used for HTTP Basic on the /oauth2/token exchange in /callback. Sourced from the verify_access ivia_client_secrets map and delivered to the pod via kubernetes_secret.banking_ui_oidc, never a ConfigMap. Required — no default, so a missing wiring fails the plan instead of silently authenticating with an empty credential."
   type        = string
   sensitive   = true
-  default     = ""
 }
 
 variable "ivia_oidc_ca_pem" {

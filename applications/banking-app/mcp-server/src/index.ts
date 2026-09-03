@@ -3,11 +3,19 @@
  *
  * Endpoints:
  *   GET  /health  — liveness probe for Kubernetes
- *   POST /mcp     — MCP tool dispatch; receives agent tool calls with user JWT
+ *   POST /mcp     — MCP tool dispatch; the user JWT comes from the request's
+ *                   Authorization: Bearer header and NOWHERE else.
  *
  * Each POST /mcp creates a fresh McpServer + transport (stateless mode).
  * The MCP SDK requires this — a single McpServer cannot be reused across
- * requests because connect() binds it to one transport at a time.
+ * requests because connect() binds it to one transport at a time. That per-request
+ * construction is what lets the authenticated JWT be closed over by the tool
+ * handlers instead of travelling as a tool argument.
+ *
+ * The tools deliberately take NO jwt parameter. Use Case 2's whole claim is that
+ * Vault sees the caller's real identity; if the acted-on token came from the tool
+ * arguments, the identity Vault saw would be whatever the caller put in the
+ * payload, and the Authorization header would constrain nothing.
  */
 
 import express, { Request, Response } from 'express';
@@ -29,7 +37,7 @@ app.get('/health', (_req: Request, res: Response) => {
 // ---------------------------------------------------------------------------
 // MCP Server factory — new instance per request (stateless mode)
 // ---------------------------------------------------------------------------
-function createMcpServer(): McpServer {
+function createMcpServer(authenticatedJwt: string): McpServer {
   const server = new McpServer({
     name: 'banking-tools',
     version: '1.0.0',
@@ -42,15 +50,12 @@ function createMcpServer(): McpServer {
       description:
         'Retrieve bank accounts for the authenticated user. ' +
         'Vault JWT auth + PostgreSQL RLS ensures only the calling user\'s accounts are returned.',
-      inputSchema: {
-        jwt: z.string().describe('IVIA-issued user JWT (access token, without "Bearer " prefix)'),
-      },
+      inputSchema: {},
     },
-    // @ts-expect-error MCP SDK + Zod deep type instantiation
-    async ({ jwt }: { jwt: string }) => {
+    async () => {
       try {
         console.log('get_accounts called');
-        const data = await getAccounts(jwt);
+        const data = await getAccounts(authenticatedJwt);
         return {
           content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }],
         };
@@ -74,17 +79,17 @@ function createMcpServer(): McpServer {
         'Vault JWT auth + PostgreSQL RLS ensures only the calling user\'s transactions are returned. ' +
         'Optionally filter by account_id.',
       inputSchema: {
-        jwt: z.string().describe('IVIA-issued user JWT (access token, without "Bearer " prefix)'),
         account_id: z
           .string()
           .optional()
           .describe('Optional account ID to filter transactions to a single account'),
       },
     },
-    async ({ jwt, account_id }: { jwt: string; account_id?: string }) => {
+    // @ts-expect-error MCP SDK + Zod deep type instantiation
+    async ({ account_id }: { account_id?: string }) => {
       try {
         console.log('get_transactions called', account_id ? `for account ${account_id}` : '(all accounts)');
-        const data = await getTransactions(jwt, account_id);
+        const data = await getTransactions(authenticatedJwt, account_id);
         return {
           content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }],
         };
@@ -116,7 +121,8 @@ app.post('/mcp', async (req: Request, res: Response) => {
 
   console.log('MCP request received');
 
-  const server = createMcpServer();
+  // The JWT the tools act on is the one this request authenticated with.
+  const server = createMcpServer(jwt);
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
     enableJsonResponse: true,

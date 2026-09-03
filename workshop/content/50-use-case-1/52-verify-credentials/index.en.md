@@ -57,13 +57,19 @@ The response surfaces the Vault authentication state:
 The SQL-shaped question in Step 2 made the agent call Vault for a Just-In-Time database credential. Read the audit log for that issuance event:
 
 ```bash
-kubectl logs -n vault vault-0 --since=15m \
+kubectl logs -n vault -l app.kubernetes.io/name=vault --since=15m --tail=-1 \
   | jq -c 'select(.type=="response" and .request.path=="database/creds/uc1-readonly")
            | {time, path: .request.path,
               display_name: .auth.display_name,
               lease_id: .response.secret.lease_id}' \
   | tail -1
 ```
+
+Read that command's first line before running it. Vault is a **three-node cluster**, and only the
+node that served your request logged it — naming `vault-0` returns nothing at all when `vault-1`
+or `vault-2` took the call, which is a coin toss on every run. The label selector reads all three.
+`--tail=-1` is required with `-l`: given a selector, `kubectl logs` otherwise returns only the last
+10 lines per pod, which will not reach back to your credential issuance.
 
 Expected:
 
@@ -108,7 +114,7 @@ The `403 Forbidden` is the passing result — the UC1 token can mint its own `da
 bash infrastructure/scripts/verify-uc1.sh
 ```
 
-The script runs nine checks and prints a pass/fail summary:
+The script runs ten checks and prints a pass/fail summary:
 
 | Check | What it validates |
 |---|---|
@@ -119,6 +125,7 @@ The script runs nine checks and prints a pass/fail summary:
 | JIT STS creds | `aws/sts/bedrock-reader` issues an access key + session token |
 | Agent /health | the agent reports `healthy` |
 | ENFC-01 | the `uc1-readonly` policy does not grant the UC3 refund path |
+| Agent Registry | the `uc1-agent` registration resolves by display-name — Use Case 1's named identity in Vault |
 | Audit device | a Vault audit device is enabled |
 | /query end-to-end | a real query returns a KB-grounded answer (not "couldn't find it") |
 
@@ -128,14 +135,15 @@ Expected summary:
 ✓ PASS UC1 agent pod Running (1 pod(s) in uc1)
 ✓ PASS UC1 ServiceAccount uc1-retriever-sa exists
 ✓ PASS Vault role uc1 bound to uc1-retriever-sa
-✓ PASS JIT DB creds issuance: username=v-kubernet-uc1-read-...
+✓ PASS JIT DB creds issuance: username=v-root-uc1-read-...
 ✓ PASS JIT STS creds issuance: access_key=ASIA...
 ✓ PASS Agent /health endpoint: healthy
 ✓ PASS ENFC-01: uc1-readonly policy does not grant UC3 (uc3-refund-writer) path access
+✓ PASS UC1 Agent Registry: registration 'uc1-agent' resolvable by display-name (registry identity; ceiling INERT — k8s uc1-readonly is the floor)
 ✓ PASS Vault audit device: enabled (1 device(s))
 ✓ PASS Agent /query end-to-end: KB retrieve + Nova Pro answer returned
 
- ✓ 9 check(s) passed
+ ✓ 10 check(s) passed
 ```
 
 If a check fails, the script prints a copy-paste `Fix hint`. The `/query end-to-end` check fails (not falsely passes) if the Knowledge Base is empty — its fix hint points to `./sync-bedrock-kb.sh`.

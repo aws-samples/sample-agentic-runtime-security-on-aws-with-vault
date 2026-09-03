@@ -67,7 +67,7 @@ sequenceDiagram
 
     rect rgba(232, 218, 255, 0.3)
     Note over Vault,Vault: Dynamic credential vend
-    Vault-->>Agent: Dynamic PostgreSQL credential (TTL 1h)<br/>+ sets app.current_user_sub = oscar
+    Vault-->>Agent: Dynamic PostgreSQL credential (TTL 15m)<br/>+ sets app.current_user_sub = oscar
     end
 ```
 
