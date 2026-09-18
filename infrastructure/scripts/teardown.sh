@@ -2226,6 +2226,20 @@ else
     print_info "Removed local Phase 07.8 ACME cache (.acme-state, .acme-rerun-marker)"
 fi
 
+# Local-only credential cleanup: vault-init.sh writes the root token + recovery
+# keys to ~/vault-init.json, and every teardown mode destroys the Vault server
+# those credentials belong to. A stale copy left on disk gets read blindly by
+# the next run's Vault-API cleanup — against whatever Vault instance is then
+# live — so the file must not outlive its server. Runs after the last reader
+# (cleanup_vault_native_resources).
+vault_init_file="${HOME}/vault-init.json"
+if [ "$DRY_RUN" = true ]; then
+    [ -f "$vault_init_file" ] && print_info "[DRY-RUN] Would remove $vault_init_file"
+elif [ -f "$vault_init_file" ]; then
+    rm -f "$vault_init_file"
+    print_info "Removed local Vault root credentials (${vault_init_file})"
+fi
+
 # Local-only state cleanup: after a FULL nuke the three roots' state files list
 # resources that no longer exist. That is not merely untidy — tier-1 state holds
 # helm_release/kubernetes entries whose providers dial the destroyed cluster, so
