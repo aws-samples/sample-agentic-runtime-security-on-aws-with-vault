@@ -1021,12 +1021,26 @@ EOF
         # .status.reason. Let's Encrypt's problem type for an exhausted budget
         # is urn:ietf:params:acme:error:rateLimited. Break out and let the
         # caller retry on a suffix with its own separate budget. Issue #5.
-        local _rl_reason
-        _rl_reason=$(kubectl --context workshop get orders.acme.cert-manager.io \
+        #
+        # Each row is one errored Order as "<first dnsName>|<reason>". Scope the
+        # verdict to the suffix THIS call is attempting: after a fallback, the
+        # refused primary Order is still sitting in the namespace (cert-manager
+        # does not delete it when the Certificate spec changes), and counting it
+        # again would report the fallback as refused without ever asking Let's
+        # Encrypt. Issue #5.
+        local _rl_rows _rl_dns _rl_reason
+        _rl_rows=$(kubectl --context workshop get orders.acme.cert-manager.io \
             -n cert-manager \
-            -o jsonpath='{range .items[?(@.status.state=="errored")]}{.status.reason}{"\n"}{end}' 2>/dev/null || true)
-        if grep -qi 'ratelimited' <<<"${_rl_reason}"; then
-            _cert_rate_limited=true
+            -o jsonpath='{range .items[?(@.status.state=="errored")]}{.spec.dnsNames[0]}{"|"}{.status.reason}{"\n"}{end}' 2>/dev/null || true)
+        while IFS='|' read -r _rl_dns _rl_reason; do
+            [[ -z "${_rl_dns}" ]] && continue
+            [[ "${_rl_dns}" == *".${_suffix}" ]] || continue
+            if grep -qi 'ratelimited' <<<"${_rl_reason}"; then
+                _cert_rate_limited=true
+                break
+            fi
+        done <<<"${_rl_rows}"
+        if [[ "${_cert_rate_limited}" = true ]]; then
             break
         fi
 
