@@ -42,15 +42,24 @@ The response surfaces the Vault authentication state:
 
 ```json
 {
-  "answer": "I was unable to find any tables in the database ...",
+  "answer": "There are no tables in the 'public' schema of the database ...",
   "credential_metadata": {
     "vault_authenticated": true,
-    "vault_role": "uc1"
+    "vault_role": "uc1",
+    "leases": [
+      {
+        "vault_path": "database/creds/uc1-readonly",
+        "lease_id": "database/creds/uc1-readonly/JMk2pg5DTC1JJMTtoBD7oiWa",
+        "ttl_seconds": 900
+      }
+    ]
   }
 }
 ```
 
 `vault_authenticated: true` with `vault_role: uc1` confirms the pod authenticated to Vault with its ServiceAccount identity — not a static key. The "no tables" answer is itself a teaching moment: the `uc1-readonly` Vault role only GRANTs SELECT on schema `public` (empty here), so even though the agent successfully obtained a credential, that credential's reach is bounded by the role.
+
+`leases` is the OBJ-5 hook: one entry per Just-In-Time credential Vault issued while answering **this** request, with the lease id spelled exactly as Vault spells it. **Copy your `lease_id` — Step 3 finds the very same string in the Vault audit log.** The value is attached by the runtime, never written by the model: an agent that narrated its own credential ids would be quoting itself, not producing an audit trail. Ask a question the agent answers from the Knowledge Base alone and `leases` is `[]`, because no database credential was issued.
 
 ## Step 3 — Observe credential issuance in the Vault audit log
 
@@ -82,7 +91,7 @@ Expected:
 }
 ```
 
-`display_name` is `kubernetes-uc1-uc1-retriever-sa` — the Vault Kubernetes mount, the role, and the ServiceAccount that authenticated. `lease_id` is unique per issuance — every `query_database` call produces a fresh one, which is the audit-trail proof that credentials are JIT (not reused). This entry is the first link in the audit-correlation chain that Use Case 3 completes end-to-end. The 15-minute TTL comes from the `default_ttl = 900` on `vault_database_secret_backend_role.uc1_readonly` (visible via `vault read database/roles/uc1-readonly` from the previous page).
+**This `lease_id` is the one your Step 2 response just showed you** — the same string on both sides is the correlation: the answer an attendee read, tied to the credential Vault vended for it. `display_name` is `kubernetes-uc1-uc1-retriever-sa` — the Vault Kubernetes mount, the role, and the ServiceAccount that authenticated. `lease_id` is unique per issuance — every `query_database` call produces a fresh one, which is the audit-trail proof that credentials are JIT (not reused). This entry is the first link in the audit-correlation chain that Use Case 3 completes end-to-end. The 15-minute TTL comes from the `default_ttl = 900` on `vault_database_secret_backend_role.uc1_readonly` (visible via `vault read database/roles/uc1-readonly` from the previous page).
 
 ## Step 4 — ENFC-01 enforcement test (the thing that must NOT happen)
 
