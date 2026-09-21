@@ -123,6 +123,21 @@ SKIP_BUILD=false
 # shellcheck disable=SC2034  # consumed by _run_acme_step
 SKIP_ACME=false
 DRY_RUN=false
+
+# Magic-DNS suffix for the workshop's TLS hostnames. These services resolve an
+# IP embedded in the hostname (10-1-2-3.nip.io -> 10.1.2.3), which is what lets
+# the workshop obtain a publicly-trusted Let's Encrypt certificate with no
+# domain purchase and no DNS hosting.
+#
+# Let's Encrypt budgets certificates per REGISTERED domain, so every workshop
+# attendee in the world draws on the SAME nip.io budget. Exhaust it and every
+# attendee fails at Step 7 simultaneously, with no way forward. nip.io and
+# sslip.io are separate registered domains with separate budgets, so the
+# fallback is a real second chance rather than a retry of the same thing.
+# Override either to use a magic-DNS host you control. Issue #5.
+TLS_DNS_SUFFIX="${TLS_DNS_SUFFIX:-nip.io}"
+TLS_DNS_SUFFIX_FALLBACK="${TLS_DNS_SUFFIX_FALLBACK:-sslip.io}"
+
 # Per-tier execution gate (empty = run all 14 steps, the Workshop Studio path;
 # 1|2|3 = run only that tier's steps, the Instruqt per-challenge path).
 TIER=""
@@ -933,6 +948,115 @@ _acme_restart_ivia() {
     return 0
 }
 
+#-------------------------------------------------------------------------------
+# Issue the workshop Certificate on ONE magic-DNS suffix.
+#
+# Sets NIP_FQDN_WRP / NIP_FQDN_BANKING for the caller, applies the Certificate
+# CR, and waits for cert-manager to drive HTTP-01 to Ready.
+#
+# Returns: 0 = Certificate Ready
+#          1 = hard failure (timed out, or an error a retry will not fix)
+#          2 = Let's Encrypt refused THIS suffix as rate limited — the caller
+#              should retry on a different registered domain. Issue #5.
+#-------------------------------------------------------------------------------
+_acme_issue_certificate() {
+    local _suffix="$1"
+
+    NIP_FQDN_WRP="wrp.${DEPLOY_ID}.${ALB_IP_DASHED}.${_suffix}"
+    NIP_FQDN_BANKING="banking.${DEPLOY_ID}.${ALB_IP_DASHED}.${_suffix}"
+
+    # Apply the Certificate CR with both SANs. The banking SAN's HTTP-01
+    # challenge validates on the shared ALB via Plan 03's solver Ingress
+    # (group.order=1) even before the tier-3 banking-ui Ingress exists.
+    #
+    # Re-applying with CHANGED dnsNames is also what makes the fallback work on
+    # a first deploy: a Certificate spec change resets cert-manager's failed-
+    # issuance backoff (1h, doubling to 32h), so the retry on the fallback
+    # suffix starts immediately instead of waiting out the backoff.
+    cat <<EOF | kubectl --context workshop apply -f -
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: workshop-le-tls
+  namespace: cert-manager
+spec:
+  secretName: workshop-le-tls-secret
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+  dnsNames:
+    - ${NIP_FQDN_WRP}
+    - ${NIP_FQDN_BANKING}
+  renewBefore: 720h
+EOF
+
+    # Wait for cert-manager to drive HTTP-01 to Ready, with auto-recovery.
+    #
+    # LE issues one authz per dnsNames entry (here: wrp + banking). Each authz
+    # is validated by LE hitting the cert-manager solver pod through the shared
+    # ALB. The ALB Load Balancer Controller takes 30-60s per solver Ingress to
+    # register the target group + propagate the listener rule. If LE polls a
+    # solver BEFORE its rule is live it gets EOF/connection-refused and marks
+    # that single authz `errored` — even though the parallel banking authz
+    # succeeds moments later when its rule IS live. The order stays `pending`
+    # but the errored authz never auto-recovers, so the cert never goes Ready.
+    #
+    # Fix: poll for Ready up to 15 min; every cycle, delete any challenge in
+    # state=errored — cert-manager auto-creates a fresh authz + solver Ingress,
+    # the ALB has time to register, and LE re-validates against a live rule.
+    # Attendees see one continuous spinner, no manual intervention.
+    local _cert_deadline=$(( $(date +%s) + 900 ))   # 15 min hard ceiling
+    local _cert_ready=false _cert_recovery_rounds=0 _cert_rate_limited=false
+    while [[ $(date +%s) -lt ${_cert_deadline} ]]; do
+        _cert_ready_cond=$(kubectl --context workshop get certificate workshop-le-tls -n cert-manager \
+                -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)
+        if grep -q "^True$" <<<"${_cert_ready_cond}"; then
+            _cert_ready=true
+            break
+        fi
+
+        # A rate-limit refusal is TERMINAL for this suffix, so waiting out the
+        # 900s ceiling only delays the failure. cert-manager treats any ACME 4xx
+        # as final: it marks the Order `errored` and records the problem in
+        # .status.reason. Let's Encrypt's problem type for an exhausted budget
+        # is urn:ietf:params:acme:error:rateLimited. Break out and let the
+        # caller retry on a suffix with its own separate budget. Issue #5.
+        local _rl_reason
+        _rl_reason=$(kubectl --context workshop get orders.acme.cert-manager.io \
+            -n cert-manager \
+            -o jsonpath='{range .items[?(@.status.state=="errored")]}{.status.reason}{"\n"}{end}' 2>/dev/null || true)
+        if grep -qi 'ratelimited' <<<"${_rl_reason}"; then
+            _cert_rate_limited=true
+            break
+        fi
+
+        # Re-trigger any errored challenges by deleting them — cert-manager
+        # owns the lifecycle and will issue a fresh authz + solver Ingress.
+        local _errored
+        _errored=$(kubectl --context workshop get challenges.acme.cert-manager.io \
+            -n cert-manager -o jsonpath='{range .items[?(@.status.state=="errored")]}{.metadata.name}{"\n"}{end}' 2>/dev/null)
+        if [[ -n "${_errored}" ]]; then
+            _cert_recovery_rounds=$(( _cert_recovery_rounds + 1 ))
+            while IFS= read -r _ch; do
+                kubectl --context workshop delete challenge "${_ch}" \
+                    -n cert-manager --ignore-not-found >/dev/null 2>&1
+            done <<< "${_errored}"
+            print_info "Step 7: re-triggered $(echo "${_errored}" | wc -l | tr -d ' ') errored ACME challenge(s) (recovery round ${_cert_recovery_rounds}); continuing to wait"
+        fi
+        sleep 15
+    done
+
+    if [[ "${_cert_rate_limited}" = true ]]; then
+        return 2
+    fi
+    if [[ "${_cert_ready}" != true ]]; then
+        print_fail "Step 7: Certificate Ready=true" \
+            "cert-manager did not mark workshop-le-tls Ready within 900s on ${_suffix} (after ${_cert_recovery_rounds} auto-recovery rounds). Investigate: kubectl describe certificate/workshop-le-tls -n cert-manager; kubectl get challenges,orders -n cert-manager"
+        return 1
+    fi
+    return 0
+}
+
 # Function wrapper allows `return 0/1` for the idempotency early-exit and the
 # ALB-IP failure cases without aborting the whole script.
 _run_acme_step() {
@@ -967,7 +1091,23 @@ _run_acme_step() {
     # catch-up tier-2 module.ivia apply (reconciles post-source config changes)
     # + MMFA reconcile + IVIA restart. The iviaop agent-uc2 redirect_uri probe
     # is NOT here — that is a tier-3 concern handled unconditionally in Step 11.
-    if [[ "$SKIP_ACME" != true ]] && [[ -n "${STABLE_ACM_ARN:-}" ]]; then
+    #
+    # The cached cert only counts as current if its hostname still carries a
+    # suffix this run would accept. An operator who overrides TLS_DNS_SUFFIX
+    # after a prior deploy means to move off the old suffix, so honour that and
+    # re-issue rather than silently keeping the old certificate. A cert issued
+    # on the FALLBACK suffix is accepted too — a prior run legitimately landed
+    # there when the primary suffix was rate limited. Issue #5.
+    _acme_suffix_current=true
+    if [[ -n "${NIP_FQDN_WRP:-}" ]]; then
+        if [[ "${NIP_FQDN_WRP}" != *".${TLS_DNS_SUFFIX}" ]] \
+            && [[ "${NIP_FQDN_WRP}" != *".${TLS_DNS_SUFFIX_FALLBACK}" ]]; then
+            _acme_suffix_current=false
+            print_info "Step 7: cached certificate is for ${NIP_FQDN_WRP}, which is not on ${TLS_DNS_SUFFIX} (or fallback ${TLS_DNS_SUFFIX_FALLBACK}); re-issuing on the requested suffix"
+        fi
+    fi
+    if [[ "$SKIP_ACME" != true ]] && [[ -n "${STABLE_ACM_ARN:-}" ]] \
+        && [[ "${_acme_suffix_current}" = true ]]; then
         CURRENT_ISSUER=$(aws acm describe-certificate \
             --certificate-arn "$STABLE_ACM_ARN" \
             --region "$REGION" \
@@ -1004,7 +1144,7 @@ MARKER
 
     if [[ "$DRY_RUN" = true ]]; then
         print_info "[DRY-RUN] Would resolve shared workshop-acme ALB hostname (kubectl get ingress ivia-wrp)"
-        print_info "[DRY-RUN] Would compute nip.io FQDNs and apply cert-manager Certificate CR (issuerRef.name=letsencrypt-prod)"
+        print_info "[DRY-RUN] Would compute ${TLS_DNS_SUFFIX} FQDNs and apply cert-manager Certificate CR (issuerRef.name=letsencrypt-prod), falling back to ${TLS_DNS_SUFFIX_FALLBACK} if Let's Encrypt refuses the suffix as rate limited"
         print_info "[DRY-RUN] Would wait for Certificate Ready=true (timeout 300s)"
         print_info "[DRY-RUN] Would bootstrap: aws acm import-certificate --certificate-arn \$STABLE_ACM_ARN ..."
         print_info "[DRY-RUN] Would write ${ACME_STATE_FILE} with DEPLOY_ID/ALB_IP/NIP_FQDN_*/STABLE_ACM_ARN"
@@ -1043,8 +1183,6 @@ MARKER
             "tr -dc 'a-z0-9' produced empty/short DEPLOY_ID='${DEPLOY_ID}' (expected 6 chars). Re-run with LC_ALL=C bash ${BASH_SOURCE[0]}"
         return 1
     fi
-    NIP_FQDN_WRP="wrp.${DEPLOY_ID}.${ALB_IP_DASHED}.nip.io"
-    NIP_FQDN_BANKING="banking.${DEPLOY_ID}.${ALB_IP_DASHED}.nip.io"
 
     # (4) STABLE_ACM_ARN — from tier-1 output (D-03 ARN-stability contract).
     STABLE_ACM_ARN=$(terraform -chdir="${INFRA_DIR}" \
@@ -1055,72 +1193,28 @@ MARKER
         return 1
     fi
 
-    # (5) Render and apply the Certificate CR with both nip.io SANs. The banking
-    # SAN's HTTP-01 challenge validates on the shared ALB via Plan 03's solver
-    # Ingress (group.order=1) even before the tier-3 banking-ui Ingress exists.
-    cat <<EOF | kubectl --context workshop apply -f -
-apiVersion: cert-manager.io/v1
-kind: Certificate
-metadata:
-  name: workshop-le-tls
-  namespace: cert-manager
-spec:
-  secretName: workshop-le-tls-secret
-  issuerRef:
-    name: letsencrypt-prod
-    kind: ClusterIssuer
-  dnsNames:
-    - ${NIP_FQDN_WRP}
-    - ${NIP_FQDN_BANKING}
-  renewBefore: 720h
-EOF
-
-    # (6) Wait for cert-manager to drive HTTP-01 to Ready, with auto-recovery.
-    #
-    # LE issues one authz per dnsNames entry (here: wrp + banking). Each authz
-    # is validated by LE hitting the cert-manager solver pod through the shared
-    # ALB. The ALB Load Balancer Controller takes 30-60s per solver Ingress to
-    # register the target group + propagate the listener rule. If LE polls a
-    # solver BEFORE its rule is live it gets EOF/connection-refused and marks
-    # that single authz `errored` — even though the parallel banking authz
-    # succeeds moments later when its rule IS live. The order stays `pending`
-    # but the errored authz never auto-recovers, so the cert never goes Ready.
-    #
-    # Fix: poll for Ready up to 15 min; every cycle, delete any challenge in
-    # state=errored — cert-manager auto-creates a fresh authz + solver Ingress,
-    # the ALB has time to register, and LE re-validates against a live rule.
-    # Attendees see one continuous spinner, no manual intervention.
-    local _cert_deadline=$(( $(date +%s) + 900 ))   # 15 min hard ceiling
-    local _cert_ready=false _cert_recovery_rounds=0
-    while [[ $(date +%s) -lt ${_cert_deadline} ]]; do
-        _cert_ready_cond=$(kubectl --context workshop get certificate workshop-le-tls -n cert-manager \
-                -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)
-        if grep -q "^True$" <<<"${_cert_ready_cond}"; then
-            _cert_ready=true
-            break
+    # (5) Issue the Certificate. If Let's Encrypt refuses the primary suffix
+    # because its certificate budget is exhausted, retry on the fallback suffix
+    # — a DIFFERENT registered domain with its own separate budget. Without
+    # this, an exhausted nip.io budget fails every attendee at once. Issue #5.
+    local _issue_rc
+    _acme_issue_certificate "${TLS_DNS_SUFFIX}"
+    _issue_rc=$?
+    if [[ ${_issue_rc} -eq 2 ]]; then
+        print_warn "Step 7: Let's Encrypt refused ${TLS_DNS_SUFFIX} as rate limited (its certificate budget is exhausted); retrying on ${TLS_DNS_SUFFIX_FALLBACK}"
+        _acme_issue_certificate "${TLS_DNS_SUFFIX_FALLBACK}"
+        _issue_rc=$?
+        if [[ ${_issue_rc} -eq 2 ]]; then
+            print_fail "Step 7: Certificate Ready=true" \
+                "Let's Encrypt refused BOTH ${TLS_DNS_SUFFIX} and ${TLS_DNS_SUFFIX_FALLBACK} as rate limited — both magic-DNS budgets are exhausted. Re-run later, or point the deploy at a magic-DNS suffix you control: TLS_DNS_SUFFIX=<suffix> bash ${BASH_SOURCE[0]}"
+            return 1
         fi
-        # Re-trigger any errored challenges by deleting them — cert-manager
-        # owns the lifecycle and will issue a fresh authz + solver Ingress.
-        local _errored
-        _errored=$(kubectl --context workshop get challenges.acme.cert-manager.io \
-            -n cert-manager -o jsonpath='{range .items[?(@.status.state=="errored")]}{.metadata.name}{"\n"}{end}' 2>/dev/null)
-        if [[ -n "${_errored}" ]]; then
-            _cert_recovery_rounds=$(( _cert_recovery_rounds + 1 ))
-            while IFS= read -r _ch; do
-                kubectl --context workshop delete challenge "${_ch}" \
-                    -n cert-manager --ignore-not-found >/dev/null 2>&1
-            done <<< "${_errored}"
-            print_info "Step 7: re-triggered $(echo "${_errored}" | wc -l | tr -d ' ') errored ACME challenge(s) (recovery round ${_cert_recovery_rounds}); continuing to wait"
-        fi
-        sleep 15
-    done
-    if [[ "${_cert_ready}" != true ]]; then
-        print_fail "Step 7: Certificate Ready=true" \
-            "cert-manager did not mark workshop-le-tls Ready within 900s (after ${_cert_recovery_rounds} auto-recovery rounds). Investigate: kubectl describe certificate/workshop-le-tls -n cert-manager; kubectl get challenges,orders -n cert-manager"
+    fi
+    if [[ ${_issue_rc} -ne 0 ]]; then
         return 1
     fi
 
-    # (7) Bootstrap ACM import — extract the K8s Secret + upsert into the stable
+    # (6) Bootstrap ACM import — extract the K8s Secret + upsert into the stable
     # ARN the ACM-sync CronJob uses. `base64 --decode` is the portable spelling
     # (BSD base64 on macOS rejects -d). cert-manager concatenates leaf +
     # intermediate(s) into tls.crt; ACM wants leaf in --certificate and the rest
@@ -1151,7 +1245,7 @@ EOF
     fi
     rm -f /tmp/tls.crt /tmp/tls.key /tmp/chain.pem
 
-    # (8) Persist .acme-state — consumed by tier-2 (nip_io_wrp_host) + tier-3
+    # (7) Persist .acme-state — consumed by tier-2 (nip_io_wrp_host) + tier-3
     # (NIP_FQDN_BANKING) + verify-tls.sh + this step on the next rerun.
     cat > "$ACME_STATE_FILE" <<EOF
 DEPLOY_ID=${DEPLOY_ID}
@@ -1162,11 +1256,11 @@ NIP_FQDN_BANKING=${NIP_FQDN_BANKING}
 STABLE_ACM_ARN=${STABLE_ACM_ARN}
 EOF
 
-    # (9) Re-apply tier-2 module.ivia so IVIA re-wires to the nip.io FQDN and the
+    # (8) Re-apply tier-2 module.ivia so IVIA re-wires to the nip.io FQDN and the
     # ivia_issuer output flips before vault-configure (Step 8) reads it.
     _acme_apply_ivia || return 1
 
-    # (10) Reconcile MMFA AuthenticatorClient.redirectUri, then restart WRP +
+    # (9) Reconcile MMFA AuthenticatorClient.redirectUri, then restart WRP +
     # runtime so they re-read the AAC DB / base_layer.
     _reconcile_mmfa_authenticator_client
     _acme_restart_ivia
