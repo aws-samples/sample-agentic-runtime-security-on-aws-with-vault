@@ -65,17 +65,21 @@ Bedrock access required: enable `us.amazon.nova-pro-v1:0` (Nova Pro via CRIS) in
 
 ---
 
-## Event capacity (multi-attendee TLS limit)
+## Browser-trusted TLS (shared magic-DNS domain)
 
-Browser-trusted TLS is issued per attendee account from Let's Encrypt over `nip.io` hostnames. `nip.io` is **not** on the Public Suffix List, so every `*.nip.io` certificate on the internet — not just this workshop's — counts against the single registered domain `nip.io`, which Let's Encrypt caps at **50 certificate issuances per rolling 7 days** (~1 refill every 202 min). Each attendee's Tier-2 deploy burns **one** issuance (more if the Step 7 HTTP-01 readiness gate retries); teardown does **not** refund it.
+Every attendee's browser-trusted certificate comes from Let's Encrypt over a `nip.io` hostname, which resolves an IP embedded in the name (`10-1-2-3.nip.io` → `10.1.2.3`). That is what gets a publicly-trusted certificate with no domain purchase and no DNS hosting.
 
-Plan events accordingly:
+`nip.io` is **not** on the Public Suffix List, so every `*.nip.io` certificate on the internet — not just this workshop's — counts against the single registered domain `nip.io`. Let's Encrypt budgets certificates per registered domain, so the whole internet draws on one bucket.
 
-- **~12–20 attendees per event.** 12 is the safe floor — the 50/week bucket is shared with every `nip.io` user on the internet, and your own retries burn extra; 20 is the upper edge for a low-usage week. Never plan against the full 50 — you never own the whole bucket.
-- **One event per rolling 7-day window — no back-to-back weeks.** A prior event's issuances stay counted for 7 days; space events **≥7 days apart** so they age out of the window and the refill replenishes.
-- Even 12–20 can fail in a heavy-usage week — the bucket is shared and there is **no way to check remaining budget or reserve it in advance**.
+**This is not a capacity limit, and event size is irrelevant.** `nip.io` holds a Let's Encrypt override of 250,000 certificates, far above any cohort; each attendee burns one. The real risk is that the bucket is shared and has been exhausted before — the operator's sibling domain `sslip.io` hit `too many certificates (50000) already issued` in February 2026. There is no way to check the remaining budget or reserve it ahead of an event.
 
-To run larger cohorts (20–60) reliably, move off the shared `nip.io` bucket onto an owned domain + self-hosted magic-DNS resolver + a Let's Encrypt rate-limit override — tracked in [issue #5](https://github.com/aws-samples/sample-agentic-runtime-security-on-aws-with-vault/issues/5).
+**The deploy handles this automatically.** If Let's Encrypt refuses `nip.io` as rate limited, `deploy-workshop.sh` re-issues on `sslip.io` — a separate registered domain with its own separate budget, and the fallback the `nip.io` operator itself recommends. Both suffixes are overridable if you run your own magic-DNS host:
+
+```bash
+TLS_DNS_SUFFIX=my.example.com TLS_DNS_SUFFIX_FALLBACK=alt.example.com bash infrastructure/scripts/deploy-workshop.sh
+```
+
+If both budgets are exhausted the deploy fails loudly at Step 7 and names the override — it does not silently retry the same exhausted domain. Tracked in [issue #5](https://github.com/aws-samples/sample-agentic-runtime-security-on-aws-with-vault/issues/5).
 
 ---
 
