@@ -282,16 +282,16 @@ The IVIA `agent-uc2` client is provisioned by the `verify_access` Terraform modu
 | `response_types` | `code` | Authorization Code response type |
 | `require_pkce` | `true` | PKCE proof required at token exchange |
 | `token_endpoint_auth_method` | `client_secret_basic` | HTTP Basic auth on `/oauth2/token` |
-| `redirect_uris` | `http://<UI_ALB>/callback` | Patched post-deploy with the real Banking UI ALB hostname |
+| `redirect_uris` | `https://<NIP_FQDN_BANKING>/callback` | Patched post-deploy with the workshop banking FQDN — the host the Let's Encrypt certificate was issued for |
 | `scopes` | `openid`, `profile`, `email` | JWT carries sub, email, name claims |
 
 The authorize URL the browser is redirected to:
 
 ```
-http://<IVIA_ALB>/isvaop/oauth2/authorize
+https://<NIP_FQDN_WRP>/isvaop/oauth2/authorize
   ?response_type=code
   &client_id=agent-uc2
-  &redirect_uri=http://<UI_ALB>/callback
+  &redirect_uri=https://<NIP_FQDN_BANKING>/callback
   &code_challenge=<S256 hash of code_verifier>
   &code_challenge_method=S256
   &state=<CSRF token>
@@ -307,7 +307,7 @@ Content-Type: application/x-www-form-urlencoded
 
 grant_type=authorization_code
 &code=<one-time code>
-&redirect_uri=http://<UI_ALB>/callback
+&redirect_uri=https://<NIP_FQDN_BANKING>/callback
 &code_verifier=<original PKCE verifier>
 ```
 
