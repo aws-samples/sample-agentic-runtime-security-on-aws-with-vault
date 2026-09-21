@@ -1279,7 +1279,7 @@ EOF
     _reconcile_mmfa_authenticator_client
     _acme_restart_ivia
 
-    print_pass "Step 7: ACME cert issued + imported (${NIP_FQDN_WRP}, ${NIP_FQDN_BANKING}); module.ivia converged on nip.io; iviawrprp1+iviaruntime rolled"
+    print_pass "Step 7: ACME cert issued + imported (${NIP_FQDN_WRP}, ${NIP_FQDN_BANKING}); module.ivia converged on the issued host; iviawrprp1+iviaruntime rolled"
     return 0
 }
 
