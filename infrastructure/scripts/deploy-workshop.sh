@@ -1498,16 +1498,34 @@ step_10_apply_tier3() {
         if [[ "$DRY_RUN" = true ]]; then
             print_info "[DRY-RUN] Would roll Deployments: ${APP_DEPLOYMENTS[*]}"
         else
+            # `rollout restart` returns 0 as soon as it patches the pod
+            # template -- it does NOT wait for pods. Counting those return
+            # codes reported 5/5 "rolled" while every pod sat in
+            # ImagePullBackOff. Ask for the rollout to actually converge.
             rolled=0
+            _roll_failed=()
             for entry in "${APP_DEPLOYMENTS[@]}"; do
                 ns="${entry%%:*}"
                 dep="${entry#*:}"
                 if kubectl --context workshop get deploy "$dep" -n "$ns" >/dev/null 2>&1; then
-                    kubectl --context workshop rollout restart "deploy/${dep}" -n "$ns" >/dev/null 2>&1 \
-                        && rolled=$((rolled + 1))
+                    kubectl --context workshop rollout restart "deploy/${dep}" -n "$ns" >/dev/null 2>&1 || true
+                    if kubectl --context workshop rollout status "deploy/${dep}" -n "$ns" \
+                        --timeout=300s >/dev/null 2>&1; then
+                        rolled=$((rolled + 1))
+                    else
+                        _roll_failed+=("${ns}/${dep}")
+                    fi
+                else
+                    _roll_failed+=("${ns}/${dep} (deployment absent)")
                 fi
             done
-            print_pass "Step 10: tier-3 Deployments rolled (${rolled}/${#APP_DEPLOYMENTS[@]})"
+            if [[ ${rolled} -eq ${#APP_DEPLOYMENTS[@]} ]]; then
+                print_pass "Step 10: tier-3 Deployments Ready (${rolled}/${#APP_DEPLOYMENTS[@]})"
+            else
+                print_fail "Step 10: tier-3 Deployments Ready (${rolled}/${#APP_DEPLOYMENTS[@]})" \
+                    "These did not become Ready within 300s: ${_roll_failed[*]}. Inspect with: kubectl --context workshop get pods -A | grep -Ev 'Running|Completed'"
+                return 1
+            fi
         fi
     else
         print_info "Step 10: Deployment roll skipped (${IMAGE_SOURCE} mode — pre-built :v1 images, IfNotPresent pull policy)"
