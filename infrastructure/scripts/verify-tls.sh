@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #===============================================================================
 # verify-tls.sh — Phase 07.8 TLS validation harness (attendee-trusted TLS via
-# nip.io + Let's Encrypt)
+# magic DNS + Let's Encrypt)
 #
 # Validates the publicly-trusted ALB TLS chain across the IVIA WRP and banking-UI
 # endpoints. Wave 0 ships this script BEFORE cert-manager / Ingress-group /
@@ -12,10 +12,10 @@
 # rule feedback_changes_through_existing_scripts.md, ALL verification of phase
 # 07.8 lives in this script — never an ad-hoc shell.
 #
-# Sub-commands (match 07.8-VALIDATION.md Dimensions A–E verbatim):
-#   --check browser-trust            Dimension A: IVIA WRP nip.io serves LE-trusted chain
-#   --check browser-trust-banking    Dimension A: banking-UI nip.io serves LE-trusted chain
-#   --check mmfa-endpoint            Dimension B: IVIA AAC DB MMFA endpoint registered on nip.io FQDN
+# Sub-commands (match 07.8-VALIDATION.md Dimensions A–F verbatim):
+#   --check browser-trust            Dimension A: IVIA WRP host serves LE-trusted chain
+#   --check browser-trust-banking    Dimension A: banking-UI host serves LE-trusted chain
+#   --check mmfa-endpoint            Dimension B: IVIA AAC DB MMFA endpoint registered on the workshop FQDN
 #   --check no-tls-reject            Dimension C: NODE_TLS_REJECT_UNAUTHORIZED removed from code
 #   --check no-extra-ca              Dimension C: NODE_EXTRA_CA_CERTS removed from code
 #   --check cookie-secure            Dimension C: cookie secure:true flip (no secure:false in locked scope)
@@ -51,7 +51,7 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-SCRIPT_DESCRIPTION="Phase 07.8 — attendee-trusted TLS (nip.io + Let's Encrypt) verification"
+SCRIPT_DESCRIPTION="Phase 07.8 — attendee-trusted TLS (magic DNS + Let's Encrypt) verification"
 
 # Source common helpers (print_pass, print_fail, print_warn, print_info,
 # FAILURES[] / PASSES[] accumulator, print_summary EXIT trap).
@@ -108,16 +108,17 @@ verify-tls.sh — ${SCRIPT_DESCRIPTION}
 Usage:
   ./verify-tls.sh [--quick | --check <name> | --help]
 
-Sub-commands (per 07.8-VALIDATION.md Dimensions A–E):
-  --check browser-trust            IVIA WRP nip.io serves LE-trusted chain (Dim A)
-  --check browser-trust-banking    banking-UI nip.io serves LE-trusted chain (Dim A)
-  --check mmfa-endpoint            IVIA AAC DB MMFA endpoint registered on nip.io (Dim B)
+Sub-commands (per 07.8-VALIDATION.md Dimensions A–F):
+  --check browser-trust            IVIA WRP host serves LE-trusted chain (Dim A)
+  --check browser-trust-banking    banking-UI host serves LE-trusted chain (Dim A)
+  --check mmfa-endpoint            IVIA AAC DB MMFA endpoint registered on the workshop FQDN (Dim B)
   --check no-tls-reject            NODE_TLS_REJECT_UNAUTHORIZED removed from code (Dim C)
   --check no-extra-ca              NODE_EXTRA_CA_CERTS removed from code (Dim C)
   --check cookie-secure            cookie secure:true flip (no secure:false) (Dim C)
   --check arn-stable               existing ACM ARN preserved across LE renewal (Dim D)
   --check idempotent-rerun         deploy-workshop.sh second run exits 0 (Dim E, D-12)
   --check skip-acme-honored        deploy-workshop.sh --skip-acme honored (Dim E, D-11)
+  --check suffix-fallback          DNS suffix is a variable with an sslip.io fallback (Dim F, issue #5)
 
 Flags:
   --quick                          Run trust-chain + workaround-grep subset (~10s)
@@ -181,10 +182,10 @@ check_browser_trust_banking() {
     fi
 }
 
-# Dimension B — MMFA endpoint registered on nip.io FQDN
+# Dimension B — MMFA endpoint registered on the workshop FQDN
 check_mmfa_endpoint() {
     if [ "${ACME_STATE_LOADED}" != "true" ] || [ -z "${NIP_FQDN_WRP:-}" ]; then
-        print_info "Check pending: mmfa-endpoint (requires Wave 5 — IVIA autoconf re-apply to register MMFA endpoint on the nip.io FQDN per D-07)"
+        print_info "Check pending: mmfa-endpoint (requires Wave 5 — IVIA autoconf re-apply to register MMFA endpoint on the workshop FQDN per D-07)"
         return
     fi
     # Query the AAC DB via LMI for the registered MMFA endpoint hostname.
@@ -207,9 +208,9 @@ check_mmfa_endpoint() {
         "https://localhost:9443/iam/access/v8/mmfa-config/" \
         2>/dev/null || echo "")
     if echo "${mmfa_json}" | grep -q "${NIP_FQDN_WRP}"; then
-        print_pass "mmfa-endpoint: MMFA endpoint registered on nip.io FQDN (${NIP_FQDN_WRP})"
+        print_pass "mmfa-endpoint: MMFA endpoint registered on the workshop FQDN (${NIP_FQDN_WRP})"
     else
-        print_fail "mmfa-endpoint: MMFA endpoint does NOT reference the nip.io FQDN (${NIP_FQDN_WRP})" \
+        print_fail "mmfa-endpoint: MMFA endpoint does NOT reference the workshop FQDN (${NIP_FQDN_WRP})" \
             "Confirm Wave 5 IVIA autoconf re-apply ran AND wrote the new FQDN into AAC DB per D-07. Mobile-app enrollment will fail with TLS rejection until this is fixed. Check: kubectl exec -n ${VERIFY_ACCESS_NAMESPACE} iviaconfig-0 -- curl -sk -u admin:<pw> https://localhost:9443/iam/access/v8/mmfa/endpoints"
     fi
 }
