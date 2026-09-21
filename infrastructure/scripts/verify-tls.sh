@@ -22,6 +22,8 @@
 #   --check arn-stable               Dimension D: existing ACM ARN preserved across LE renewal
 #   --check idempotent-rerun         Dimension E: deploy-workshop.sh second run exits 0 (D-12)
 #   --check skip-acme-honored        Dimension E: deploy-workshop.sh --skip-acme honored (D-11)
+#   --check suffix-fallback          Dimension F: DNS suffix is a variable with an sslip.io
+#                                    rate-limit fallback (issue #5 — no single point of failure)
 #
 # Flags:
 #   --quick                          Run trust-chain + workaround-grep subset (~10s)
@@ -400,6 +402,64 @@ check_skip_acme_honored() {
 #-------------------------------------------------------------------------------
 # Suite runners
 #-------------------------------------------------------------------------------
+# Dimension F — DNS suffix is a variable, with a rate-limit fallback (issue #5)
+#
+# Issue #5: every attendee's certificate is drawn from nip.io's shared Let's
+# Encrypt budget. That budget has been exhausted before (cunnie/sslip.io#108),
+# there is no way to reserve or observe it, and the deploy has no fallback — so
+# one exhaustion event fails every attendee at once. The fix makes the suffix a
+# variable and falls back to sslip.io, a separately-budgeted registered domain.
+#
+# Unlike the wave-aware Dimension C checks, this one FAILS rather than pends:
+# the fix either landed or it did not, and a silent regression to a hardcoded
+# suffix is exactly the state this issue exists to prevent.
+check_suffix_fallback() {
+    local deploy_script="infrastructure/scripts/deploy-workshop.sh"
+    local failures=""
+
+    # (a) The FQDNs must be built from a variable, not a literal suffix.
+    local hardcoded
+    hardcoded=$(grep -nE '^[[:space:]]*NIP_FQDN_(WRP|BANKING)=.*\.nip\.io"' "${deploy_script}" 2>/dev/null || true)
+    if [ -n "${hardcoded}" ]; then
+        failures+="  - FQDN built from a hardcoded .nip.io literal:
+${hardcoded}
+"
+    fi
+
+    # (b) A suffix variable with nip.io as its DEFAULT must exist (behaviour
+    #     unchanged for every attendee who never hits a rate limit).
+    if ! grep -qE 'TLS_DNS_SUFFIX="\$\{TLS_DNS_SUFFIX:-nip\.io\}"' "${deploy_script}" 2>/dev/null; then
+        failures+="  - no TLS_DNS_SUFFIX variable defaulting to nip.io
+"
+    fi
+
+    # (c) The rate-limit refusal must be detected. cert-manager marks the Order
+    #     errored on any ACME 4xx and puts the problem type in .status.reason,
+    #     so the deploy must look there rather than spin to its 900s ceiling.
+    if ! grep -q 'orders.acme.cert-manager.io' "${deploy_script}" 2>/dev/null; then
+        failures+="  - no Order query: a rate-limit refusal cannot be distinguished from slow issuance
+"
+    fi
+    if ! grep -qi 'ratelimited' "${deploy_script}" 2>/dev/null; then
+        failures+="  - no rateLimited match: the ACME problem type is never inspected
+"
+    fi
+
+    # (d) sslip.io must be reachable as the fallback suffix.
+    if ! grep -q 'sslip\.io' "${deploy_script}" 2>/dev/null; then
+        failures+="  - no sslip.io fallback: an exhausted nip.io budget still fails the deploy
+"
+    fi
+
+    if [ -z "${failures}" ]; then
+        print_pass "suffix-fallback: DNS suffix is a variable (default nip.io) with an sslip.io rate-limit fallback (issue #5)"
+    else
+        print_fail "suffix-fallback: the deploy has no TLS fallback — an exhausted nip.io budget fails every attendee at once (issue #5)" \
+            "Missing:
+${failures}Fix: make the suffix a variable at ${deploy_script}:1046-1047, detect the rateLimited Order reason in the Step 7 wait loop, and re-apply the Certificate on sslip.io. See issue #5."
+    fi
+}
+
 run_quick() {
     print_info "${SCRIPT_DESCRIPTION} — QUICK (~10s)"
     echo ""
@@ -442,6 +502,8 @@ case "${1:-}" in
         exit 0
         ;;
     --quick)
+
+
         run_quick
         ;;
     --check)
@@ -456,6 +518,7 @@ case "${1:-}" in
             arn-stable)               check_arn_stable ;;
             idempotent-rerun)         check_idempotent_rerun ;;
             skip-acme-honored)        check_skip_acme_honored ;;
+            suffix-fallback)          check_suffix_fallback ;;
             *)
                 trap - EXIT
                 echo "ERROR: unknown --check name: '${1:-}'" >&2
