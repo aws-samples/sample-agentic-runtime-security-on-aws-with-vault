@@ -7,7 +7,7 @@ The refund approval arrives as a mobile push to IBM Verify on your phone. Enroll
 
 If you have not installed the IBM Verify app yet, see [Prerequisites — IBM Verify app](../../20-prerequisites/#mobile-prerequisite--ibm-verify-app) first.
 
-**1. Open the enrollment URL** — incognito window, sign in `jaime` / `WorkshopUser1!`. The IVIA WRP is served on the nip.io FQDN that `bash infrastructure/scripts/deploy-workshop.sh` provisioned a Let's Encrypt cert for (stored in `infrastructure/.acme-state` as `NIP_FQDN_WRP`):
+**1. Open the enrollment URL** — incognito window, sign in `jaime` / `WorkshopUser1!`. The IVIA WRP is served on the workshop FQDN that `bash infrastructure/scripts/deploy-workshop.sh` provisioned a Let's Encrypt cert for (stored in `infrastructure/.acme-state` as `NIP_FQDN_WRP`):
 
 ```bash
 NIP_FQDN_WRP=$(grep '^NIP_FQDN_WRP=' infrastructure/.acme-state | cut -d= -f2)

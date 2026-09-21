@@ -5,7 +5,7 @@ weight: 70.5
 
 This is the heart of Use Case 3 — a refund write executes only after the human approves it out-of-band on a mobile device, and only with a 5-minute Vault-issued database credential.
 
-**1. Open the banking app** — incognito window, sign in `jaime` / `WorkshopUser1!`. The banking UI is served on the nip.io FQDN that `bash infrastructure/scripts/deploy-workshop.sh` provisioned a Let's Encrypt cert for (stored in `infrastructure/.acme-state` as `NIP_FQDN_BANKING`):
+**1. Open the banking app** — incognito window, sign in `jaime` / `WorkshopUser1!`. The banking UI is served on the workshop FQDN that `bash infrastructure/scripts/deploy-workshop.sh` provisioned a Let's Encrypt cert for (stored in `infrastructure/.acme-state` as `NIP_FQDN_BANKING`):
 
 ```bash
 source infrastructure/.acme-state && echo "https://${NIP_FQDN_BANKING}/"

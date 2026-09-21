@@ -9,7 +9,7 @@ Query the Use Case 1 agent, watch Vault issue just-in-time credentials, prove th
 
 ## Step 1 — Ask the agent (no sign-in)
 
-The agent is exposed through a public, read-only chat page. Print the full clickable URL (the banking-UI nip.io FQDN backed by a Let's Encrypt cert, with the `/ask` path appended):
+The agent is exposed through a public, read-only chat page. Print the full clickable URL (the banking-UI FQDN backed by a Let's Encrypt cert, with the `/ask` path appended):
 
 ```bash
 source infrastructure/.acme-state && echo "Ask page: https://${NIP_FQDN_BANKING}/ask"
