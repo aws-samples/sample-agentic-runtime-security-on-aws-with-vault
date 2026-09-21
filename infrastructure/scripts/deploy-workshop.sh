@@ -1228,6 +1228,15 @@ MARKER
         return 1
     fi
 
+    # A suffix change rewrites .acme-state, but the banking-UI Ingress host is
+    # built by TIER 3 from that file. If this run stops at tier 2, the ALB keeps
+    # routing the OLD host while the new certificate only covers the NEW one --
+    # banking is then unreachable on both names (404 on the new, TLS name
+    # mismatch on the old). Tell the operator to carry the change into tier 3.
+    if [[ "${_acme_suffix_current}" = false ]] && [[ -n "${TIER}" ]] && [[ "${TIER}" != "3" ]]; then
+        print_warn "Step 7: the TLS suffix changed, but this run is --tier ${TIER}. Tier 3 builds the banking-UI Ingress host from .acme-state, so banking stays on the OLD host until you re-apply it: bash ${BASH_SOURCE[0]} --tier 3"
+    fi
+
     # (6) Bootstrap ACM import — extract the K8s Secret + upsert into the stable
     # ARN the ACM-sync CronJob uses. `base64 --decode` is the portable spelling
     # (BSD base64 on macOS rejects -d). cert-manager concatenates leaf +

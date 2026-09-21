@@ -79,6 +79,8 @@ Every attendee's browser-trusted certificate comes from Let's Encrypt over a `ni
 TLS_DNS_SUFFIX=my.example.com TLS_DNS_SUFFIX_FALLBACK=alt.example.com bash infrastructure/scripts/deploy-workshop.sh
 ```
 
+Changing the suffix on an **already-deployed** environment must reach tier 3. The certificate is issued in tier 2, but the banking-UI Ingress host is built by tier 3 from `.acme-state`. Stop at `--tier 2` and the two disagree: the ALB still routes the old hostname, which the new certificate no longer covers, so banking answers `404` on the new name and fails TLS name validation on the old one. Run the deploy without `--tier` (all tiers), or follow a `--tier 2` run with `--tier 3`. The deploy warns when it detects this.
+
 If both budgets are exhausted the deploy fails loudly at Step 7 and names the override — it does not silently retry the same exhausted domain. Tracked in [issue #5](https://github.com/aws-samples/sample-agentic-runtime-security-on-aws-with-vault/issues/5).
 
 ---
