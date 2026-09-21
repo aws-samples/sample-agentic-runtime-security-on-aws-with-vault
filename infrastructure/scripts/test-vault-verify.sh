@@ -15,7 +15,7 @@
 #  10. database/ + aws/ secrets engines mounted (license-module gate)
 #  11. agent-registry responds (uc1-agent registration resolvable by display-name)
 #  12. oauth-resource-server profile 'ivia' responds
-#  13. jwt/ auth mount ABSENT (retired IVIA jwt backend gone — decision (e))
+#  13. jwt/ auth mount ABSENT (no Vault auth method in the OAuth token path)
 #
 # Usage:
 #   ./test-vault-verify.sh [--help]
@@ -58,7 +58,7 @@ Checks (13 total):
  10. database/ + aws/ secrets engines mounted (license-module gate)
  11. agent-registry responds (uc1-agent registration by display-name)
  12. oauth-resource-server profile 'ivia' responds
- 13. jwt/ auth mount ABSENT (retired IVIA jwt backend gone — decision (e))
+ 13. jwt/ auth mount ABSENT (no Vault auth method in the OAuth token path)
 
 Env-var overrides:
   VAULT_NAMESPACE   (default: vault)
@@ -200,8 +200,8 @@ fi
 #   11. agent-registry responds — the uc1-agent registration reads back
 #       (agent-registry/registration/display-name/<name>, 09-DISCOVERY path)
 #   12. oauth-resource-server profile 'ivia' responds (sys/config/oauth-resource-server/ivia)
-#   13. jwt/ auth mount is ABSENT — the retired IVIA jwt auth backend is GONE
-#       (locked decision (e) cutover proof; a still-mounted jwt/ FAILS LOUD)
+#   13. jwt/ auth mount is ABSENT — the OAuth access token IS the Vault token,
+#       so no auth method belongs in this path; a mounted jwt/ FAILS LOUD
 #
 # All use the same kubectl-exec + root-token pattern as Checks 3/4 above.
 #===============================================================================
@@ -276,20 +276,19 @@ else
 fi
 
 #-------------------------------------------------------------------------------
-# Check 13 — jwt/ auth mount is ABSENT (locked decision (e) cutover proof)
+# Check 13 — jwt/ auth mount is ABSENT
 #
-# The retired IVIA jwt auth backend (and its uc2-jwt / uc3-jwt roles) MUST be
-# gone: UC2/UC3 now present the OAuth JWT directly via X-Vault-Token against the
-# oauth-resource-server profile. A lingering jwt/ mount means the cutover is
-# incomplete and a dead auth path survives — FAIL LOUD.
+# UC2/UC3 present the IVIA-issued OAuth access token directly via X-Vault-Token
+# against the oauth-resource-server profile — there is no Vault auth method in
+# that path at all. A jwt/ mount would be a second, unenforced way in. FAIL LOUD.
 #-------------------------------------------------------------------------------
 auth_list_json=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
     sh -c "${VAULT_EXEC} vault auth list -format=json" 2>/dev/null || echo "{}")
 if echo "${auth_list_json}" | jq -e 'has("jwt/")' >/dev/null 2>&1; then
-    print_fail "jwt/ auth mount ABSENT (decision (e) cutover)" \
-        "The retired IVIA jwt/ auth backend is STILL mounted — the native cutover (locked decision (e)) is incomplete. UC2/UC3 must present the OAuth JWT via X-Vault-Token, not vault write auth/jwt/login. Disable it: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault auth disable jwt. Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault auth list"
+    print_fail "jwt/ auth mount ABSENT" \
+        "A jwt/ auth backend is mounted — it must not be. UC2/UC3 present the OAuth access token via X-Vault-Token, not vault write auth/jwt/login. Disable it: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault auth disable jwt. Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault auth list"
 else
-    print_pass "jwt/ auth mount is ABSENT — retired IVIA jwt backend removed (decision (e) cutover proof)"
+    print_pass "jwt/ auth mount is ABSENT — the OAuth access token IS the Vault token; no auth method in the path"
 fi
 
 # Summary is printed automatically by the common-checks.sh EXIT trap

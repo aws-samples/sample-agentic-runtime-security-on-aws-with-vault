@@ -494,9 +494,9 @@ TFVARS
   fi
 
   # NOTE: the IVIA `jwt/` auth backend check was REMOVED here — Plan 05's native
-  # cutover (09-CONTEXT decision (e)) RETIRED vault_jwt_auth_backend.ivia entirely
+  # There is deliberately no vault_jwt_auth_backend resource in this config
   # (UC2/UC3 present the OAuth JWT directly via X-Vault-Token, never traversing
-  # auth/jwt). Asserting a retired backend would always FAIL. The OAuth resource
+  # auth/jwt). Asserting a backend that must not exist would always FAIL. The OAuth resource
   # server surface is verified by the license-module gate below instead.
 
   # ---- Deploy-time license-module gate (Phase 9 — 09-CONTEXT Decision 1) --------

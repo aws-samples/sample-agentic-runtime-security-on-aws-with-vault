@@ -17,8 +17,8 @@
 #   2.  ServiceAccount uc3-privileged-actor-sa exists in banking-app namespace
 #   3.  Vault k8s auth role uc3 bound to uc3-privileged-actor-sa
 #   4.  UC3 native OBO surface: uc3-actor registration + uc3-agent-ceiling policy +
-#       OAuth alias binding (profile config_id == accessor .id). The retired uc3-jwt
-#       jwt-auth role is GONE (decisions (a)/(e)).
+#       OAuth alias binding (profile config_id == accessor .id). No jwt auth
+#       method is involved — the delegated token authorizes the request itself.
 #   5.  Vault DB role uc3-refund-writer generates credentials (JIT)
 #   6.  banking.refunds table exists in RDS
 #   7.  JIT credential fetch: vault read database/creds/uc3-refund-writer
@@ -34,7 +34,7 @@
 #       check is SKIPPED with a print_warn — never a fake pass.
 #   13. UC3 agent /chat multi-turn session — same UC3_VERIFY_CHAT_TOKEN gate.
 #
-# Bypass mode (--bypass) — the native enforcement done-gate (jwt/ backend GONE).
+# Bypass mode (--bypass) — the native enforcement done-gate.
 # SELF-MINTING: the suite headlessly mints a REAL IVIA-issued delegated token via
 # the production path (a REAL CIBA approval, then an RFC 8693 token-exchange) for a
 # workshop persona,
@@ -275,7 +275,7 @@ ivia_client_secret() {
 }
 
 
-# --- Native-model helpers (Phase 9 cutover — the jwt/ auth backend is GONE) ---
+# --- Native-model helpers (delegated token presented directly via X-Vault-Token) ---
 #
 # UC3 now presents the IVIA-issued delegated JWT DIRECTLY as the Vault token
 # (X-Vault-Token / VAULT_TOKEN=<jwt>) against the oauth-resource-server profile.
@@ -588,7 +588,7 @@ PYEOF
 
 if [ "${BYPASS_MODE}" = true ]; then
     #===========================================================================
-    # Native enforcement suite (Phase 9 — the jwt/ backend is GONE, decision (e)).
+    # Native enforcement suite (delegated token presented directly via X-Vault-Token).
     #
     # UC3 presents the IVIA-issued delegated JWT DIRECTLY to Vault (X-Vault-Token)
     # against the oauth-resource-server profile. The suite SELF-MINTS a real
@@ -832,7 +832,7 @@ print(jwt.encode(payload, 'forged-secret', algorithm='HS256'))
                 "Got sub='${w_sub}', jti='${w_jti:-<absent>}', RAR path(s)='${w_rar:-<none>}'. ONLY act.sub may differ; jti presence and a matching RAR path must hold so the deny hinges on the actor alone."
         else
             assert_native_deny "Bypass Check 19 (wrong actor, act.sub=${w_act:-<absent>})" "${UC3_WRONG_ACTOR_TOKEN}" \
-                "Bypass Check 19 PASSED: a delegated token varying act.sub to a wrong actor (act.sub=${w_act:-<absent>}, sub=${w_sub}) was DENIED — no actor alias resolves, the OBO agent-ceiling cannot attach; the native actor check is re-homed from the retired jwt bound_claims (decision (e))" \
+                "Bypass Check 19 PASSED: a delegated token varying act.sub to a wrong actor (act.sub=${w_act:-<absent>}, sub=${w_sub}) was DENIED — no actor alias resolves, the OBO agent-ceiling cannot attach; the actor claim is what Vault resolves the agent identity from" \
                 "A wrong-actor token that is ALLOWED means the native act.sub actor binding regressed. Confirm only the uc3-actor actor alias (external_id=uc3-actor) is bound; a wrong act.sub must resolve no entity."
         fi
     fi
@@ -1365,8 +1365,8 @@ fi
 # Check 4 — UC3 native OBO surface: uc3-actor registration + agent ceiling +
 #           OAuth alias binding (profile config_id == the synthetic accessor's .id)
 #
-# Phase 9 cutover (locked decisions (a)/(e)): the uc3-jwt jwt-auth role is RETIRED
-# (the jwt/ backend is GONE — asserted in test-vault-verify.sh). UC3 is OBO: the
+# The delegated token is presented directly via X-Vault-Token; no jwt auth role
+# (no jwt/ mount exists — asserted in test-vault-verify.sh). UC3 is OBO: the
 # human sub=jaime + the agent act.sub=uc3-actor resolve via the oauth-resource-server
 # profile. Assert the native surfaces + the alias binding.
 #-------------------------------------------------------------------------------

@@ -1324,10 +1324,9 @@ step_08_configure_vault() {
             # a healthy Vault. Each exec is its own connection, so there is no
             # tunnel to lose. Same fix as vault-configure.sh's gates.
             #
-            # Only kubernetes/ is asserted. The IVIA jwt/ backend was retired in
-            # the native Agent Registry cutover — vault-configure.sh dropped its
-            # own jwt check for that reason, and requiring it here warned on every
-            # healthy deploy.
+            # Only kubernetes/ is asserted. There is no jwt/ backend by design
+            # (the OAuth access token authorizes the request itself), so requiring
+            # a jwt/ mount here warned on every healthy deploy.
             ROOT_TOKEN=""
             if [[ -f "${HOME}/vault-init.json" ]]; then
                 ROOT_TOKEN=$(jq -r '.root_token // empty' "${HOME}/vault-init.json" 2>/dev/null || echo "")

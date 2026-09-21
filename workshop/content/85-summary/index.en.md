@@ -12,7 +12,7 @@ This workshop deployed **HashiCorp Vault Enterprise 2.0.3** on EKS and wired it 
 HashiCorp's [native AI agent support in Vault](https://www.hashicorp.com/en/blog/announcing-native-ai-agent-support-in-hashicorp-vault) is a released Enterprise capability, and this workshop runs it. Three native primitives carry the authorization model:
 
 - **Agent Registry** — each agent is registered as a first-class identity (`uc1-agent`, `agent-uc2`, `uc3-actor`), distinct from human users and traditional non-human identities, with a `ceiling_policies` envelope on the registration.
-- **OAuth resource server** — the IVIA-issued OAuth JWT authorizes the Vault request **directly** via the `X-Vault-Token` header. There is no `jwt_login`, no intermediate Vault token, and the legacy `jwt` auth backend has been **retired** entirely.
+- **OAuth resource server** — the IVIA-issued OAuth JWT authorizes the Vault request **directly** via the `X-Vault-Token` header. There is no login round-trip, no intermediate Vault token, and no Vault auth method in that path at all.
 - **Vault-side per-request RAR** — `authorization_details` of `type: vault:path_access` narrow a token to the exact path and capabilities of a single request. **Vault itself** is the interpreter and the decision point.
 
 The table below maps each workshop use case to the native Vault capability it deploys:
@@ -37,6 +37,6 @@ Objective 5 (correlated audit evidence) maps to Vault's native end-to-end tracin
 
 ### Key Takeaway
 
-Agent identity, the ceiling envelope, and per-request scoping are **native Vault capabilities you configured and enforced today** — not hand-rolled approximations and not a roadmap item. Vault is where the *authorization* decision is made: IVIA remains the issuer, delegation and CIBA-consent authority, and every decision about which credential an agent may hold is made natively by Vault against the registered agent's ceiling and the request's `vault:path_access` RAR.
+Agent identity, the ceiling envelope, and per-request scoping are **native Vault capabilities you configured and enforced today** — not a roadmap item. Vault is where the *authorization* decision is made: IVIA remains the issuer, delegation and CIBA-consent authority, and every decision about which credential an agent may hold is made natively by Vault against the registered agent's ceiling and the request's `vault:path_access` RAR.
 
 Vault is not, however, the only thing standing between an agent and your data, and the workshop deliberately shows you the others. The credential Vault issues is read-only because of a Postgres `GRANT`; the rows it can see are filtered by row-level security keyed on the authenticated subject; a second refund under one approval is refused by a unique index; and the agent's pod cannot reach an unapproved endpoint because of a Kubernetes NetworkPolicy. Each of those is a layer that still holds on the day the identity layer is the thing that failed — which is the reason to have them. Teams adopting this model implement exactly the pattern you deployed here.

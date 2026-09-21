@@ -26,7 +26,7 @@ Expected — all 13 checks `PASS`:
   ✓ PASS Secrets engines mounted: database/ + aws/ (platform-standard license present)
   ✓ PASS Agent Registry responds — registration 'uc1-agent' resolvable by display-name
   ✓ PASS OAuth resource server profile 'ivia' responds (feature active + profile applied)
-  ✓ PASS jwt/ auth mount is ABSENT — retired IVIA jwt backend removed (decision (e))
+  ✓ PASS jwt/ auth mount is ABSENT — the OAuth access token IS the Vault token; no auth method in the path
 
  ✓ 13 check(s) passed
 ===============================================================================
@@ -34,8 +34,8 @@ Expected — all 13 checks `PASS`:
 
 The last five checks are the native-Vault surface this workshop is built on: an Enterprise
 build, the secrets engines, the **Agent Registry**, the **OAuth resource server** profile, and
-a positive assertion that the retired `jwt` auth backend is **gone**. That last one is a check
-that something does *not* exist — if a `jwt/` mount ever reappears, this fails.
+a positive assertion that **no `jwt/` auth mount exists**. That last one is a check that
+something does *not* exist — if a `jwt/` mount ever appears, this fails.
 
 If any check fails, the script prints a `Fix:` hint inline. Address the issue and re-run.
 
@@ -54,5 +54,5 @@ If any check fails, the script prints a `Fix:` hint inline. Address the issue an
 | Secrets engines mounted | `kubectl exec vault-0 -- vault secrets list` | `database/` and `aws/` both present |
 | Agent Registry responds | `vault read agent-registry/registration/display-name/uc1-agent` | registration resolves by display-name |
 | OAuth resource server profile `ivia` | `vault read sys/config/oauth-resource-server/ivia` | profile responds (feature active + applied) |
-| `jwt/` auth mount is ABSENT | `kubectl exec vault-0 -- vault auth list` | **no** `jwt/` row — the retired backend stays removed |
+| `jwt/` auth mount is ABSENT | `kubectl exec vault-0 -- vault auth list` | **no** `jwt/` row — no Vault auth method in the token path |
 ::::

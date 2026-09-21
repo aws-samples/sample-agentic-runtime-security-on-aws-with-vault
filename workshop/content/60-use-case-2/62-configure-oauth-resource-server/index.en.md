@@ -7,7 +7,7 @@ weight: 62
 
 In this module you inspect the Vault **OAuth resource server** — the native mechanism that authorizes Use Case 2's data access — and trace how a user's IVIA-issued OAuth JWT flows into per-user-scoped Postgres credentials **without any intermediate Vault login**.
 
-This is the native cutover: Vault Enterprise treats IVIA's OAuth JWT as a first-class credential. The MCP Server presents that JWT **directly** to Vault in the `X-Vault-Token` header — there is no `POST /v1/auth/jwt/login` round-trip and no separately-issued Vault token. Vault validates the JWT against the OAuth resource server profile, resolves the human subject and the agent actor from the token's claims, and evaluates policy at the moment of the request.
+Vault Enterprise treats the IVIA-issued OAuth access token as a first-class credential. The MCP Server presents that JWT **directly** to Vault in the `X-Vault-Token` header — there is no `POST /v1/auth/jwt/login` round-trip and no separately-issued Vault token. Vault validates the JWT against the OAuth resource server profile, resolves the human subject and the agent actor from the token's claims, and evaluates policy at the moment of the request.
 
 ## The Native OAuth Resource Server Model
 
@@ -27,19 +27,22 @@ User OAuth JWT (issued by IVIA — authorization-code grant)
 
 Every successful request resolves **three enforcing controls** for Use Case 2: the human's baseline policy (what this user is permitted), the `agent-uc2` registration's `ceiling_policies` (the maximum the agent may *ever* hold — restrict-only), and an optional per-request authorization-details (RAR) scope. For Use Case 2 the RAR is optional, so when absent the effective grant is **human baseline ∩ agent-uc2 ceiling**.
 
-:::alert{header="Migration: this replaces a hand-rolled jwt auth backend" type="info"}
-Earlier iterations of this workshop used a Vault **`jwt` auth backend**: the MCP Server called `POST /v1/auth/jwt/login` with role `uc2-jwt`, Vault matched hand-rolled `bound_claims` / `bound_audiences`, and returned a *separate* Vault token that the server then used to read credentials. That `jwt` auth backend has been **removed**. The before/after:
+:::alert{header="One call, and nothing to configure in between" type="info"}
+There is **no Vault auth method in this path at all**. The MCP Server does not log in to Vault and
+does not hold a Vault token of its own for the read — it presents the OAuth access token itself in
+`X-Vault-Token`, and Vault validates it against the resource server profile on that single request.
 
-| | Before (removed) | After (native) |
-|---|---|---|
-| Auth path | `POST auth/jwt/login` → Vault token, then read creds | Present the OAuth JWT directly via `X-Vault-Token` — one call |
-| Who-may-act check | hand-rolled `bound_claims` on the `uc2-jwt` role | agent actor resolved from `act.sub = agent-uc2` against the registry |
-| Max-permission envelope | approximated by `bound_*` role fields | `ceiling_policies` on the `agent-uc2` registration (true intersection) |
+Two consequences worth naming, because both are checks you run below:
 
-The old `bound_claims` are shown here only as the *before* of that migration — they are no longer a live control.
+- **Who may act is not configured on a role.** The agent actor is resolved from the token's
+  `act.sub` claim against the Agent Registry, so there is no per-role claim matching to keep in
+  sync with the issuer.
+- **The maximum an agent may hold is a real intersection.** `ceiling_policies` on the
+  `agent-uc2` registration restricts and never grants, so the effective permission is
+  human baseline ∩ agent ceiling rather than an approximation of it.
 :::
 
-## Step 1 — Confirm the jwt backend is gone and the resource server is active
+## Step 1 — Confirm there is no jwt auth mount and the resource server is active
 
 Point the `vault` CLI at Vault with the root token so the reads below are permitted. One paste — kills any prior port-forward, opens a fresh one, and exports `VAULT_ADDR` + `VAULT_TOKEN`:
 
@@ -47,7 +50,7 @@ Point the `vault` CLI at Vault with the root token so the reads below are permit
 pkill -f "kubectl port-forward -n vault svc/vault 8200:8200" 2>/dev/null; kubectl port-forward -n vault svc/vault 8200:8200 >/dev/null 2>&1 & sleep 2 && export VAULT_ADDR=http://localhost:8200 && export VAULT_TOKEN=$(jq -r '.root_token' ~/vault-init.json) && echo "Vault: $VAULT_ADDR"
 ```
 
-Confirm there is **no** `jwt/` auth mount — the retired backend is gone:
+Confirm there is **no** `jwt/` auth mount — the OAuth access token is the Vault token:
 
 ```bash
 vault auth list
@@ -238,7 +241,7 @@ Key design decision: **Vault validates the JWT signature and resolves identity; 
 
 :::expand{header="Agent Developer Track — MCP server presents X-Vault-Token directly"}
 
-With the native cutover, the MCP Server's `vault-client.ts` no longer performs a login. It presents the user's OAuth JWT as the Vault token and reads credentials in a single request:
+The MCP Server's `vault-client.ts` performs no login. It presents the user's OAuth access token as the Vault token and reads credentials in a single request:
 
 ```typescript
 export class VaultClient {

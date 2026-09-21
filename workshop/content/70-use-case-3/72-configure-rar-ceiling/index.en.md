@@ -5,7 +5,7 @@ weight: 72
 
 ## How Vault Enforces Delegation Natively
 
-Use Case 3 is an **on-behalf-of** flow: the agent acts for a human who approved a specific refund out-of-band (the CIBA flow on the [previous page](../71-ciba-approval-flow/)). Vault Enterprise's **OAuth resource server** enforces that delegation directly — no hand-rolled auth backend in between.
+Use Case 3 is an **on-behalf-of** flow: the agent acts for a human who approved a specific refund out-of-band (the CIBA flow on the [previous page](../71-ciba-approval-flow/)). Vault Enterprise's **OAuth resource server** enforces that delegation directly — the delegated token authorizes the request itself, with no auth method in between.
 
 When the delegated IVIA OAuth JWT is presented to Vault via `X-Vault-Token`, Vault validates it against the resource server profile and resolves **two** identities from its claims: the human subject (`sub = jaime`) and the agent actor (`act.sub = uc3-actor`). It then evaluates **three enforcing layers**:
 
@@ -24,16 +24,16 @@ Delegated OAuth JWT (X-Vault-Token)
 
 The decisive property: **Vault is the interpreter of the RAR.** A JWT whose `vault:path_access` path matches the requested path is allowed; a JWT whose RAR path is anything else is **denied — even though the human baseline and the agent ceiling both permit the target path.** Enforcement happens at the point of use, inside Vault, per request. (Use Case 3's RAR is mandatory: the `uc3-actor` registration sets `optional_authorization_details = false`, so a delegated token with *no* RAR is rejected.)
 
-:::alert{header="Migration: this replaces hand-rolled jwt bound_claims" type="info"}
-Earlier iterations enforced delegation with a Vault **`jwt` auth backend** role (`uc3-jwt`) carrying `bound_claims` on `/may_act/sub = uc3-actor` (RFC 8693, *who may act*) and `/authorization_details/0/type = refund_approval` (the RAR *type*). That backend has been **removed**. The before/after:
+:::alert{header="Vault is the interpreter of the RAR, at the point of use" type="info"}
+All three layers are evaluated **inside Vault, on the request that uses the token** — not at
+issuance time and not by the agent. The agent cannot widen its own scope by asking differently,
+and IVIA cannot grant the agent more than the registered ceiling allows, because neither of them
+makes the decision.
 
-| Concern | Before (removed `uc3-jwt` bound_claims) | After (native OAuth resource server) |
-|---|---|---|
-| Who may act | `bound_claims "/may_act/sub" = "uc3-actor"` on a jwt role | actor resolved from `act.sub = uc3-actor` against the Agent Registry |
-| Max envelope | approximated by the flat `uc3-refund-writer` policy | `ceiling_policies` on the `uc3-actor` registration (true intersection) |
-| Per-request scope | none — IVIA interpreted the RAR, Vault only presence-checked the *type* | `vault:path_access` RAR — **Vault** narrows the token to an exact path/capabilities per request |
-
-The old `bound_claims` appear here only as the *before* of this migration; they are no longer a live control.
+That is what makes Layer 3 checkable: the human baseline and the agent ceiling both permit
+`database/creds/uc3-refund-writer`, and Vault **still** denies the request when the per-request
+`vault:path_access` RAR names a different path. You run exactly that case on the
+[Bypass Test](../73-bypass-test/) page.
 :::
 
 ## Step 1 — Point the CLI at Vault
