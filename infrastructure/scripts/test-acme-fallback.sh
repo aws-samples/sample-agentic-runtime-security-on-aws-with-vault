@@ -341,6 +341,131 @@ assert "did not wait on the old object"        "yes"  "$([[ ${NPOLLS} -eq 0 ]] &
 assert "says the apply itself failed"          "yes"  "$(grep -q 'could not apply the cert-manager Certificate' <<<"${LAST_FAIL}" && echo yes || echo no)"
 echo
 
+echo -e "${YELLOW}9. Tier 3 is deployed on a different TLS host — must FAIL, not warn${NC}"
+echo -e "    (The hosts encode the ALB's IP. A re-issue that picks a different"
+echo -e "     address renames them with the DNS suffix unchanged, so the old"
+echo -e "     suffix-change guard could never notice. Vault's issuer_id moves"
+echo -e "     while iviaop and the banking Ingress keep the old name and every"
+echo -e "     token is rejected, with all 13 tier-2 gates still green. Issue #52.)"
+
+# Extract the gate from its own comment anchors, same technique as the caller.
+{
+    echo '_acme_tier3_gate() {'
+    awk '/# Gate on the VALUE tier 3 actually deployed/{f=1} /# \(6\) Bootstrap ACM import/{f=0} f{print}' \
+        "${DEPLOY_SCRIPT}"
+    echo '    return 0'
+    echo '}'
+} > "${WORK}/gate.sh"
+grep -q 'effective_banking_host' "${WORK}/gate.sh" \
+    || fatal "could not extract the tier-3 coherence gate from deploy-workshop.sh (anchors moved?)"
+grep -q '# (6) Bootstrap ACM import' "${DEPLOY_SCRIPT}" \
+    || fatal "the gate STOP anchor is gone from deploy-workshop.sh — the extraction would run to EOF"
+grep -q 'base64 --decode' "${WORK}/gate.sh" \
+    && fatal "the extracted gate ran past its STOP anchor into the ACM import block"
+# shellcheck source=/dev/null
+source "${WORK}/gate.sh"
+
+WORKLOADS_DIR="${WORK}/workloads"
+TF_OUT=""
+terraform() { [[ -n "${TF_OUT}" ]] && echo "${TF_OUT}"; [[ -n "${TF_OUT}" ]]; }
+
+run_gate() {
+    TF_OUT="$1"; TIER="$2"; NIP_FQDN_BANKING="$3"
+    LAST_FAIL=""
+    _acme_tier3_gate; GATE_RC=$?
+}
+
+run_gate "" "2" "banking.abc123.44-205-184-217.nip.io"
+assert "tier 3 never applied — nothing to compare, proceeds" "0" "${GATE_RC}"
+
+run_gate "k8s-workshopacme-61ec0da744-1969185907.us-east-1.elb.amazonaws.com" "2" "banking.abc123.44-205-184-217.nip.io"
+assert "tier 3 on its pre-ACME ALB fallback — not a split, proceeds" "0" "${GATE_RC}"
+
+run_gate "banking.abc123.44-205-184-217.nip.io" "2" "banking.abc123.44-205-184-217.nip.io"
+assert "tier 3 on the SAME host — proceeds"                  "0" "${GATE_RC}"
+
+run_gate "banking.abc123.54-85-112-25.nip.io" "2" "banking.abc123.44-205-184-217.nip.io"
+assert "tier 3 on a DIFFERENT host — FAILS the run"          "1" "${GATE_RC}"
+assert "names the host tier 3 deployed with"  "yes" "$(grep -q 'banking.abc123.54-85-112-25.nip.io' <<<"${LAST_FAIL}" && echo yes || echo no)"
+assert "names the host this run issued"       "yes" "$(grep -q 'banking.abc123.44-205-184-217.nip.io' <<<"${LAST_FAIL}" && echo yes || echo no)"
+assert "tells the operator to re-apply tier 3" "yes" "$(grep -q 'bash .* --tier 3' <<<"${LAST_FAIL}" && echo yes || echo no)"
+
+# Re-runnability: a full run applies tier 3 later in the SAME invocation and
+# reconciles both hosts itself. Failing here would abort before it got the
+# chance, and deploy-workshop.sh must stay safe to re-run end to end.
+run_gate "banking.abc123.54-85-112-25.nip.io" "" "banking.abc123.44-205-184-217.nip.io"
+assert "full run with the same mismatch — does NOT abort"    "0" "${GATE_RC}"
+
+run_gate "banking.abc123.54-85-112-25.nip.io" "3" "banking.abc123.44-205-184-217.nip.io"
+assert "--tier 3 run is the fix itself — does NOT abort"     "0" "${GATE_RC}"
+echo
+
+echo -e "${YELLOW}10. The ALB address pick must not wander between runs${NC}"
+echo -e "    (A multi-AZ ALB publishes 2-3 addresses and round-robins their"
+echo -e "     order; the dig fallback in _resolve_host_ips is unsorted. With"
+echo -e "     head -1, 20 consecutive lookups against one unchanged ALB"
+echo -e "     returned 3 different addresses — and the address is what the"
+echo -e "     TLS hostname is built from. Issue #52.)"
+
+{
+    echo '_acme_pick_alb_ip() {'
+    awk '/^    ALB_LIVE_IPS=\$\(_resolve_host_ips "\$WRP_ALB"\)$/{f=1} /^    if \[\[ -z "\$ALB_IP" \]\]; then$/{f=0} f{print}' \
+        "${DEPLOY_SCRIPT}"
+    echo '    return 0'
+    echo '}'
+} > "${WORK}/pick.sh"
+grep -q 'ALB_SORTED_IPS' "${WORK}/pick.sh" \
+    || fatal "could not extract the ALB-IP pick from deploy-workshop.sh (anchors moved?)"
+grep -q 'DEPLOY_ID' "${WORK}/pick.sh" \
+    && fatal "the extracted pick ran past its STOP anchor into the DEPLOY_ID block"
+# shellcheck source=/dev/null
+source "${WORK}/pick.sh"
+
+# Round-robin the answer order on every call, exactly as the live ALB does.
+# The counter lives in a FILE, not a variable: the pick calls this from a
+# command substitution, so a shell variable would be incremented in a subshell
+# and reset to the same value on every call — the stub would then hand back one
+# fixed order and could never catch an unsorted pick.
+ROTFILE="${WORK}/rotation"
+echo 0 > "${ROTFILE}"
+_resolve_host_ips() {
+    local rot; rot=$(( ( $(cat "${ROTFILE}") + 1 ) % 3 )); echo "${rot}" > "${ROTFILE}"
+    case ${rot} in
+        0) printf '%s\n' 54.85.112.25 34.206.144.111 44.205.184.217 ;;
+        1) printf '%s\n' 34.206.144.111 44.205.184.217 54.85.112.25 ;;
+        2) printf '%s\n' 44.205.184.217 54.85.112.25 34.206.144.111 ;;
+    esac
+}
+run_pick() {
+    local reset="$1" cached="$2" n="${3:-9}" seen=""
+    echo 0 > "${ROTFILE}"
+    for _ in $(seq 1 "${n}"); do
+        _acme_hosts_reset="${reset}"; _acme_cached_alb_ip="${cached}"
+        WRP_ALB="alb.example"; ALB_IP=""
+        _acme_pick_alb_ip
+        grep -qx "${ALB_IP}" <<<"${seen}" || seen="${seen}${ALB_IP}"$'\n'
+    done
+    PICKS=$(grep -c . <<<"${seen}"); PICK="${seen%%$'\n'*}"
+}
+
+run_pick false "54.85.112.25"
+assert "cached address still live — reused every run"  "1"              "${PICKS}"
+assert "and it is the cached one"                      "54.85.112.25"   "${PICK}"
+
+run_pick false ""
+assert "no cache (first deploy) — one address, always" "1"              "${PICKS}"
+assert "and it is the numerically lowest"              "34.206.144.111" "${PICK}"
+
+run_pick false "18.1.2.3"
+assert "cached address no longer live — falls to sorted" "1"            "${PICKS}"
+assert "and does NOT resurrect the dead address"       "34.206.144.111" "${PICK}"
+
+# The drift guard deletes .acme-state precisely because the cached address
+# stopped routing. Reusing it here would defeat that guard entirely.
+run_pick true "54.85.112.25"
+assert "drift reset — refuses to re-pin the cached address" "34.206.144.111" "${PICK}"
+echo
+
 echo "============================================================"
 if [[ ${FAILED} -eq 0 ]]; then
     echo -e "${GREEN}✓ ${PASSED} check(s) passed${NC}"
