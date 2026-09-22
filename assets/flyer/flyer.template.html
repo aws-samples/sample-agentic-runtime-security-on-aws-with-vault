@@ -107,28 +107,33 @@ h1{margin:0;font-size:clamp(34px,6vw,52px);font-weight:800;letter-spacing:-.03em
      unless the page says otherwise, which would leave dark text on white. */
   html,body{background:var(--ground) !important;
             -webkit-print-color-adjust:exact;print-color-adjust:exact}
-  /* @page supplies the margin, so the sheet runs full width inside it and the
-     ink reaches the trim rather than sitting in a second, doubled gutter. */
-  .sheet{max-width:none;padding-left:0;padding-right:0;padding-block:0;gap:5px}
+  /* @page supplies the bulk of the margin. The sheet keeps a small side gutter
+     on top of it because the AWS mark has ink in its very first pixel column —
+     flush against the trim its "p" gets shaved off. */
+  .sheet{max-width:none;padding-left:7px;padding-right:7px;padding-block:0;gap:4px}
+  /* Screen leads at 1.5 for comfortable on-screen reading. Print is denser by
+     nature and this is a one-pager, so tighten the leading rather than the type
+     size — no body copy drops below 12px, which is 9pt at print scale. */
+  body{line-height:1.38}
   /* Chrome's print pipeline does not honour background-clip:text — it paints the
      gradient as a solid box over the glyphs and the title disappears. Print the
      title in flat ink instead. */
   h1{font-size:37px;background:none;-webkit-text-fill-color:currentColor;color:var(--g1)}
   /* Screen caps the lede at a comfortable 66ch; on paper the measure is already
      fixed by the page box, so the cap only forces extra lines. */
-  .lede{max-width:none;font-size:12px;line-height:1.42}
+  .lede{max-width:none;font-size:12px;line-height:1.38}
   .sec-h{margin-bottom:4px;font-size:10.5px}
   .plane{padding:6px 11px} .plane .q{font-size:12px}
-  .natives{gap:7px} .native{padding:5px 10px;gap:2px} .native .q{font-size:12px;line-height:1.35}
+  .natives{gap:6px} .native{padding:5px 10px;gap:2px} .native .q{font-size:12px;line-height:1.35}
   .steps{gap:4px} .steps li{padding:4px 11px} .steps .t{font-size:12.5px} .steps .d{font-size:12px}
   .modes{gap:8px} .mode{padding:7px 12px;gap:3px} .mode h3{font-size:13.5px}
   .mode p{font-size:12px} .mode .need{padding-top:5px;font-size:11px}
-  .foot{padding:8px 13px;gap:14px} .qr{padding:6px} .qr svg{width:104px;height:104px}
+  .foot{padding:7px 13px;gap:14px} .qr{padding:6px} .qr svg{width:96px;height:96px}
   .foot .who{font-size:12.5px} .foot .url{font-size:11px}
   /* Nothing may split across a page: this is a one-pager. */
   .planes,.natives,.modes,.foot,.steps li,.native,.mode{break-inside:avoid;page-break-inside:avoid}
 }
-@page{ size:Letter portrait; margin:12mm; }
+@page{ size:Letter portrait; margin:16mm; }
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
 
