@@ -165,6 +165,9 @@ bash assets/flyer/build-flyer.sh
 
 # ...and a print-ready PDF alongside it, for sending to a printer or attaching.
 bash assets/flyer/build-flyer.sh --pdf
+
+# ...and an Outlook-safe rich-HTML version, for pasting into an email.
+bash assets/flyer/build-flyer.sh --email
 ```
 
 Requires `qrencode` (`brew install qrencode`); `--pdf` also needs Google Chrome or Chromium, which the script finds on its own. Everything else runs on a stock `python3` with no `pip install` and no `npm install`.
@@ -176,9 +179,10 @@ Edit `assets/flyer/flyer.template.html` for any copy, colour or layout change, t
 
 - **PDF.** `--pdf` prints `workshop-flyer.pdf` through headless Chrome — one Letter page, dark ground intact, Inter and JetBrains Mono embedded, and the text still selectable. The template carries a print stylesheet that does two things the screen layout does not need: it compacts spacing so the content fits a single page, and it prints the headline in flat ink, because Chrome's print pipeline ignores `background-clip: text` and paints the gradient as a solid box over the glyphs. The page carries a 16mm margin all round and the sheet keeps a small gutter inside it, because the AWS mark has ink in its first pixel column and gets shaved flush against the trim. No body copy goes below 12px (9pt at print scale). Printing from the browser's own dialog gives the same result, but only with **Background graphics** ticked.
 - **The build fails loud.** `--pdf` asserts the result is exactly one page and, where `zbarimg` and `pdftoppm` are installed, that the QR still decodes to `WORKSHOP_URL` at 100 dpi — well under what a phone camera gets off a printed sheet. A longer `WORKSHOP_URL` wraps the footer link and can push the layout over; the guard catches that instead of handing back a silent two-pager.
+- **Email.** `--email` writes `email-flyer.html` from its own source, `assets/flyer/email.template.html` — a separate file, because the print flyer cannot be reused. Outlook on Windows lays out mail with the **Word** engine, which ignores CSS grid, flex, float, gradients and `background-clip`, and drops `background-color` on block elements while still honouring the `bgcolor` *attribute*. So the email version is nested tables with inline styles only, every coloured cell carrying both `bgcolor` and `background`, the headline gradient approximated by colouring each word, and the logos and QR embedded as base64 **PNG** (Word renders no SVG at all). Rounded corners are kept: the Word engine drops `border-radius` and renders the square box it would render anyway, while new Outlook, OWA, Apple Mail and Gmail round properly. To use it: open `assets/flyer/email-flyer.html` in a browser, Select All, Copy, paste into the message — the clipboard carries the table backgrounds and the embedded images with it. The build asserts what silently breaks: at least ten `bgcolor` attributes, no banned property in the body, no rounded cell on a `border-collapse:collapse` table (the radius would be dropped), exactly three embedded images, and — where `zbarimg` is installed — that the QR decodes to `WORKSHOP_URL`.
 - **Fonts.** Inter and JetBrains Mono ship in `assets/flyer/fonts/` and are inlined as `@font-face` data URIs, so the flyer renders identically with no network at all — which is also what makes the PDF embed the real faces instead of substituting a system sans. Both are SIL Open Font License 1.1; the upstream license texts travel with them as `Inter-LICENSE.txt` and `JetBrainsMono-LICENSE.txt` in that same directory.
 
-The built `workshop-flyer.html` is committed alongside its source: it is self-contained and it is the file you actually open. `workshop-flyer.pdf` is **not** committed (`*.pdf` is gitignored repo-wide) — run `--pdf` when you need it.
+The built `workshop-flyer.html` and `email-flyer.html` are committed alongside their sources: it is self-contained and it is the file you actually open. `workshop-flyer.pdf` is **not** committed (`*.pdf` is gitignored repo-wide) — run `--pdf` when you need it.
 
 ---
 

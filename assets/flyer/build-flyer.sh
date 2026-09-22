@@ -19,6 +19,12 @@
 # Usage:
 #   bash assets/flyer/build-flyer.sh              # HTML only
 #   bash assets/flyer/build-flyer.sh --pdf        # HTML + workshop-flyer.pdf
+#   bash assets/flyer/build-flyer.sh --email      # email-flyer.html (Outlook)
+#
+# --email renders email.template.html, a SEPARATE Outlook-safe rebuild of the
+# same content. Outlook on Windows lays out mail with the Word engine, which
+# ignores grid, flex and gradients, so the print flyer cannot
+# simply be reused — see the comment block at the top of that template.
 #
 # --pdf renders through headless Chrome, which is the same engine the flyer is
 # designed against, so the CSS grid, the embedded fonts and the dark ground all
@@ -36,10 +42,12 @@ REPO="$(cd "${HERE}/../.." && pwd)"
 WORKSHOP_URL="${WORKSHOP_URL:-https://catalog.us-east-1.prod.workshops.aws/workshops/9d6a0b3d-9ea2-47a2-8ca4-40168cadd531/en-US}"
 
 WANT_PDF=false
+WANT_EMAIL=false
 OUT=""
 for arg in "$@"; do
     case "${arg}" in
-        --pdf) WANT_PDF=true ;;
+        --pdf)   WANT_PDF=true ;;
+        --email) WANT_EMAIL=true ;;
         -*)    echo "FATAL: unknown option ${arg}" >&2; exit 2 ;;
         *)     OUT="${arg}" ;;
     esac
@@ -132,4 +140,76 @@ print(len(re.findall(rb'/Type\s*/Page[^s]', d)))" "${pdf}")
     fi
 
     echo "pdf written:   ${pdf}  (1 page, $(wc -c < "${pdf}" | tr -d " ") bytes)"
+fi
+
+#-------------------------------------------------------------------------------
+# --email — the flyer as an Outlook-safe HTML email body.
+#
+# Rendered from email.template.html, a SEPARATE rebuild of the same content:
+# Outlook on Windows lays out mail with the Word engine, which drops grid,
+# flex and gradients, so workshop-flyer.html cannot be reused. border-radius is
+# the exception: the Word engine drops it and renders a square, which is exactly
+# what a version without it renders, while every web-based client (new Outlook,
+# OWA, Apple Mail, Gmail) rounds properly. So it is kept, and asserted below.
+# Logos and QR come from the same sources as the print flyer, so the two
+# artefacts cannot drift. See the docstring in build-email.py.
+#-------------------------------------------------------------------------------
+if [ "${WANT_EMAIL}" = true ]; then
+    [ -f "${HERE}/email.template.html" ] || {
+        echo "FATAL: email.template.html missing" >&2; exit 1; }
+    email_out="${HERE}/email-flyer.html"
+    python3 "${HERE}/build-email.py" \
+        --repo "${REPO}" --here "${HERE}" --work "${work}" \
+        --url "${WORKSHOP_URL}" --out "${email_out}"
+
+    # Word drops background-color on block elements but honours the bgcolor
+    # ATTRIBUTE, so every coloured cell must carry both. A panel added with
+    # only the CSS renders white-on-white in Outlook — broken for exactly the
+    # audience this file exists for.
+    attr_bg=$(grep -o 'bgcolor="#[0-9a-fA-F]\{6\}"' "${email_out}" | wc -l | tr -d ' ')
+    if [ "${attr_bg}" -lt 10 ]; then
+        echo "FATAL: only ${attr_bg} bgcolor attributes found; coloured cells are missing them." >&2
+        exit 1
+    fi
+    # Anything the Word engine cannot lay out must not be in the body at all.
+    for banned in 'display:flex' 'display:grid' 'linear-gradient' 'background-clip' '<style'; do
+        if grep -q "${banned}" "${email_out}"; then
+            echo "FATAL: '${banned}' is in the email body; the Word engine ignores it." >&2
+            exit 1
+        fi
+    done
+    # Rounded corners, to match the artifact. A td only rounds when its table
+    # is border-collapse:separate — under collapse the property is silently
+    # dropped by every engine that honours it at all, so assert both.
+    radii=$(grep -o 'border-radius:' "${email_out}" | wc -l | tr -d ' ')
+    if [ "${radii}" -lt 12 ]; then
+        echo "FATAL: only ${radii} border-radius declarations; the corners are square." >&2
+        exit 1
+    fi
+    if grep -q 'border-collapse:collapse;[^"]*border-radius' "${email_out}"; then
+        echo "FATAL: a rounded element sits on a collapsed table; the radius will not render." >&2
+        exit 1
+    fi
+    # The marks and the QR must actually be embedded, or the paste is text-only.
+    imgs=$(grep -o 'src="data:image/png;base64,' "${email_out}" | wc -l | tr -d ' ')
+    if [ "${imgs}" -ne 3 ]; then
+        echo "FATAL: expected 3 embedded images (AWS, HashiCorp, QR); found ${imgs}." >&2
+        exit 1
+    fi
+    if command -v zbarimg >/dev/null 2>&1; then
+        python3 - "${email_out}" "${work}/qr-check.png" <<'EXTRACT'
+import base64, pathlib, re, sys
+html = pathlib.Path(sys.argv[1]).read_text()
+m = re.findall(r'src="data:image/png;base64,([^"]+)"', html)
+pathlib.Path(sys.argv[2]).write_bytes(base64.b64decode(m[-1]))
+EXTRACT
+        got=$(zbarimg --quiet --raw "${work}/qr-check.png" 2>/dev/null | head -1 | tr -d "\r\n") || got=""
+        if [ "${got}" != "${WORKSHOP_URL}" ]; then
+            echo "FATAL: the embedded QR did not decode to WORKSHOP_URL (got: ${got:-<no read>})." >&2
+            exit 1
+        fi
+        echo "qr verified:    embedded PNG decodes to WORKSHOP_URL"
+    fi
+    echo "email written:  ${email_out}  (${attr_bg} bgcolor cells, ${radii} rounded, ${imgs} embedded images)"
+    echo "                open in a browser, Select All, Copy, paste into Outlook"
 fi
