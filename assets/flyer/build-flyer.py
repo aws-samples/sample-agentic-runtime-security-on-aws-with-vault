@@ -77,15 +77,19 @@ def main():
     reversed_aws(repo/"assets"/"aws-logo.png", work/"aws.png", pnglib)
     reversed_hashicorp(repo/"assets"/"hashicorp_logo.png", work/"hcp.png", pnglib)
 
+    fonts = here/"fonts"
     tpl = (here/"flyer.template.html").read_text()
     out = (tpl
+           .replace("__FONT_INTER__", base64.b64encode((fonts/"Inter.woff2").read_bytes()).decode())
+           .replace("__FONT_MONO__", base64.b64encode((fonts/"JetBrainsMono.woff2").read_bytes()).decode())
            .replace("__AWS_LOGO__", base64.b64encode((work/"aws.png").read_bytes()).decode())
            .replace("__HASHICORP_LOGO__", base64.b64encode((work/"hcp.png").read_bytes()).decode())
            .replace("__QR__", qr_to_path((work/"qr.svg").read_text()))
            .replace("__WORKSHOP_URL__", a.url)
            .replace("__WORKSHOP_URL_DISPLAY__", re.sub(r"^https://", "", a.url)))
 
-    left = [m for m in ("__AWS_LOGO__", "__HASHICORP_LOGO__", "__QR__", "__WORKSHOP_URL__") if m in out]
+    left = [m for m in ("__AWS_LOGO__", "__HASHICORP_LOGO__", "__QR__", "__WORKSHOP_URL__",
+                        "__FONT_INTER__", "__FONT_MONO__") if m in out]
     if left:
         raise SystemExit(f"FATAL: placeholders not substituted: {left}")
     pathlib.Path(a.out).write_text(out)

@@ -1,8 +1,14 @@
 <title>Agentic Runtime Security on AWS</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap">
 <style>
+/* Fonts are inlined, not fetched. A network request at render time is a
+   fidelity risk the flyer cannot take: headless Chrome snapshots the page
+   before a slow stylesheet lands and silently falls back to a system face, and
+   a printed flyer has no second chance. Both are variable fonts, so one file
+   per family covers every weight used here. */
+@font-face{font-family:'Inter';font-style:normal;font-weight:100 900;font-display:block;
+  src:url(data:font/woff2;base64,__FONT_INTER__) format('woff2')}
+@font-face{font-family:'JetBrains Mono';font-style:normal;font-weight:100 800;font-display:block;
+  src:url(data:font/woff2;base64,__FONT_MONO__) format('woff2')}
 :root{
   --ground:#0d1117; --panel:#161b22; --panel-2:#1c2330; --line:#30363d;
   --ink:#e6edf3; --ink-2:#c9d1d9; --mute:#8b949e;
@@ -96,7 +102,33 @@ h1{margin:0;font-size:clamp(34px,6vw,52px);font-weight:800;letter-spacing:-.03em
 .rule{height:1px;background:linear-gradient(90deg,var(--g1),var(--g2) 45%,var(--g3) 80%,transparent)}
 
 @media (max-width:640px){ .planes{grid-template-columns:1fr} .modes{grid-template-columns:1fr} .natives{grid-template-columns:1fr} }
-@media print{ .sheet{max-width:none;padding:0} }
+@media print{
+  /* The flyer is a dark design. Browsers drop background colours when printing
+     unless the page says otherwise, which would leave dark text on white. */
+  html,body{background:var(--ground) !important;
+            -webkit-print-color-adjust:exact;print-color-adjust:exact}
+  /* @page supplies the margin, so the sheet runs full width inside it and the
+     ink reaches the trim rather than sitting in a second, doubled gutter. */
+  .sheet{max-width:none;padding-left:0;padding-right:0;padding-block:0;gap:6px}
+  /* Chrome's print pipeline does not honour background-clip:text — it paints the
+     gradient as a solid box over the glyphs and the title disappears. Print the
+     title in flat ink instead. */
+  h1{font-size:37px;background:none;-webkit-text-fill-color:currentColor;color:var(--g1)}
+  /* Screen caps the lede at a comfortable 66ch; on paper the measure is already
+     fixed by the page box, so the cap only forces extra lines. */
+  .lede{max-width:none;font-size:12px;line-height:1.42}
+  .sec-h{margin-bottom:5px;font-size:10px}
+  .plane{padding:7px 11px} .plane .q{font-size:11.5px}
+  .natives{gap:7px} .native{padding:6px 10px;gap:2px} .native .q{font-size:10.5px;line-height:1.35}
+  .steps{gap:4px} .steps li{padding:5px 11px} .steps .t{font-size:12.5px} .steps .d{font-size:11px}
+  .modes{gap:8px} .mode{padding:8px 12px;gap:3px} .mode h3{font-size:13.5px}
+  .mode p{font-size:12px} .mode .need{padding-top:5px;font-size:10px}
+  .foot{padding:9px 13px;gap:14px} .qr{padding:6px} .qr svg{width:78px;height:78px}
+  .foot .who{font-size:12.5px} .foot .url{font-size:10px}
+  /* Nothing may split across a page: this is a one-pager. */
+  .planes,.natives,.modes,.foot,.steps li,.native,.mode{break-inside:avoid;page-break-inside:avoid}
+}
+@page{ size:Letter portrait; margin:12mm; }
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
 

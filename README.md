@@ -170,16 +170,23 @@ A printable one-pager for promoting the workshop — what it is, who it is for, 
 ```bash
 # Regenerate assets/flyer/workshop-flyer.html — open or print it from a browser.
 bash assets/flyer/build-flyer.sh
+
+# ...and a print-ready PDF alongside it, for sending to a printer or attaching.
+bash assets/flyer/build-flyer.sh --pdf
 ```
 
-Requires `qrencode` (`brew install qrencode`); everything else runs on a stock `python3` with no `pip install`.
+Requires `qrencode` (`brew install qrencode`); `--pdf` also needs Google Chrome or Chromium, which the script finds on its own. Everything else runs on a stock `python3` with no `pip install` and no `npm install`.
 
 Edit `assets/flyer/flyer.template.html` for any copy, colour or layout change, then re-run. Nothing in the output is hand-edited — the logos, the QR code and the URL are all generated:
 
 - **Logos.** Neither shipped mark works on the flyer's dark ground. `assets/aws-logo.png` is a dark navy wordmark, and `assets/hashicorp_logo.png` is a black hexagon on a *solid white field with no transparency at all* — it renders as a white box. The build recolours the AWS wordmark to white while leaving the orange smile alone, and keys the HashiCorp field out by luminance so the mark comes through white with its anti-aliased edges intact. Both are the official reversed variants.
 - **QR code.** Rebuilt from `qrencode`'s module grid into a single SVG path (its native output is ~52 KB of individual `<rect>` elements) and inlined, so the flyer makes no external image requests and prints crisp. Point it somewhere else with `WORKSHOP_URL=<url> bash assets/flyer/build-flyer.sh`.
 
-The built `workshop-flyer.html` is committed alongside its source: it is self-contained and it is the file you actually open.
+- **PDF.** `--pdf` prints `workshop-flyer.pdf` through headless Chrome — one Letter page, dark ground intact, Inter and JetBrains Mono embedded, and the text still selectable. The template carries a print stylesheet that does two things the screen layout does not need: it compacts the type scale so the content fits a single page, and it prints the headline in flat ink, because Chrome's print pipeline ignores `background-clip: text` and paints the gradient as a solid box over the glyphs. Printing from the browser's own dialog gives the same result, but only with **Background graphics** ticked.
+
+- **Fonts.** Inter and JetBrains Mono ship in `assets/flyer/fonts/` and are inlined as `@font-face` data URIs, so the flyer renders identically with no network at all — which is also what makes the PDF embed the real faces instead of substituting a system sans.
+
+The built `workshop-flyer.html` is committed alongside its source: it is self-contained and it is the file you actually open. `workshop-flyer.pdf` is **not** committed (`*.pdf` is gitignored repo-wide) — run `--pdf` when you need it.
 
 ---
 

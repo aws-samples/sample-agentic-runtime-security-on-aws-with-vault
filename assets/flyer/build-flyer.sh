@@ -12,11 +12,21 @@
 #   * the QR code is generated from WORKSHOP_URL below and inlined as an SVG
 #     path, so the flyer has no external image requests and prints crisp.
 #
-# Output: workshop-flyer.html (self-contained, ~31 KB, print-ready).
+# Output: workshop-flyer.html (self-contained, print-ready).
 #
 # Requires: qrencode  (brew install qrencode)
 #
-# Usage: bash assets/flyer/build-flyer.sh
+# Usage:
+#   bash assets/flyer/build-flyer.sh              # HTML only
+#   bash assets/flyer/build-flyer.sh --pdf        # HTML + workshop-flyer.pdf
+#
+# --pdf renders through headless Chrome, which is the same engine the flyer is
+# designed against, so the CSS grid, the embedded fonts and the dark ground all
+# survive and the text stays selectable. The template carries a print stylesheet
+# that compacts the type scale to fit Letter in ONE page and prints the headline
+# in flat ink — Chrome's print pipeline does not honour background-clip:text and
+# paints the gradient as a solid box over the glyphs. Printing from the browser's
+# own dialog works too, but only with "Background graphics" ticked.
 #===============================================================================
 set -euo pipefail
 
@@ -24,7 +34,17 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "${HERE}/../.." && pwd)"
 
 WORKSHOP_URL="${WORKSHOP_URL:-https://catalog.us-east-1.prod.workshops.aws/workshops/9d6a0b3d-9ea2-47a2-8ca4-40168cadd531/en-US}"
-OUT="${1:-${HERE}/workshop-flyer.html}"
+
+WANT_PDF=false
+OUT=""
+for arg in "$@"; do
+    case "${arg}" in
+        --pdf) WANT_PDF=true ;;
+        -*)    echo "FATAL: unknown option ${arg}" >&2; exit 2 ;;
+        *)     OUT="${arg}" ;;
+    esac
+done
+OUT="${OUT:-${HERE}/workshop-flyer.html}"
 
 command -v qrencode >/dev/null 2>&1 || {
     echo "FATAL: qrencode not found. Install it with:  brew install qrencode" >&2
@@ -43,3 +63,33 @@ python3 "${HERE}/build-flyer.py" \
     --url "${WORKSHOP_URL}" --out "${OUT}"
 
 echo "flyer written: ${OUT}"
+
+if [ "${WANT_PDF}" = true ]; then
+    chrome=""
+    for candidate in \
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+        "/Applications/Chromium.app/Contents/MacOS/Chromium" \
+        "$(command -v google-chrome || true)" \
+        "$(command -v chromium || true)" \
+        "$(command -v chromium-browser || true)"; do
+        [ -n "${candidate}" ] && [ -x "${candidate}" ] && { chrome="${candidate}"; break; }
+    done
+    [ -n "${chrome}" ] || {
+        echo "FATAL: no Chrome/Chromium found — install Google Chrome, or open ${OUT}" >&2
+        echo "       in a browser and print to PDF with 'Background graphics' ticked." >&2
+        exit 1
+    }
+
+    pdf="${OUT%.html}.pdf"
+    # --virtual-time-budget gives the inlined @font-face faces time to decode
+    # before the snapshot. --no-pdf-header-footer keeps Chrome's URL/date
+    # furniture off the page.
+    "${chrome}" --headless --disable-gpu --no-sandbox \
+        --virtual-time-budget=10000 \
+        --no-pdf-header-footer \
+        --print-to-pdf="${pdf}" \
+        "file://${OUT}" 2>/dev/null
+
+    [ -s "${pdf}" ] || { echo "FATAL: Chrome produced no PDF at ${pdf}" >&2; exit 1; }
+    echo "pdf written:   ${pdf}  ($(wc -c < "${pdf}" | tr -d " ") bytes)"
+fi
