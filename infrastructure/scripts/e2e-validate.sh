@@ -96,7 +96,7 @@ echo -e "${YELLOW}Phase 5: TLS-Suffix Fallback Behaviour${NC}"
 # Drives the real fallback branch against a stubbed kubectl. No cluster and no
 # ACME traffic: the rate-limit path cannot be provoked on demand, and provoking
 # it for real would spend the shared magic-DNS budget the workshop depends on.
-check "ACME suffix fallback (4 scenarios, 17 assertions)" bash "$SCRIPT_DIR/test-acme-fallback.sh"
+check "ACME suffix fallback (8 scenarios, 35 assertions)" bash "$SCRIPT_DIR/test-acme-fallback.sh"
 echo ""
 
 ################################################################################

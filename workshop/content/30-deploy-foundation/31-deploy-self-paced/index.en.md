@@ -124,7 +124,29 @@ TLS_DNS_SUFFIX=<dashed-ipv4-magic-dns-suffix> bash infrastructure/scripts/deploy
 ```
 
 ::::alert{header="This warning is not a failure" type="info"}
-If you instead see `⚠ Step 7: Let's Encrypt refused nip.io as rate limited ...; retrying on sslip.io` and the deploy continues, the fallback worked. Your TLS host names are on `sslip.io` rather than `nip.io` — everything else behaves identically, and the FQDN to expect below is the `sslip.io` one.
+If you instead see `⚠ Step 7: Let's Encrypt refused nip.io as rate limited ...; retrying on sslip.io` and the deploy continues, the fallback worked. Your TLS host names are on `sslip.io` rather than `nip.io`, and the FQDN to expect below is the `sslip.io` one.
+
+**One thing does change.** The host names live in `infrastructure/.acme-state`, and **Tier 3 builds the banking-UI Ingress from that file**. When the suffix moves during a `--tier 2` run, the deploy tells you so:
+
+```
+⚠ Step 7: the TLS suffix changed, but this run is --tier 2. Tier 3 builds the
+  banking-UI Ingress host from .acme-state, so banking stays on the OLD host
+  until you re-apply it: bash infrastructure/scripts/deploy-workshop.sh --tier 3
+```
+
+Re-run Tier 3 when you see that line. Until you do, banking is unreachable on both names — a 404 on the new one, a certificate-name mismatch on the old.
+::::
+
+::::alert{header="If the suffix you pick is also the fallback" type="info"}
+`TLS_DNS_SUFFIX=sslip.io` is a sensible choice here — it is the suffix the fallback message just named. Because the default `TLS_DNS_SUFFIX_FALLBACK` is *also* `sslip.io`, the deploy runs on the suffix you asked for with the retry switched off, rather than refusing to start. If Let's Encrypt then refuses that suffix too, you get:
+
+```
+✗ Step 7: Certificate Ready=true
+   Fix: Let's Encrypt refused sslip.io as rate limited, and no fallback is
+   available because TLS_DNS_SUFFIX_FALLBACK is the same suffix.
+```
+
+Pick a third dashed-IPv4 magic-DNS suffix, or point `TLS_DNS_SUFFIX_FALLBACK` at a different one.
 ::::
 
 #### Case B — issuance ran past the readiness gate (timing)

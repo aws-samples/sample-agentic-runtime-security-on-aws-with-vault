@@ -146,6 +146,20 @@ USAGE
 #                     print_pass + print_fail; print_info is informational.
 #-------------------------------------------------------------------------------
 
+# Does the certificate the host actually SERVES carry that host in its SANs?
+# Issuer + chain say the certificate is trustworthy; they say NOTHING about
+# WHICH hosts it covers. A deploy that imported a certificate for a previous
+# TLS suffix passes an issuer-only check while every attendee gets a browser
+# interstitial, so the hostname assertion is the part that catches a real
+# misconfiguration. `openssl verify_hostname` does the matching (wildcards
+# included) rather than a substring compare. Issue #5.
+_serves_host() {
+    _sh_host="$1"
+    openssl s_client -connect "${_sh_host}:443" -servername "${_sh_host}" \
+        -verify_hostname "${_sh_host}" </dev/null 2>&1 \
+        | grep -q "Verify return code: 0 (ok)"
+}
+
 # Dimension A — browser trust chain (IVIA WRP)
 check_browser_trust() {
     if [ "${ACME_STATE_LOADED}" != "true" ] || [ -z "${NIP_FQDN_WRP:-}" ]; then
@@ -157,7 +171,12 @@ check_browser_trust() {
         -servername "${NIP_FQDN_WRP}" </dev/null 2>&1 || true)
     if echo "${chain}" | grep -q "ISRG Root X1" && \
        echo "${chain}" | openssl x509 -noout -issuer 2>/dev/null | grep -qi "Let's Encrypt"; then
-        print_pass "browser-trust: IVIA WRP (${NIP_FQDN_WRP}) serves a Let's Encrypt cert chained to ISRG Root X1"
+        if _serves_host "${NIP_FQDN_WRP}"; then
+            print_pass "browser-trust: IVIA WRP (${NIP_FQDN_WRP}) serves a Let's Encrypt cert chained to ISRG Root X1 AND covering this hostname"
+        else
+            print_fail "browser-trust: IVIA WRP (${NIP_FQDN_WRP}) serves a Let's Encrypt cert that does NOT cover this hostname" \
+                "The chain is trusted but the SANs are for other hosts — a certificate from a previous TLS suffix was imported into ACM. Attendees get a browser interstitial. Check: openssl s_client -connect ${NIP_FQDN_WRP}:443 -servername ${NIP_FQDN_WRP} </dev/null 2>&1 | openssl x509 -noout -ext subjectAltName"
+        fi
     else
         print_fail "browser-trust: IVIA WRP (${NIP_FQDN_WRP}) is not serving a Let's Encrypt cert chained to ISRG Root X1" \
             "Confirm cert-manager has issued the LE cert AND it has been imported into ACM (Plan 04 ACME step). Check: openssl s_client -connect ${NIP_FQDN_WRP}:443 -servername ${NIP_FQDN_WRP} </dev/null 2>&1 | openssl x509 -noout -issuer"
@@ -175,7 +194,12 @@ check_browser_trust_banking() {
         -servername "${NIP_FQDN_BANKING}" </dev/null 2>&1 || true)
     if echo "${chain}" | grep -q "ISRG Root X1" && \
        echo "${chain}" | openssl x509 -noout -issuer 2>/dev/null | grep -qi "Let's Encrypt"; then
-        print_pass "browser-trust-banking: banking-UI (${NIP_FQDN_BANKING}) serves a Let's Encrypt cert chained to ISRG Root X1"
+        if _serves_host "${NIP_FQDN_BANKING}"; then
+            print_pass "browser-trust-banking: banking-UI (${NIP_FQDN_BANKING}) serves a Let's Encrypt cert chained to ISRG Root X1 AND covering this hostname"
+        else
+            print_fail "browser-trust-banking: banking-UI (${NIP_FQDN_BANKING}) serves a Let's Encrypt cert that does NOT cover this hostname" \
+                "The chain is trusted but the SANs are for other hosts — a certificate from a previous TLS suffix was imported into ACM. Check: openssl s_client -connect ${NIP_FQDN_BANKING}:443 -servername ${NIP_FQDN_BANKING} </dev/null 2>&1 | openssl x509 -noout -ext subjectAltName"
+        fi
     else
         print_fail "browser-trust-banking: banking-UI (${NIP_FQDN_BANKING}) is not serving a Let's Encrypt cert chained to ISRG Root X1" \
             "Confirm the shared workshop-acme ALB group includes the banking-UI Ingress AND the cert SANs cover ${NIP_FQDN_BANKING}. Check: openssl s_client -connect ${NIP_FQDN_BANKING}:443 -servername ${NIP_FQDN_BANKING} </dev/null 2>&1 | openssl x509 -noout -subject -issuer"

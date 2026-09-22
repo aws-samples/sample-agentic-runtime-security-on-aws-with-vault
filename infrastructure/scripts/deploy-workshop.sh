@@ -137,6 +137,19 @@ DRY_RUN=false
 # Override either to use a magic-DNS host you control. Issue #5.
 TLS_DNS_SUFFIX="${TLS_DNS_SUFFIX:-nip.io}"
 TLS_DNS_SUFFIX_FALLBACK="${TLS_DNS_SUFFIX_FALLBACK:-sslip.io}"
+# Both values are interpolated into the Certificate YAML and written into
+# .acme-state, which is later `source`d. The operator sets them, so this is a
+# typo guard rather than a trust boundary — but a typo here is expensive: it is
+# not caught until Let's Encrypt has already been asked for a nonsense name.
+for _s in "${TLS_DNS_SUFFIX}" "${TLS_DNS_SUFFIX_FALLBACK}"; do
+    if [[ ! "${_s}" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]]; then
+        echo "FATAL: '${_s}' is not a valid DNS suffix. TLS_DNS_SUFFIX and" >&2
+        echo "       TLS_DNS_SUFFIX_FALLBACK must be dashed-IPv4 magic-DNS domains" >&2
+        echo "       such as nip.io or sslip.io (lowercase labels separated by dots)." >&2
+        exit 1
+    fi
+done
+unset _s
 # A fallback only means anything if it is a DIFFERENT registered domain: Let's
 # Encrypt budgets per registered domain, so retrying the same suffix burns a
 # second 15-minute wait against the budget that just refused us.
@@ -988,20 +1001,26 @@ _acme_issue_certificate() {
     # once, Step 7 fails in seconds on every subsequent run — including the
     # `--tier 2 --skip-vault-init` re-run the workshop tells attendees to do.
     #
-    # An errored Order is terminal, so deleting it destroys nothing in flight;
-    # cert-manager's CertificateRequest controller creates a fresh one. This is
-    # the same idiom the wait loop already uses for errored Challenges. Issue #5.
-    local _stale
-    _stale=$(kubectl --context workshop get orders.acme.cert-manager.io \
+    # RECORD them, do not delete them. Deleting an errored Order makes
+    # cert-manager mint a fresh ACME newOrder, which spends Let's Encrypt
+    # budget — the exact resource this whole feature exists to conserve, burned
+    # on every re-run. Remembering the names instead is non-destructive and has
+    # the identical effect: the scan below skips anything on this list, so only
+    # Orders THIS attempt produced can make it report a rate limit. Issue #5.
+    local _ACME_PREEXISTING_ORDERS
+    _ACME_PREEXISTING_ORDERS=$(kubectl --context workshop get orders.acme.cert-manager.io \
         -n cert-manager \
         -o jsonpath='{range .items[?(@.status.state=="errored")]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)
-    if [[ -n "${_stale}" ]]; then
-        while IFS= read -r _o; do
-            [[ -z "${_o}" ]] && continue
-            kubectl --context workshop delete orders.acme.cert-manager.io "${_o}" \
-                -n cert-manager --ignore-not-found >/dev/null 2>&1
-        done <<< "${_stale}"
-        print_info "Step 7: cleared $(grep -c . <<<"${_stale}") terminal ACME Order(s) from an earlier run so this attempt is judged on its own result"
+    # Same idiom for CertificateRequests, used as the second rate-limit signal
+    # below. A CertificateRequest carries no spec.dnsNames (verified against
+    # the live CRD), so it cannot be filtered by suffix — scoping it to "did
+    # not exist when this attempt started" is what makes it attributable.
+    local _ACME_PREEXISTING_CRS
+    _ACME_PREEXISTING_CRS=$(kubectl --context workshop get certificaterequests.cert-manager.io \
+        -n cert-manager -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)
+
+    if [[ -n "${_ACME_PREEXISTING_ORDERS}" ]]; then
+        print_info "Step 7: ignoring $(grep -c . <<<"${_ACME_PREEXISTING_ORDERS}") terminal ACME Order(s) left by an earlier run so this attempt is judged on its own result (they are kept, not deleted — deleting one costs a fresh Let's Encrypt order)"
     fi
 
     # Apply the Certificate CR with both SANs. The banking SAN's HTTP-01
@@ -1056,17 +1075,36 @@ EOF
     # Attendees see one continuous spinner, no manual intervention.
     local _cert_deadline=$(( $(date +%s) + 900 ))   # 15 min hard ceiling
     local _cert_ready=false _cert_recovery_rounds=0 _cert_rate_limited=false
-    local _cert_state _cert_ready_cond _cert_ready_names
+    local _cert_state _cert_ready_cond _cert_ready_names _cert_gen _cert_obs _cert_names
     while [[ $(date +%s) -lt ${_cert_deadline} ]]; do
-        # Read the Ready condition AND the spec it belongs to in one call. A
-        # Certificate that is still Ready for the PREVIOUS suffix would
-        # otherwise satisfy this gate the moment the fallback re-applies, and
-        # .acme-state would be written with hosts no certificate covers.
+        # Ask cert-manager, not ourselves. Comparing .spec.dnsNames to the
+        # hosts we want proves nothing on its own: the apply above WROTE that
+        # spec, so reading it back is true by construction. The signal that
+        # distinguishes "cert-manager has issued for THESE hosts" from "a
+        # certificate for the PREVIOUS suffix is still marked Ready" is
+        # .status.conditions[Ready].observedGeneration -- cert-manager stamps
+        # it with the .metadata.generation it actually reconciled. An apply
+        # that moves the suffix bumps generation; the stale Ready condition
+        # keeps the OLD observedGeneration until cert-manager reconciles the
+        # new spec. Requiring the two to match is what closes the hole, and it
+        # is why this gate is not simply `Ready==true`. Issue #5.
+        #
+        # Keep the dnsNames comparison as a cheap guard that we are looking at
+        # the object we think we are, but it is NOT the load-bearing check.
+        # observedGeneration is published by cert-manager >= v1.7 (cluster runs
+        # v1.17.2); an empty value means "not reconciled yet", so the gate
+        # keeps waiting rather than passing -- fail closed, bounded by the
+        # existing 900s ceiling.
+        #
+        # Direct string compare, not `grep -q`: under `pipefail` a `grep -q`
+        # that short-circuits its input can surface as SIGPIPE 141 and invert
+        # the gate.
         _cert_state=$(kubectl --context workshop get certificate workshop-le-tls -n cert-manager \
-                -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}{"|"}{.spec.dnsNames[*]}' 2>/dev/null || true)
-        _cert_ready_cond="${_cert_state%%|*}"
-        _cert_ready_names=" ${_cert_state#*|} "
-        if grep -q "^True$" <<<"${_cert_ready_cond}" \
+                -o jsonpath='{.metadata.generation}|{.status.conditions[?(@.type=="Ready")].status}|{.status.conditions[?(@.type=="Ready")].observedGeneration}|{.spec.dnsNames[*]}' 2>/dev/null || true)
+        IFS='|' read -r _cert_gen _cert_ready_cond _cert_obs _cert_names <<<"${_cert_state}"
+        _cert_ready_names=" ${_cert_names} "
+        if [[ "${_cert_ready_cond}" == "True" ]] \
+            && [[ -n "${_cert_gen}" ]] && [[ "${_cert_obs}" == "${_cert_gen}" ]] \
             && [[ "${_cert_ready_names}" == *" ${NIP_FQDN_WRP} "* ]] \
             && [[ "${_cert_ready_names}" == *" ${NIP_FQDN_BANKING} "* ]]; then
             _cert_ready=true
@@ -1086,18 +1124,46 @@ EOF
         # does not delete it when the Certificate spec changes), and counting it
         # again would report the fallback as refused without ever asking Let's
         # Encrypt. Issue #5.
-        local _rl_rows _rl_dns _rl_reason
+        local _rl_rows _rl_name _rl_dns _rl_reason
         _rl_rows=$(kubectl --context workshop get orders.acme.cert-manager.io \
             -n cert-manager \
-            -o jsonpath='{range .items[?(@.status.state=="errored")]}{.spec.dnsNames[0]}{"|"}{.status.reason}{"\n"}{end}' 2>/dev/null || true)
-        while IFS='|' read -r _rl_dns _rl_reason; do
+            -o jsonpath='{range .items[?(@.status.state=="errored")]}{.metadata.name}{"|"}{.spec.dnsNames[0]}{"|"}{.status.reason}{"\n"}{end}' 2>/dev/null || true)
+        while IFS='|' read -r _rl_name _rl_dns _rl_reason; do
             [[ -z "${_rl_dns}" ]] && continue
+            # Skip Orders that were already errored when this attempt started —
+            # a previous run's refusal is not this run's result.
+            grep -qx -- "${_rl_name}" <<<"${_ACME_PREEXISTING_ORDERS}" && continue
             [[ "${_rl_dns}" == *".${_suffix}" ]] || continue
             if grep -qi 'ratelimited' <<<"${_rl_reason}"; then
                 _cert_rate_limited=true
                 break
             fi
         done <<<"${_rl_rows}"
+
+        # SECOND SIGNAL. Order.status.reason is not durable: cert-manager can
+        # garbage-collect an Order as part of a retry cycle, and this loop only
+        # samples every 15s — so the one window the reason existed can be
+        # missed entirely. The same ACME failure is also recorded on the
+        # CertificateRequest's Ready condition. Missing it is expensive: the
+        # function falls through to a 900s timeout and returns 1 instead of 2,
+        # the fallback never fires, and the attendee is pointed at the "wait
+        # and re-run" guidance, which can never succeed against an exhausted
+        # budget. Issue #5.
+        if [[ "${_cert_rate_limited}" != true ]]; then
+            local _cr_rows _cr_name _cr_msg
+            _cr_rows=$(kubectl --context workshop get certificaterequests.cert-manager.io \
+                -n cert-manager \
+                -o jsonpath='{range .items[*]}{.metadata.name}{"|"}{.status.conditions[?(@.type=="Ready")].reason}{" "}{.status.conditions[?(@.type=="Ready")].message}{"\n"}{end}' 2>/dev/null || true)
+            while IFS='|' read -r _cr_name _cr_msg; do
+                [[ -z "${_cr_name}" ]] && continue
+                grep -qx -- "${_cr_name}" <<<"${_ACME_PREEXISTING_CRS}" && continue
+                if grep -qi 'ratelimited' <<<"${_cr_msg}"; then
+                    _cert_rate_limited=true
+                    break
+                fi
+            done <<<"${_cr_rows}"
+        fi
+
         if [[ "${_cert_rate_limited}" = true ]]; then
             break
         fi
@@ -1122,8 +1188,19 @@ EOF
         return 2
     fi
     if [[ "${_cert_ready}" != true ]]; then
+        # Rate-limit detection above reads two signals, and both can be missed
+        # (an Order garbage-collected between 15s polls). If it was missed, the
+        # attendee lands here — on guidance that says "wait and re-run", which
+        # is exactly wrong for an exhausted budget. Surface whatever reason ACME
+        # did record and name the override, so a missed detection degrades into
+        # a useful message instead of a misleading one. Issue #5.
+        local _why
+        _why=$(kubectl --context workshop get orders.acme.cert-manager.io,certificaterequests.cert-manager.io \
+            -n cert-manager \
+            -o jsonpath='{range .items[*]}{.status.reason}{" "}{.status.conditions[?(@.type=="Ready")].message}{"\n"}{end}' 2>/dev/null \
+            | grep -v '^[[:space:]]*$' | tail -3 | tr '\n' ' ' || true)
         print_fail "Step 7: Certificate Ready=true" \
-            "cert-manager did not mark workshop-le-tls Ready within 900s on ${_suffix} (after ${_cert_recovery_rounds} auto-recovery rounds). Investigate: kubectl describe certificate/workshop-le-tls -n cert-manager; kubectl get challenges,orders -n cert-manager"
+            "cert-manager did not mark workshop-le-tls Ready within 900s on ${_suffix} (after ${_cert_recovery_rounds} auto-recovery rounds).${_why:+ ACME last reported: ${_why}} If that mentions a rate limit, waiting will NOT help — the budget refills over days; re-run on a different dashed-IPv4 magic-DNS suffix instead: TLS_DNS_SUFFIX=<suffix> bash ${BASH_SOURCE[0]} --tier 2 --skip-vault-init. Otherwise investigate: kubectl describe certificate/workshop-le-tls -n cert-manager; kubectl get challenges,orders -n cert-manager"
         return 1
     fi
     return 0
@@ -1138,6 +1215,7 @@ _run_acme_step() {
         source "$ACME_STATE_FILE"
     fi
 
+    local _acme_hosts_reset=false
     # ALB-IP drift detection: on destroy+recreate the ALB gets new public IPs but
     # .acme-state survives — its NIP_FQDN_* then encode IPs that no longer route.
     # Multi-AZ ALBs publish 2-3 IPs; check whether the cached ALB_IP is STILL in
@@ -1153,6 +1231,12 @@ _run_acme_step() {
                 rm -f "$ACME_STATE_FILE"
                 rm -f "${ACME_STATE_FILE%.acme-state}.acme-rerun-marker"
                 unset DEPLOY_ID ALB_IP ALB_IP_DASHED NIP_FQDN_WRP NIP_FQDN_BANKING STABLE_ACM_ARN
+                # The hosts just changed as surely as a suffix override changes
+                # them, but the suffix check below is guarded on NIP_FQDN_WRP —
+                # which this unset just cleared — so it cannot notice. Record it
+                # here or the "carry this into tier 3" warning stays silent on a
+                # run that genuinely moved the banking host. Issue #5.
+                _acme_hosts_reset=true
             fi
         fi
     fi
@@ -1171,11 +1255,19 @@ _run_acme_step() {
     # on the FALLBACK suffix is accepted too — a prior run legitimately landed
     # there when the primary suffix was rate limited. Issue #5.
     _acme_suffix_current=true
+    if [[ "${_acme_hosts_reset:-false}" = true ]]; then
+        _acme_suffix_current=false
+        print_info "Step 7: the ALB's IP changed, so the TLS host names move with it; treating this as a suffix change so tier 3 is told to re-apply"
+    fi
     if [[ -n "${NIP_FQDN_WRP:-}" ]]; then
         if [[ "${NIP_FQDN_WRP}" != *".${TLS_DNS_SUFFIX}" ]] \
             && [[ "${NIP_FQDN_WRP}" != *".${TLS_DNS_SUFFIX_FALLBACK}" ]]; then
             _acme_suffix_current=false
-            print_info "Step 7: cached certificate is for ${NIP_FQDN_WRP}, which is not on ${TLS_DNS_SUFFIX} (or fallback ${TLS_DNS_SUFFIX_FALLBACK}); re-issuing on the requested suffix"
+            # Say nothing when --skip-acme is in play: the early return below
+            # means no re-issue happens, and announcing one directly above
+            # "ACME skipped" just contradicts itself.
+            [[ "$SKIP_ACME" = true ]] \
+                || print_info "Step 7: cached certificate is for ${NIP_FQDN_WRP}, which is not on ${TLS_DNS_SUFFIX} (or fallback ${TLS_DNS_SUFFIX_FALLBACK}); re-issuing on the requested suffix"
         fi
     fi
     if [[ "$SKIP_ACME" != true ]] && [[ -n "${STABLE_ACM_ARN:-}" ]] \
@@ -1280,9 +1372,10 @@ MARKER
     if [[ ${_issue_rc} -eq 2 ]]; then
         print_warn "Step 7: Let's Encrypt refused ${TLS_DNS_SUFFIX} as rate limited (its certificate budget is exhausted); retrying on ${TLS_DNS_SUFFIX_FALLBACK}"
         # The fallback moves the suffix, so the hosts in .acme-state are about
-        # to change. _acme_suffix_current was decided before issuance ran and is
-        # still true; leave it that way and the tier-2 warning below can never
-        # fire in the one case this fallback creates. Issue #5.
+        # to change. _acme_suffix_current was decided BEFORE issuance ran, when
+        # the suffix was still the primary one, so it is stale now — clear it,
+        # or the tier-2 "carry this into tier 3" warning below can never fire in
+        # the one case this fallback creates. Issue #5.
         _acme_suffix_current=false
         _acme_issue_certificate "${TLS_DNS_SUFFIX_FALLBACK}"
         _issue_rc=$?
@@ -1322,6 +1415,25 @@ MARKER
             "Failed to split tls.crt bundle (leaf=$(stat -f%z /tmp/tls.crt 2>/dev/null || echo 0)B, chain=$(stat -f%z /tmp/chain.pem 2>/dev/null || echo 0)B). Inspect: kubectl get secret workshop-le-tls-secret -n cert-manager -o jsonpath='{.data.tls\\.crt}' | base64 --decode"
         return 1
     fi
+
+    # LAST GATE BEFORE THE POINT OF NO RETURN. The import below upserts into
+    # the STABLE ACM ARN the ALB already serves, and it cannot be undone by
+    # re-running: the D-12 idempotency floor accepts any certificate whose
+    # issuer is Let's Encrypt, so a wrong-host LE certificate would be cemented
+    # by every subsequent deploy. Read the SANs off the leaf we are about to
+    # import and refuse if either host is missing. This is the only check that
+    # looks at what was ISSUED rather than what was requested. Issue #5.
+    _leaf_sans=$(openssl x509 -in /tmp/tls.crt -noout -ext subjectAltName 2>/dev/null \
+        | tr ',' '\n' | sed 's/.*DNS://' | tr -d ' ')
+    for _want in "${NIP_FQDN_WRP}" "${NIP_FQDN_BANKING}"; do
+        if ! grep -qx -- "${_want}" <<<"${_leaf_sans}"; then
+            rm -f /tmp/tls.crt /tmp/tls.key /tmp/chain.pem
+            print_fail "Step 7: issued certificate covers the deployed hosts" \
+                "The certificate cert-manager issued does NOT cover ${_want}; importing it would make the ALB serve a certificate for the wrong hosts and every re-run would keep it. SANs on the issued leaf: $(tr '\n' ' ' <<<"${_leaf_sans}"). Delete the Certificate and let it re-issue: kubectl --context workshop delete certificate workshop-le-tls -n cert-manager"
+            return 1
+        fi
+    done
+    print_info "Step 7: issued certificate covers both deployed hosts (SANs verified on the leaf)"
 
     if ! aws acm import-certificate \
             --certificate-arn "$STABLE_ACM_ARN" \

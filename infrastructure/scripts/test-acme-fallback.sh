@@ -87,7 +87,7 @@ grep -q '_run_if_tier' "${WORK}/caller.sh" \
     && fatal "the extracted caller ran past its STOP anchor into deploy-workshop.sh's tier dispatch"
 
 #-- 2. Stub the outside world ------------------------------------------------
-print_info() { echo "      INFO $*"; }
+print_info() { echo "      INFO $*"; LAST_INFO="${LAST_INFO}${*}\n"; }
 print_warn() { echo "      WARN $*"; LAST_WARN="$*"; }
 print_fail() { echo "      FAIL $1"; LAST_FAIL="${2:-}"; }
 
@@ -110,6 +110,13 @@ kubectl() {
     if [[ "${args}" == *"apply -f -"* ]]; then
         local yaml fq n
         yaml=$(cat)
+        # A rejected apply must be reported as such. Without this the harness
+        # can never exercise the PIPESTATUS[1] guard, and a script that ignores
+        # kubectl's exit code looks identical to one that checks it.
+        if [[ "${SCENARIO}" == "apply_rejected" ]]; then
+            echo 'error: unable to recognize "STDIN": no matches for kind "Certificate"' >&2
+            return 1
+        fi
         fq=$(grep -oE '^[[:space:]]+- wrp\..*' <<<"${yaml}" | sed 's/^[[:space:]]*- //')
         echo "${fq}" >> "${APPLIED}"
         n=$(grep -c . "${APPLIED}")
@@ -138,7 +145,10 @@ kubectl() {
     if [[ "${args}" == *"get orders"* ]]; then
         # Two different jsonpaths: names (for the pre-wait sweep) and
         # "<dnsName>|<reason>" rows (for the rate-limit verdict).
-        if [[ "${args}" == *"metadata.name"* ]]; then
+        if [[ "${args}" == *"metadata.name"* && "${args}" == *"spec.dnsNames"* ]]; then
+            # name|dnsName|reason — the rate-limit verdict scan
+            cat "${ORDERS}" 2>/dev/null || true
+        elif [[ "${args}" == *"metadata.name"* ]]; then
             cut -d'|' -f1 "${ORDERS}" 2>/dev/null || true
         else
             cut -d'|' -f2- "${ORDERS}" 2>/dev/null || true
@@ -146,30 +156,57 @@ kubectl() {
         return 0
     fi
 
+    # MUST be tested before "get certificate" — that string is a prefix of this
+    # one, so the order of these branches is load-bearing.
+    if [[ "${args}" == *"get certificaterequests"* ]]; then
+        # The CertificateRequest rate-limit signal. Modelled as "nothing to
+        # report" for every scenario: the Order-based signal is what the
+        # scenarios drive, and this branch exists so the extra query neither
+        # counts as a readiness poll nor invents a second verdict.
+        return 0
+    fi
+
     if [[ "${args}" == *"get certificate"* ]]; then
-        local n wrp bank out
+        local n wrp bank gen obs ready
         n=$(( $(cat "${POLLS}" 2>/dev/null || echo 0) + 1 )); echo "${n}" > "${POLLS}"
         wrp=$(tail -1 "${APPLIED}")
         bank="banking.${wrp#wrp.}"
-        # Answer the jsonpath that was actually asked for. Code that requests
-        # only the Ready condition gets only the Ready condition — otherwise
-        # this stub, not the defect, is what makes an old script fail.
-        out=""
+        # A REAL API server returns the spec that was last applied. It does NOT
+        # keep serving the previous dnsNames after an apply changed them, so a
+        # stub that does is testing a state Kubernetes cannot produce. What
+        # actually lags is cert-manager's RECONCILE: .metadata.generation bumps
+        # on the apply, while the leftover Ready condition still carries the
+        # observedGeneration it was computed for.
+        gen=$(grep -c . "${APPLIED}")
+        ready=False; obs="${gen}"
         case "${SCENARIO}" in
-            clean_issue)               out="True|${wrp} ${bank}" ;;
+            clean_issue) ready=True ;;
             primary_ratelimited)
-                if [[ "${wrp}" == *sslip.io && ${n} -ge 3 ]]; then out="True|${wrp} ${bank}"
-                else out="False|${wrp} ${bank}"; fi ;;
+                [[ "${wrp}" == *sslip.io && ${n} -ge 3 ]] && ready=True ;;
             stale_order_previous_run)
-                if [[ ${n} -ge 3 ]]; then out="True|${wrp} ${bank}"; else out="False|${wrp} ${bank}"; fi ;;
+                [[ ${n} -ge 3 ]] && ready=True ;;
             ready_but_for_the_old_host)
-                # cert-manager has not reconciled the changed dnsNames yet, so
-                # the object still reports Ready for the PREVIOUS hosts.
-                if [[ ${n} -ge 3 ]]; then out="True|${wrp} ${bank}"
-                else out="True|wrp.old999.44-205-184-217.example wrp.old999.44-205-184-217.example"; fi ;;
-            *) out="False|${wrp} ${bank}" ;;
+                # The PREVIOUS certificate is still marked Ready. Its condition
+                # is stale: observedGeneration trails the generation this
+                # apply created, until cert-manager catches up at poll 3.
+                ready=True
+                [[ ${n} -lt 3 ]] && obs=$(( gen - 1 )) ;;
+            apply_rejected)
+                # The apply was refused, so the object on the cluster is still
+                # the PREVIOUS one — fully reconciled and Ready. This is the
+                # trap: a gate that only reads Ready sails straight through.
+                ready=True ;;
         esac
-        if [[ "${args}" == *"spec.dnsNames"* ]]; then echo "${out}"; else echo "${out%%|*}"; fi
+        # Answer the jsonpath that was actually asked for, so an older script
+        # that requests fewer fields is judged on its own logic, not on this
+        # stub handing it something it never asked for.
+        if [[ "${args}" == *"metadata.generation"* ]]; then
+            echo "${gen}|${ready}|${obs}|${wrp} ${bank}"
+        elif [[ "${args}" == *"spec.dnsNames"* ]]; then
+            echo "${ready}|${wrp} ${bank}"
+        else
+            echo "${ready}"
+        fi
         return 0
     fi
     return 0
@@ -186,7 +223,7 @@ run_scenario() {
     TLS_DNS_SUFFIX_FALLBACK_ENABLED=true
     [[ "${TLS_DNS_SUFFIX}" == "${TLS_DNS_SUFFIX_FALLBACK}" ]] && TLS_DNS_SUFFIX_FALLBACK_ENABLED=false
     DEPLOY_ID="abc123"; ALB_IP_DASHED="44-205-184-217"
-    NIP_FQDN_WRP=""; NIP_FQDN_BANKING=""; LAST_WARN=""; LAST_FAIL=""
+    NIP_FQDN_WRP=""; NIP_FQDN_BANKING=""; LAST_WARN=""; LAST_FAIL=""; LAST_INFO=""
     # The caller decides this before issuance runs; the fallback must clear it.
     _acme_suffix_current=true
     NOW=1000000000
@@ -194,6 +231,12 @@ run_scenario() {
     # Scenario 5 starts on a cluster an EARLIER deploy already got refused on.
     if [[ "${SCENARIO}" == "stale_order_previous_run" ]]; then
         echo "order-stale|wrp.old999.44-205-184-217.nip.io|${RL} \"nip.io\" in the last 168h0m0s" > "${ORDERS}"
+    fi
+    # Scenario 8 runs against a cluster that ALREADY carries a Ready
+    # certificate from an earlier deploy. The apply of the new one is refused,
+    # so that older object is what every subsequent read returns.
+    if [[ "${SCENARIO}" == "apply_rejected" ]]; then
+        echo "wrp.old999.44-205-184-217.nip.io" > "${APPLIED}"
     fi
     _acme_caller >/dev/null 2>&1
     RC=$?
@@ -255,16 +298,21 @@ assert "returns success"                       "0"                              
 assert "stays on nip.io — LE refused nothing"  "wrp.abc123.44-205-184-217.nip.io"       "${NIP_FQDN_WRP}"
 assert "does NOT burn the fallback budget"     "1"                                      "${NCERTS}"
 assert "emits no rate-limit warning"           "yes"  "$(grep -q 'rate limited' <<<"${LAST_WARN}" && echo no || echo yes)"
-assert "swept the earlier run's Order"         "0"                                      "${NSTALE}"
+assert "kept the earlier run's Order (no new LE order spent)" "1"                    "${NSTALE}"
+assert "ignored it rather than blaming this attempt" "yes" "$(grep -q 'ignoring 1 terminal ACME Order' <<<"${LAST_INFO}" && echo yes || echo no)"
 echo
 
-echo -e "${YELLOW}6. Certificate still Ready for the OLD hosts — must not satisfy the gate${NC}"
-echo -e "    (Ready alone says nothing about WHICH hosts. Accepting it writes"
+echo -e "${YELLOW}6. Ready=True left over from the PREVIOUS certificate — must not satisfy the gate${NC}"
+echo -e "    (The apply moves .spec.dnsNames to the new hosts immediately, so"
+echo -e "     comparing the spec to what we want proves nothing — we wrote it."
+echo -e "     The object still carries Ready=True from the certificate it had"
+echo -e "     BEFORE, and only .status.conditions[Ready].observedGeneration"
+echo -e "     distinguishes the two. Accepting the stale condition writes"
 echo -e "     .acme-state with FQDNs no certificate covers, and ACM imports a"
 echo -e "     certificate whose SANs do not match what the ALB will serve.)"
 run_scenario ready_but_for_the_old_host
 assert "returns success"                       "0"                                      "${RC}"
-assert "waited for the cert to cover our hosts" "yes"  "$([[ ${NPOLLS} -ge 3 ]] && echo yes || echo no)"
+assert "did NOT accept the stale Ready condition" "yes" "$([[ ${NPOLLS} -ge 3 ]] && echo yes || echo no)"
 assert "host is the one we asked for"          "wrp.abc123.44-205-184-217.nip.io"       "${NIP_FQDN_WRP}"
 echo
 
@@ -280,6 +328,17 @@ assert "did NOT retry the same suffix"         "1"                              
 assert "stayed on the requested suffix"        "wrp.abc123.44-205-184-217.sslip.io"     "${NIP_FQDN_WRP}"
 assert "says no fallback was available"        "yes"  "$(grep -q 'no fallback is available' <<<"${LAST_FAIL}" && echo yes || echo no)"
 assert "tells the operator to pick a different suffix" "yes" "$(grep -q 'DIFFERENT dashed-IPv4' <<<"${LAST_FAIL}" && echo yes || echo no)"
+echo
+
+echo -e "${YELLOW}8. kubectl refuses the apply — must fail, not inherit the old certificate${NC}"
+echo -e "    (If the apply is not checked, the wait loop runs against the"
+echo -e "     PREVIOUS object — fully reconciled and Ready — so the gate passes,"
+echo -e "     .acme-state records hosts this deploy never issued for, and ACM"
+echo -e "     imports the wrong certificate. It must fail immediately instead.)"
+run_scenario apply_rejected
+assert "returns failure"                       "1"                                      "${RC}"
+assert "did not wait on the old object"        "yes"  "$([[ ${NPOLLS} -eq 0 ]] && echo yes || echo no)"
+assert "says the apply itself failed"          "yes"  "$(grep -q 'could not apply the cert-manager Certificate' <<<"${LAST_FAIL}" && echo yes || echo no)"
 echo
 
 echo "============================================================"
