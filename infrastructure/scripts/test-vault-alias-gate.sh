@@ -308,14 +308,40 @@ grep -q 'vault_issuer_id=' "${WORK}/check14.sh" \
     || fatal "could not extract check 14 from ${VAULT_VERIFY_SCRIPT} (anchors moved?)"
 grep -q '^# Summary is printed automatically' "${VAULT_VERIFY_SCRIPT}" \
     || fatal "the check-14 STOP anchor is gone from ${VAULT_VERIFY_SCRIPT} — the extraction would run to EOF"
+# Prove the extraction stopped where it should, the same way the sweep and the
+# gate do above. The STOP-anchor test one line up reads the SOURCE file, so it
+# still passes when the anchor exists but sits BEFORE check 14 — awk would then
+# set f=0 before f=1 and print from check 14 to EOF, quietly swallowing whatever
+# follows. Assert on the EXTRACTED block instead: it may contain check 14 and
+# nothing else numbered.
+grep -qE '^# Check ([0-9]|1[0-35-9]) ' "${WORK}/check14.sh" \
+    && fatal "the extracted check 14 ran past its block into another check"
 # shellcheck source=/dev/null
 source "${WORK}/check14.sh"
 
 VAULT_NAMESPACE=vault; VAULT_POD=vault-0; VAULT_EXEC=""
 print_pass() { echo "      PASS $*"; LAST_PASS="${LAST_PASS}$*"$'\n'; }
 print_fail() { echo "      FAIL $1"; LAST_FAILMSG="${LAST_FAILMSG}${1} ${2:-}"$'\n'; }
-# kubectl is only reached by check 14 here, and only to read Vault's profile.
-kubectl() { vault_exec "vault read -format=json sys/config/oauth-resource-server/ivia"; }
+# kubectl is only reached by check 14 here, and only to read Vault's OAuth
+# profile. It ASSERTS on the command it was handed rather than answering every
+# question with the same answer: a stub that returns the profile whatever it is
+# asked certifies that check 14 prints the right verdict for a given pair of
+# issuers, and nothing whatever about check 14 reading the right object. Check 14
+# could be pointed at another path, pod or namespace and the scenarios below would
+# still pass. Drift here is FATAL rather than a quiet wrong-answer, for the same
+# reason the extraction anchors are.
+kubectl() {
+    local argv="$*"
+    case "${argv}" in
+        *"exec"*"-n ${VAULT_NAMESPACE}"*"${VAULT_POD}"*"sys/config/oauth-resource-server/ivia"*) ;;
+        *) fatal "check 14 asked kubectl for something this stub does not model: ${argv}" ;;
+    esac
+    case "${argv}" in
+        *"vault read -format=json"*) ;;
+        *) fatal "check 14 no longer reads the OAuth profile as JSON: ${argv}" ;;
+    esac
+    vault_exec "vault read -format=json sys/config/oauth-resource-server/ivia"
+}
 _run_coherence() {   # <iviaop advertised issuer>
     ivia_issuer="$1"; LAST_PASS=""; LAST_FAILMSG=""
     _issuer_coherence_check >/dev/null 2>&1
