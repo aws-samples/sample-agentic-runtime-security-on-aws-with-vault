@@ -114,9 +114,10 @@ grep -qE '^(phase_ivia_verify|vault_exec)\(\) \{' "${WORK}/gate.sh" \
 #   PF_UP    whether the 127.0.0.1:8200 port-forward is bound
 #   DELFAIL  alias ids whose DELETE is refused
 #   TFOUT    terraform output -json
+#   TFRC     the exit code that terraform stub returns
 ALIASES="${WORK}/aliases"; PROFILE="${WORK}/profile"; ISSUER="${WORK}/issuer"
 VAULT_UP="${WORK}/vault_up"; PF_UP="${WORK}/pf_up"; DELFAIL="${WORK}/delfail"
-TFOUT="${WORK}/tfout.json"; DELETED="${WORK}/deleted"
+TFOUT="${WORK}/tfout.json"; DELETED="${WORK}/deleted"; TFRC="${WORK}/tfrc"
 
 _alias_json() {   # <id>
     local id="$1" line
@@ -212,7 +213,13 @@ curl() {
     return 22
 }
 
-terraform() { cat "${TFOUT}"; }
+# TFRC lets a scenario model a terraform workspace that answers badly. `terraform
+# output -json` returns {} with exit 0 when there is no state (verified: an
+# uninitialised dir with a provider block answers {} rc=0, and a dir holding
+# state answers its outputs with no init at all), so the empty-declaration case
+# is reached through TFOUT, not through a non-zero exit. TFRC covers the exit
+# anyway, because the sweep must not be able to tell the difference.
+terraform() { cat "${TFOUT}"; return "$(cat "${TFRC}" 2>/dev/null || echo 0)"; }
 
 # Reporters. Captured so a scenario can assert on what the operator was told,
 # not merely on an exit status.
@@ -232,6 +239,47 @@ mkdir -p "${VAULT_CONFIG_DIR}"
 source "${WORK}/sweep.sh"
 # shellcheck source=/dev/null
 source "${WORK}/gate.sh"
+
+# The sweep's CALL SITE inside phase_vault_config decides what a given exit
+# status does to the deploy, and that decision is not in either function. It is
+# top-level code, so it is extracted by anchor and wrapped, with both anchors
+# asserted the same way check 14's are.
+{
+    echo '_heal_call_site() {'
+    awk '/^  local _heal_rc=0$/{f=1} f{print} f&&/^  fi$/{exit}' "${VAULT_CONFIGURE_SCRIPT}"
+    echo '    return 0'
+    echo '}'
+} > "${WORK}/callsite.sh"
+# A missing call site is FATAL for the shipped script — that is anchor drift, and
+# silently skipping the scenario is the same fail-open this whole suite exists to
+# close. Against an explicitly-named older copy it is expected (the first
+# implementation swallowed the status with `|| true` and had no such block), so
+# there the scenario is SKIPPED out loud and counted as neither pass nor fail.
+CALLSITE_OK=yes
+if ! grep -q 'heal_orphan_oauth_aliases || _heal_rc=' "${WORK}/callsite.sh"; then
+    if [[ "${VAULT_CONFIGURE_SCRIPT}" == "${SCRIPT_DIR}/vault-configure.sh" ]]; then
+        fatal "could not extract the sweep call site from ${VAULT_CONFIGURE_SCRIPT} (was it rewritten?)"
+    fi
+    CALLSITE_OK=no
+fi
+if [[ "${CALLSITE_OK}" == yes ]]; then
+    grep -q '^  fi$' "${WORK}/callsite.sh" \
+        || fatal "the extracted call site is not closed — extraction ran past its block"
+    grep -q 'record "vault_config"' "${WORK}/callsite.sh" \
+        || fatal "the extracted call site no longer records a phase result — anchors moved"
+    # shellcheck source=/dev/null
+    source "${WORK}/callsite.sh"
+fi
+
+LAST_RECORD=""
+record() { LAST_RECORD="$1=$2"; }
+# Drives the real call-site block against a sweep that returns a chosen status.
+_run_call_site() {   # <status heal_orphan_oauth_aliases returns>
+    local want="$1"
+    LAST_RECORD=""; LAST_FAIL=""
+    heal_orphan_oauth_aliases() { return "${want}"; }
+    CS_RC=0; _heal_call_site >/dev/null 2>&1 || CS_RC=$?
+}
 
 # Check 14 of test-vault-verify.sh is top-level code, not a function, so it is
 # extracted by comment anchor and wrapped — the same way test-acme-fallback.sh
@@ -285,6 +333,7 @@ _reset() {
     echo yes > "${VAULT_UP}"
     echo yes > "${PF_UP}"
     echo "${TF_JSON}" > "${TFOUT}"
+    echo 0 > "${TFRC}"
     LAST_OK=""; LAST_FAIL=""; LAST_WARN=""; LAST_INFO=""
 }
 
@@ -348,6 +397,8 @@ _run_sweep
 assert "completes cleanly"                     "0" "${RC}"
 assert "deletes nothing"                       "0" "${NDEL}"
 assert "the foreign alias survives"            "1" "$(grep -c 'foreign-1' "${ALIASES}" || true)"
+assert "names what it left behind, rather than skipping in silence" "yes" \
+    "$(grep -q "left alias foreign-1 (name someone-elses-app) on dead profile" <<<"${LAST_WARN}" && echo yes || echo no)"
 echo
 
 echo -e "${YELLOW}4. No aliases at all — an ordinary no-op, not a failure${NC}"
@@ -394,18 +445,67 @@ assert "still completes"                       "0" "${RC}"
 assert "still sweeps the stranded generation"  "4" "${NDEL}"
 echo
 
-echo -e "${YELLOW}9. Terraform declares no identities, but aliases exist${NC}"
-echo -e "     (the expected set is unknown, so deleting would be deleting blind)"
+echo -e "${YELLOW}9. Terraform declares no identities while orphans are sitting there${NC}"
+echo -e "     (the expected set is unknown, so deleting would be deleting blind —"
+echo -e "      and the collision is real, so this stops the deploy)"
 _reset; _add_generation "${OLD_ACC}" "${OLD_ISS}" old; echo '{}' > "${TFOUT}"
 _run_sweep
 assert "fails"                                 "1" "${RC}"
 assert "deletes nothing"                       "0" "${NDEL}"
 echo
 
+echo -e "${YELLOW}10. Terraform declares no identities and there is nothing to sweep${NC}"
+echo -e "     (a fresh checkout reads 'terraform output -json' as {} with exit 0, so"
+echo -e "      demanding a non-empty expected set up front would abort a deploy that"
+echo -e "      had no orphan in the first place)"
+_reset; _add_generation "${LIVE_ACC}" "${LIVE_ISS}" cur; _add_k8s_aliases
+        echo '{}' > "${TFOUT}"
+_run_sweep
+assert "completes cleanly rather than aborting the phase" "0" "${RC}"
+assert "deletes nothing"                                  "0" "${NDEL}"
+assert "leaves all six aliases"                           "6" "${NLEFT}"
+assert "raises no refusal"                                "no" \
+    "$(grep -q 'refusing to delete any alias' <<<"${LAST_WARN}" && echo yes || echo no)"
+echo
+
+echo -e "${YELLOW}11. The terraform workspace itself errors out${NC}"
+echo -e "     (an unusable workspace must read the same as an empty one: sweep when"
+echo -e "      there is nothing at risk, refuse when there is)"
+_reset; _add_generation "${LIVE_ACC}" "${LIVE_ISS}" cur
+        : > "${TFOUT}"; echo 1 > "${TFRC}"
+_run_sweep
+assert "no orphan present — completes cleanly"  "0" "${RC}"
+assert "deletes nothing"                        "0" "${NDEL}"
+_reset; _add_generation "${LIVE_ACC}" "${LIVE_ISS}" cur
+        _add_generation "${OLD_ACC}"  "${OLD_ISS}"  old
+        : > "${TFOUT}"; echo 1 > "${TFRC}"
+_run_sweep
+assert "orphan present — refuses rather than deleting blind" "1" "${RC}"
+assert "deletes nothing"                                     "0" "${NDEL}"
+assert "the stranded generation survives"                    "8" "${NLEFT}"
+echo
+
+echo -e "${YELLOW}12. An identity dropped from the workshop is left alone, and said out loud${NC}"
+echo -e "     (name-scoped deletion means a removed human's stale alias is NOT swept;"
+echo -e "      it only bites if that human is re-added later, so it must be visible)"
+_reset; _add_generation "${LIVE_ACC}" "${LIVE_ISS}" cur
+        _add_generation "${OLD_ACC}"  "${OLD_ISS}"  old
+        echo '{"human_entity_ids":{"value":{"oscar":"ent-oscar"}},
+               "agent_uc2_entity_id":{"value":"ent-agent-uc2"},
+               "uc3_actor_entity_id":{"value":"ent-uc3-actor"}}' > "${TFOUT}"
+_run_sweep
+assert "sweeps the three still-declared identities" "3" "${NDEL}"
+assert "leaves the dropped identity's alias"        "1" "$(grep -c '^old-2|' "${ALIASES}" || true)"
+assert "names it in the log"                        "yes" \
+    "$(grep -q 'left alias old-2 (name jaime) on dead profile' <<<"${LAST_WARN}" && echo yes || echo no)"
+assert "counts it in the summary"                   "yes" \
+    "$(grep -qE '1 alias\(es\) on a dead profile were left in place' <<<"${LAST_WARN}" && echo yes || echo no)"
+echo
+
 #===============================================================================
 # THE GATE
 #===============================================================================
-echo -e "${YELLOW}10. Every identity has an alias at the live profile${NC}"
+echo -e "${YELLOW}13. Every identity has an alias at the live profile${NC}"
 _reset; _add_generation "${LIVE_ACC}" "${LIVE_ISS}" cur; _add_k8s_aliases
 _run_gate "${LIVE_ISS}"
 assert "passes"                                "0" "${RC}"
@@ -413,7 +513,7 @@ assert "counts what it read against what it expected" "yes" \
     "$(grep -q '4 found at accessor '"${LIVE_ACC}"', 4 expected' <<<"${LAST_OK}" && echo yes || echo no)"
 echo
 
-echo -e "${YELLOW}11. Aliases exist, but only at the PREVIOUS issuer${NC}"
+echo -e "${YELLOW}14. Aliases exist, but only at the PREVIOUS issuer${NC}"
 echo -e "     (the deadlock this gate exists for: the profile reads correct while"
 echo -e "      every alias write in the same apply was refused with 400)"
 _reset; _add_generation "${OLD_ACC}" "${OLD_ISS}" old; _add_k8s_aliases
@@ -423,26 +523,26 @@ assert "names all four missing identities"     "4" "$(grep -c "is missing at the
 assert "says what breaks at run time"          "yes" "$(grep -q 'no alias found' <<<"${LAST_FAIL}" && echo yes || echo no)"
 echo
 
-echo -e "${YELLOW}12. Aliases at the live accessor but stamped with the OLD issuer${NC}"
+echo -e "${YELLOW}15. Aliases at the live accessor but stamped with the OLD issuer${NC}"
 _reset; _add_generation "${LIVE_ACC}" "${OLD_ISS}" cur
 _run_gate "${LIVE_ISS}"
 assert "fails — the issuer is part of the identity" "1" "${RC}"
 echo
 
-echo -e "${YELLOW}13. Vault unreadable — UNVERIFIED is not a pass${NC}"
+echo -e "${YELLOW}16. Vault unreadable — UNVERIFIED is not a pass${NC}"
 _reset; _add_generation "${LIVE_ACC}" "${LIVE_ISS}" cur; echo no > "${VAULT_UP}"
 _run_gate "${LIVE_ISS}"
 assert "fails"                                 "1" "${RC}"
 assert "says the aliases are UNVERIFIED"       "yes" "$(grep -q 'UNVERIFIED' <<<"${LAST_FAIL}" && echo yes || echo no)"
 echo
 
-echo -e "${YELLOW}14. Terraform declares no identities — the gate cannot run${NC}"
+echo -e "${YELLOW}17. Terraform declares no identities — the gate cannot run${NC}"
 _reset; _add_generation "${LIVE_ACC}" "${LIVE_ISS}" cur; echo '{}' > "${TFOUT}"
 _run_gate "${LIVE_ISS}"
 assert "fails rather than passing on an empty expected set" "1" "${RC}"
 echo
 
-echo -e "${YELLOW}15. An identity added to the workshop is gated, not silently skipped${NC}"
+echo -e "${YELLOW}18. An identity added to the workshop is gated, not silently skipped${NC}"
 _reset
 echo '{"human_entity_ids":{"value":{"oscar":"ent-oscar","jaime":"ent-jaime","newcomer":"ent-newcomer"}},
        "agent_uc2_entity_id":{"value":"ent-agent-uc2"},
@@ -456,13 +556,13 @@ echo
 #===============================================================================
 # ISSUER COHERENCE (test-vault-verify.sh check 14)
 #===============================================================================
-echo -e "${YELLOW}16. Vault validates against the issuer iviaop actually stamps${NC}"
+echo -e "${YELLOW}19. Vault validates against the issuer iviaop actually stamps${NC}"
 _reset
 _run_coherence "${LIVE_ISS}"
 assert "passes"                                "yes" "$(grep -q 'Issuer coherence: Vault validates against the same issuer' <<<"${LAST_PASS}" && echo yes || echo no)"
 echo
 
-echo -e "${YELLOW}17. Tier 2 moved Vault's issuer; tier 3 has not caught up${NC}"
+echo -e "${YELLOW}20. Tier 2 moved Vault's issuer; tier 3 has not caught up${NC}"
 echo -e "     (both hosts are real and both are live — the disagreement every"
 echo -e "      existing gate misses, because each one reads a single side)"
 _reset
@@ -472,7 +572,7 @@ assert "prints both values"                    "yes" "$(grep -q "${LIVE_ISS}" <<
 assert "tells the operator to re-apply tier 3" "yes" "$(grep -q 'deploy-workshop.sh --tier 3' <<<"${LAST_FAILMSG}" && echo yes || echo no)"
 echo
 
-echo -e "${YELLOW}18. Tier-2 placeholder is not a failure${NC}"
+echo -e "${YELLOW}21. Tier-2 placeholder is not a failure${NC}"
 echo -e "     (iviaop ships https://issuer-patched-at-root.invalid until tier 3"
 echo -e "      flips it; warning here is the false alarm that has misdirected"
 echo -e "      debugging before)"
@@ -482,10 +582,35 @@ assert "passes"                                "yes" "$(grep -q 'not yet applica
 assert "raises no failure"                     ""    "${LAST_FAILMSG}"
 echo
 
-echo -e "${YELLOW}19. One side unreadable — a comparison that cannot run is not a pass${NC}"
+echo -e "${YELLOW}22. One side unreadable — a comparison that cannot run is not a pass${NC}"
 _reset; echo no > "${VAULT_UP}"
 _run_coherence "${LIVE_ISS}"
 assert "fails"                                 "yes" "$(grep -q 'were NOT compared' <<<"${LAST_FAILMSG}" && echo yes || echo no)"
+echo
+
+#===============================================================================
+# THE CALL SITE (phase_vault_config)
+#===============================================================================
+echo -e "${YELLOW}23. What each sweep status does to the deploy${NC}"
+echo -e "     (the sweep's exit code is only half the fix — the other half is the"
+echo -e "      call site acting on it instead of swallowing it with '|| true')"
+if [[ "${CALLSITE_OK}" != yes ]]; then
+echo -e "    ${YELLOW}—${NC} SKIPPED: ${VAULT_CONFIGURE_SCRIPT##*/} has no such call site"
+echo -e "      (it swallows the sweep status with '|| true', which is the defect"
+echo -e "       scenarios 10 and 11 above already fail it on)"
+else
+_run_call_site 0
+assert "clean sweep — the phase carries on"            "0"  "${CS_RC}"
+assert "records no failure"                            ""   "${LAST_RECORD}"
+_run_call_site 2
+assert "first deploy (no profile) — the phase carries on" "0" "${CS_RC}"
+assert "records no failure"                            ""   "${LAST_RECORD}"
+_run_call_site 1
+assert "sweep could not run — the phase stops"         "1"  "${CS_RC}"
+assert "records the phase as failed"                   "vault_config=FAIL" "${LAST_RECORD}"
+assert "says why, naming the 400 it is preventing"     "yes" \
+    "$(grep -q 'alias already exists for issuer and external_id' <<<"${LAST_FAIL}" && echo yes || echo no)"
+fi
 echo
 
 #===============================================================================

@@ -108,7 +108,7 @@ echo -e "${YELLOW}Phase 6: Vault OAuth Alias Sweep + Gate Behaviour${NC}"
 # observed once on a live cluster, not provocable on demand — so the live path can
 # never cover it. Both transports are modelled, which is what lets the port-forward
 # be taken down while Vault stays healthy.
-check "Vault OAuth alias sweep + gate + issuer coherence (19 scenarios, 45 assertions)" bash "$SCRIPT_DIR/test-vault-alias-gate.sh"
+check "Vault OAuth alias sweep + gate + issuer coherence (23 scenarios, 66 assertions)" bash "$SCRIPT_DIR/test-vault-alias-gate.sh"
 echo ""
 
 ################################################################################
