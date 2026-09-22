@@ -9,9 +9,10 @@ This workshop deployed **HashiCorp Vault Enterprise 2.0.3** on EKS and wired it 
 
 ### Vault's Native AI Agent Support Is Deployed Here
 
-HashiCorp's [native AI agent support in Vault](https://www.hashicorp.com/en/blog/announcing-native-ai-agent-support-in-hashicorp-vault) is a released Enterprise capability, and this workshop runs it. Three native primitives carry the authorization model:
+HashiCorp's [native AI agent support in Vault](https://www.hashicorp.com/en/blog/announcing-native-ai-agent-support-in-hashicorp-vault) is a released Enterprise capability, and this workshop runs it. Four native primitives carry the authorization model:
 
-- **Agent Registry** — each agent is registered as a first-class identity (`uc1-agent`, `agent-uc2`, `uc3-actor`), distinct from human users and traditional non-human identities, with a `ceiling_policies` envelope on the registration.
+- **Agent Registry** — each agent is registered as a first-class identity (`uc1-agent`, `agent-uc2`, `uc3-actor`), distinct from human users and traditional non-human identities.
+- **Agent ceiling policies** — `ceiling_policies` on the registration declare the maximum an agent may **ever** hold. A ceiling restricts and never grants, so the effective permission is the human baseline ∩ the agent's ceiling, resolved by Vault in the On-Behalf-Of flow. You configure `uc3-agent-ceiling` and watch Vault enforce it on [Vault Enforces the RAR Ceiling](../70-use-case-3/72-configure-rar-ceiling/).
 - **OAuth resource server** — the IVIA-issued OAuth JWT authorizes the Vault request **directly** via the `X-Vault-Token` header. There is no login round-trip, no intermediate Vault token, and no Vault auth method in that path at all.
 - **Vault-side per-request RAR** — `authorization_details` of `type: vault:path_access` narrow a token to the exact path and capabilities of a single request. **Vault itself** is the interpreter and the decision point.
 

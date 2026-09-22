@@ -47,11 +47,12 @@ h1{margin:0;font-size:clamp(34px,6vw,52px);font-weight:800;letter-spacing:-.03em
 .plane.u .k{color:var(--identity)} .plane.w .k{color:var(--agent)} .plane.d .k{color:var(--data)}
 
 /* ── Vault native primitives ── */
-.natives{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.natives{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
 .native{background:var(--panel);border:1px solid var(--line);border-radius:9px;
         border-top:2px solid var(--vault);padding:11px 13px;display:flex;flex-direction:column;gap:4px}
 .native .k{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;color:var(--vault);font-weight:700}
 .native .q{font-size:12.5px;color:var(--ink-2);line-height:1.45}
+.native em{color:var(--ink);font-style:normal;font-weight:600}
 .native code{font-family:var(--mono);font-size:11px;color:var(--agent);
              background:rgba(45,212,191,.09);padding:1px 4px;border-radius:3px}
 
@@ -126,12 +127,17 @@ h1{margin:0;font-size:clamp(34px,6vw,52px);font-weight:800;letter-spacing:-.03em
   <div class="rule"></div>
 
   <section>
-    <p class="sec-h">Vault's native AI agent support — released, and running here</p>
+    <p class="sec-h">Vault's native AI agent support — released, and configured by you here</p>
     <div class="natives">
       <div class="native">
         <span class="k">Agent Registry</span>
-        <span class="q">Each agent is a first-class identity, distinct from human users and from
-        traditional non-human identities, with a <code>ceiling_policies</code> envelope.</span>
+        <span class="q">Each agent is a first-class identity, distinct from human users and
+        from traditional non-human identities.</span>
+      </div>
+      <div class="native">
+        <span class="k">Agent ceiling policies</span>
+        <span class="q">The maximum an agent may <em>ever</em> hold. A ceiling restricts and never
+        grants — effective permission is the human's baseline &cap; the agent's ceiling.</span>
       </div>
       <div class="native">
         <span class="k">OAuth resource server</span>
