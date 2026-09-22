@@ -117,7 +117,7 @@ kubectl() {
             primary_ratelimited)
                 [[ "${fq}" == *.nip.io ]] \
                     && echo "order-${n}|${fq}|${RL} \"nip.io\" in the last 168h0m0s" >> "${ORDERS}" ;;
-            both_ratelimited)
+            both_ratelimited|same_suffix_no_fallback)
                 echo "order-${n}|${fq}|${RL} its registered domain in the last 168h0m0s" >> "${ORDERS}" ;;
             dns_failure_not_ratelimited)
                 echo "order-${n}|${fq}|Failed to create Order: acme: authorization error: 403 urn:ietf:params:acme:error:dns: DNS problem: NXDOMAIN looking up A for ${fq}" >> "${ORDERS}" ;;
@@ -180,7 +180,11 @@ source "${WORK}/caller.sh"
 
 run_scenario() {
     SCENARIO="$1"
-    TLS_DNS_SUFFIX="nip.io"; TLS_DNS_SUFFIX_FALLBACK="sslip.io"
+    TLS_DNS_SUFFIX="${2:-nip.io}"; TLS_DNS_SUFFIX_FALLBACK="${3:-sslip.io}"
+    # Mirrors the top-level decision in deploy-workshop.sh: a fallback to the
+    # same registered domain is not a second chance, so it is turned off.
+    TLS_DNS_SUFFIX_FALLBACK_ENABLED=true
+    [[ "${TLS_DNS_SUFFIX}" == "${TLS_DNS_SUFFIX_FALLBACK}" ]] && TLS_DNS_SUFFIX_FALLBACK_ENABLED=false
     DEPLOY_ID="abc123"; ALB_IP_DASHED="44-205-184-217"
     NIP_FQDN_WRP=""; NIP_FQDN_BANKING=""; LAST_WARN=""; LAST_FAIL=""
     # The caller decides this before issuance runs; the fallback must clear it.
@@ -264,15 +268,18 @@ assert "waited for the cert to cover our hosts" "yes"  "$([[ ${NPOLLS} -ge 3 ]] 
 assert "host is the one we asked for"          "wrp.abc123.44-205-184-217.nip.io"       "${NIP_FQDN_WRP}"
 echo
 
-echo -e "${YELLOW}7. Primary and fallback set to the same suffix — refused up front${NC}"
-echo -e "    (Let's Encrypt budgets per registered domain, so a 'fallback' to the"
-echo -e "     same suffix is a second 15-minute wait on the budget that just"
-echo -e "     refused us. The Step 7 failure text invites exactly this mistake.)"
-SAME_OUT=$(TLS_DNS_SUFFIX=sslip.io TLS_DNS_SUFFIX_FALLBACK=sslip.io \
-    bash "${DEPLOY_SCRIPT}" --help 2>&1); SAME_RC=$?
-assert "refuses to run"                        "1"                                      "${SAME_RC}"
-assert "names the duplicated suffix"           "yes"  "$(grep -q "both 'sslip.io'" <<<"${SAME_OUT}" && echo yes || echo no)"
-assert "says why a same-suffix retry is useless" "yes" "$(grep -q 'budgets per' <<<"${SAME_OUT}" && echo yes || echo no)"
+echo -e "${YELLOW}7. Primary and fallback are the same suffix — run, but do not retry${NC}"
+echo -e "    (An attendee whose nip.io budget is gone runs TLS_DNS_SUFFIX=sslip.io —"
+echo -e "     the suffix the fallback message just named — and the default fallback"
+echo -e "     is sslip.io too. That must DEPLOY, not be refused. If Let's Encrypt"
+echo -e "     then refuses it, a retry on the same registered domain is a second"
+echo -e "     15-minute wait on the budget that just said no.)"
+run_scenario same_suffix_no_fallback sslip.io sslip.io
+assert "returns failure"                       "1"                                      "${RC}"
+assert "did NOT retry the same suffix"         "1"                                      "${NCERTS}"
+assert "stayed on the requested suffix"        "wrp.abc123.44-205-184-217.sslip.io"     "${NIP_FQDN_WRP}"
+assert "says no fallback was available"        "yes"  "$(grep -q 'no fallback is available' <<<"${LAST_FAIL}" && echo yes || echo no)"
+assert "tells the operator to pick a different suffix" "yes" "$(grep -q 'DIFFERENT dashed-IPv4' <<<"${LAST_FAIL}" && echo yes || echo no)"
 echo
 
 echo "============================================================"

@@ -137,18 +137,18 @@ DRY_RUN=false
 # Override either to use a magic-DNS host you control. Issue #5.
 TLS_DNS_SUFFIX="${TLS_DNS_SUFFIX:-nip.io}"
 TLS_DNS_SUFFIX_FALLBACK="${TLS_DNS_SUFFIX_FALLBACK:-sslip.io}"
-# The fallback only means anything if it is a DIFFERENT registered domain: Let's
+# A fallback only means anything if it is a DIFFERENT registered domain: Let's
 # Encrypt budgets per registered domain, so retrying the same suffix burns a
-# second 15-minute wait against the budget that just refused us. The Step 7
-# failure text tells an operator to override TLS_DNS_SUFFIX, and the obvious
-# thing to reach for is the fallback they just saw named. Refuse that here.
+# second 15-minute wait against the budget that just refused us.
+#
+# Setting them equal is a REASONABLE thing to do, not an error — an attendee
+# whose nip.io budget is exhausted runs `TLS_DNS_SUFFIX=sslip.io`, which is the
+# suffix the fallback message just named, and the default fallback is sslip.io
+# too. So run on the requested suffix and turn the retry off, rather than
+# refusing to deploy. Issue #5.
+TLS_DNS_SUFFIX_FALLBACK_ENABLED=true
 if [[ "${TLS_DNS_SUFFIX}" == "${TLS_DNS_SUFFIX_FALLBACK}" ]]; then
-    echo "FATAL: TLS_DNS_SUFFIX and TLS_DNS_SUFFIX_FALLBACK are both '${TLS_DNS_SUFFIX}'." >&2
-    echo "       They must be different registered domains — Let's Encrypt budgets per" >&2
-    echo "       registered domain, so a fallback to the same suffix is not a second chance." >&2
-    echo "       Fix: set TLS_DNS_SUFFIX to another dashed-IPv4 magic-DNS suffix, or leave" >&2
-    echo "       TLS_DNS_SUFFIX_FALLBACK unset to keep the default (sslip.io)." >&2
-    exit 1
+    TLS_DNS_SUFFIX_FALLBACK_ENABLED=false
 fi
 
 # Per-tier execution gate (empty = run all 14 steps, the Workshop Studio path;
@@ -1272,6 +1272,11 @@ MARKER
     local _issue_rc
     _acme_issue_certificate "${TLS_DNS_SUFFIX}"
     _issue_rc=$?
+    if [[ ${_issue_rc} -eq 2 ]] && [[ "${TLS_DNS_SUFFIX_FALLBACK_ENABLED}" != true ]]; then
+        print_fail "Step 7: Certificate Ready=true" \
+            "Let's Encrypt refused ${TLS_DNS_SUFFIX} as rate limited, and no fallback is available because TLS_DNS_SUFFIX_FALLBACK is the same suffix. Point the deploy at a DIFFERENT dashed-IPv4 magic-DNS provider (one that resolves <anything>.<ip-with-dashes>.<suffix>): TLS_DNS_SUFFIX=<other-suffix> bash ${BASH_SOURCE[0]}"
+        return 1
+    fi
     if [[ ${_issue_rc} -eq 2 ]]; then
         print_warn "Step 7: Let's Encrypt refused ${TLS_DNS_SUFFIX} as rate limited (its certificate budget is exhausted); retrying on ${TLS_DNS_SUFFIX_FALLBACK}"
         # The fallback moves the suffix, so the hosts in .acme-state are about
