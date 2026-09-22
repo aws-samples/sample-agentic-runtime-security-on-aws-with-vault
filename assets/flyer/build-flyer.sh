@@ -91,5 +91,38 @@ if [ "${WANT_PDF}" = true ]; then
         "file://${OUT}" 2>/dev/null
 
     [ -s "${pdf}" ] || { echo "FATAL: Chrome produced no PDF at ${pdf}" >&2; exit 1; }
-    echo "pdf written:   ${pdf}  ($(wc -c < "${pdf}" | tr -d " ") bytes)"
+
+    # The print stylesheet is tuned to land the default content on ONE Letter
+    # page with ~14px to spare. A longer WORKSHOP_URL wraps the footer link and
+    # can push it over, so assert rather than hand back a silent two-pager.
+    pages=$(python3 -c "
+import re,sys
+d=open(sys.argv[1],'rb').read()
+print(len(re.findall(rb'/Type\s*/Page[^s]', d)))" "${pdf}")
+    if [ "${pages}" != "1" ]; then
+        echo "FATAL: the flyer rendered ${pages} pages; it must be 1." >&2
+        echo "       Fix: content or WORKSHOP_URL grew past the page. Tighten the" >&2
+        echo "       @media print block in flyer.template.html (spacing first, then" >&2
+        echo "       copy) until it fits — do not drop body copy below 12px, which" >&2
+        echo "       is the 9pt print floor." >&2
+        exit 1
+    fi
+
+    # Optional, only when zbarimg is installed: prove the QR still scans at a
+    # resolution well below what a phone camera gets off a printed sheet.
+    if command -v zbarimg >/dev/null 2>&1 && command -v pdftoppm >/dev/null 2>&1; then
+        png="${work}/scan.png"
+        pdftoppm -png -r 100 -f 1 -l 1 "${pdf}" "${png%.png}" 2>/dev/null
+        shot=""; for cand in "${png%.png}"*.png; do [ -f "${cand}" ] && { shot="${cand}"; break; }; done
+        got=$(zbarimg --quiet --raw "${shot}" 2>/dev/null | head -1 | tr -d "\r\n")
+        if [ "${got}" != "${WORKSHOP_URL}" ]; then
+            echo "FATAL: the QR code did not decode to WORKSHOP_URL at 100 dpi." >&2
+            echo "       got: ${got:-<no read>}" >&2
+            echo "       Fix: enlarge .qr svg in the @media print block." >&2
+            exit 1
+        fi
+        echo "qr verified:   decodes to WORKSHOP_URL at 100 dpi"
+    fi
+
+    echo "pdf written:   ${pdf}  (1 page, $(wc -c < "${pdf}" | tr -d " ") bytes)"
 fi

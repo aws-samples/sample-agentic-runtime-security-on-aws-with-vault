@@ -109,7 +109,7 @@ h1{margin:0;font-size:clamp(34px,6vw,52px);font-weight:800;letter-spacing:-.03em
             -webkit-print-color-adjust:exact;print-color-adjust:exact}
   /* @page supplies the margin, so the sheet runs full width inside it and the
      ink reaches the trim rather than sitting in a second, doubled gutter. */
-  .sheet{max-width:none;padding-left:0;padding-right:0;padding-block:0;gap:6px}
+  .sheet{max-width:none;padding-left:0;padding-right:0;padding-block:0;gap:5px}
   /* Chrome's print pipeline does not honour background-clip:text — it paints the
      gradient as a solid box over the glyphs and the title disappears. Print the
      title in flat ink instead. */
@@ -117,14 +117,14 @@ h1{margin:0;font-size:clamp(34px,6vw,52px);font-weight:800;letter-spacing:-.03em
   /* Screen caps the lede at a comfortable 66ch; on paper the measure is already
      fixed by the page box, so the cap only forces extra lines. */
   .lede{max-width:none;font-size:12px;line-height:1.42}
-  .sec-h{margin-bottom:5px;font-size:10px}
-  .plane{padding:7px 11px} .plane .q{font-size:11.5px}
-  .natives{gap:7px} .native{padding:6px 10px;gap:2px} .native .q{font-size:10.5px;line-height:1.35}
-  .steps{gap:4px} .steps li{padding:5px 11px} .steps .t{font-size:12.5px} .steps .d{font-size:11px}
-  .modes{gap:8px} .mode{padding:8px 12px;gap:3px} .mode h3{font-size:13.5px}
-  .mode p{font-size:12px} .mode .need{padding-top:5px;font-size:10px}
-  .foot{padding:9px 13px;gap:14px} .qr{padding:6px} .qr svg{width:78px;height:78px}
-  .foot .who{font-size:12.5px} .foot .url{font-size:10px}
+  .sec-h{margin-bottom:4px;font-size:10.5px}
+  .plane{padding:6px 11px} .plane .q{font-size:12px}
+  .natives{gap:7px} .native{padding:5px 10px;gap:2px} .native .q{font-size:12px;line-height:1.35}
+  .steps{gap:4px} .steps li{padding:4px 11px} .steps .t{font-size:12.5px} .steps .d{font-size:12px}
+  .modes{gap:8px} .mode{padding:7px 12px;gap:3px} .mode h3{font-size:13.5px}
+  .mode p{font-size:12px} .mode .need{padding-top:5px;font-size:11px}
+  .foot{padding:8px 13px;gap:14px} .qr{padding:6px} .qr svg{width:104px;height:104px}
+  .foot .who{font-size:12.5px} .foot .url{font-size:11px}
   /* Nothing may split across a page: this is a one-pager. */
   .planes,.natives,.modes,.foot,.steps li,.native,.mode{break-inside:avoid;page-break-inside:avoid}
 }
