@@ -229,7 +229,8 @@ heal_orphan_auth_mounts() {
 # no-op reported as a failure — which is precisely why the call site learned to
 # swallow the status with `|| true` and stopped noticing real ones.
 heal_orphan_oauth_aliases() {
-  local deleted=0 failed=0 skipped=0 live_id live_accessor names alias_ids id acc name entry
+  local deleted=0 failed=0 skipped=0 unreadable=0 _read_rc=0
+  local live_id live_accessor names alias_ids id acc name entry
 
   live_id=$(vault_exec "vault read -format=json sys/config/oauth-resource-server/ivia" \
     2>/dev/null | jq -r '.data.config_id // empty' 2>/dev/null || echo "")
@@ -246,8 +247,19 @@ heal_orphan_oauth_aliases() {
   alias_ids=$(vault_exec "vault list -format=json identity/entity-alias/id" 2>/dev/null \
     | jq -r '.[]? // empty' 2>/dev/null || echo "")
   if [[ -z "$alias_ids" ]]; then
-    info "No entity aliases in Vault — nothing to sweep"
-    return 0
+    # `vault list` answers empty BOTH when the namespace genuinely holds no
+    # aliases and when the read failed, so the two are told apart the same way
+    # the live_id branch above tells them apart — by asking Vault whether it is
+    # answering at all — rather than by assuming the happy case. Assuming it is
+    # how a sweep that could not read anything reported that there was nothing
+    # to read.
+    if vault_exec "vault status -format=json" >/dev/null 2>&1; then
+      info "No entity aliases in Vault — nothing to sweep"
+      return 0
+    fi
+    warn "Could not list entity aliases — Vault answered the profile read and then stopped"
+    warn "  The sweep cannot certify it saw the alias list, so no alias will be deleted"
+    return 1
   fi
 
   # Pass 1 — find the aliases that sit on a DEAD oauth-resource-server profile.
@@ -257,8 +269,37 @@ heal_orphan_oauth_aliases() {
   _tab=$'\t'
   while IFS= read -r id; do
     [[ -z "$id" ]] && continue
-    entry=$(vault_exec "vault read -format=json identity/entity-alias/id/${id}" 2>/dev/null || echo "")
-    acc=$(jq -r '.data.mount_accessor // empty' <<<"$entry" 2>/dev/null || echo "")
+    # A read that FAILED must not be confused with a read that SUCCEEDED and
+    # returned an alias belonging to another auth method. Both leave the accessor
+    # empty, and answering both with `continue` is what let a transport that went
+    # blind mid-walk report a clean sweep: the aliases it could not read are
+    # precisely the ones that might be squatting the issuer. Three conditions are
+    # all "could not read", none of them "not my business":
+    #   - vault_exec exited non-zero (pod gone, exec refused, CLI error)
+    #   - it exited 0 but the body is not parseable JSON (truncated/partial)
+    #   - the JSON parses but carries no mount_accessor, the one field the
+    #     decision turns on
+    # jq -e covers the middle case (parse error) and the null case; the emptiness
+    # test after it covers a present-but-empty accessor.
+    #
+    # An alias legitimately deleted between the list and this read lands here too
+    # and is treated as a read failure — deliberately. During a deploy this sweep
+    # is the only writer of these aliases and it runs before the apply, so an
+    # alias vanishing mid-walk is not an expected state; and the two costs are not
+    # symmetric. A false "could not read" stops the phase with an accurate message
+    # and is cleared by re-running. A false "clean sweep" lets the deploy walk into
+    # the 400 this function exists to prevent, while the log says the opposite.
+    _read_rc=0
+    entry=$(vault_exec "vault read -format=json identity/entity-alias/id/${id}" 2>/dev/null) || _read_rc=$?
+    acc=""
+    if (( _read_rc == 0 )); then
+      acc=$(jq -re '.data.mount_accessor' <<<"$entry" 2>/dev/null) || acc=""
+    fi
+    if [[ -z "$acc" ]]; then
+      unreadable=$(( unreadable + 1 ))
+      warn "  could not read entity alias ${id} — it is neither confirmed current nor confirmed orphaned"
+      continue
+    fi
     name=$(jq -r '.data.name // empty' <<<"$entry" 2>/dev/null || echo "")
     case "$acc" in
       oauth-resource-server_root_*) ;;
@@ -267,6 +308,19 @@ heal_orphan_oauth_aliases() {
     [[ "$acc" == "$live_accessor" ]] && continue
     candidates="${candidates}${id}${_tab}${name}${_tab}${acc}"$'\n'
   done <<< "$alias_ids"
+
+  # Refuse to act on a partial view BEFORE deciding anything, and before deleting
+  # anything. Same posture as an unreadable Vault at the top: the sweep's contract
+  # is that rc=0 means it saw the whole alias list and acted on all of it, so an
+  # alias it could not classify makes rc=0 a lie whatever the visible candidates
+  # look like. Deleting the ones it did see would add mutation to a run the call
+  # site is about to stop anyway.
+  if (( unreadable > 0 )); then
+    warn "${unreadable} entity alias(es) could not be read — the sweep cannot certify it saw the whole list"
+    warn "  Refusing to delete on a partial view: a stale (issuer, external_id) may still be squatting"
+    warn "  one of them. Re-run once Vault is readable: ${BASH_SOURCE[0]}"
+    return 1
+  fi
 
   if [[ -z "$candidates" ]]; then
     info "No orphaned OAuth entity aliases — every OAuth alias in Vault is already on the live profile"
