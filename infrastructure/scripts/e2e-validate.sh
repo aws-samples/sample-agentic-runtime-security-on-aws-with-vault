@@ -100,6 +100,18 @@ check "ACME suffix fallback (8 scenarios, 35 assertions)" bash "$SCRIPT_DIR/test
 echo ""
 
 ################################################################################
+# Phase 6: Vault OAuth entity-alias sweep + gate behaviour (issue #5)
+################################################################################
+echo -e "${YELLOW}Phase 6: Vault OAuth Alias Sweep + Gate Behaviour${NC}"
+# Drives the real sweep and the real gate against a modelled Vault. The collision
+# they exist for needs AWS to hand a re-created ALB an IP address it held before —
+# observed once on a live cluster, not provocable on demand — so the live path can
+# never cover it. Both transports are modelled, which is what lets the port-forward
+# be taken down while Vault stays healthy.
+check "Vault OAuth alias sweep + gate + issuer coherence (19 scenarios, 45 assertions)" bash "$SCRIPT_DIR/test-vault-alias-gate.sh"
+echo ""
+
+################################################################################
 # Summary
 ################################################################################
 echo -e "${BLUE}===============================================================================${NC}"
