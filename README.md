@@ -163,6 +163,26 @@ No build step — `reveal-md.json` next to `slides.md` carries the theme + trans
 
 ---
 
+## One-page flyer
+
+A printable one-pager for promoting the workshop — what it is, who it is for, the three agents you build, the two ways to run it, and a QR code to the published Workshop Studio catalog entry.
+
+```bash
+# Regenerate assets/flyer/workshop-flyer.html — open or print it from a browser.
+bash assets/flyer/build-flyer.sh
+```
+
+Requires `qrencode` (`brew install qrencode`); everything else runs on a stock `python3` with no `pip install`.
+
+Edit `assets/flyer/flyer.template.html` for any copy, colour or layout change, then re-run. Nothing in the output is hand-edited — the logos, the QR code and the URL are all generated:
+
+- **Logos.** Neither shipped mark works on the flyer's dark ground. `assets/aws-logo.png` is a dark navy wordmark, and `assets/hashicorp_logo.png` is a black hexagon on a *solid white field with no transparency at all* — it renders as a white box. The build recolours the AWS wordmark to white while leaving the orange smile alone, and keys the HashiCorp field out by luminance so the mark comes through white with its anti-aliased edges intact. Both are the official reversed variants.
+- **QR code.** Rebuilt from `qrencode`'s module grid into a single SVG path (its native output is ~52 KB of individual `<rect>` elements) and inlined, so the flyer makes no external image requests and prints crisp. Point it somewhere else with `WORKSHOP_URL=<url> bash assets/flyer/build-flyer.sh`.
+
+The built `workshop-flyer.html` is committed alongside its source: it is self-contained and it is the file you actually open.
+
+---
+
 ## Admin-only test + diagnostic scripts
 
 The workshop content never shows attendees these. Use them to isolate problems, sanity-check a fresh deploy, or re-run a single layer after a change. All live under `infrastructure/scripts/`.
