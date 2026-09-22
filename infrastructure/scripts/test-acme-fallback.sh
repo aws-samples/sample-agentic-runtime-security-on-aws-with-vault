@@ -31,7 +31,9 @@ set -uo pipefail
 
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DEPLOY_SCRIPT="${SCRIPT_DIR}/deploy-workshop.sh"
+# Overridable so the suite can be pointed at an older copy of the deploy script
+# to prove a regression assertion actually fails without the fix in place.
+DEPLOY_SCRIPT="${DEPLOY_SCRIPT:-${SCRIPT_DIR}/deploy-workshop.sh}"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 PASSED=0; FAILED=0
@@ -95,43 +97,79 @@ NOW=1000000000
 sleep() { NOW=$(( NOW + ${1:-15} )); }
 date() { if [[ "${1:-}" == "+%s" ]]; then echo "${NOW}"; else command date "$@"; fi; }
 
-APPLIED="${WORK}/applied"; POLLS="${WORK}/polls"
+APPLIED="${WORK}/applied"; POLLS="${WORK}/polls"; ORDERS="${WORK}/orders"
 
+RL='Failed to create Order: 429 urn:ietf:params:acme:error:rateLimited: too many certificates (50000) already issued for'
+
+# The cluster, modelled as a file of Orders ("<name>|<first dnsName>|<reason>").
+# cert-manager creates one per Certificate spec and NEVER deletes an errored
+# one, which is the whole point of scenario 5.
 kubectl() {
     local args="$*"
+
     if [[ "${args}" == *"apply -f -"* ]]; then
-        local yaml fq; yaml=$(cat)
+        local yaml fq n
+        yaml=$(cat)
         fq=$(grep -oE '^[[:space:]]+- wrp\..*' <<<"${yaml}" | sed 's/^[[:space:]]*- //')
         echo "${fq}" >> "${APPLIED}"
-        return 0
-    fi
-    if [[ "${args}" == *"get certificate"* ]]; then
-        case "${SCENARIO}" in
-            clean_issue) echo "True" ;;
-            primary_ratelimited)
-                # Real ACME takes 30-90s, so Ready is not true on the first poll.
-                if [[ "$(tail -1 "${APPLIED}")" == *sslip.io ]]; then
-                    local n; n=$(( $(cat "${POLLS}" 2>/dev/null || echo 0) + 1 )); echo "${n}" > "${POLLS}"
-                    [[ ${n} -ge 3 ]] && echo "True" || echo "False"
-                else echo "False"; fi ;;
-            *) echo "False" ;;
-        esac
-        return 0
-    fi
-    if [[ "${args}" == *"get orders"* ]]; then
-        # Rows are "<first dnsName>|<reason>", exactly as the real jsonpath emits.
-        local rl='Failed to create Order: 429 urn:ietf:params:acme:error:rateLimited: too many certificates (50000) already issued for'
+        n=$(grep -c . "${APPLIED}")
         case "${SCENARIO}" in
             primary_ratelimited)
-                grep -q 'nip\.io' "${APPLIED}" 2>/dev/null \
-                    && echo "wrp.abc123.44-205-184-217.nip.io|${rl} \"nip.io\" in the last 168h0m0s" ;;
+                [[ "${fq}" == *.nip.io ]] \
+                    && echo "order-${n}|${fq}|${RL} \"nip.io\" in the last 168h0m0s" >> "${ORDERS}" ;;
             both_ratelimited)
-                while read -r f; do [[ -n "${f}" ]] && echo "${f}|${rl} its registered domain in the last 168h0m0s"; done < "${APPLIED}" ;;
+                echo "order-${n}|${fq}|${RL} its registered domain in the last 168h0m0s" >> "${ORDERS}" ;;
             dns_failure_not_ratelimited)
-                # nip.io the SERVICE is down. Not a budget refusal — the fallback
-                # must NOT fire, because the second suffix is no more reachable.
-                while read -r f; do [[ -n "${f}" ]] && echo "${f}|Failed to create Order: acme: authorization error: 403 urn:ietf:params:acme:error:dns: DNS problem: NXDOMAIN looking up A for ${f}"; done < "${APPLIED}" ;;
+                echo "order-${n}|${fq}|Failed to create Order: acme: authorization error: 403 urn:ietf:params:acme:error:dns: DNS problem: NXDOMAIN looking up A for ${fq}" >> "${ORDERS}" ;;
         esac
+        return 0
+    fi
+
+    if [[ "${args}" == *"delete orders"* ]]; then
+        local name
+        name=$(tr ' ' '\n' <<<"${args}" | grep -E '^order-' | head -1)
+        if [[ -n "${name}" ]]; then
+            grep -v "^${name}|" "${ORDERS}" > "${ORDERS}.tmp" 2>/dev/null || true
+            mv -f "${ORDERS}.tmp" "${ORDERS}"
+        fi
+        return 0
+    fi
+
+    if [[ "${args}" == *"get orders"* ]]; then
+        # Two different jsonpaths: names (for the pre-wait sweep) and
+        # "<dnsName>|<reason>" rows (for the rate-limit verdict).
+        if [[ "${args}" == *"metadata.name"* ]]; then
+            cut -d'|' -f1 "${ORDERS}" 2>/dev/null || true
+        else
+            cut -d'|' -f2- "${ORDERS}" 2>/dev/null || true
+        fi
+        return 0
+    fi
+
+    if [[ "${args}" == *"get certificate"* ]]; then
+        local n wrp bank out
+        n=$(( $(cat "${POLLS}" 2>/dev/null || echo 0) + 1 )); echo "${n}" > "${POLLS}"
+        wrp=$(tail -1 "${APPLIED}")
+        bank="banking.${wrp#wrp.}"
+        # Answer the jsonpath that was actually asked for. Code that requests
+        # only the Ready condition gets only the Ready condition — otherwise
+        # this stub, not the defect, is what makes an old script fail.
+        out=""
+        case "${SCENARIO}" in
+            clean_issue)               out="True|${wrp} ${bank}" ;;
+            primary_ratelimited)
+                if [[ "${wrp}" == *sslip.io && ${n} -ge 3 ]]; then out="True|${wrp} ${bank}"
+                else out="False|${wrp} ${bank}"; fi ;;
+            stale_order_previous_run)
+                if [[ ${n} -ge 3 ]]; then out="True|${wrp} ${bank}"; else out="False|${wrp} ${bank}"; fi ;;
+            ready_but_for_the_old_host)
+                # cert-manager has not reconciled the changed dnsNames yet, so
+                # the object still reports Ready for the PREVIOUS hosts.
+                if [[ ${n} -ge 3 ]]; then out="True|${wrp} ${bank}"
+                else out="True|wrp.old999.44-205-184-217.example wrp.old999.44-205-184-217.example"; fi ;;
+            *) out="False|${wrp} ${bank}" ;;
+        esac
+        if [[ "${args}" == *"spec.dnsNames"* ]]; then echo "${out}"; else echo "${out%%|*}"; fi
         return 0
     fi
     return 0
@@ -145,12 +183,20 @@ run_scenario() {
     TLS_DNS_SUFFIX="nip.io"; TLS_DNS_SUFFIX_FALLBACK="sslip.io"
     DEPLOY_ID="abc123"; ALB_IP_DASHED="44-205-184-217"
     NIP_FQDN_WRP=""; NIP_FQDN_BANKING=""; LAST_WARN=""; LAST_FAIL=""
+    # The caller decides this before issuance runs; the fallback must clear it.
+    _acme_suffix_current=true
     NOW=1000000000
-    : > "${APPLIED}"; : > "${POLLS}"
+    : > "${APPLIED}"; : > "${POLLS}"; : > "${ORDERS}"
+    # Scenario 5 starts on a cluster an EARLIER deploy already got refused on.
+    if [[ "${SCENARIO}" == "stale_order_previous_run" ]]; then
+        echo "order-stale|wrp.old999.44-205-184-217.nip.io|${RL} \"nip.io\" in the last 168h0m0s" > "${ORDERS}"
+    fi
     _acme_caller >/dev/null 2>&1
     RC=$?
     CERTS="$(tr '\n' ' ' < "${APPLIED}" | sed 's/ $//')"
     NCERTS="$(grep -c . "${APPLIED}")"
+    NPOLLS="$(cat "${POLLS}" 2>/dev/null || echo 0)"
+    NSTALE="$(grep -c 'old999' "${ORDERS}" 2>/dev/null || true)"
 }
 
 echo -e "${BLUE}=== ACME TLS-suffix fallback (issue #5) — offline behaviour test ===${NC}"
@@ -172,6 +218,10 @@ assert "host moved to the fallback suffix"     "wrp.abc123.44-205-184-217.sslip.
 assert "banking SAN moved with it"             "banking.abc123.44-205-184-217.sslip.io" "${NIP_FQDN_BANKING}"
 assert "tried nip.io first, then sslip.io"     "wrp.abc123.44-205-184-217.nip.io wrp.abc123.44-205-184-217.sslip.io" "${CERTS}"
 assert "warns that nip.io was refused"         "yes"  "$(grep -q 'refused nip.io as rate limited' <<<"${LAST_WARN}" && echo yes || echo no)"
+# The hosts in .acme-state just changed, and tier 3 builds the banking-UI
+# Ingress from that file. If this flag stays true the tier-2 "carry the change
+# into tier 3" warning can never fire in the one case the fallback creates.
+assert "flags the suffix as changed for tier 2" "false"                                 "${_acme_suffix_current}"
 echo
 
 echo -e "${YELLOW}3. Both budgets exhausted — fails with a usable instruction${NC}"
@@ -190,6 +240,39 @@ assert "returns failure"                       "1"                              
 assert "does NOT try the fallback suffix"      "1"                                      "${NCERTS}"
 assert "stays on the primary suffix"           "wrp.abc123.44-205-184-217.nip.io"       "${NIP_FQDN_WRP}"
 assert "emits no rate-limit warning"           "yes"  "$(grep -q 'rate limited' <<<"${LAST_WARN}" && echo no || echo yes)"
+echo
+
+echo -e "${YELLOW}5. A PREVIOUS deploy was refused on this cluster — judge this run on its own${NC}"
+echo -e "    (cert-manager never deletes an errored Order. Left in place, the first"
+echo -e "     refusal on a cluster is reported forever: every later run returns"
+echo -e "     'rate limited' on its first poll without Let's Encrypt being asked.)"
+run_scenario stale_order_previous_run
+assert "returns success"                       "0"                                      "${RC}"
+assert "stays on nip.io — LE refused nothing"  "wrp.abc123.44-205-184-217.nip.io"       "${NIP_FQDN_WRP}"
+assert "does NOT burn the fallback budget"     "1"                                      "${NCERTS}"
+assert "emits no rate-limit warning"           "yes"  "$(grep -q 'rate limited' <<<"${LAST_WARN}" && echo no || echo yes)"
+assert "swept the earlier run's Order"         "0"                                      "${NSTALE}"
+echo
+
+echo -e "${YELLOW}6. Certificate still Ready for the OLD hosts — must not satisfy the gate${NC}"
+echo -e "    (Ready alone says nothing about WHICH hosts. Accepting it writes"
+echo -e "     .acme-state with FQDNs no certificate covers, and ACM imports a"
+echo -e "     certificate whose SANs do not match what the ALB will serve.)"
+run_scenario ready_but_for_the_old_host
+assert "returns success"                       "0"                                      "${RC}"
+assert "waited for the cert to cover our hosts" "yes"  "$([[ ${NPOLLS} -ge 3 ]] && echo yes || echo no)"
+assert "host is the one we asked for"          "wrp.abc123.44-205-184-217.nip.io"       "${NIP_FQDN_WRP}"
+echo
+
+echo -e "${YELLOW}7. Primary and fallback set to the same suffix — refused up front${NC}"
+echo -e "    (Let's Encrypt budgets per registered domain, so a 'fallback' to the"
+echo -e "     same suffix is a second 15-minute wait on the budget that just"
+echo -e "     refused us. The Step 7 failure text invites exactly this mistake.)"
+SAME_OUT=$(TLS_DNS_SUFFIX=sslip.io TLS_DNS_SUFFIX_FALLBACK=sslip.io \
+    bash "${DEPLOY_SCRIPT}" --help 2>&1); SAME_RC=$?
+assert "refuses to run"                        "1"                                      "${SAME_RC}"
+assert "names the duplicated suffix"           "yes"  "$(grep -q "both 'sslip.io'" <<<"${SAME_OUT}" && echo yes || echo no)"
+assert "says why a same-suffix retry is useless" "yes" "$(grep -q 'budgets per' <<<"${SAME_OUT}" && echo yes || echo no)"
 echo
 
 echo "============================================================"

@@ -137,6 +137,19 @@ DRY_RUN=false
 # Override either to use a magic-DNS host you control. Issue #5.
 TLS_DNS_SUFFIX="${TLS_DNS_SUFFIX:-nip.io}"
 TLS_DNS_SUFFIX_FALLBACK="${TLS_DNS_SUFFIX_FALLBACK:-sslip.io}"
+# The fallback only means anything if it is a DIFFERENT registered domain: Let's
+# Encrypt budgets per registered domain, so retrying the same suffix burns a
+# second 15-minute wait against the budget that just refused us. The Step 7
+# failure text tells an operator to override TLS_DNS_SUFFIX, and the obvious
+# thing to reach for is the fallback they just saw named. Refuse that here.
+if [[ "${TLS_DNS_SUFFIX}" == "${TLS_DNS_SUFFIX_FALLBACK}" ]]; then
+    echo "FATAL: TLS_DNS_SUFFIX and TLS_DNS_SUFFIX_FALLBACK are both '${TLS_DNS_SUFFIX}'." >&2
+    echo "       They must be different registered domains — Let's Encrypt budgets per" >&2
+    echo "       registered domain, so a fallback to the same suffix is not a second chance." >&2
+    echo "       Fix: set TLS_DNS_SUFFIX to another dashed-IPv4 magic-DNS suffix, or leave" >&2
+    echo "       TLS_DNS_SUFFIX_FALLBACK unset to keep the default (sslip.io)." >&2
+    exit 1
+fi
 
 # Per-tier execution gate (empty = run all 14 steps, the Workshop Studio path;
 # 1|2|3 = run only that tier's steps, the Instruqt per-challenge path).
@@ -965,6 +978,32 @@ _acme_issue_certificate() {
     NIP_FQDN_WRP="wrp.${DEPLOY_ID}.${ALB_IP_DASHED}.${_suffix}"
     NIP_FQDN_BANKING="banking.${DEPLOY_ID}.${ALB_IP_DASHED}.${_suffix}"
 
+    # Clear terminal Orders before we start watching for one.
+    #
+    # cert-manager never deletes an errored Order, and the rate-limit scan below
+    # cannot tell one of ours from one a PREVIOUS deploy left behind. Without
+    # this, the first cluster to be refused on a suffix reports that refusal
+    # forever: every later run returns rc=2 on its first poll without Let's
+    # Encrypt being asked anything, and once both suffixes have been refused
+    # once, Step 7 fails in seconds on every subsequent run — including the
+    # `--tier 2 --skip-vault-init` re-run the workshop tells attendees to do.
+    #
+    # An errored Order is terminal, so deleting it destroys nothing in flight;
+    # cert-manager's CertificateRequest controller creates a fresh one. This is
+    # the same idiom the wait loop already uses for errored Challenges. Issue #5.
+    local _stale
+    _stale=$(kubectl --context workshop get orders.acme.cert-manager.io \
+        -n cert-manager \
+        -o jsonpath='{range .items[?(@.status.state=="errored")]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)
+    if [[ -n "${_stale}" ]]; then
+        while IFS= read -r _o; do
+            [[ -z "${_o}" ]] && continue
+            kubectl --context workshop delete orders.acme.cert-manager.io "${_o}" \
+                -n cert-manager --ignore-not-found >/dev/null 2>&1
+        done <<< "${_stale}"
+        print_info "Step 7: cleared $(grep -c . <<<"${_stale}") terminal ACME Order(s) from an earlier run so this attempt is judged on its own result"
+    fi
+
     # Apply the Certificate CR with both SANs. The banking SAN's HTTP-01
     # challenge validates on the shared ALB via Plan 03's solver Ingress
     # (group.order=1) even before the tier-3 banking-ui Ingress exists.
@@ -989,6 +1028,16 @@ spec:
     - ${NIP_FQDN_BANKING}
   renewBefore: 720h
 EOF
+    # PIPESTATUS[1] is kubectl's status, not the heredoc's. Without this a
+    # rejected or unreachable apply falls straight into the wait loop, where a
+    # PREVIOUS Certificate that is still Ready satisfies the gate and the deploy
+    # proceeds to import a certificate that does not cover these hosts.
+    local _apply_rc=${PIPESTATUS[1]}
+    if [[ ${_apply_rc} -ne 0 ]]; then
+        print_fail "Step 7: Certificate Ready=true" \
+            "kubectl could not apply the cert-manager Certificate (rc=${_apply_rc}). Check cluster access and that cert-manager's CRDs are installed: kubectl --context workshop get crd certificates.cert-manager.io"
+        return 1
+    fi
 
     # Wait for cert-manager to drive HTTP-01 to Ready, with auto-recovery.
     #
@@ -1007,10 +1056,19 @@ EOF
     # Attendees see one continuous spinner, no manual intervention.
     local _cert_deadline=$(( $(date +%s) + 900 ))   # 15 min hard ceiling
     local _cert_ready=false _cert_recovery_rounds=0 _cert_rate_limited=false
+    local _cert_state _cert_ready_cond _cert_ready_names
     while [[ $(date +%s) -lt ${_cert_deadline} ]]; do
-        _cert_ready_cond=$(kubectl --context workshop get certificate workshop-le-tls -n cert-manager \
-                -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)
-        if grep -q "^True$" <<<"${_cert_ready_cond}"; then
+        # Read the Ready condition AND the spec it belongs to in one call. A
+        # Certificate that is still Ready for the PREVIOUS suffix would
+        # otherwise satisfy this gate the moment the fallback re-applies, and
+        # .acme-state would be written with hosts no certificate covers.
+        _cert_state=$(kubectl --context workshop get certificate workshop-le-tls -n cert-manager \
+                -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}{"|"}{.spec.dnsNames[*]}' 2>/dev/null || true)
+        _cert_ready_cond="${_cert_state%%|*}"
+        _cert_ready_names=" ${_cert_state#*|} "
+        if grep -q "^True$" <<<"${_cert_ready_cond}" \
+            && [[ "${_cert_ready_names}" == *" ${NIP_FQDN_WRP} "* ]] \
+            && [[ "${_cert_ready_names}" == *" ${NIP_FQDN_BANKING} "* ]]; then
             _cert_ready=true
             break
         fi
@@ -1216,6 +1274,11 @@ MARKER
     _issue_rc=$?
     if [[ ${_issue_rc} -eq 2 ]]; then
         print_warn "Step 7: Let's Encrypt refused ${TLS_DNS_SUFFIX} as rate limited (its certificate budget is exhausted); retrying on ${TLS_DNS_SUFFIX_FALLBACK}"
+        # The fallback moves the suffix, so the hosts in .acme-state are about
+        # to change. _acme_suffix_current was decided before issuance ran and is
+        # still true; leave it that way and the tier-2 warning below can never
+        # fire in the one case this fallback creates. Issue #5.
+        _acme_suffix_current=false
         _acme_issue_certificate "${TLS_DNS_SUFFIX_FALLBACK}"
         _issue_rc=$?
         if [[ ${_issue_rc} -eq 2 ]]; then
