@@ -1,0 +1,171 @@
+<title>Agentic Runtime Security on AWS</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap">
+<style>
+:root{
+  --ground:#0d1117; --panel:#161b22; --panel-2:#1c2330; --line:#30363d;
+  --ink:#e6edf3; --ink-2:#c9d1d9; --mute:#8b949e;
+  --vault:#a855f7; --agent:#2dd4bf; --identity:#60a5fa; --data:#fdba74; --ok:#4ade80;
+  --g1:#9B72F2; --g2:#E87CA8; --g3:#F2A96B;
+  --sans:'Inter','Helvetica Neue',Arial,sans-serif;
+  --mono:'JetBrains Mono','Fira Code',Consolas,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);
+     -webkit-font-smoothing:antialiased;line-height:1.5}
+.sheet{max-width:860px;margin:0 auto;padding-block:32px;padding-left:28px;padding-right:28px;
+       display:flex;flex-direction:column;gap:22px}
+
+/* ── masthead: transparent reversed marks straight on the dark ground ── */
+.mast{display:flex;flex-wrap:wrap;gap:16px;align-items:center;justify-content:space-between}
+.marks{display:flex;align-items:center;gap:20px}
+.marks img{display:block;max-width:100%}
+.marks .aws{height:29px}
+.marks .hcp{height:31px}
+.marks .div{width:1px;height:26px;background:var(--line)}
+.meta{display:flex;gap:8px;flex-wrap:wrap}
+.chip{font-family:var(--mono);font-size:11px;font-weight:500;letter-spacing:.08em;
+      text-transform:uppercase;padding:6px 11px;border-radius:999px;
+      border:1px solid var(--line);color:var(--ink-2);background:var(--panel)}
+.chip.lvl{border-color:rgba(242,169,107,.45);color:var(--data);background:rgba(242,169,107,.08)}
+
+/* ── title ── */
+h1{margin:0;font-size:clamp(34px,6vw,52px);font-weight:800;letter-spacing:-.03em;
+   line-height:1.03;text-wrap:balance;
+   background:linear-gradient(96deg,var(--g1) 0%,var(--g2) 52%,var(--g3) 100%);
+   -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:var(--g2)}
+.lede{margin:0;font-size:16.5px;color:var(--ink-2);max-width:66ch}
+.lede b{color:var(--ink);font-weight:600}
+
+/* ── three planes ── */
+.planes{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);
+        border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.plane{background:var(--panel);padding:13px 15px;display:flex;flex-direction:column;gap:3px}
+.plane .k{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase}
+.plane .q{font-size:13.5px;color:var(--ink);font-weight:500}
+.plane.u .k{color:var(--identity)} .plane.w .k{color:var(--agent)} .plane.d .k{color:var(--data)}
+
+/* ── build sequence ── */
+.sec-h{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+       color:var(--mute);margin:0 0 9px}
+.steps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:7px;counter-reset:uc}
+.steps li{counter-increment:uc;display:grid;grid-template-columns:26px 1fr;gap:12px;
+          align-items:baseline;padding:10px 14px;background:var(--panel);
+          border:1px solid var(--line);border-radius:8px;border-left:3px solid var(--step)}
+.steps li:nth-child(1){--step:var(--agent)}
+.steps li:nth-child(2){--step:var(--identity)}
+.steps li:nth-child(3){--step:var(--vault)}
+.steps li::before{content:counter(uc);font-family:var(--mono);font-weight:700;font-size:15px;
+                  color:var(--step);line-height:1.3}
+.steps .t{font-weight:600;font-size:14.5px;color:var(--ink)}
+.steps .d{font-size:13px;color:var(--mute);display:block;margin-top:1px}
+
+/* ── delivery modes ── */
+.modes{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.mode{background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+      display:flex;flex-direction:column;gap:6px}
+.mode .tag{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;
+           color:var(--ok);display:flex;align-items:center;gap:6px}
+.mode.sp .tag{color:var(--vault)}
+.mode .tag::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.mode h3{margin:0;font-size:15.5px;font-weight:600;color:var(--ink)}
+.mode p{margin:0;font-size:13px;color:var(--ink-2)}
+.mode .need{margin-top:auto;padding-top:7px;font-family:var(--mono);font-size:11px;
+            color:var(--mute);border-top:1px dashed var(--line)}
+
+/* ── footer / QR ── */
+.foot{display:flex;gap:20px;align-items:center;flex-wrap:wrap;
+      background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px}
+.qr{background:#fff;border-radius:8px;padding:9px;flex:0 0 auto;line-height:0}
+.qr svg{width:104px;height:104px;display:block}
+.foot .txt{flex:1 1 240px;display:flex;flex-direction:column;gap:5px}
+.foot .lbl{font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute)}
+.foot .who{font-size:13.5px;color:var(--ink-2)}
+.foot .url{font-family:var(--mono);font-size:11px;color:var(--identity);word-break:break-all}
+.rule{height:1px;background:linear-gradient(90deg,var(--g1),var(--g2) 45%,var(--g3) 80%,transparent)}
+
+@media (max-width:640px){ .planes{grid-template-columns:1fr} .modes{grid-template-columns:1fr} }
+@media print{ .sheet{max-width:none;padding:0} }
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+
+<div class="sheet">
+
+  <header class="mast">
+    <div class="marks">
+      <img class="aws" src="data:image/png;base64,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" alt="Amazon Web Services">
+      <span class="div"></span>
+      <img class="hcp" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAANMAAADMCAYAAADph5aXAAAOhklEQVR42u2djbGkqhZGOwRDIIQOgQzGDI4ZdGfgycDJwJdBh2AIHYIhGALvnrpSw3gBAbH9W1R9VfNjIwIL9t6A3pRSN4TQclEJCAETQsCEEDAhhIAJIWBCCJgQAiaEEDAdU/IftRnyEWM+gjoFpqup+EeN+jf1mWDSqaZ+gekqEP109sHo/Llh0nl+Ud/AdGaTrlf/TWvApNMb0w+YzqT7P+qUO60Jk074U8B0Gr9IbQyTvs+DdgGmo+kx8Yv2ABP+FDAdzi96q7j0aZgw/YBp1xIzftEeYdKpASpg2muo+2gw6agf7QlMh/CL9g5TT3sC01Z+UafyJWACpkv6RS+VPwETMOEXARMCpnCVji1AwISAaSO/6EwwSULpwJRzC9CVYdImb01/AaYt/KKzwcTWJGCKOhrxqfQ6MEzmMwhg4mjEVuk9gnw7AUyX3++HX7RN+jElnyusge0BpsuafmwB+nz6PcJ8OzFMZp4lMHE0InfqRrNyzd0Ze4PpUqYfRyM+E6mTH3rOvcKkU73SrAxMH1C1oUn3c9/vD3aeI8Ck73MHpuOp3QikdoMR+CgwqbMGJ4Apv18k1XbmLDAB0+Fh6keTcmvfEJiA6bAwfdovAiZgOiVMXcZwrwQmYLoiTDm3AOljHj0wAdOVYMq5BWi6nQmYgOkyMOXcAlRb1r6ACZhOD1POL0j4jnkAEzCdHqavTJ28y9iRgQmYLgdTzDEPYAImYFJ5jnkAEzABk8pzzAOYgAmYDHUf6sjABEynh0kBEzABEzABEzABEzABEzABEzABEzABEzABEzABEzABEzABEzABEzB9GKY9JGACJmACJmACJmACJmACJmACJmACJmACJmACJmACJmACJmACJmACJmACJmACJmACJmACJmACJmACJmACJmACJmACJmBaC6afF1bKhSqBCZiAifNMwARMwARMwARMwARMwARMwARMwARMwARMwARMwARMwARMG8D0AiZgAqZlML3HRd8bMAETMKXB9LPr4pl4L2ACJmAa07f69wPWN2ACJmBKg6kbr1t6L2ACpsvC1Cf4RS7dVdpHsIEJmA4N0xK/aKofs7BReRIwAdOhYPq90C8y9RjBVMAETFeCKZdfdBtNw7fKn4AJmHYNU5HRLxIjlGslYAKmXcOUyy+qM5t0wARMl4Op+gBEwARMp4ZJrmzSARMwnR4mkaF+gOlCMD2BaTO/yJWGjIESYDrQCHw2mMrxXlulNmPYHpg2drD7i8K0hV9kpu6ss9FVYTJNv/4iMOXcApRq0j2v0reuCFOM6XdkmLb2i5Ye8wCmA0L1PhlMcmO/qDuzXwRM6f7UkWAqNvaLUo6/A9OJ9X1gmMRGEF3KLwKmdH8KmPwp5zEPYDqx7pFmy5Vg6sb6oZ8A0yq6Akz91f0iYAImQt3ABEw7gAm/CJiAiS1AwARM28L0U5aS9gQmYMIvAqYL7ffbI0yvq24BAqbzHfXYCib8ImA6zNakfqcwsQUImE5r+n0KJvwiYDoFVP3GMHX4RcB0BX9qTZje+EXAdFYV6r9HPdaACb8ImC7pT+WGiS1AwHRJlaM/kwOmn3w4GgFMCAETQgiYEAImhIAJIWBCCAETQsCEEDAhBEwIIWBCCJgQAiaEEDAhBEwIARNCwIQQAqb19Xs8em4q93u69Unc95i/yHQqV6p/X/BSjn/mhO6HYOotKhMaMEc+e9JP+aepzph/Zcn/554p73eQI5SD8qcfaBvFa8FWg8mWvhJgypHPlWDqM9RZqeJf16xTC1TAdBaYXCnkHoVK/5DAdCYEKGA6PEydo85kAEhvlS8BFDAdHqa7xcf5HfC71wwcwzhrPcfyNgHwvQEGmI4Mk663Zuz8VcD19QxE354Ahpjxrx5AA0xHhim2jgePqRYa/v6fB0bAOQFMYhyZ61GP0XdIfQ2wNPLTa0TN+Pcy0EcIgUmMZW1GPQI6tZiR63e+gEOMz1N4ZigZUb8PY1atA599Wo6QZ9f/V8zUoauMrdE28swwVR5HPDaEW4yNOrfWolM30/g+mMRMuV2fvhQB5RKRofTvxMHGlpoM9dsH9p/WA7OwrJvVM3UoA9umT7GY9gxTEQBRrBmTGuGqIzrvI8D38EXJUmGSnnukmi6DMag0M5bAXaV9flQkwOQyZ+dguke0TbTJvmeYuoROP3iAqheGhx+BMMnI9Z3eYp6kwNSsEDQQgWa0jJjtY4BywdTPdH5XHRYJwNefgKkeHyxUVQRMlcecq0Y1yv3hsCKw4+volh6x5Bh6HhzXFgF5lpPfdGO5u0BQU2HqPKPxVkEPHVLvZqwCV5u1M/UbA9Ng6Ve6bHMDt1wbplzpK7DjlxEN+bCYIDG+x5wZMQeoGiNiRcC6kTajbA51FVHufqPom2tNy/aNKOG5vg6EqVsAk2m22szr1uM7HxKmu2NGillX6QL8iTlfojYaQe/YLgMd/tjyKsfILCNgGjZYaJUekGIBtM387UxwyOXDiZnAj69sTerstNeZqRih0ubhXcXvrA5p9DIgPJ2yEdX3u5hZcilM3cowtREm27R9QyyKNhEIsWCJwFW25qgwhYS4fX6TslzvG+FS1xf6jA29FKZ35khe6vO3C0B8BcIkEuv4FVi2JmVgWgJTbzhvoUqFSRiLa6HRmNTo4Hus9JAFxj4h+rMWTK8P+0xFwmxv6hEAf5s424qFkc1fKQPT3teZ6gVrQ7FRJx9c9wPA1CSO4ks24SZHvhwddkiYvWLqWC58tkPCFLIAOIwV20Y8eMyCXeo601YwyRXWmUr191Ygadz7vhBeGdBubaIZuRQmcRaYhGed52eKf04aTCY8uIw0GV0dZU8wFSsEITqPIy42mplald8KCqn34YgwuSJEYsEIN2f7yxHSdsasbHYMky/snhJcCYFlyUwYsqSRG6ZGpftz76PBVCR0hsdCmFxlfQc09t5gcs1OfYLv1AY44d2CmbAP6Oy5YeoWzMivo8GUYod3EQEIHU7vAhrl1wFhuo0zrFoI1Jcjj+9MM2EV+LvcMIVEG111Xp0FpjJyVlKB191PCJNvgOln2q3wAGJbjE2ZCe+e39w+AJNvM7QvQCXUScy8fjJqTRv97bDdZUC+XxGVuhefSUfYakfHmItamhtw2wBf0TegPT2/adWfjc6l8m8PkivDNEzym5at8SydhLx34zABiCkA078/PI05tw6j83gFdCr5YZjuARHGrxWWAebMuxzHZULyzz0zlQllCzaP9whT7JkT4TFNWpXv9VftButMhZpfaJ4z29oFzzyMM09IRLRbAdTcMInIcg4xgZu9LtqGjKqD4RTKCACahAa3Haf4BExzZlRoO1QJs1SXEAH8juyoc059bpjuHp9tcQQ0ZvFuKpkAU2w+tvc/DMr+LuzKkvfTU5Zaud+9rY9dNDPle1nuWSXWg2+ndWlEIZe0QzWW2fcGo0YteKnI+HzfDivAXHgvAsvbTlSp5WtkvhmqC5yND/0VjNAj1KmbNsXK99hjfWoHfM3nDnmr0hr3DA1yiFxtz/vO0FkHipT1rxswIQRMCAETQsAETAiYgAkhYEIImBBCwIQQMCEETAgBE0IImKI3sW6x6TLXZtQ7HRaYtlYdECZtPedafo4SPGbCr3NnmFpje3/oe9s6xxEJoAKmzXQ3zvGo8axNNZmddGfXH4g2pQ/VPTwwDZ7t+3JyVmauvOXkIFyp/n5/wnChYyLAtPMZyvfiDt/R8cEBUz8zO73Ha/oAmMwTxrZDcN+BMyG6IExiHPFr5X+f2d0wb6T68+5r8QGYzBeGCAtMrfpzYtd2+leDEQJTZcyQvmtcH0bTdfml/G/AvY95PBx1KY2ZeS4fPZvOXT8to5y5Tufte6Z7RD6nhqk2zJZ+xifQHbGeXD9EVFYOmAoHTNL487Tc/eQZQt7yExsgaSZ+lU5fyv4+j3acMc1PU+q6bCZ1rBw+4zSf3uNDmi9cMe/ZO551Oki5rm88Zq9uk/LsMEmLKSOMhrF9iFl/zHlqEoX6EKkw6bK+HGZeO8lDWmalUJh6Ff9NJf1c5jdkheEjSktHHSb//jT+fZqPq45t+eg2nN5Xz8zS0n6dAyZb3sPkeukZNFq1/sfedjMz2Tr1L0fl9Mr+4vRHxOgTAlNvkQ5aFDMwTRu7nwAYApNK6ACufAtL57s5BgbX7GsOCl+B+bjuKzztJwLzbizXD47nH1T4VwxPGYCQHpi6iOtTYdIvotR6eQIMwmLa1UY+00ZfAyY5E5BoLTOdcnQyXQeuezwC87kZFsZc+SvP7NkGXl9bBoHqE7vE9wSTdoC1bdwZJsJWMImZdSI5A5P50sg28BlcPtYtojPWM+UWGWCqI2By+Zi1+vv1aH0GmGywvz5t4m0JkzAcS3Ntp9kpTL8sUTbhaPSnI68QmEJH9KPBVBoL4GZ7vzLAdDPgNNuluQpMrqiV2ClMtmid8DT6M8K3CS2juahbBJp5r4xmXixMg2XGLVYw86amXpUYET0sTL2j4e47halyRB9VhJMbumjr2ykxHXULjwNeWIIguWHqAp9BzQSQlsJUGKZepwK+8ncmmFqLnWvuR3tMRrElMOmNrqYJKRzlKY2NpdJYvBwsaxxrwGTucnipvz+JI40RXljMSvOV0XfP7J8TpkH9+ayNWcbpwNNZoq5me39N2jsWptvE566uBJOYLLwOxrpCZ6nMJTAt3ejqWhxeCyYTqGnqHLNn4yhz5VkQzWXm9ZZ7f1ssjmHS3nqBvre0YQpM5meFxJVg0p2xGhvJ9gV1GbAtRI+GhQo7xmCqmORfOVQ68tf3Dm242K0twtim8wwI8wrDsX/ObLwVDhNbRjyn7vBivN9cOafXFZPnFAFlFJ72LiJ35rPRFe1GMbPyVrtqgAkBU+R6pTAWqAtgQsCUpsrwlX5vWRY6BVrSieUOyiH2UhY6BULAhBAwIQRMCCFgQgiYEAImhC6m/wO+6B6vMVNYXwAAAABJRU5ErkJggg==" alt="HashiCorp">
+    </div>
+    <div class="meta">
+      <span class="chip lvl">Level 300 · Advanced</span>
+      <span class="chip">~3 hours</span>
+    </div>
+  </header>
+
+  <h1>Agentic Runtime Security on AWS</h1>
+
+  <p class="lede">AI agents broke the assumptions security tooling has relied on for two decades.
+  An agent is not a user, and not a workload in the classic sense — it acts on its own behalf one
+  request and on a person's behalf the next. In this workshop you <b>deploy a working implementation</b>
+  of five control objectives for agentic systems on EKS, using IBM Verify Identity Access and
+  HashiCorp Vault: every agent has a verifiable identity, no standing privileges, actions are tied
+  to user intent, enforcement happens at the point of use, and audit evidence correlates across
+  all three trust planes.</p>
+
+  <div class="rule"></div>
+
+  <section>
+    <p class="sec-h">The agentic threat model spans three planes at once</p>
+    <div class="planes">
+      <div class="plane u"><span class="k">User identity</span><span class="q">Who is asking?</span></div>
+      <div class="plane w"><span class="k">Workload identity</span><span class="q">Which agent process is acting?</span></div>
+      <div class="plane d"><span class="k">Data plane</span><span class="q">What credential does it present?</span></div>
+    </div>
+  </section>
+
+  <section>
+    <p class="sec-h">What you build — three agents, each layering on the last</p>
+    <ol class="steps">
+      <li><span><span class="t">Non-personalized read-only agent</span>
+        <span class="d">Workload identity and just-in-time database credentials. No standing grants.</span></span></li>
+      <li><span><span class="t">OAuth personalized read-only agent</span>
+        <span class="d">User intent carried into the request via Authorization Code + PKCE.</span></span></li>
+      <li><span><span class="t">Privileged action with CIBA</span>
+        <span class="d">Out-of-band approval for a real money movement, then one query correlating
+        identity, workload and database evidence for that single action.</span></span></li>
+    </ol>
+  </section>
+
+  <section>
+    <p class="sec-h">Two ways to run it</p>
+    <div class="modes">
+      <div class="mode">
+        <span class="tag">At an event</span>
+        <h3>Pre-provisioned AWS accounts</h3>
+        <p>Each attendee gets an account with the cluster, database and container images already
+        built. You start at the identity and secrets layer and spend the time on the agents.</p>
+        <span class="need">Bring: a laptop. Nothing to set up.</span>
+      </div>
+      <div class="mode sp">
+        <span class="tag">Self-paced</span>
+        <h3>Your own AWS account</h3>
+        <p>The same content, start to finish. You run the foundation build yourself first, then
+        follow the identical path through all three agents.</p>
+        <span class="need">Requires: your own AWS account.</span>
+      </div>
+    </div>
+  </section>
+
+  <footer class="foot">
+    <div class="qr"><svg xmlns="http://www.w3.org/2000/svg" viewBox="-2 -2 45 45" shape-rendering="crispEdges" role="img" aria-label="Workshop URL QR code"><path fill="#0d1117" d="M0 0h7v1h-7zM9 0h1v1h-1zM11 0h3v1h-3zM15 0h1v1h-1zM17 0h1v1h-1zM19 0h1v1h-1zM21 0h6v1h-6zM30 0h3v1h-3zM34 0h7v1h-7zM0 1h1v1h-1zM6 1h1v1h-1zM10 1h1v1h-1zM12 1h3v1h-3zM16 1h2v1h-2zM20 1h2v1h-2zM25 1h4v1h-4zM32 1h1v1h-1zM34 1h1v1h-1zM40 1h1v1h-1zM0 2h1v1h-1zM2 2h3v1h-3zM6 2h1v1h-1zM8 2h1v1h-1zM10 2h1v1h-1zM12 2h2v1h-2zM17 2h2v1h-2zM21 2h2v1h-2zM24 2h1v1h-1zM27 2h1v1h-1zM31 2h1v1h-1zM34 2h1v1h-1zM36 2h3v1h-3zM40 2h1v1h-1zM0 3h1v1h-1zM2 3h3v1h-3zM6 3h1v1h-1zM8 3h2v1h-2zM11 3h1v1h-1zM16 3h1v1h-1zM21 3h1v1h-1zM25 3h1v1h-1zM27 3h1v1h-1zM29 3h2v1h-2zM32 3h1v1h-1zM34 3h1v1h-1zM36 3h3v1h-3zM40 3h1v1h-1zM0 4h1v1h-1zM2 4h3v1h-3zM6 4h1v1h-1zM8 4h1v1h-1zM11 4h3v1h-3zM15 4h6v1h-6zM22 4h2v1h-2zM25 4h1v1h-1zM31 4h2v1h-2zM34 4h1v1h-1zM36 4h3v1h-3zM40 4h1v1h-1zM0 5h1v1h-1zM6 5h1v1h-1zM8 5h2v1h-2zM11 5h4v1h-4zM16 5h1v1h-1zM20 5h3v1h-3zM25 5h6v1h-6zM32 5h1v1h-1zM34 5h1v1h-1zM40 5h1v1h-1zM0 6h7v1h-7zM8 6h1v1h-1zM10 6h1v1h-1zM12 6h1v1h-1zM14 6h1v1h-1zM16 6h1v1h-1zM18 6h1v1h-1zM20 6h1v1h-1zM22 6h1v1h-1zM24 6h1v1h-1zM26 6h1v1h-1zM28 6h1v1h-1zM30 6h1v1h-1zM32 6h1v1h-1zM34 6h7v1h-7zM8 7h1v1h-1zM15 7h2v1h-2zM19 7h1v1h-1zM21 7h3v1h-3zM26 7h1v1h-1zM31 7h1v1h-1zM0 8h1v1h-1zM2 8h5v1h-5zM9 8h4v1h-4zM14 8h1v1h-1zM17 8h2v1h-2zM22 8h6v1h-6zM29 8h1v1h-1zM31 8h1v1h-1zM34 8h5v1h-5zM0 9h1v1h-1zM2 9h1v1h-1zM4 9h2v1h-2zM7 9h2v1h-2zM15 9h3v1h-3zM19 9h1v1h-1zM21 9h1v1h-1zM23 9h3v1h-3zM28 9h1v1h-1zM30 9h7v1h-7zM38 9h1v1h-1zM40 9h1v1h-1zM0 10h1v1h-1zM2 10h1v1h-1zM6 10h1v1h-1zM11 10h1v1h-1zM14 10h1v1h-1zM16 10h1v1h-1zM18 10h1v1h-1zM22 10h1v1h-1zM25 10h3v1h-3zM29 10h2v1h-2zM32 10h2v1h-2zM39 10h1v1h-1zM2 11h2v1h-2zM8 11h1v1h-1zM10 11h1v1h-1zM14 11h2v1h-2zM18 11h1v1h-1zM20 11h5v1h-5zM27 11h2v1h-2zM31 11h2v1h-2zM34 11h4v1h-4zM39 11h1v1h-1zM1 12h1v1h-1zM5 12h2v1h-2zM9 12h2v1h-2zM13 12h1v1h-1zM17 12h1v1h-1zM20 12h1v1h-1zM22 12h1v1h-1zM24 12h3v1h-3zM29 12h1v1h-1zM31 12h2v1h-2zM35 12h1v1h-1zM37 12h3v1h-3zM1 13h1v1h-1zM3 13h3v1h-3zM7 13h1v1h-1zM9 13h2v1h-2zM12 13h5v1h-5zM18 13h1v1h-1zM21 13h1v1h-1zM28 13h1v1h-1zM30 13h2v1h-2zM33 13h4v1h-4zM39 13h2v1h-2zM0 14h1v1h-1zM6 14h1v1h-1zM9 14h1v1h-1zM12 14h2v1h-2zM15 14h1v1h-1zM20 14h1v1h-1zM23 14h3v1h-3zM27 14h2v1h-2zM33 14h1v1h-1zM38 14h2v1h-2zM2 15h3v1h-3zM9 15h2v1h-2zM12 15h3v1h-3zM18 15h1v1h-1zM21 15h1v1h-1zM23 15h1v1h-1zM27 15h2v1h-2zM30 15h1v1h-1zM32 15h1v1h-1zM34 15h2v1h-2zM37 15h1v1h-1zM40 15h1v1h-1zM1 16h1v1h-1zM6 16h3v1h-3zM11 16h3v1h-3zM16 16h3v1h-3zM23 16h3v1h-3zM27 16h1v1h-1zM29 16h2v1h-2zM32 16h2v1h-2zM35 16h1v1h-1zM38 16h2v1h-2zM0 17h1v1h-1zM4 17h1v1h-1zM7 17h1v1h-1zM9 17h2v1h-2zM12 17h1v1h-1zM14 17h1v1h-1zM18 17h3v1h-3zM23 17h1v1h-1zM25 17h1v1h-1zM28 17h1v1h-1zM30 17h2v1h-2zM34 17h5v1h-5zM40 17h1v1h-1zM2 18h3v1h-3zM6 18h3v1h-3zM10 18h2v1h-2zM14 18h1v1h-1zM18 18h1v1h-1zM20 18h1v1h-1zM22 18h1v1h-1zM26 18h5v1h-5zM36 18h3v1h-3zM0 19h1v1h-1zM4 19h2v1h-2zM8 19h1v1h-1zM10 19h7v1h-7zM19 19h1v1h-1zM23 19h1v1h-1zM26 19h3v1h-3zM31 19h1v1h-1zM34 19h1v1h-1zM36 19h1v1h-1zM39 19h1v1h-1zM0 20h1v1h-1zM2 20h2v1h-2zM5 20h3v1h-3zM11 20h1v1h-1zM18 20h1v1h-1zM20 20h3v1h-3zM24 20h1v1h-1zM26 20h5v1h-5zM37 20h3v1h-3zM0 21h1v1h-1zM3 21h1v1h-1zM8 21h1v1h-1zM12 21h5v1h-5zM19 21h3v1h-3zM23 21h2v1h-2zM26 21h1v1h-1zM28 21h1v1h-1zM31 21h6v1h-6zM39 21h2v1h-2zM3 22h1v1h-1zM5 22h4v1h-4zM11 22h2v1h-2zM18 22h1v1h-1zM20 22h3v1h-3zM25 22h3v1h-3zM30 22h1v1h-1zM33 22h1v1h-1zM36 22h2v1h-2zM1 23h4v1h-4zM8 23h2v1h-2zM11 23h2v1h-2zM19 23h1v1h-1zM21 23h4v1h-4zM26 23h2v1h-2zM31 23h1v1h-1zM2 24h2v1h-2zM5 24h3v1h-3zM11 24h2v1h-2zM14 24h2v1h-2zM17 24h4v1h-4zM22 24h1v1h-1zM25 24h1v1h-1zM27 24h1v1h-1zM29 24h1v1h-1zM33 24h1v1h-1zM35 24h1v1h-1zM37 24h3v1h-3zM0 25h1v1h-1zM2 25h2v1h-2zM9 25h1v1h-1zM12 25h1v1h-1zM14 25h7v1h-7zM23 25h1v1h-1zM28 25h2v1h-2zM31 25h1v1h-1zM34 25h1v1h-1zM36 25h2v1h-2zM40 25h1v1h-1zM0 26h2v1h-2zM4 26h6v1h-6zM11 26h1v1h-1zM13 26h1v1h-1zM15 26h3v1h-3zM20 26h1v1h-1zM22 26h1v1h-1zM27 26h2v1h-2zM30 26h1v1h-1zM32 26h2v1h-2zM36 26h1v1h-1zM39 26h1v1h-1zM1 27h1v1h-1zM4 27h2v1h-2zM8 27h2v1h-2zM11 27h2v1h-2zM14 27h1v1h-1zM16 27h1v1h-1zM19 27h1v1h-1zM21 27h2v1h-2zM26 27h2v1h-2zM30 27h3v1h-3zM35 27h3v1h-3zM39 27h1v1h-1zM1 28h4v1h-4zM6 28h2v1h-2zM9 28h3v1h-3zM13 28h3v1h-3zM17 28h1v1h-1zM22 28h1v1h-1zM24 28h4v1h-4zM29 28h1v1h-1zM31 28h1v1h-1zM37 28h2v1h-2zM0 29h1v1h-1zM3 29h2v1h-2zM8 29h1v1h-1zM11 29h1v1h-1zM15 29h3v1h-3zM20 29h1v1h-1zM22 29h1v1h-1zM24 29h3v1h-3zM28 29h7v1h-7zM36 29h3v1h-3zM40 29h1v1h-1zM0 30h1v1h-1zM2 30h1v1h-1zM4 30h1v1h-1zM6 30h4v1h-4zM11 30h2v1h-2zM16 30h1v1h-1zM19 30h1v1h-1zM21 30h2v1h-2zM26 30h3v1h-3zM33 30h2v1h-2zM36 30h3v1h-3zM0 31h1v1h-1zM5 31h1v1h-1zM7 31h1v1h-1zM10 31h1v1h-1zM14 31h3v1h-3zM19 31h6v1h-6zM26 31h1v1h-1zM28 31h1v1h-1zM32 31h6v1h-6zM39 31h1v1h-1zM0 32h1v1h-1zM3 32h1v1h-1zM6 32h1v1h-1zM8 32h2v1h-2zM11 32h1v1h-1zM13 32h2v1h-2zM17 32h3v1h-3zM25 32h1v1h-1zM29 32h2v1h-2zM32 32h5v1h-5zM38 32h2v1h-2zM8 33h3v1h-3zM13 33h5v1h-5zM19 33h6v1h-6zM26 33h1v1h-1zM28 33h1v1h-1zM32 33h1v1h-1zM36 33h1v1h-1zM38 33h1v1h-1zM40 33h1v1h-1zM0 34h7v1h-7zM12 34h1v1h-1zM17 34h1v1h-1zM21 34h1v1h-1zM24 34h1v1h-1zM26 34h3v1h-3zM30 34h3v1h-3zM34 34h1v1h-1zM36 34h2v1h-2zM0 35h1v1h-1zM6 35h1v1h-1zM8 35h2v1h-2zM12 35h2v1h-2zM15 35h4v1h-4zM21 35h2v1h-2zM26 35h2v1h-2zM31 35h2v1h-2zM36 35h2v1h-2zM39 35h2v1h-2zM0 36h1v1h-1zM2 36h3v1h-3zM6 36h1v1h-1zM8 36h1v1h-1zM10 36h1v1h-1zM12 36h5v1h-5zM19 36h1v1h-1zM21 36h1v1h-1zM26 36h1v1h-1zM28 36h3v1h-3zM32 36h5v1h-5zM38 36h1v1h-1zM40 36h1v1h-1zM0 37h1v1h-1zM2 37h3v1h-3zM6 37h1v1h-1zM8 37h4v1h-4zM13 37h3v1h-3zM17 37h7v1h-7zM25 37h2v1h-2zM28 37h1v1h-1zM30 37h1v1h-1zM33 37h1v1h-1zM35 37h1v1h-1zM37 37h1v1h-1zM39 37h2v1h-2zM0 38h1v1h-1zM2 38h3v1h-3zM6 38h1v1h-1zM8 38h1v1h-1zM11 38h1v1h-1zM14 38h1v1h-1zM16 38h1v1h-1zM21 38h1v1h-1zM25 38h4v1h-4zM33 38h4v1h-4zM38 38h1v1h-1zM0 39h1v1h-1zM6 39h1v1h-1zM10 39h2v1h-2zM13 39h1v1h-1zM15 39h1v1h-1zM18 39h2v1h-2zM21 39h3v1h-3zM28 39h1v1h-1zM30 39h3v1h-3zM34 39h1v1h-1zM36 39h1v1h-1zM39 39h1v1h-1zM0 40h7v1h-7zM8 40h1v1h-1zM10 40h3v1h-3zM14 40h4v1h-4zM20 40h1v1h-1zM22 40h1v1h-1zM25 40h2v1h-2zM29 40h1v1h-1zM31 40h1v1h-1zM34 40h5v1h-5z"/></svg></div>
+    <div class="txt">
+      <span class="lbl">Start the workshop</span>
+      <span class="who">Built for security architects, platform and identity engineers putting
+      AI agents into production.</span>
+      <span class="url">catalog.us-east-1.prod.workshops.aws/workshops/9d6a0b3d-9ea2-47a2-8ca4-40168cadd531/en-US</span>
+    </div>
+  </footer>
+
+</div>
