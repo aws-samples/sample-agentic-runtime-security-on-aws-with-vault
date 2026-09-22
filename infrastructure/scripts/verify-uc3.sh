@@ -271,7 +271,7 @@ ivia_client_secret() {
         *) return 1 ;;
     esac
     kubectl get secret -n "${BANKING_NAMESPACE}" "${secret_name}" \
-        -o "jsonpath={.data.${key}}" 2>/dev/null | base64 -d 2>/dev/null
+        -o "jsonpath={.data.${key}}" 2>/dev/null | base64 --decode 2>/dev/null
 }
 
 
@@ -294,7 +294,7 @@ decode_jwt_claim() {
         2) payload="${payload}==" ;;
         3) payload="${payload}=" ;;
     esac
-    printf '%s' "$payload" | tr '_-' '/+' | base64 -d 2>/dev/null \
+    printf '%s' "$payload" | tr '_-' '/+' | base64 --decode 2>/dev/null \
         | jq -r "$filter" 2>/dev/null || echo ""
 }
 
@@ -374,14 +374,19 @@ assert_native_allow() {
     fi
 }
 
-# _mint_uc3_tokens <user> — obtain a REAL IVIA-issued delegated OBO token (and the
-# subject token underneath it) for <user> by driving an ACTUAL human approval.
-# Populates two globals:
-#   MINTED_SUBJECT_TOKEN   — the genuine CIBA access token: sub=<user>, issued to
-#                            the CIBA client, NO act claim (a first-party token).
+# _mint_uc3_tokens <user> — obtain a REAL IVIA-issued delegated OBO token for
+# <user> by driving an ACTUAL human approval.
+# Populates one global:
 #   MINTED_DELEGATED_TOKEN — sub=<user>, act.sub=uc3-actor, a native jti, and a
 #                            vault:path_access RAR = database/creds/uc3-refund-writer.
 # Returns 0 on success, 1 on any failure (so a check HARD-FAILs, never silent-passes).
+#
+# The CIBA subject token underneath it is NOT surfaced as a global. It used to be,
+# back when a check modelled the wrong-agent case on it; since issue #29 made it a
+# first-party token carrying no act claim it cannot serve that purpose, and Check 18
+# mints its own UC2 login token instead (see the comment at the DELEG_TOKEN
+# assignment). The token exchange still consumes it — inside the mint helper below,
+# where it is a local of the embedded python, not a shell global.
 #
 # WHY THIS IS NOT A PKCE LOGIN ANY MORE (issue #29): this function used to mint the
 # subject token from a plain authorization_code login and hand it to the token
@@ -398,7 +403,7 @@ assert_native_allow() {
 # the tokens are presented to Vault separately via _present_native_token.
 _mint_uc3_tokens() {
     local user="$1"
-    MINTED_SUBJECT_TOKEN=""; MINTED_DELEGATED_TOKEN=""; MINT_ERR=""
+    MINTED_DELEGATED_TOKEN=""; MINT_ERR=""
 
     local acme_state="${SCRIPT_DIR}/../.acme-state"
     local base_layer="${SCRIPT_DIR}/../modules/verify_access/base_layer/base_layer.yaml.tftpl"
@@ -499,11 +504,13 @@ r = c.post(token_url, auth=(actor_client, actor_secret),
                  "requested_token_type": "urn:ietf:params:oauth:token-type:access_token"})
 if r.status_code != 200:
     print("MINT_ERR token-exchange %d %s" % (r.status_code, r.text[:200])); sys.exit(1)
-print("SUBJECT=" + subject)
+# The subject token is deliberately NOT printed. Nothing reads it any more, and
+# the failure path below echoes the first 200 characters of this output into
+# MINT_ERR — which, with the subject token printed first, put a live IVIA access
+# token into the log of every run whose exchange failed.
 print("DELEGATED=" + r.json()["access_token"])
 PYEOF
 )
-    MINTED_SUBJECT_TOKEN=$(printf '%s\n' "${mint_out}" | sed -n 's/^SUBJECT=//p')
     MINTED_DELEGATED_TOKEN=$(printf '%s\n' "${mint_out}" | sed -n 's/^DELEGATED=//p')
     if [ -z "${MINTED_DELEGATED_TOKEN}" ]; then
         MINT_ERR=$(printf '%s\n' "${mint_out}" | grep 'MINT_ERR' | head -1)
