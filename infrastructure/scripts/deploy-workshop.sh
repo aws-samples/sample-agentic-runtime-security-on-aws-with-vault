@@ -1215,6 +1215,11 @@ _run_acme_step() {
         source "$ACME_STATE_FILE"
     fi
 
+    # Captured BEFORE the drift guard below, which unsets ALB_IP when the cached
+    # address stopped routing. The sticky pick in step (2) reuses this only when
+    # the guard did NOT fire. Issue #52.
+    local _acme_cached_alb_ip="${ALB_IP:-}"
+
     local _acme_hosts_reset=false
     # ALB-IP drift detection: on destroy+recreate the ALB gets new public IPs but
     # .acme-state survives — its NIP_FQDN_* then encode IPs that no longer route.
@@ -1330,7 +1335,31 @@ MARKER
 
     # (2) Resolve ALB IP (nip.io encodes the IP into the hostname). Uses a
     # dig-free resolver (getent/python3 fallback) so it works in CloudShell.
-    ALB_IP=$(_resolve_host_ips "$WRP_ALB" | head -1)
+    #
+    # The pick must be STABLE across runs, not merely valid. A multi-AZ ALB
+    # publishes 2-3 addresses and round-robins their order, and the dig fallback
+    # inside _resolve_host_ips is unsorted — so `head -1` returned a DIFFERENT
+    # address run to run from one unchanged ALB (measured: 3 distinct addresses
+    # across 20 consecutive lookups). The hostname encodes that address, so an
+    # unstable pick renames the WRP and banking hosts on a re-issue: Vault's
+    # issuer_id moves while iviaop and the banking Ingress keep the old name,
+    # and every token is then rejected. Issue #52.
+    #
+    # Prefer the address already recorded in .acme-state while it is still live;
+    # otherwise take the numerically lowest. _acme_hosts_reset gates the reuse —
+    # the drift guard above unsets ALB_IP precisely because the cached address
+    # stopped routing, and re-pinning it here would defeat that guard.
+    ALB_LIVE_IPS=$(_resolve_host_ips "$WRP_ALB")
+    if [[ "${_acme_hosts_reset}" = false ]] && [[ -n "${_acme_cached_alb_ip}" ]] \
+        && grep -qx "${_acme_cached_alb_ip}" <<<"$ALB_LIVE_IPS"; then
+        ALB_IP="${_acme_cached_alb_ip}"
+        print_info "Step 7: reusing the ALB address already recorded in .acme-state (${ALB_IP}); it is still live, so the TLS host names do not move"
+    else
+        # No pipe to head: `sort | head -1` under `set -o pipefail` can surface
+        # SIGPIPE (141) as the assignment's status.
+        ALB_SORTED_IPS=$(sort -t. -k1,1n -k2,2n -k3,3n -k4,4n <<<"$ALB_LIVE_IPS")
+        ALB_IP="${ALB_SORTED_IPS%%$'\n'*}"
+    fi
     if [[ -z "$ALB_IP" ]]; then
         print_fail "Step 7: ALB IP resolution" \
             "Could not resolve an IP for ${WRP_ALB} (tried getent/dig/python3). Confirm the ALB has converged: aws elbv2 describe-load-balancers --region ${REGION}"
@@ -1405,8 +1434,30 @@ MARKER
     # (2) is the one that is silent: every tier-2 gate still passes, because each
     # reads only its own side. Name it here rather than leaving the operator to
     # discover it at Use Case 2.
-    if [[ "${_acme_suffix_current}" = false ]] && [[ -n "${TIER}" ]] && [[ "${TIER}" != "3" ]]; then
-        print_warn "Step 7: the TLS host names changed, but this run is --tier ${TIER}. Tier 3 builds BOTH the banking-UI Ingress host AND iviaop's advertised issuer from .acme-state, so banking stays on the OLD host and iviaop keeps stamping the OLD issuer into tokens while Vault now validates against the NEW one. Re-apply tier 3 before using Use Case 2 or 3: bash ${BASH_SOURCE[0]} --tier 3"
+    # Gate on the VALUE tier 3 actually deployed, not on whether the suffix
+    # changed. A suffix change is only one of the ways the hosts move — an IP
+    # re-pick moves them too, with _acme_suffix_current still true, and that path
+    # was silent. Compare against tier 3's own recorded host instead, so any
+    # divergence is caught however it arose. Issue #52.
+    #
+    # Tier 3 not applied yet → the output is empty → nothing to diverge from,
+    # skip. Applied before ACME ever ran → the output carries tier 3's raw ALB
+    # fallback (coalesce in workloads/main.tf), which is not a magic-DNS host and
+    # is not evidence of a split, so skip that too.
+    #
+    # Stays scoped to a tier-2-only run: a full run applies tier 3 later in the
+    # same invocation and reconciles both hosts itself, so failing here would
+    # break end-to-end re-runnability.
+    if [[ -n "${TIER}" ]] && [[ "${TIER}" != "3" ]]; then
+        _tier3_banking_host=$(terraform -chdir="${WORKLOADS_DIR}" \
+            output -raw effective_banking_host 2>/dev/null || echo "")
+        if [[ -n "${_tier3_banking_host}" ]] \
+            && [[ "${_tier3_banking_host}" != *.elb.amazonaws.com ]] \
+            && [[ "${_tier3_banking_host}" != "${NIP_FQDN_BANKING}" ]]; then
+            print_fail "Step 7: tier 3 is deployed on a different TLS host than this run just issued" \
+                "Tier 3 deployed with ${_tier3_banking_host}; this run issued ${NIP_FQDN_BANKING}. Tier 3 builds BOTH the banking-UI Ingress host AND iviaop's advertised issuer from .acme-state, so banking stays on the OLD host and iviaop keeps stamping the OLD issuer into tokens while Vault now validates against the NEW one — every token is rejected and no tier-2 gate can see it. Re-apply tier 3 before using Use Case 2 or 3: bash ${BASH_SOURCE[0]} --tier 3"
+            return 1
+        fi
     fi
 
     # (6) Bootstrap ACM import — extract the K8s Secret + upsert into the stable
