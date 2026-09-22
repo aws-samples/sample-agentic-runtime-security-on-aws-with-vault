@@ -1220,7 +1220,7 @@ MARKER
         _issue_rc=$?
         if [[ ${_issue_rc} -eq 2 ]]; then
             print_fail "Step 7: Certificate Ready=true" \
-                "Let's Encrypt refused BOTH ${TLS_DNS_SUFFIX} and ${TLS_DNS_SUFFIX_FALLBACK} as rate limited — both magic-DNS budgets are exhausted. Re-run later, or point the deploy at a magic-DNS suffix you control: TLS_DNS_SUFFIX=<suffix> bash ${BASH_SOURCE[0]}"
+                "Let's Encrypt refused BOTH ${TLS_DNS_SUFFIX} and ${TLS_DNS_SUFFIX_FALLBACK} as rate limited — both magic-DNS budgets are exhausted. Re-run later, or point the deploy at another dashed-IPv4 magic-DNS provider (one that resolves <anything>.<ip-with-dashes>.<suffix>): TLS_DNS_SUFFIX=<suffix> bash ${BASH_SOURCE[0]}"
             return 1
         fi
     fi

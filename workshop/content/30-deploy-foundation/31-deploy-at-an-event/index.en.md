@@ -111,10 +111,15 @@ Step 7 obtains the browser-trusted Let's Encrypt certificate. It has two distinc
 
 The deploy already tried the fallback for you: `sslip.io` is a separate registered domain with its own separate budget. This message means both were exhausted, which is rare.
 
-Point the deploy at a magic-DNS host you control and re-run:
+Point the deploy at a different magic-DNS provider and re-run. The suffix you
+choose must be a **dashed-IPv4 magic-DNS** service — one that resolves
+`<anything>.<ip-with-dashes>.<suffix>` to that IP address, the same convention
+`nip.io` and `sslip.io` use — because the deploy builds its host names as
+`wrp.<deploy-id>.<alb-ip-dashed>.<suffix>`. A domain you own does not work here
+unless it provides that wildcard resolution.
 
 ```bash
-TLS_DNS_SUFFIX=<your-magic-dns-suffix> bash infrastructure/scripts/deploy-workshop.sh --tier 2 --skip-vault-init
+TLS_DNS_SUFFIX=<dashed-ipv4-magic-dns-suffix> bash infrastructure/scripts/deploy-workshop.sh --tier 2 --skip-vault-init
 ```
 
 ::::alert{header="This warning is not a failure" type="info"}
