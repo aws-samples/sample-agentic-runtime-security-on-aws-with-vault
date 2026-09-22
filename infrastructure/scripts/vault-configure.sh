@@ -229,7 +229,7 @@ heal_orphan_auth_mounts() {
 # no-op reported as a failure — which is precisely why the call site learned to
 # swallow the status with `|| true` and stopped noticing real ones.
 heal_orphan_oauth_aliases() {
-  local deleted=0 failed=0 live_id live_accessor names alias_ids id acc name entry
+  local deleted=0 failed=0 skipped=0 live_id live_accessor names alias_ids id acc name entry
 
   live_id=$(vault_exec "vault read -format=json sys/config/oauth-resource-server/ivia" \
     2>/dev/null | jq -r '.data.config_id // empty' 2>/dev/null || echo "")
@@ -250,31 +250,59 @@ heal_orphan_oauth_aliases() {
     return 0
   fi
 
-  # The identity names this workshop owns, from the same declaration the gate
-  # below asserts against, so an identity added to the workshop is swept and
-  # gated from one source.
+  # Pass 1 — find the aliases that sit on a DEAD oauth-resource-server profile.
+  # An alias on the profile this deploy binds is current by definition, and an
+  # alias belonging to any other auth method is none of this sweep's business.
+  local candidates="" _tab
+  _tab=$'\t'
+  while IFS= read -r id; do
+    [[ -z "$id" ]] && continue
+    entry=$(vault_exec "vault read -format=json identity/entity-alias/id/${id}" 2>/dev/null || echo "")
+    acc=$(jq -r '.data.mount_accessor // empty' <<<"$entry" 2>/dev/null || echo "")
+    name=$(jq -r '.data.name // empty' <<<"$entry" 2>/dev/null || echo "")
+    case "$acc" in
+      oauth-resource-server_root_*) ;;
+      *) continue ;;
+    esac
+    [[ "$acc" == "$live_accessor" ]] && continue
+    candidates="${candidates}${id}${_tab}${name}${_tab}${acc}"$'\n'
+  done <<< "$alias_ids"
+
+  if [[ -z "$candidates" ]]; then
+    info "No orphaned OAuth entity aliases — every OAuth alias in Vault is already on the live profile"
+    return 0
+  fi
+
+  # Only NOW does the expected set matter, and asking for it any earlier is a
+  # deploy-stopping bug: `terraform output -json` answers {} with exit 0 when
+  # vault-config has no state yet (fresh checkout, or state lost while the
+  # cluster lives), so demanding a non-empty set up front aborts a phase that
+  # had nothing to sweep in the first place.
+  #
+  # The identity names this workshop owns come from the same declaration the
+  # gate below asserts against, so an identity added to the workshop is swept
+  # and gated from one source.
   names=$(_workshop_oauth_expected_aliases | cut -f1)
   if [[ -z "$names" ]]; then
-    warn "Entity aliases exist but terraform declares no OAuth identities — refusing to delete any alias"
+    warn "Orphaned OAuth aliases exist but terraform declares no OAuth identities — refusing to delete any alias"
     warn "  Expected human_entity_ids / agent_uc2_entity_id / uc3_actor_entity_id from"
     warn "  infrastructure/vault-config/outputs.tf. Deleting on an unknown expected set"
     warn "  would be deleting blind."
     return 1
   fi
 
-  while IFS= read -r id; do
+  # Pass 2 — delete the ones this workshop owns by name. The name scope is a
+  # blast-radius guard, not a correctness rule: an alias on a dead profile whose
+  # name terraform no longer declares is LEFT IN PLACE and named in the log, so
+  # an identity removed between generations is visible rather than silently
+  # swept or silently ignored.
+  while IFS=$'\t' read -r id name acc; do
     [[ -z "$id" ]] && continue
-    entry=$(vault_exec "vault read -format=json identity/entity-alias/id/${id}" 2>/dev/null || echo "")
-    acc=$(jq -r '.data.mount_accessor // empty' <<<"$entry" 2>/dev/null || echo "")
-    name=$(jq -r '.data.name // empty' <<<"$entry" 2>/dev/null || echo "")
-    # (1) an OAuth-profile alias, (2) not the profile this deploy binds,
-    # (3) a name this workshop owns. All three, or it is left alone.
-    case "$acc" in
-      oauth-resource-server_root_*) ;;
-      *) continue ;;
-    esac
-    [[ "$acc" == "$live_accessor" ]] && continue
-    grep -qxF "$name" <<<"$names" || continue
+    if ! grep -qxF "$name" <<<"$names"; then
+      skipped=$(( skipped + 1 ))
+      warn "  left alias ${id} (name ${name}) on dead profile ${acc} — terraform does not declare that identity"
+      continue
+    fi
     if vault_exec "vault delete identity/entity-alias/id/${id}" >/dev/null 2>&1; then
       deleted=$(( deleted + 1 ))
       # Name every deletion. An unauditable "deleted some" line cannot be checked
@@ -284,12 +312,15 @@ heal_orphan_oauth_aliases() {
       failed=$(( failed + 1 ))
       warn "Failed to delete orphaned OAuth alias ${id} (name ${name}, accessor ${acc})"
     fi
-  done <<< "$alias_ids"
+  done <<< "$candidates"
 
   if (( deleted > 0 )); then
     ok "Deleted ${deleted} orphaned OAuth entity alias(es) whose oauth-resource-server profile this deploy no longer binds"
   else
     info "No orphaned OAuth entity aliases — every workshop alias is already on the live profile"
+  fi
+  if (( skipped > 0 )); then
+    warn "${skipped} alias(es) on a dead profile were left in place because terraform no longer declares their identity"
   fi
   if (( failed > 0 )); then
     warn "${failed} orphaned alias(es) could not be deleted — the apply may still collide on (issuer, external_id)"
