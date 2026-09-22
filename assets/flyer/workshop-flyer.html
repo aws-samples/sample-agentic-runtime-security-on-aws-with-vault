@@ -46,6 +46,15 @@ h1{margin:0;font-size:clamp(34px,6vw,52px);font-weight:800;letter-spacing:-.03em
 .plane .q{font-size:13.5px;color:var(--ink);font-weight:500}
 .plane.u .k{color:var(--identity)} .plane.w .k{color:var(--agent)} .plane.d .k{color:var(--data)}
 
+/* ── Vault native primitives ── */
+.natives{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.native{background:var(--panel);border:1px solid var(--line);border-radius:9px;
+        border-top:2px solid var(--vault);padding:11px 13px;display:flex;flex-direction:column;gap:4px}
+.native .k{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;color:var(--vault);font-weight:700}
+.native .q{font-size:12.5px;color:var(--ink-2);line-height:1.45}
+.native code{font-family:var(--mono);font-size:11px;color:var(--agent);
+             background:rgba(45,212,191,.09);padding:1px 4px;border-radius:3px}
+
 /* ── build sequence ── */
 .sec-h{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;
        color:var(--mute);margin:0 0 9px}
@@ -85,7 +94,7 @@ h1{margin:0;font-size:clamp(34px,6vw,52px);font-weight:800;letter-spacing:-.03em
 .foot .url{font-family:var(--mono);font-size:11px;color:var(--identity);word-break:break-all}
 .rule{height:1px;background:linear-gradient(90deg,var(--g1),var(--g2) 45%,var(--g3) 80%,transparent)}
 
-@media (max-width:640px){ .planes{grid-template-columns:1fr} .modes{grid-template-columns:1fr} }
+@media (max-width:640px){ .planes{grid-template-columns:1fr} .modes{grid-template-columns:1fr} .natives{grid-template-columns:1fr} }
 @media print{ .sheet{max-width:none;padding:0} }
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
@@ -110,11 +119,32 @@ h1{margin:0;font-size:clamp(34px,6vw,52px);font-weight:800;letter-spacing:-.03em
   An agent is not a user, and not a workload in the classic sense — it acts on its own behalf one
   request and on a person's behalf the next. In this workshop you <b>deploy a working implementation</b>
   of five control objectives for agentic systems on EKS, using IBM Verify Identity Access and
-  HashiCorp Vault: every agent has a verifiable identity, no standing privileges, actions are tied
-  to user intent, enforcement happens at the point of use, and audit evidence correlates across
-  all three trust planes.</p>
+  <b>HashiCorp Vault Enterprise 2.0.3 and its native AI agent support</b>: every agent has a
+  verifiable identity, no standing privileges, actions are tied to user intent, enforcement happens
+  at the point of use, and audit evidence correlates across all three trust planes.</p>
 
   <div class="rule"></div>
+
+  <section>
+    <p class="sec-h">Vault's native AI agent support — released, and running here</p>
+    <div class="natives">
+      <div class="native">
+        <span class="k">Agent Registry</span>
+        <span class="q">Each agent is a first-class identity, distinct from human users and from
+        traditional non-human identities, with a <code>ceiling_policies</code> envelope.</span>
+      </div>
+      <div class="native">
+        <span class="k">OAuth resource server</span>
+        <span class="q">The issued OAuth token authorizes Vault directly. No login round-trip, no
+        intermediate Vault token, no auth method in that path at all.</span>
+      </div>
+      <div class="native">
+        <span class="k">Per-request RAR</span>
+        <span class="q">Authorization details of <code>type: vault:path_access</code> narrow a token
+        to the exact path and capability of a single request. Vault is the decision point.</span>
+      </div>
+    </div>
+  </section>
 
   <section>
     <p class="sec-h">The agentic threat model spans three planes at once</p>
