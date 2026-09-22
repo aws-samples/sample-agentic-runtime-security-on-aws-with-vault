@@ -206,7 +206,7 @@ heal_orphan_auth_mounts() {
 # apply has failed. On a cluster whose aliases are all current it finds nothing
 # and is a no-op. Returns 0 if it deleted at least one, non-zero otherwise.
 heal_orphan_oauth_aliases() {
-  local healed=false live_id live_accessor keys id acc
+  local healed=false deleted=0 live_id live_accessor keys id acc
 
   live_id=$(curl -sf -H "X-Vault-Token: ${VAULT_TOKEN}" \
     http://127.0.0.1:8200/v1/sys/config/oauth-resource-server/ivia 2>/dev/null \
@@ -236,13 +236,17 @@ heal_orphan_oauth_aliases() {
     if curl -sf -X DELETE -H "X-Vault-Token: ${VAULT_TOKEN}" \
          "http://127.0.0.1:8200/v1/identity/entity-alias/id/${id}" >/dev/null 2>&1; then
       healed=true
+      deleted=$(( deleted + 1 ))
+      # Name every deletion. An unauditable "deleted some" line cannot be checked
+      # by a reviewer, and cannot be cited honestly in a status report.
+      info "  deleted orphaned OAuth alias ${id} (dead profile accessor ${acc})"
     else
       warn "Failed to delete orphaned OAuth alias ${id} (accessor ${acc})"
     fi
   done <<< "$keys"
 
   if [[ "$healed" == true ]]; then
-    ok "Deleted OAuth entity alias(es) belonging to oauth-resource-server profiles that no longer exist"
+    ok "Deleted ${deleted} OAuth entity alias(es) belonging to oauth-resource-server profiles that no longer exist"
   fi
   [[ "$healed" == true ]]
 }
@@ -681,8 +685,11 @@ assert_oauth_aliases_current() {
   live_id=$(vault_exec "vault read -format=json sys/config/oauth-resource-server/ivia" \
     2>/dev/null | jq -r '.data.config_id // empty' 2>/dev/null || echo "")
   if [[ -z "$live_id" ]]; then
-    warn "Could not read the live oauth-resource-server config_id — cannot verify OAuth aliases"
-    return 0
+    # A gate that cannot read its subject must FAIL, never pass. Returning 0 here
+    # would reproduce the exact defect this gate replaced: green while unverified.
+    fail "Could not read the live oauth-resource-server config_id — OAuth aliases are UNVERIFIED"
+    fail "  Vault unreachable, profile absent, or the token lacks access. Not a pass."
+    return 1
   fi
   live_accessor="oauth-resource-server_root_${live_id}"
 
