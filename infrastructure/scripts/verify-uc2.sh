@@ -139,7 +139,7 @@ decode_jwt_claim() {
         2) payload="${payload}==" ;;
         3) payload="${payload}=" ;;
     esac
-    printf '%s' "$payload" | tr '_-' '/+' | base64 -d 2>/dev/null \
+    printf '%s' "$payload" | tr '_-' '/+' | base64 --decode 2>/dev/null \
         | jq -r "$filter" 2>/dev/null || echo ""
 }
 
@@ -157,7 +157,7 @@ ivia_client_secret() {
         *) return 1 ;;
     esac
     kubectl get secret -n "${BANKING_NAMESPACE}" "${secret_name}" \
-        -o "jsonpath={.data.${key}}" 2>/dev/null | base64 -d 2>/dev/null
+        -o "jsonpath={.data.${key}}" 2>/dev/null | base64 --decode 2>/dev/null
 }
 
 
@@ -389,7 +389,7 @@ if [ -n "${UC2_VERIFY_TOKEN:-}" ]; then
         print_pass "UC2 real token carries a jti claim (jti=${uc2_jti})"
     else
         print_fail "UC2 real-token jti MISSING" \
-            "The forwarded UC2 OAuth token has NO jti claim — Vault (JTI_MANDATORY) rejects it and UC2 (no fallback) breaks. Fix = Plan 04's UC2 jti emission on the aud=agent-uc2 authcode grant, NEVER a jwt_login fallback. Decode: echo <jwt> | cut -d. -f2 | base64 -d"
+            "The forwarded UC2 OAuth token has NO jti claim — Vault (JTI_MANDATORY) rejects it and UC2 (no fallback) breaks. Fix = Plan 04's UC2 jti emission on the aud=agent-uc2 authcode grant, NEVER a jwt_login fallback. Decode: echo <jwt> | cut -d. -f2 | base64 --decode"
     fi
 
     if [ "${uc2_actsub}" = "agent-uc2" ]; then

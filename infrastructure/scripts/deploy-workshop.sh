@@ -1788,7 +1788,7 @@ _run_post_tier3_step() {
                 print_pass "Step 11: iviaop recycled — agent-uc2 redirect_uri now ${expected_redirect_uri}"
             else
                 _die "Step 11: iviaop redirect_uri reconcile" \
-                    "iviaop still rejects ${expected_redirect_uri} after a pod recycle, so the banking-ui OAuth login will dead-end. The registry lives in the iviaop-clients Secret; confirm the tier-3 patch landed: kubectl --context workshop get secret -n verify-access iviaop-clients -o jsonpath='{.data.clients\\.yml}' | base64 -d | grep -A2 redirect_uris"
+                    "iviaop still rejects ${expected_redirect_uri} after a pod recycle, so the banking-ui OAuth login will dead-end. The registry lives in the iviaop-clients Secret; confirm the tier-3 patch landed: kubectl --context workshop get secret -n verify-access iviaop-clients -o jsonpath='{.data.clients\\.yml}' | base64 --decode | grep -A2 redirect_uris"
             fi
         fi
     fi
