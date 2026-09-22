@@ -114,7 +114,14 @@ print(len(re.findall(rb'/Type\s*/Page[^s]', d)))" "${pdf}")
         png="${work}/scan.png"
         pdftoppm -png -r 100 -f 1 -l 1 "${pdf}" "${png%.png}" 2>/dev/null
         shot=""; for cand in "${png%.png}"*.png; do [ -f "${cand}" ] && { shot="${cand}"; break; }; done
-        got=$(zbarimg --quiet --raw "${shot}" 2>/dev/null | head -1 | tr -d "\r\n")
+        # zbarimg exits non-zero when it finds no barcode — exactly the case this
+        # guard exists to report. Under `set -e` an unguarded command
+        # substitution would abort here and the FATAL below would never print,
+        # so absorb the status and let the comparison do the failing.
+        got=""
+        if [ -n "${shot}" ]; then
+            got=$(zbarimg --quiet --raw "${shot}" 2>/dev/null | head -1 | tr -d "\r\n") || got=""
+        fi
         if [ "${got}" != "${WORKSHOP_URL}" ]; then
             echo "FATAL: the QR code did not decode to WORKSHOP_URL at 100 dpi." >&2
             echo "       got: ${got:-<no read>}" >&2

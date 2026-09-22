@@ -74,6 +74,15 @@ grep -q '^}' "${WORK}/helper.sh" \
 # shellcheck disable=SC2016
 grep -q '_acme_issue_certificate "${TLS_DNS_SUFFIX_FALLBACK}"' "${WORK}/caller.sh" \
     || fatal "could not extract the fallback caller from deploy-workshop.sh (anchors moved?)"
+# The START anchor is proven by the grep above. The STOP anchor is not: if it is
+# renamed, awk never clears the flag and swallows the whole tail of the deploy
+# script into the function body — which then sources and executes. Prove the
+# stop anchor is still there, and prove the extract stopped where it should by
+# asserting it did not drag in the script's top-level tier dispatch.
+grep -q '# A suffix change rewrites \.acme-state' "${DEPLOY_SCRIPT}" \
+    || fatal "the caller STOP anchor is gone from deploy-workshop.sh — the extraction would run to EOF"
+grep -q '_run_if_tier' "${WORK}/caller.sh" \
+    && fatal "the extracted caller ran past its STOP anchor into deploy-workshop.sh's tier dispatch"
 
 #-- 2. Stub the outside world ------------------------------------------------
 print_info() { echo "      INFO $*"; }

@@ -415,8 +415,17 @@ check_skip_acme_honored() {
 # the fix either landed or it did not, and a silent regression to a hardcoded
 # suffix is exactly the state this issue exists to prevent.
 check_suffix_fallback() {
-    local deploy_script="infrastructure/scripts/deploy-workshop.sh"
+    local deploy_script="${PROJECT_ROOT}/infrastructure/scripts/deploy-workshop.sh"
     local failures=""
+
+    # Every grep below is `|| true`, so a missing file would read as a missing
+    # feature and report the fallback as never implemented. Fail on the file
+    # itself instead, the way check_skip_acme_honored does.
+    if [ ! -f "${deploy_script}" ]; then
+        print_fail "suffix-fallback: deploy-workshop.sh not found at ${deploy_script}" \
+            "This is a hard regression — the script must exist. Check: ls ${deploy_script}"
+        return
+    fi
 
     # (a) The FQDNs must be built from a variable, not a literal suffix.
     local hardcoded
@@ -457,7 +466,7 @@ ${hardcoded}
     else
         print_fail "suffix-fallback: the deploy has no TLS fallback — an exhausted nip.io budget fails every attendee at once (issue #5)" \
             "Missing:
-${failures}Fix: make the suffix a variable at ${deploy_script}:1046-1047, detect the rateLimited Order reason in the Step 7 wait loop, and re-apply the Certificate on sslip.io. See issue #5."
+${failures}Fix: make the suffix a variable at ${deploy_script}:138-139, detect the rateLimited Order reason in the Step 7 wait loop, and re-apply the Certificate on sslip.io. See issue #5."
     fi
 }
 
@@ -490,6 +499,8 @@ run_full() {
     # Dimension E
     check_idempotent_rerun
     check_skip_acme_honored
+    # Dimension F
+    check_suffix_fallback
 }
 
 #-------------------------------------------------------------------------------
@@ -503,8 +514,6 @@ case "${1:-}" in
         exit 0
         ;;
     --quick)
-
-
         run_quick
         ;;
     --check)

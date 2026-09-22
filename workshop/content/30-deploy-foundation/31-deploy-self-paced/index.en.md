@@ -134,7 +134,7 @@ If you instead see `⚠ Step 7: Let's Encrypt refused nip.io as rate limited ...
    Fix: cert-manager did not mark workshop-le-tls Ready within 900s
 ```
 
-**What happened:** issuance for the fresh host occasionally takes longer than Step 7's 15-minute readiness gate. When the gate trips, the deploy records the failure and continues — but the "re-apply IVIA on the trusted host" sub-step is skipped, so Vault's `jwt` auth stays bound to the internal load-balancer hostname instead of the public magic-DNS issuer. Use Case 2 and Use Case 3 token validation depend on that issuer, so correct this before Tier 3.
+**What happened:** issuance for the fresh host occasionally takes longer than Step 7's 15-minute readiness gate. When the gate trips, the deploy records the failure and continues — but the "re-apply IVIA on the trusted host" sub-step is skipped, so Vault's OAuth resource server profile (`ivia`) keeps an `issuer_id` pointing at the internal load-balancer hostname instead of the public magic-DNS issuer. Use Case 2 and Use Case 3 token validation depend on that issuer, so correct this before Tier 3.
 
 **1. Confirm the certificate finished issuing** (wait a minute or two after the gate trips), until `READY` shows `True`:
 

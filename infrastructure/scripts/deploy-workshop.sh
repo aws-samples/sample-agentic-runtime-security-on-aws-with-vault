@@ -1159,7 +1159,7 @@ MARKER
     if [[ "$DRY_RUN" = true ]]; then
         print_info "[DRY-RUN] Would resolve shared workshop-acme ALB hostname (kubectl get ingress ivia-wrp)"
         print_info "[DRY-RUN] Would compute ${TLS_DNS_SUFFIX} FQDNs and apply cert-manager Certificate CR (issuerRef.name=letsencrypt-prod), falling back to ${TLS_DNS_SUFFIX_FALLBACK} if Let's Encrypt refuses the suffix as rate limited"
-        print_info "[DRY-RUN] Would wait for Certificate Ready=true (timeout 300s)"
+        print_info "[DRY-RUN] Would wait for Certificate Ready=true (timeout 900s)"
         print_info "[DRY-RUN] Would bootstrap: aws acm import-certificate --certificate-arn \$STABLE_ACM_ARN ..."
         print_info "[DRY-RUN] Would write ${ACME_STATE_FILE} with DEPLOY_ID/ALB_IP/NIP_FQDN_*/STABLE_ACM_ARN"
         print_info "[DRY-RUN] Would run: terraform -chdir=${SERVICES_DIR} apply -auto-approve -target=module.ivia"
