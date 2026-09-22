@@ -107,10 +107,16 @@ h1{margin:0;font-size:clamp(34px,6vw,52px);font-weight:800;letter-spacing:-.03em
      unless the page says otherwise, which would leave dark text on white. */
   html,body{background:var(--ground) !important;
             -webkit-print-color-adjust:exact;print-color-adjust:exact}
-  /* @page supplies the bulk of the margin. The sheet keeps a small side gutter
-     on top of it because the AWS mark has ink in its very first pixel column —
-     flush against the trim its "p" gets shaved off. */
-  .sheet{max-width:none;padding-left:7px;padding-right:7px;padding-block:0;gap:4px}
+  /* @page supplies the white trim. Inside it the body paints the dark ground
+     edge to edge, so the sheet's own padding is what separates the ink from
+     that edge — and it has to be the SAME on all four sides or the panel reads
+     as misaligned. It also has to be non-zero: the AWS mark has ink in its very
+     first pixel column, so flush against the edge its "p" gets shaved off. */
+  html,body{height:100%}
+  /* Centre the sheet so spare height splits evenly above and below instead of
+     pooling into a dead band under the footer. */
+  body{display:flex;align-items:center}
+  .sheet{max-width:none;width:100%;padding:10px;gap:3px}
   /* Screen leads at 1.5 for comfortable on-screen reading. Print is denser by
      nature and this is a one-pager, so tighten the leading rather than the type
      size — no body copy drops below 12px, which is 9pt at print scale. */
@@ -122,10 +128,10 @@ h1{margin:0;font-size:clamp(34px,6vw,52px);font-weight:800;letter-spacing:-.03em
   /* Screen caps the lede at a comfortable 66ch; on paper the measure is already
      fixed by the page box, so the cap only forces extra lines. */
   .lede{max-width:none;font-size:12px;line-height:1.38}
-  .sec-h{margin-bottom:4px;font-size:10.5px}
+  .sec-h{margin-bottom:3px;font-size:10.5px}
   .plane{padding:6px 11px} .plane .q{font-size:12px}
-  .natives{gap:6px} .native{padding:5px 10px;gap:2px} .native .q{font-size:12px;line-height:1.35}
-  .steps{gap:4px} .steps li{padding:4px 11px} .steps .t{font-size:12.5px} .steps .d{font-size:12px}
+  .natives{gap:5px} .native{padding:5px 10px;gap:2px} .native .q{font-size:12px;line-height:1.35}
+  .steps{gap:3px} .steps li{padding:4px 11px} .steps .t{font-size:12.5px} .steps .d{font-size:12px}
   .modes{gap:8px} .mode{padding:7px 12px;gap:3px} .mode h3{font-size:13.5px}
   .mode p{font-size:12px} .mode .need{padding-top:5px;font-size:11px}
   .foot{padding:7px 13px;gap:14px} .qr{padding:6px} .qr svg{width:96px;height:96px}
