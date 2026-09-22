@@ -115,9 +115,15 @@ grep -qE '^(phase_ivia_verify|vault_exec)\(\) \{' "${WORK}/gate.sh" \
 #   DELFAIL  alias ids whose DELETE is refused
 #   TFOUT    terraform output -json
 #   TFRC     the exit code that terraform stub returns
+#   VFAIL    stop answering after this many vault_exec calls (0 = never). Models a
+#            Vault pod that is rolled, evicted or briefly unreachable PART WAY
+#            THROUGH the sweep — the state in which a read failure is easiest to
+#            mistake for "this alias is simply not mine to touch".
+#   VCALLS   how many vault_exec calls have been made (drives VFAIL)
 ALIASES="${WORK}/aliases"; PROFILE="${WORK}/profile"; ISSUER="${WORK}/issuer"
 VAULT_UP="${WORK}/vault_up"; PF_UP="${WORK}/pf_up"; DELFAIL="${WORK}/delfail"
 TFOUT="${WORK}/tfout.json"; DELETED="${WORK}/deleted"; TFRC="${WORK}/tfrc"
+VFAIL="${WORK}/vfail"; VCALLS="${WORK}/vcalls"
 
 _alias_json() {   # <id>
     local id="$1" line
@@ -159,7 +165,13 @@ _do_delete() {    # <id>
 
 # Transport A: kubectl exec. What the fixed sweep and the gate use.
 vault_exec() {
-    local cmd="$1"
+    local cmd="$1" n lim
+    # Count every call so a scenario can take Vault away mid-sweep rather than
+    # only before it starts. A transport that dies on call N is the case the
+    # whole-sweep VAULT_UP switch cannot express.
+    n=$(( $(cat "${VCALLS}" 2>/dev/null || echo 0) + 1 )); echo "${n}" > "${VCALLS}"
+    lim="$(cat "${VFAIL}" 2>/dev/null || echo 0)"
+    [[ "${lim}" != 0 ]] && (( n > lim )) && return 1
     [[ "$(cat "${VAULT_UP}")" == yes ]] || return 1
     case "${cmd}" in
         *"vault status"*)                                   echo '{"sealed":false}'; return 0 ;;
@@ -334,6 +346,7 @@ _reset() {
     echo yes > "${PF_UP}"
     echo "${TF_JSON}" > "${TFOUT}"
     echo 0 > "${TFRC}"
+    echo 0 > "${VFAIL}"; echo 0 > "${VCALLS}"
     LAST_OK=""; LAST_FAIL=""; LAST_WARN=""; LAST_INFO=""
 }
 
@@ -502,10 +515,55 @@ assert "counts it in the summary"                   "yes" \
     "$(grep -qE '1 alias\(es\) on a dead profile were left in place' <<<"${LAST_WARN}" && echo yes || echo no)"
 echo
 
+# The three cases below are all one defect: a read that FAILED being handled the
+# same way as a read that SUCCEEDED and returned an alias belonging to some other
+# auth method. Both leave the accessor empty, and the pre-fix sweep answered both
+# with `continue` — so a transport that went blind half way down the list reported
+# a clean sweep and returned 0, the verdict meaning "I did my job". That is the
+# same fail-open as reading Vault through a dead port-forward, moved from the
+# whole sweep to a single alias.
+echo -e "${YELLOW}13. Vault stops answering part way through the alias walk${NC}"
+echo -e "     (a rolled or evicted Vault pod mid-sweep: the aliases it could not"
+echo -e "      read are exactly the ones that might be squatting the issuer)"
+_reset; _add_generation "${LIVE_ACC}" "${LIVE_ISS}" cur
+        _add_generation "${OLD_ACC}"  "${OLD_ISS}"  old
+        echo 2 > "${VFAIL}"        # profile read + list succeed; every alias read fails
+_run_sweep
+assert "fails rather than reporting a clean sweep" "1" "${RC}"
+assert "deletes nothing on a partial view"         "0" "${NDEL}"
+assert "the stranded generation survives"          "8" "${NLEFT}"
+assert "says it could not see the whole list"      "yes" \
+    "$(grep -q 'could not be read' <<<"${LAST_WARN}" && echo yes || echo no)"
+echo
+
+echo -e "${YELLOW}14. Vault stops answering between the profile read and the alias list${NC}"
+echo -e "     ('vault list' answers empty both when there are no aliases and when"
+echo -e "      the read failed — telling them apart needs the same status probe the"
+echo -e "      profile branch already uses)"
+_reset; _add_generation "${OLD_ACC}" "${OLD_ISS}" old
+        echo 1 > "${VFAIL}"        # only the profile read succeeds
+_run_sweep
+assert "fails rather than claiming Vault holds no aliases" "1" "${RC}"
+assert "deletes nothing"                                   "0" "${NDEL}"
+assert "the stranded generation survives"                  "4" "${NLEFT}"
+echo
+
+echo -e "${YELLOW}15. An alias comes back without a mount_accessor${NC}"
+echo -e "     (valid JSON that is missing the one field the decision turns on is a"
+echo -e "      read you cannot act on, not an alias belonging to someone else)"
+_reset; _add_generation "${LIVE_ACC}" "${LIVE_ISS}" cur
+        echo "partial-1|oscar||${LIVE_ISS}|ent-oscar" >> "${ALIASES}"
+_run_sweep
+assert "fails rather than skipping it in silence" "1" "${RC}"
+assert "deletes nothing"                          "0" "${NDEL}"
+assert "names the alias it could not read"        "yes" \
+    "$(grep -q 'partial-1' <<<"${LAST_WARN}" && echo yes || echo no)"
+echo
+
 #===============================================================================
 # THE GATE
 #===============================================================================
-echo -e "${YELLOW}13. Every identity has an alias at the live profile${NC}"
+echo -e "${YELLOW}16. Every identity has an alias at the live profile${NC}"
 _reset; _add_generation "${LIVE_ACC}" "${LIVE_ISS}" cur; _add_k8s_aliases
 _run_gate "${LIVE_ISS}"
 assert "passes"                                "0" "${RC}"
@@ -513,7 +571,7 @@ assert "counts what it read against what it expected" "yes" \
     "$(grep -q '4 found at accessor '"${LIVE_ACC}"', 4 expected' <<<"${LAST_OK}" && echo yes || echo no)"
 echo
 
-echo -e "${YELLOW}14. Aliases exist, but only at the PREVIOUS issuer${NC}"
+echo -e "17. Aliases exist, but only at the PREVIOUS issuer${NC}"
 echo -e "     (the deadlock this gate exists for: the profile reads correct while"
 echo -e "      every alias write in the same apply was refused with 400)"
 _reset; _add_generation "${OLD_ACC}" "${OLD_ISS}" old; _add_k8s_aliases
@@ -523,26 +581,26 @@ assert "names all four missing identities"     "4" "$(grep -c "is missing at the
 assert "says what breaks at run time"          "yes" "$(grep -q 'no alias found' <<<"${LAST_FAIL}" && echo yes || echo no)"
 echo
 
-echo -e "${YELLOW}15. Aliases at the live accessor but stamped with the OLD issuer${NC}"
+echo -e "18. Aliases at the live accessor but stamped with the OLD issuer${NC}"
 _reset; _add_generation "${LIVE_ACC}" "${OLD_ISS}" cur
 _run_gate "${LIVE_ISS}"
 assert "fails — the issuer is part of the identity" "1" "${RC}"
 echo
 
-echo -e "${YELLOW}16. Vault unreadable — UNVERIFIED is not a pass${NC}"
+echo -e "19. Vault unreadable — UNVERIFIED is not a pass${NC}"
 _reset; _add_generation "${LIVE_ACC}" "${LIVE_ISS}" cur; echo no > "${VAULT_UP}"
 _run_gate "${LIVE_ISS}"
 assert "fails"                                 "1" "${RC}"
 assert "says the aliases are UNVERIFIED"       "yes" "$(grep -q 'UNVERIFIED' <<<"${LAST_FAIL}" && echo yes || echo no)"
 echo
 
-echo -e "${YELLOW}17. Terraform declares no identities — the gate cannot run${NC}"
+echo -e "20. Terraform declares no identities — the gate cannot run${NC}"
 _reset; _add_generation "${LIVE_ACC}" "${LIVE_ISS}" cur; echo '{}' > "${TFOUT}"
 _run_gate "${LIVE_ISS}"
 assert "fails rather than passing on an empty expected set" "1" "${RC}"
 echo
 
-echo -e "${YELLOW}18. An identity added to the workshop is gated, not silently skipped${NC}"
+echo -e "21. An identity added to the workshop is gated, not silently skipped${NC}"
 _reset
 echo '{"human_entity_ids":{"value":{"oscar":"ent-oscar","jaime":"ent-jaime","newcomer":"ent-newcomer"}},
        "agent_uc2_entity_id":{"value":"ent-agent-uc2"},
@@ -556,13 +614,13 @@ echo
 #===============================================================================
 # ISSUER COHERENCE (test-vault-verify.sh check 14)
 #===============================================================================
-echo -e "${YELLOW}19. Vault validates against the issuer iviaop actually stamps${NC}"
+echo -e "22. Vault validates against the issuer iviaop actually stamps${NC}"
 _reset
 _run_coherence "${LIVE_ISS}"
 assert "passes"                                "yes" "$(grep -q 'Issuer coherence: Vault validates against the same issuer' <<<"${LAST_PASS}" && echo yes || echo no)"
 echo
 
-echo -e "${YELLOW}20. Tier 2 moved Vault's issuer; tier 3 has not caught up${NC}"
+echo -e "23. Tier 2 moved Vault's issuer; tier 3 has not caught up${NC}"
 echo -e "     (both hosts are real and both are live — the disagreement every"
 echo -e "      existing gate misses, because each one reads a single side)"
 _reset
@@ -572,7 +630,7 @@ assert "prints both values"                    "yes" "$(grep -q "${LIVE_ISS}" <<
 assert "tells the operator to re-apply tier 3" "yes" "$(grep -q 'deploy-workshop.sh --tier 3' <<<"${LAST_FAILMSG}" && echo yes || echo no)"
 echo
 
-echo -e "${YELLOW}21. Tier-2 placeholder is not a failure${NC}"
+echo -e "24. Tier-2 placeholder is not a failure${NC}"
 echo -e "     (iviaop ships https://issuer-patched-at-root.invalid until tier 3"
 echo -e "      flips it; warning here is the false alarm that has misdirected"
 echo -e "      debugging before)"
@@ -582,7 +640,7 @@ assert "passes"                                "yes" "$(grep -q 'not yet applica
 assert "raises no failure"                     ""    "${LAST_FAILMSG}"
 echo
 
-echo -e "${YELLOW}22. One side unreadable — a comparison that cannot run is not a pass${NC}"
+echo -e "25. One side unreadable — a comparison that cannot run is not a pass${NC}"
 _reset; echo no > "${VAULT_UP}"
 _run_coherence "${LIVE_ISS}"
 assert "fails"                                 "yes" "$(grep -q 'were NOT compared' <<<"${LAST_FAILMSG}" && echo yes || echo no)"
@@ -591,7 +649,7 @@ echo
 #===============================================================================
 # THE CALL SITE (phase_vault_config)
 #===============================================================================
-echo -e "${YELLOW}23. What each sweep status does to the deploy${NC}"
+echo -e "26. What each sweep status does to the deploy${NC}"
 echo -e "     (the sweep's exit code is only half the fix — the other half is the"
 echo -e "      call site acting on it instead of swallowing it with '|| true')"
 if [[ "${CALLSITE_OK}" != yes ]]; then
