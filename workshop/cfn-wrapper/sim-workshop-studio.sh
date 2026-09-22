@@ -22,7 +22,7 @@
 #
 # HOW IT RUNS
 # The script stops before each major step and waits for Enter, so you can inspect
-# state as it goes. The 35-45 minute deploy runs in the background with its
+# state as it goes. The 20-30 minute deploy runs in the background with its
 # output teed to a log, so Ctrl-C at any prompt leaves the deploy running.
 #
 # USAGE
@@ -49,8 +49,8 @@
 # TEARDOWN is deliberately NOT part of this script. It is a separate act:
 #   aws cloudformation delete-stack --stack-name <stack> --region <region>
 #   aws cloudformation wait stack-delete-complete --stack-name <stack> --region <region>
-# (The Delete path runs a CodeBuild that destroys tier 2 then tier 1, so it takes
-# roughly as long as the create.)
+# (The Delete path runs a CodeBuild that tears down tier 1, so it takes roughly
+# as long as the create.)
 #===============================================================================
 set -uo pipefail
 
@@ -167,16 +167,19 @@ report() {
         echo
 
         # Assert the artifacts, do not merely describe them. A CREATE_COMPLETE
-        # stack holding only tier1/ is exactly the silent-success this branch
-        # exists to eliminate — the build reported SUCCEEDED and staged nothing.
+        # stack that staged NOTHING is the silent-success failure mode this
+        # check exists to catch — the build reported SUCCEEDED and wrote no
+        # state. Only tier1/ is expected: buildspec.yml runs --tier 1 and stages
+        # tier1/ alone. The attendee deploys tiers 2 and 3 themselves, so their
+        # state never reaches this bucket.
         local missing=""
-        for prefix in tier1/ tier2/ tier2-private/; do
+        for prefix in tier1/; do
             if [[ -z "$(aws s3 ls "s3://${state_bucket}/${prefix}" 2>/dev/null)" ]]; then
                 missing="${missing}${prefix} "
             fi
         done
         if [[ -z "$missing" ]]; then
-            ok "all three prefixes staged: tier1/ tier2/ tier2-private/"
+            ok "tier1/ staged (the only prefix CodeBuild writes)"
             staged_ok=1
         elif [[ "$final" == "CREATE_COMPLETE" ]]; then
             echo "  ${RED}✗ Stack is CREATE_COMPLETE but these prefixes are EMPTY: ${missing}${NC}" >&2
@@ -424,7 +427,7 @@ jq -n \
 ok "Parameters written to a mode-600 temp file (nothing secret on the command line)"
 
 info "The stack stays CREATE_IN_PROGRESS until the CodeBuild callback fires:"
-info "tier 1 (~17 min) then tier 2 (~15 min). Budget 35-45 minutes."
+info "tier 1 only (~18 min observed). Budget 20-30 minutes."
 pause "About to CREATE the stack"
 
 # Backgrounded so Ctrl-C at any later prompt leaves the deploy running. A
@@ -461,14 +464,18 @@ echo "    CodeBuild       https://console.aws.amazon.com/codesuite/codebuild/pro
 step 5 "Follow the build"
 
 echo
-echo "  The line that matters, near the end of tier 2:"
-echo "    ${GREEN}PASS${NC} Gate: Tier-2 exit contract (Vault issuer_id = https://wrp.<id>.<ip>.nip.io)"
+echo "  The line that matters, at the end of the build:"
+echo "    Tier-1 deploy complete."
+echo "  followed by:"
+echo "    State staged to s3://<state-bucket>/tier1/"
+echo
+echo "  Tier 2 is NOT built here — the attendee deploys it, and tier 3, themselves."
 echo
 # Pre-empt the obvious wrong conclusion. Everything happens inside CodeBuild and
 # CloudFormation is told nothing until the buildspec's finally block PUTs the
 # callback, so the stack looks frozen on Tier1Deployment for the whole run.
 warn "The CloudFormation console will show CREATE_IN_PROGRESS on Tier1Deployment and"
-warn "nothing else for 35-45 minutes. That is correct, not a hang — CloudFormation is"
+warn "nothing else for 20-30 minutes. That is correct, not a hang — CloudFormation is"
 warn "not told anything until the build's final callback. Judge progress by the"
 warn "CodeBuild log, never by the stack events."
 echo
@@ -508,7 +515,7 @@ step 6 "Result"
 
 if report; then
     echo
-    ok "Simulation complete — tier 1 and tier 2 are provisioned."
+    ok "Simulation complete — tier 1 is provisioned; tiers 2 and 3 are the attendee's."
     ok "Next: assume WSParticipantRole and run the attendee checks."
     exit 0
 else
