@@ -1389,13 +1389,24 @@ MARKER
         return 1
     fi
 
-    # A suffix change rewrites .acme-state, but the banking-UI Ingress host is
-    # built by TIER 3 from that file. If this run stops at tier 2, the ALB keeps
-    # routing the OLD host while the new certificate only covers the NEW one --
-    # banking is then unreachable on both names (404 on the new, TLS name
-    # mismatch on the old). Tell the operator to carry the change into tier 3.
+    # A suffix change rewrites .acme-state, but TWO tier-3 things are built from
+    # that file and neither moves until tier 3 is re-applied.
+    #
+    #   1. The banking-UI Ingress host. The ALB keeps routing the OLD host while
+    #      the new certificate only covers the NEW one -- banking is then
+    #      unreachable on both names (404 on the new, TLS name mismatch on the
+    #      old).
+    #   2. The issuer iviaop advertises and stamps into tokens. Tier 2 has just
+    #      moved Vault's oauth-resource-server issuer_id to the NEW host, while
+    #      iviaop keeps serving the OLD one until tier 3's iviaop_clients_patch
+    #      re-applies. Vault validates the iss claim against issuer_id, so the two
+    #      ends of the OAuth path are pointed at different hosts until tier 3 runs.
+    #
+    # (2) is the one that is silent: every tier-2 gate still passes, because each
+    # reads only its own side. Name it here rather than leaving the operator to
+    # discover it at Use Case 2.
     if [[ "${_acme_suffix_current}" = false ]] && [[ -n "${TIER}" ]] && [[ "${TIER}" != "3" ]]; then
-        print_warn "Step 7: the TLS suffix changed, but this run is --tier ${TIER}. Tier 3 builds the banking-UI Ingress host from .acme-state, so banking stays on the OLD host until you re-apply it: bash ${BASH_SOURCE[0]} --tier 3"
+        print_warn "Step 7: the TLS host names changed, but this run is --tier ${TIER}. Tier 3 builds BOTH the banking-UI Ingress host AND iviaop's advertised issuer from .acme-state, so banking stays on the OLD host and iviaop keeps stamping the OLD issuer into tokens while Vault now validates against the NEW one. Re-apply tier 3 before using Use Case 2 or 3: bash ${BASH_SOURCE[0]} --tier 3"
     fi
 
     # (6) Bootstrap ACM import — extract the K8s Secret + upsert into the stable

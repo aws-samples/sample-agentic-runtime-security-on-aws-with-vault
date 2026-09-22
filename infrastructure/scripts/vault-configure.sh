@@ -194,61 +194,122 @@ heal_orphan_auth_mounts() {
 # from that earlier generation then squats the exact (issuer, external_id) the
 # new profile needs. Issue #5.
 #
-# What makes deletion provably safe: the accessor encodes the profile that owns
-# the alias ("oauth-resource-server_root_<config_id>"). An alias whose config_id
-# is not the live profile's belongs to a profile that NO LONGER EXISTS, so no
-# token can ever validate through it and no identity can resolve by it. Only
-# those are deleted; Kubernetes auth aliases are never touched.
+# What makes deletion safe is NOT merely that the alias sits on an accessor other
+# than the live profile's. It is that the alias is one the WORKSHOP itself wrote —
+# its name appears in the set this deploy's own Terraform outputs declare — AND it
+# sits on an oauth-resource-server accessor that is not the profile this deploy
+# binds. Both conditions are required, and the name condition is what bounds the
+# blast radius: an OAuth alias this workshop never created is left alone whatever
+# accessor carries it, so adding a second oauth-resource-server profile later
+# cannot turn this sweep into a destroyer of someone else's identities.
+# Kubernetes auth aliases are never touched — their accessors do not carry the
+# oauth-resource-server_root_ prefix.
+#
+# Reads and deletes go through vault_exec (kubectl exec), NOT the 127.0.0.1:8200
+# port-forward. A tunnel that never bound or died mid-run turned this whole sweep
+# into a silent no-op, and the collision it exists to clear then surfaced as four
+# unexplained 400s inside the apply — the one symptom this function was written to
+# prevent. kubectl exec needs no local port, so there is no tunnel to lose.
 #
 # Runs UNCONDITIONALLY before the apply, not in response to an apply error. The
 # squatter is removed before it can collide rather than recovered from after, and
 # deleting an alias whose owning profile is gone is correct whether or not an
 # apply has failed. On a cluster whose aliases are all current it finds nothing
-# and is a no-op. Returns 0 if it deleted at least one, non-zero otherwise.
+# and is a no-op.
+#
+# Exit status is a HEALTH verdict, not a count of deletions:
+#   0  the sweep did its job — including the ordinary case of finding nothing.
+#   2  there is no oauth-resource-server profile yet, so there is nothing this
+#      sweep could be about. That is the state of every FIRST deploy, and it is
+#      not a fault. Distinguished from an unreadable Vault by probing `vault
+#      status` — Vault answering while the profile is absent is a clean install.
+#   1  the sweep could not carry out its job: Vault unreadable, aliases present
+#      that Terraform declares nothing about, or a delete that failed.
+# The previous version returned non-zero for an empty alias list — an ordinary
+# no-op reported as a failure — which is precisely why the call site learned to
+# swallow the status with `|| true` and stopped noticing real ones.
 heal_orphan_oauth_aliases() {
-  local healed=false deleted=0 live_id live_accessor keys id acc
+  local deleted=0 failed=0 live_id live_accessor names alias_ids id acc name entry
 
-  live_id=$(curl -sf -H "X-Vault-Token: ${VAULT_TOKEN}" \
-    http://127.0.0.1:8200/v1/sys/config/oauth-resource-server/ivia 2>/dev/null \
-    | jq -r '.data.config_id // empty' 2>/dev/null)
+  live_id=$(vault_exec "vault read -format=json sys/config/oauth-resource-server/ivia" \
+    2>/dev/null | jq -r '.data.config_id // empty' 2>/dev/null || echo "")
   if [[ -z "$live_id" ]]; then
-    warn "Could not read the live oauth-resource-server config_id — refusing to delete any alias"
+    if vault_exec "vault status -format=json" >/dev/null 2>&1; then
+      info "No oauth-resource-server profile in Vault yet — nothing to sweep (first deploy)"
+      return 2
+    fi
+    warn "Vault is unreadable — cannot identify the live OAuth profile, so no alias will be deleted"
     return 1
   fi
   live_accessor="oauth-resource-server_root_${live_id}"
 
-  keys=$(curl -sf -X LIST -H "X-Vault-Token: ${VAULT_TOKEN}" \
-    http://127.0.0.1:8200/v1/identity/entity-alias/id 2>/dev/null \
-    | jq -r '.data.keys[]? // empty' 2>/dev/null)
-  [[ -z "$keys" ]] && return 1
+  alias_ids=$(vault_exec "vault list -format=json identity/entity-alias/id" 2>/dev/null \
+    | jq -r '.[]? // empty' 2>/dev/null || echo "")
+  if [[ -z "$alias_ids" ]]; then
+    info "No entity aliases in Vault — nothing to sweep"
+    return 0
+  fi
+
+  # The identity names this workshop owns, from the same declaration the gate
+  # below asserts against, so an identity added to the workshop is swept and
+  # gated from one source.
+  names=$(_workshop_oauth_expected_aliases | cut -f1)
+  if [[ -z "$names" ]]; then
+    warn "Entity aliases exist but terraform declares no OAuth identities — refusing to delete any alias"
+    warn "  Expected human_entity_ids / agent_uc2_entity_id / uc3_actor_entity_id from"
+    warn "  infrastructure/vault-config/outputs.tf. Deleting on an unknown expected set"
+    warn "  would be deleting blind."
+    return 1
+  fi
 
   while IFS= read -r id; do
     [[ -z "$id" ]] && continue
-    acc=$(curl -sf -H "X-Vault-Token: ${VAULT_TOKEN}" \
-      "http://127.0.0.1:8200/v1/identity/entity-alias/id/${id}" 2>/dev/null \
-      | jq -r '.data.mount_accessor // empty' 2>/dev/null)
-    # Only OAuth-profile aliases, and only ones whose profile is gone.
+    entry=$(vault_exec "vault read -format=json identity/entity-alias/id/${id}" 2>/dev/null || echo "")
+    acc=$(jq -r '.data.mount_accessor // empty' <<<"$entry" 2>/dev/null || echo "")
+    name=$(jq -r '.data.name // empty' <<<"$entry" 2>/dev/null || echo "")
+    # (1) an OAuth-profile alias, (2) not the profile this deploy binds,
+    # (3) a name this workshop owns. All three, or it is left alone.
     case "$acc" in
       oauth-resource-server_root_*) ;;
       *) continue ;;
     esac
     [[ "$acc" == "$live_accessor" ]] && continue
-    if curl -sf -X DELETE -H "X-Vault-Token: ${VAULT_TOKEN}" \
-         "http://127.0.0.1:8200/v1/identity/entity-alias/id/${id}" >/dev/null 2>&1; then
-      healed=true
+    grep -qxF "$name" <<<"$names" || continue
+    if vault_exec "vault delete identity/entity-alias/id/${id}" >/dev/null 2>&1; then
       deleted=$(( deleted + 1 ))
       # Name every deletion. An unauditable "deleted some" line cannot be checked
       # by a reviewer, and cannot be cited honestly in a status report.
-      info "  deleted orphaned OAuth alias ${id} (dead profile accessor ${acc})"
+      info "  deleted orphaned OAuth alias ${id} (name ${name}, dead profile accessor ${acc})"
     else
-      warn "Failed to delete orphaned OAuth alias ${id} (accessor ${acc})"
+      failed=$(( failed + 1 ))
+      warn "Failed to delete orphaned OAuth alias ${id} (name ${name}, accessor ${acc})"
     fi
-  done <<< "$keys"
+  done <<< "$alias_ids"
 
-  if [[ "$healed" == true ]]; then
-    ok "Deleted ${deleted} OAuth entity alias(es) belonging to oauth-resource-server profiles that no longer exist"
+  if (( deleted > 0 )); then
+    ok "Deleted ${deleted} orphaned OAuth entity alias(es) whose oauth-resource-server profile this deploy no longer binds"
+  else
+    info "No orphaned OAuth entity aliases — every workshop alias is already on the live profile"
   fi
-  [[ "$healed" == true ]]
+  if (( failed > 0 )); then
+    warn "${failed} orphaned alias(es) could not be deleted — the apply may still collide on (issuer, external_id)"
+    return 1
+  fi
+  return 0
+}
+
+# The OAuth identities this workshop owns, as "<alias name>\t<entity id>" lines,
+# read from Terraform's own outputs so that adding a human to the workshop does
+# not silently narrow either the sweep above or the gate below. Empty output means
+# the expected set is unknown — never that the set is empty.
+_workshop_oauth_expected_aliases() {
+  local tf_out
+  tf_out=$(terraform -chdir="${VAULT_CONFIG_DIR}" output -json 2>/dev/null || echo '{}')
+  jq -r '
+      ((.human_entity_ids.value // {}) | to_entries[] | "\(.key)\t\(.value)"),
+      (select(.agent_uc2_entity_id.value  != null) | "agent-uc2\t"  + .agent_uc2_entity_id.value),
+      (select(.uc3_actor_entity_id.value  != null) | "uc3-actor\t"  + .uc3_actor_entity_id.value)
+    ' <<<"$tf_out" 2>/dev/null || true
 }
 
 # Activate the oauth-resource-server Enterprise feature BEFORE terraform reconciles
@@ -517,12 +578,29 @@ TFVARS
   info "Activating oauth-resource-server feature (pre-reconcile, idempotent)..."
   activate_oauth_resource_server || true
 
-  # Sweep OAuth entity aliases left behind by oauth-resource-server profiles that
-  # no longer exist, BEFORE the apply writes this generation's aliases. A stale
-  # alias holding the same (issuer, external_id) makes every alias write fail, and
-  # the issuer recurs whenever a re-created ALB is handed an address it held
-  # before (issue #5). No-op when every alias is current.
-  heal_orphan_oauth_aliases || true
+  # Sweep OAuth entity aliases left behind by oauth-resource-server profiles this
+  # deploy no longer binds, BEFORE the apply writes this generation's aliases. A
+  # stale alias holding the same (issuer, external_id) makes every alias write
+  # fail, and the issuer recurs whenever a re-created ALB is handed an address it
+  # held before (issue #5). No-op when every alias is current.
+  #
+  # The status is acted on rather than swallowed. `|| true` here was how a sweep
+  # that could not run at all — the port-forward it used to read Vault through was
+  # gone — became invisible, and the collision it exists to clear then arrived as
+  # four unexplained 400s inside the apply. rc=2 is the clean-install case (no
+  # profile yet) and is not a fault; rc=1 means the sweep could not do its job, and
+  # the apply that follows would collide or fail on the same unreachable Vault, so
+  # stopping here with the real reason beats failing later with the symptom.
+  local _heal_rc=0
+  heal_orphan_oauth_aliases || _heal_rc=$?
+  if (( _heal_rc == 1 )); then
+    fail "Could not sweep orphaned OAuth entity aliases before the apply"
+    fail "  The apply writes identity/entity-alias entries that Vault rejects with 400"
+    fail "  \"alias already exists for issuer and external_id\" when a stale generation"
+    fail "  still holds them. Re-run once Vault is readable: ${BASH_SOURCE[0]}"
+    record "vault_config" "FAIL"
+    return 1
+  fi
 
   # Terraform init + apply
   info "Running terraform init..."
@@ -680,7 +758,7 @@ TFVARS
 # correct here. Expected identities come from terraform's own outputs, so adding
 # a human to the workshop does not silently narrow the gate. Issue #5.
 assert_oauth_aliases_current() {
-  local want_issuer="$1" live_id live_accessor tf_out expected found ent missing=0
+  local want_issuer="$1" live_id live_accessor expected found ent missing=0 n_expected n_found
 
   live_id=$(vault_exec "vault read -format=json sys/config/oauth-resource-server/ivia" \
     2>/dev/null | jq -r '.data.config_id // empty' 2>/dev/null || echo "")
@@ -693,12 +771,9 @@ assert_oauth_aliases_current() {
   fi
   live_accessor="oauth-resource-server_root_${live_id}"
 
-  tf_out=$(terraform -chdir="${VAULT_CONFIG_DIR}" output -json 2>/dev/null || echo '{}')
-  expected=$(jq -r '
-      ((.human_entity_ids.value // {}) | to_entries[] | "\(.key)\t\(.value)"),
-      (select(.agent_uc2_entity_id.value  != null) | "agent-uc2\t"  + .agent_uc2_entity_id.value),
-      (select(.uc3_actor_entity_id.value  != null) | "uc3-actor\t"  + .uc3_actor_entity_id.value)
-    ' <<<"$tf_out" 2>/dev/null || true)
+  # Same single declaration the sweep above deletes by, so the set this gate
+  # asserts and the set the sweep is allowed to touch can never drift apart.
+  expected=$(_workshop_oauth_expected_aliases)
   if [[ -z "$expected" ]]; then
     fail "No OAuth identity ids in terraform output — the alias gate cannot run"
     fail "  Expected human_entity_ids / agent_uc2_entity_id / uc3_actor_entity_id from"
@@ -729,7 +804,13 @@ assert_oauth_aliases_current() {
     fail "  Re-run: bash infrastructure/scripts/vault-configure.sh"
     return 1
   fi
-  ok "OAuth entity aliases present for every identity at the live profile ($(grep -c . <<<"$expected") of $(grep -c . <<<"$expected"))"
+  # Count what was actually READ OUT OF VAULT against what was expected. Printing
+  # the expected count on both sides of "N of N" makes the one line a reader takes
+  # as the gate's receipt true by construction — the same tautology this gate
+  # exists to replace, moved from the verdict into the evidence.
+  n_expected=$(grep -c . <<<"$expected" || true)
+  n_found=$(grep -c . <<<"$found" || true)
+  ok "OAuth entity aliases present for every identity at the live profile (${n_found} found at accessor ${live_accessor}, ${n_expected} expected)"
   return 0
 }
 
@@ -788,9 +869,15 @@ phase_ivia_verify() {
     2>/dev/null | jq -r '.data.issuer_id // empty' 2>/dev/null || echo "")
 
   if [[ -z "$vault_issuer" ]]; then
-    warn "Could not read Vault's oauth-resource-server issuer_id"
-    warn "  Check: vault read sys/config/oauth-resource-server/ivia"
-    record "ivia_verify" "WARN"
+    # FAIL, not WARN. This is the same fail-open the alias gate below was changed
+    # to close: the value that decides whether UC2/UC3 tokens validate at all could
+    # not be read, so the phase knows nothing about it. A WARN here let a run whose
+    # Vault was unreadable finish with a green summary — unverified reported as
+    # merely noisy.
+    fail "Could not read Vault's oauth-resource-server issuer_id — the OAuth binding is UNVERIFIED"
+    fail "  Vault unreachable, profile absent, or the token lacks access. Not a pass."
+    fail "  Check: kubectl exec -n vault vault-0 -- vault read sys/config/oauth-resource-server/ivia"
+    record "ivia_verify" "FAIL"
   elif [[ "$vault_issuer" == *".invalid"* ]]; then
     warn "Vault's OAuth issuer_id is a pre-ACME placeholder: ${vault_issuer}"
     warn "  Vault validates UC2/UC3 tokens against this value, so a placeholder"
