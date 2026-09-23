@@ -11,29 +11,30 @@ Every command in this workshop runs from one shell. Pick it now — your choice 
 
 ::::tab{label="AWS CloudShell" id="cs"}
 
-Open **CloudShell** from the AWS console toolbar, in the same Region you will deploy into. It runs with your console session's own credentials, so there is nothing to configure.
+Open **CloudShell** from the AWS console toolbar, in the same Region you will deploy into. It runs with your console session's own credentials, so there is nothing to configure. `aws`, `git`, `jq`, `kubectl` and a running Docker daemon ship with it — Step 2 installs the rest.
 
-Two things about CloudShell that the rest of the workshop assumes you have done:
-
-**CloudShell keeps only your home directory.** Tools installed outside `$HOME` are gone after an idle disconnect. If your session drops, re-run the pre-flight script in Step 2 — it reinstalls whatever is missing.
-
-**Put the Vault Enterprise license in your home directory**, at the path the Deploy Foundation pages already use. Create the directory first:
+**Upload the Vault Enterprise license.** The deploy reads it from a file, and CloudShell starts with no Downloads folder:
 
 ```bash
 mkdir -p ~/Downloads
 ```
 
-Then **Actions → Upload file**, target `~/Downloads`, and confirm it landed:
+Then **Actions -> Upload file**, target `~/Downloads`, and confirm it landed:
 
 ```bash
 ls -la ~/Downloads/vault-ent.hclic
 ```
 
-:::alert{header="Self-paced: deploy from a local terminal, not CloudShell" type="warning"}
-The self-paced deploy builds the five Use Case container images on the machine you run it from, and CloudShell has no container runtime. Run the self-paced path from a local terminal instead.
+**Self-paced only — install `bc`.** CloudShell does not ship it, and without it the service-quota check in Step 2 stops before it reaches AWS:
 
-At an AWS-led event this does not apply — CodeBuild built and pushed those images during Tier 1, so you run only Tiers 2 and 3 and never build anything.
+```bash
+sudo yum install -y bc
+```
+
+:::alert{header="CloudShell keeps only your home directory" type="info"}
+Tools installed outside `$HOME` are gone after an idle disconnect. If your session drops, re-run Step 2 and the `kubectl` command in Step 3. The license you uploaded and the `~/vault-init.json` the deploy writes both live in `$HOME` and survive.
 :::
+
 ::::
 
 ::::tab{label="Local terminal or IDE" id="local"}
@@ -44,7 +45,7 @@ The pre-flight script in Step 2 installs every CLI tool for you, through Homebre
 
 Note where you saved the Vault Enterprise license — the Deploy Foundation pages ask for its path, and show `~/Downloads/vault-ent.hclic` as the default.
 
-If you are self-paced, you also need a container runtime running before you deploy — see **the container runtime you install yourself** at the bottom of this page.
+If you are self-paced, you also need Docker or Podman running before you deploy — see **the container runtime you install yourself** at the bottom of this page.
 ::::
 
 :::::
@@ -89,6 +90,26 @@ Self-paced attendees using their own account with `AdministratorAccess` (or `Pow
 terraform version && kubectl version --client && helm version --short && vault version && aws --version
 ```
 
+:::::tabs{groupId="workshop-env"}
+
+::::tab{label="AWS CloudShell" id="cs"}
+
+If `kubectl version --client` reports anything other than **1.34.x**, CloudShell's own newer `kubectl` in `/usr/local/bin` is shadowing the 1.34 the script just installed in `/usr/bin`. Point the name at the right binary:
+
+```bash
+sudo ln -sf /usr/bin/kubectl /usr/local/bin/kubectl && hash -r && kubectl version --client
+```
+
+The workshop deploys an EKS 1.34 cluster, and a client more than one minor version ahead of its server is outside what Kubernetes supports. Re-run this after any reconnect.
+::::
+
+::::tab{label="Local terminal or IDE" id="local"}
+
+All five should report versions. If `kubectl` is not 1.34.x, re-run Step 2 — the script installs the right version from the Kubernetes package repository.
+::::
+
+:::::
+
 ## All checks passed?
 
 Once every check is green, continue to [Deploy Foundation](../../30-deploy-foundation/).
@@ -120,7 +141,7 @@ AWS Workshop Studio auto-provisions these quotas before account hand-off when th
 
 ::::expand{header="Self-paced only — the container runtime you install yourself"}
 
-The default self-paced deploy **builds the five Use Case images and pushes them to your own account's private ECR**, so a running container runtime is **required**. This is the one tool the pre-flight script detects but does not install, and **CloudShell cannot provide it** — run the self-paced deploy from a local terminal.
+The default self-paced deploy **builds the five Use Case images and pushes them to your own account's private ECR**, so a running container runtime is **required**. This is the one tool the pre-flight script detects but does not install. **On CloudShell there is nothing to do** — it ships a running Docker daemon, and its image storage sits on a separate 16 GB filesystem rather than your 1 GB home directory.
 
 At an AWS-led event none of this applies: CodeBuild built and pushed the images during Tier 1.
 

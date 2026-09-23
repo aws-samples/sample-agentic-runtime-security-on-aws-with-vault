@@ -56,7 +56,7 @@ Applies Vault HA + IVIA, initializes Vault (`~/vault-init.json`), issues the Let
 
 Tier 2 requires a **Vault Enterprise license** — Vault runs in Enterprise mode for the native Agent Registry. The preflight reads it from a **file**, not a prompt: save your HashiCorp Vault Enterprise `.hclic` to `~/Downloads/vault-ent.hclic`, or point `VAULT_ENTERPRISE_LICENSE_PATH` at it, before running. The deploy fails fast (and tells you the path) if the file is missing.
 
-On **AWS CloudShell** there is no `cp` source to copy from — upload the file instead: **Actions -> Upload file**, targeting `~/Downloads` (run `mkdir -p ~/Downloads` first). See [Running from AWS CloudShell](../../20-prerequisites/23-pre-flight-checks/#step-1-choose-where-you-will-run-the-workshop). Note that the self-paced deploy itself cannot run from CloudShell — it builds the Use Case images locally and CloudShell has no container runtime.
+On **AWS CloudShell** there is no `cp` source to copy from — upload the file instead: **Actions -> Upload file**, targeting `~/Downloads` (run `mkdir -p ~/Downloads` first). See [Running from AWS CloudShell](../../20-prerequisites/23-pre-flight-checks/#step-1-choose-where-you-will-run-the-workshop).
 
 ```bash
 # save your Vault Enterprise license to the default path...
