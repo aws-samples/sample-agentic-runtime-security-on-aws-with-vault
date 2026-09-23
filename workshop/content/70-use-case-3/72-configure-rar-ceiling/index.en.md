@@ -3,7 +3,9 @@ title: 'Vault Enforces the RAR Ceiling'
 weight: 72
 ---
 
-**Objective 4 · Enforcement at the point of use.** The approval happened on the last page. This one is about who decides what that approval is *worth* — and the answer is Vault, on the request itself, not IVIA at issue time and not the agent.
+## Objective 4 · Enforcement at the point of use
+
+The approval happened on the last page. This one is about who decides what that approval is *worth* — and the answer is Vault, on the request itself, not IVIA at issue time and not the agent.
 
 ## The three layers a delegated token must satisfy
 

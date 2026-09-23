@@ -3,7 +3,9 @@ title: 'The Bypass Test'
 weight: 73
 ---
 
-**Objective 4 · Enforcement at the point of use.** Every page so far built the approval path. This one tries to get round it — and every route fails at Vault, not in the application code.
+## Objective 4 · Enforcement at the point of use
+
+Every page so far built the approval path. This one tries to get round it — and every route fails at Vault, not in the application code.
 
 ## Run the bypass test
 

@@ -3,7 +3,9 @@ title: 'Three-Plane Audit Correlation'
 weight: 74
 ---
 
-**Objective 5 · Correlated audit evidence.** Three systems logged your refund independently and none of them knew about the others. This page joins them on one shared id and answers the question people actually ask after an incident: *who authorized this, when, against what, and how long did the credential live?*
+## Objective 5 · Correlated audit evidence
+
+Three systems logged your refund independently and none of them knew about the others. This page joins them on one shared id and answers the question people actually ask after an incident: *who authorized this, when, against what, and how long did the credential live?*
 
 Each plane records its own half: IVIA *who approved*, Vault *which agent was authorized, for which human, scoped to which path*, Postgres *the write that landed*. They join on the agent's `request_id`, which reaches Vault because the agent stamps it on the credential request as an `X-Correlation-Id` header. The `audit_correlation` VIEW was created during deployment — you only query it.
 

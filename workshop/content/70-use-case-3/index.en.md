@@ -3,7 +3,9 @@ title: 'Use Case 3: Privileged Action with CIBA'
 weight: 70
 ---
 
-**Demonstrates all five control objectives.** Use Case 1 proved an agent can have an identity. Use Case 2 tied what it reads to who is asking. Use Case 3 is the one where money moves — so the agent has to ask a person first, and everything it is then allowed to do is decided by Vault on the request itself.
+## Demonstrates all five control objectives
+
+Use Case 1 proved an agent can have an identity. Use Case 2 tied what it reads to who is asking. Use Case 3 is the one where money moves — so the agent has to ask a person first, and everything it is then allowed to do is decided by Vault on the request itself.
 
 ## What Use Case 3 Adds
 
