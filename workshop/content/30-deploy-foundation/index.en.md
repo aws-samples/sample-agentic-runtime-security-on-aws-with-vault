@@ -3,6 +3,8 @@ title: 'Deploy Foundation'
 weight: 30
 ---
 
-In this module you deploy the entire workshop stack — VPC, EKS, RDS, Bedrock Knowledge Base, Vault, IBM Verify Identity Access, and the Use Case workloads — with one command, then verify it came up healthy. Later modules only verify what this deploy produces; they don't apply their own Terraform.
+Pick your path:
 
-Complete the [Prerequisites module](../20-prerequisites/) first, then work through the sub-modules in the left nav in order.
+:button[Deploy Foundation — At an Event]{href="31-deploy-at-an-event/" variant="primary"}
+
+:button[Deploy Foundation — Self-paced]{href="31-deploy-self-paced/" variant="primary"}
