@@ -3,7 +3,7 @@ title: 'Use Case 1 — Non-Personalized Read-Only'
 weight: 50
 ---
 
-### Overview
+## Overview
 
 Use Case 1 is a Strands agent that authenticates to Vault using its own Kubernetes ServiceAccount (`uc1-retriever-sa`), receives just-in-time credentials, and queries both Amazon RDS (Postgres) and a Bedrock Knowledge Base. No user identity is involved — this is **pure workload identity**.
 

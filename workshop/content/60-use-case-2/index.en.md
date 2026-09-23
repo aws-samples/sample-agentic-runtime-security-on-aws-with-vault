@@ -3,7 +3,7 @@ title: 'Use Case 2 — OAuth Personalized Read-only'
 weight: 60
 ---
 
-### Overview
+## Overview
 
 Use Case 2 builds directly on Use Case 1 by adding **user identity** to the credential flow. In Use Case 1 the agent acts as a workload — it has no knowledge of who sent the query, and all users receive the same data. In Use Case 2 the banking app authenticates the user through IBM Verify Identity Access (IVIA) using the OAuth Authorization Code + PKCE flow, and that user identity propagates all the way to the database through short-lived, per-user-scoped Vault credentials. The agent now knows *who* is asking, and the database enforces data isolation at the row level.
 

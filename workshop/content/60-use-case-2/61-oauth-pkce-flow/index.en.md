@@ -3,7 +3,7 @@ title: 'OAuth Login Flow'
 weight: 61
 ---
 
-### Overview
+## Overview
 
 In this module you open the OscarVault Banking UI, sign in with your LDAP credentials at the IBM Verify Identity Access (IVIA) login page, and observe how the **OAuth Authorization Code + PKCE** flow delivers a JWT to the SvelteKit server. You will see how the JWT carries the `sub` claim that Vault's **OAuth resource server** validates — the MCP Server presents that JWT directly via the `X-Vault-Token` header — and that PostgreSQL Row-Level Security uses to filter rows.
 

@@ -3,7 +3,7 @@ title: 'Verify Per-User Data Access'
 weight: 63
 ---
 
-### Overview
+## Overview
 
 In this module you log in as Oscar and then as Jaime and confirm that each user sees only their own accounts and transactions. You then inspect the PostgreSQL Row-Level Security (RLS) policy that enforces per-user isolation at the database layer and run `verify-uc2.sh` to validate all Use Case 2 end-to-end success criteria.
 

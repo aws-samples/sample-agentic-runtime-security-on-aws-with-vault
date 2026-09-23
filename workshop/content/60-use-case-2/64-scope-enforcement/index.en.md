@@ -3,7 +3,7 @@ title: 'Scope Enforcement (Layer 2)'
 weight: 64
 ---
 
-### Overview
+## Overview
 
 Use Case 2 enforces the principle of least privilege at two independent layers:
 
