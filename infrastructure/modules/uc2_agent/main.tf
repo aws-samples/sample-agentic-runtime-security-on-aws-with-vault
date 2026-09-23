@@ -1131,6 +1131,16 @@ resource "kubernetes_ingress_v1" "banking_ui" {
       # this Ingress's /* catch-all (group.order=10).
       "alb.ingress.kubernetes.io/group.name"  = "workshop-acme"
       "alb.ingress.kubernetes.io/group.order" = "10"
+
+      # Issue #54: without these the LBC health-checks "/" and requires 200.
+      # "/" correctly answers 302 (it redirects a signed-out visitor to IVIA),
+      # so the target was permanently unhealthy and the site served only
+      # because the ALB falls back to routing at ALL targets when none is
+      # healthy — i.e. there was no health signal at all. /healthz is a
+      # SvelteKit +server.ts endpoint that answers 200 from process state
+      # alone; endpoints skip +layout.server.ts, whose session guard 302s
+      # every non-public path, so the check measures the UI and nothing else.
+      "alb.ingress.kubernetes.io/healthcheck-path" = "/healthz"
     }
   }
 
