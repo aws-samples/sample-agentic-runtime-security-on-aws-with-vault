@@ -13,6 +13,8 @@ This page explains what was configured and why — understanding the Vault trust
 
 Point the `vault` CLI at Vault and authenticate with the root token so the reads below are permitted (without `VAULT_TOKEN` the CLI sends no credential and Vault returns `403 permission denied`). One paste — kills any prior port-forward, opens a fresh one, exports `VAULT_ADDR` + `VAULT_TOKEN`, and prints the Web UI URL + token for the browser-side step further down:
 
+**Why:** Everything on this page is a read of Vault's own configuration. Point the CLI at Vault as the operator who set it up, so nothing below has to be taken on this page's word.
+
 ```bash
 pkill -f "kubectl port-forward -n vault svc/vault 8200:8200" 2>/dev/null; \
   kubectl port-forward -n vault svc/vault 8200:8200 >/dev/null 2>&1 & \
@@ -25,6 +27,8 @@ pkill -f "kubectl port-forward -n vault svc/vault 8200:8200" 2>/dev/null; \
 To follow along in the browser too, open the **Vault Web UI** URL printed above, leave **Token** selected as the auth method, and paste the printed root token.
 
 Read the Kubernetes auth role that binds `uc1-retriever-sa` to the `uc1-readonly` policy:
+
+**Why:** This is where the agent's identity is actually decided. One ServiceAccount, in one namespace, gets one policy — and nothing else in the cluster can ask for it.
 
 ```bash
 vault read auth/kubernetes/role/uc1
@@ -53,6 +57,8 @@ Key observations:
 - `token_ttl` is 1 hour — the Vault session (not the database credential) lifetime.
 
 ### Step 2 — Inspect the uc1-readonly policy
+
+**Why:** Four paths, and that is the whole of what this agent may ever do. Read what is missing as carefully as what is there.
 
 ```bash
 vault policy read uc1-readonly
@@ -95,6 +101,8 @@ Notice what is **not** in the policy:
 
 ### Step 3 — Verify the Kubernetes auth method is enabled
 
+**Why:** The agent holds no Vault password and no pre-seeded token. Confirm the mechanism that lets it in at all is even mounted.
+
 ```bash
 vault auth list
 ```
@@ -110,6 +118,8 @@ token/         token         token based credentials
 
 Verify the Kubernetes auth configuration points to the EKS cluster:
 
+**Why:** This is the trust anchor. Vault believes whatever the EKS API server says about a ServiceAccount token, so the address printed here decides whose word Vault takes.
+
 ```bash
 vault read auth/kubernetes/config
 ```
@@ -117,6 +127,8 @@ vault read auth/kubernetes/config
 The `kubernetes_host` field should show the EKS API server endpoint. This is the address Vault calls when validating an incoming SA JWT via the Kubernetes TokenReview API.
 
 ### Step 4 — Verify the database secrets engine role
+
+**Why:** The database credential does not exist until the agent asks for it, and Postgres drops it fifteen minutes later. Read the SQL Vault runs on the way in and on the way out.
 
 ```bash
 vault read database/roles/uc1-readonly
@@ -143,6 +155,8 @@ The 15-minute TTL means each Postgres credential issued to the agent is valid fo
 ### Step 5 — Registry identity: the `uc1-agent` registration
 
 Use Case 1 keeps **Kubernetes auth** — its agent presents a ServiceAccount JWT, not an OAuth token — but it is *also* registered in the Vault **Agent Registry** so the agent carries a first-class, named identity in Vault rather than an anonymous entity. Read the registration:
+
+**Why:** Use Case 1 acts as a workload, on nobody's behalf — so the agent still gets a name in Vault rather than an anonymous entity, but the ceiling attached to that name enforces nothing here. Use Case 2 and 3 are where it bites.
 
 ```bash
 vault read agent-registry/registration/display-name/uc1-agent

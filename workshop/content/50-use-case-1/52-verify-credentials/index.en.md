@@ -11,6 +11,8 @@ Query the Use Case 1 agent, watch Vault issue just-in-time credentials, prove th
 
 The agent is exposed through a public, read-only chat page. Print the full clickable URL (the banking-UI FQDN backed by a Let's Encrypt cert, with the `/ask` path appended):
 
+**Why:** The page is minted per deployment, so it carries your own workshop hostname. Resolve it rather than typing one.
+
 ```bash
 source infrastructure/.acme-state && echo "Ask page: https://${NIP_FQDN_BANKING}/ask"
 ```
@@ -25,11 +27,15 @@ You get an answer grounded in the Knowledge Base corpus (PTO accrual: 15 days at
 
 To see the Vault authentication behind the answer, port-forward and call `/query` directly:
 
+**Why:** The browser gave you an answer and told you nothing about how. The rest of this page is what Vault did to produce it, and that is only visible on the API behind the chat page.
+
 ```bash
 kubectl port-forward -n uc1 svc/uc1-agent-svc 8080:80
 ```
 
 In a second terminal, send a SQL-shaped question — the agent's `query_database` tool routes this to Vault for a Just-In-Time Postgres credential, which we'll observe in Step 3:
+
+**Why:** Ask for something that needs the database, not just the knowledge base — that is what forces the agent to go to Vault for a credential. The reply hands you back the lease id it was given.
 
 ```bash
 curl -s http://localhost:8080/query \
@@ -65,6 +71,8 @@ The response surfaces the Vault authentication state:
 
 The SQL-shaped question in Step 2 made the agent call Vault for a Just-In-Time database credential. Read the audit log for that issuance event:
 
+**Why:** The same lease id, this time out of Vault's own audit log. One string appearing on both sides is the whole of Objective 5: the answer somebody read, tied to the credential that produced it.
+
 ```bash
 kubectl logs -n vault -l app.kubernetes.io/name=vault --since=15m --tail=-1 \
   | jq -c 'select(.type=="response" and .request.path=="database/creds/uc1-readonly")
@@ -97,6 +105,8 @@ Expected:
 
 Use Case 1 is read-only and must never obtain Use Case 3's refund-writer database credentials. Have the agent attempt it **with its own Vault identity** — Vault must refuse:
 
+**Why:** Everything so far has been the happy path. Now the agent asks Vault for Use Case 3's refund-writer credential using its own identity. The refusal is the pass.
+
 ```bash
 kubectl exec -n uc1 deploy/uc1-agent -- python3 -c '
 from app.agent import _vault
@@ -118,6 +128,8 @@ DENIED (expected): Forbidden
 The `403 Forbidden` is the passing result — the UC1 token can mint its own `database/creds/uc1-readonly` but is denied `database/creds/uc3-refund-writer`, because that path is absent from the `uc1-readonly` policy (you read that policy on the previous page).
 
 ### Step 5 — Run verify-uc1.sh
+
+**Why:** Ten checks in one command — what you just did by hand, plus the parts there is never time to demonstrate live.
 
 ```bash
 bash infrastructure/scripts/verify-uc1.sh

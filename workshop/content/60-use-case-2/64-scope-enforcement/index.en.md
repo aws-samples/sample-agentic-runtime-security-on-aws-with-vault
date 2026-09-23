@@ -16,6 +16,8 @@ This defense-in-depth means that a single control being misconfigured does not o
 
 #### Step 1.1 — Read the uc2-personal policy
 
+**Why:** The agent's own workload policy grants it one thing: the right to hand credentials back. Everything it ever reads is authorized by the customer's token, never by its own identity.
+
 ```bash
 export VAULT_ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)
 kubectl exec -n vault vault-0 -- sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault policy read uc2-personal"
@@ -56,6 +58,8 @@ path — which is what the next step proves.
 Obtain a Vault token carrying the `uc2-personal` policy — the same policy the MCP server's
 ServiceAccount receives — and attempt to read a Use Case 3 credential with it:
 
+**Why:** Hand the MCP server's own policy to a token you control, then ask Vault for Use Case 3's write credential with it. The refusal is the pass.
+
 ```bash
 # Get a Vault token bound to uc2-personal policy (creating a token requires the root token)
 UC2_TOKEN=$(kubectl exec -n vault vault-0 -- \
@@ -85,6 +89,8 @@ The URL field shows `http://127.0.0.1:8200` (rather than the cluster-DNS address
 #### Step 1.3 — Confirm the policy boundary in the audit log
 
 The audit log streams every Vault request and response. Filter the last 10 minutes for any denied response targeting a `uc3` path:
+
+**Why:** A denial you watched in a terminal is an anecdote. The same denial in Vault's audit log is evidence somebody can find six months later.
 
 ```bash
 kubectl logs -n vault -l app.kubernetes.io/name=vault --since=10m --tail=-1 \
@@ -123,6 +129,8 @@ To verify what the hash represents, the operator hashes the candidate string wit
 
 This block issues a fresh credential, prints the `username` / `password` so you can see what Vault gave you, and exports them into `PG_USER` and `PG_PASS` so Step 2.2 picks them up automatically — no copy-paste required:
 
+**Why:** Layer one refused a path. Layer two does not involve Vault at all — so take a credential Vault is perfectly happy to issue, and see what Postgres will let it do.
+
 ```bash
 CREDS_JSON=$(kubectl exec -n vault vault-0 -- \
   sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read database/creds/uc2-personal-readonly -format=json")
@@ -143,6 +151,8 @@ The credential issued above lives for **15 minutes** (`default_ttl`). If you tak
 #### Step 2.2 — Attempt INSERT with those credentials
 
 No workshop pod has the `psql` binary pre-installed, so spawn a transient `postgres:16-alpine` pod that connects to RDS as the Vault-vended ephemeral role, attempts the INSERT, and auto-deletes when it exits. The `${PG_USER}`, `${PG_PASS}`, and `${RDS_HOST}` references resolve from the exports you just ran in Step 2.1:
+
+**Why:** This is the test. A credential Vault approved, pointed at the database, attempting a write. Postgres refuses on its own authority.
 
 ```bash
 kubectl delete pod pg-insert-attempt -n banking-app --ignore-not-found --now >/dev/null 2>&1
@@ -166,6 +176,8 @@ The Postgres GRANT layer rejected the INSERT independently of Vault policy. Even
 #### Step 2.3 — Confirm the GRANT configuration
 
 The grant snapshot lives in the Postgres system catalog `pg_class.relacl`; `\dp banking.accounts` is `psql`'s pretty-printer for it. Reading it requires admin access (the ephemeral `uc2-personal-readonly` role cannot read `pg_class`), so pull the RDS master credentials from AWS Secrets Manager and run a transient `postgres:16-alpine` pod as the master:
+
+**Why:** Read the GRANTs themselves, so the refusal traces to a rule rather than to luck.
 
 ```bash
 RDS_HOST=$(kubectl get configmap banking-mcp-config -n banking-app -o jsonpath='{.data.RDS_ADDRESS}')
@@ -222,6 +234,8 @@ The Banking UI keeps the token in an `httpOnly` cookie, which JavaScript cannot 
 
 In the browser tab where you are signed in as Oscar: open DevTools (**F12**), go to **Application** → **Storage** → **Cookies**, select the banking site, and copy the value of the **`access_token`** cookie. Then put it in a shell variable:
 
+**Why:** Take your own token out of the browser. From here you are the attacker who stole it.
+
 ```bash
 read -r -s ACCESS_TOKEN   # paste the cookie value, press Enter (input is hidden)
 export ACCESS_TOKEN
@@ -233,6 +247,8 @@ A Use Case 2 access token is roughly 800 characters. If you got something much s
 #### Step 3.2 — Present it to Vault twice
 
 This is the exact call the MCP server makes: the token *is* the Vault token. Run it twice.
+
+**Why:** The same stolen token, used twice. Watch what it actually buys — a fresh, short-lived, read-only credential each time, not the standing access the word 'stolen' usually implies.
 
 ```bash
 for attempt in 1 2; do
@@ -265,6 +281,8 @@ What limits the damage is everything *around* the token, and you have already pr
 - **And a replayed Use Case 3 token still cannot pay a refund twice.** It could obtain the writer credential again, but the unique index on `banking.refunds (request_id)` refuses the second write — proved under "One Approval Pays Once".
 
 **The honest gap:** the token's own lifetime. Check it yourself:
+
+**Why:** The honest limit of the design, checked rather than asserted: the token outlives every credential it can mint, so its own lifetime is the real exposure window.
 
 ```bash
 python3 -c "

@@ -136,6 +136,8 @@ Open the Banking UI in a fresh incognito / private window. Stale WebSEAL/IVIA se
 
 At the end of `bash infrastructure/scripts/deploy-workshop.sh`, the script prints `NIP_FQDN_BANKING` — the banking-UI URL backed by a Let's Encrypt certificate served on the shared workshop ALB. Print the full HTTPS URL (read back from `infrastructure/.acme-state`) and open it in your browser:
 
+**Why:** The URL is minted per deployment and carries your own workshop hostname. Resolve it rather than typing one.
+
 ```bash
 echo "https://$(grep '^NIP_FQDN_BANKING=' infrastructure/.acme-state | cut -d= -f2)/"
 ```
@@ -162,6 +164,8 @@ This workshop uses OpenLDAP as the user registry, with two pre-provisioned users
 ### Step 3 — Inspect the Banking UI logs
 
 View the Banking UI pod logs to confirm it is running and serving:
+
+**Why:** You signed in at IVIA, not at this app. The Banking UI's own log is where you watch it take delivery of a token it never minted and cannot forge.
 
 ```bash
 kubectl logs -n banking-app -l app=banking-ui --tail=30
@@ -194,6 +198,8 @@ The dashboard now shows Jaime's accounts and transactions — not Oscar's. The `
 Steps 1 through 5 proved the login works. This step proves the claim that makes it worth anything: the token the MCP server acts on comes from the `Authorization` header and from nothing else.
 
 Ask the MCP server to describe its own tools. `tools/list` needs no user — any non-empty bearer value gets past the auth gate, because listing tools touches neither Vault nor the database:
+
+**Why:** Ask the server what its tools actually accept. If any tool took a user id as an argument, the agent could name whichever customer it liked — so the interesting part of this schema is what is missing from it.
 
 ```bash
 kubectl delete pod mcp-probe -n banking-app --ignore-not-found --now >/dev/null 2>&1
@@ -231,6 +237,8 @@ There is no `jwt` field. A caller cannot name the user it wants to be, because t
 #### Now prove it behaves that way
 
 A schema is a promise. This request tests it: it puts a **JWT-shaped** token in the tool arguments and a string that is obviously **not a JWT** in the header. Whichever one the server acts on decides the error you get back.
+
+**Why:** A schema states an intention; it does not prove what the server does with it. Send a real-looking JWT in the arguments and obvious rubbish in the header. Whichever one the server acts on is the one deciding identity.
 
 ```bash
 kubectl delete pod mcp-probe -n banking-app --ignore-not-found --now >/dev/null 2>&1
@@ -314,6 +322,8 @@ grant_type=authorization_code
 The `client_secret` is injected into the Banking UI pod from the `banking-ui-oidc` **Kubernetes Secret** — never a ConfigMap. Each OIDC client registered with the provider (`agent-uc1`, `agent-uc2`, `agent-uc3`, `uc3-actor`) is generated its own distinct secret at deploy time by the `verify_access` Terraform module, so holding one client's credential does not let you authenticate as another.
 
 Confirm both properties on the running cluster:
+
+**Why:** Two properties, checked on the running cluster rather than taken on trust: the browser never sees a client secret, and the server holds exactly one.
 
 ```bash
 kubectl get configmap -n banking-app banking-ui-config -o yaml | grep -c CLIENT_SECRET; kubectl get secret -n banking-app banking-ui-oidc -o jsonpath='{.data.IVIA_CLIENT_SECRET}' | wc -c

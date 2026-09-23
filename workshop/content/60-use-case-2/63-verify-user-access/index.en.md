@@ -15,6 +15,8 @@ To confirm from the cluster, run a query using Vault-vended credentials with Osc
 
 This block issues a fresh credential, prints the `username` / `password` so you can see what Vault gave you, and exports them (along with `RDS_HOST`) into your shell so the psql commands further down pick them up automatically — no copy-paste required:
 
+**Why:** The browser already showed you Oscar's accounts. The rest of this page proves the filtering happens in Postgres and not in the web app — which needs a real Vault-vended credential in your own hand.
+
 ```bash
 export VAULT_ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)
 
@@ -35,6 +37,8 @@ The credential issued above lives for **15 minutes** (`default_ttl`). If you tak
 :::
 
 Now spawn a transient `postgres:16-alpine` pod, run the SELECT as Oscar, and let it auto-delete (no psql binary lives in any workshop pod — this is the cluster-side equivalent of the MCP server's per-request connect → SET → SELECT pattern):
+
+**Why:** Query the database directly as Oscar, bypassing the application entirely. Same credential the MCP server uses, same session variable it sets.
 
 ```bash
 kubectl delete pod pg-client-oscar -n banking-app --ignore-not-found --now >/dev/null 2>&1
@@ -67,6 +71,8 @@ Open a **new Incognito / Private browser window**, go to the Banking UI URL, and
 
 Run the same manual query with `app.current_user_sub = 'jaime'` (you can reuse the same Vault-vended credential — RLS isolation is driven entirely by the session variable, not by the Postgres user):
 
+**Why:** The control. Same credential, same table, one word changed — and a different customer's rows come back. Nothing about the Postgres user changed, so the isolation cannot be coming from there.
+
 ```bash
 kubectl delete pod pg-client-jaime -n banking-app --ignore-not-found --now >/dev/null 2>&1
 kubectl run pg-client-jaime --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
@@ -91,6 +97,8 @@ pod "pg-client-jaime" deleted
 ### Step 3 — Inspect the Row-Level Security policy
 
 The RLS policy lives in the `pg_policy` system catalog. Reading it requires admin access (the `uc2-personal-readonly` Vault-vended role is non-superuser and cannot query `pg_policy`). The RDS master credentials are stored in AWS Secrets Manager — pull them and run a SELECT against the catalog from a transient `postgres:16-alpine` pod:
+
+**Why:** Two queries agreeing is suggestive, not proof. Read the Row-Level Security policy out of the Postgres catalog and see the rule that made them differ.
 
 ```bash
 REGION=$(echo "${RDS_HOST}" | sed -E 's/.*\.([a-z0-9-]+)\.rds\.amazonaws\.com$/\1/')
@@ -131,6 +139,8 @@ The `policy_expr` column shows the RLS predicate (PostgreSQL has normalised the 
 ### Step 4 — Run verify-uc2.sh
 
 Run the end-to-end verification script:
+
+**Why:** Every Use Case 2 success criterion in one command — what you just did by hand, plus the parts there is never time to demonstrate live.
 
 ```bash
 bash infrastructure/scripts/verify-uc2.sh

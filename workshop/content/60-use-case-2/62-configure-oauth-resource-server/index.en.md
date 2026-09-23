@@ -46,11 +46,15 @@ Two consequences worth naming, because both are checks you run below:
 
 Point the `vault` CLI at Vault with the root token so the reads below are permitted. One paste — kills any prior port-forward, opens a fresh one, and exports `VAULT_ADDR` + `VAULT_TOKEN`:
 
+**Why:** Everything below is a read of Vault's own configuration. Point the CLI at Vault as the operator who set it up, so nothing on this page has to be taken on trust.
+
 ```bash
 pkill -f "kubectl port-forward -n vault svc/vault 8200:8200" 2>/dev/null; kubectl port-forward -n vault svc/vault 8200:8200 >/dev/null 2>&1 & sleep 2 && export VAULT_ADDR=http://localhost:8200 && export VAULT_TOKEN=$(jq -r '.root_token' ~/vault-init.json) && echo "Vault: $VAULT_ADDR"
 ```
 
 Confirm there is **no** `jwt/` auth mount — the OAuth access token is the Vault token:
+
+**Why:** The expected answer here is an absence. There is no `jwt/` mount because there is no login step to mount one for — the user's OAuth token is presented to Vault as the Vault token itself.
 
 ```bash
 vault auth list
@@ -67,6 +71,8 @@ token/         token         auth_token_<id>             token based credentials
 
 Confirm the Agent Registry secrets engine is mounted (the OAuth resource server profile and the agent registrations live under Enterprise identity):
 
+**Why:** The Agent Registry is where an agent stops being an anonymous caller and becomes a named identity Vault can reason about. Confirm it is mounted before reading what is in it.
+
 ```bash
 vault secrets list | grep -E 'agent-registry|database|aws'
 ```
@@ -76,6 +82,8 @@ Expected — `agent-registry/`, `aws/`, and `database/` are all present.
 ### Step 2 — Inspect the `agent-uc2` registration and its ceiling
 
 Read the Agent Registry registration that represents the Use Case 2 agent. Its `ceiling_policies` are the restrict-only envelope Vault intersects on every on-behalf-of request:
+
+**Why:** When a customer delegates to this agent, the agent does not inherit what that customer can do. The ceiling named here is a fixed list of paths it can never step outside, whoever it is acting for.
 
 ```bash
 vault read agent-registry/registration/display-name/agent-uc2
@@ -96,6 +104,8 @@ optional_authorization_details    true
 - `optional_authorization_details` `true` — a per-request `vault:path_access` RAR is *optional* for Use Case 2 (mandatory for Use Case 3). When absent, enforcement is human baseline ∩ ceiling.
 
 Read the `uc2-agent-ceiling` policy — the paths the agent is *ever* permitted to touch:
+
+**Why:** Read the ceiling itself and see how short it is. This is the most the agent can ever hold — not the most it holds today.
 
 ```bash
 vault policy read uc2-agent-ceiling
@@ -125,6 +135,8 @@ Notice what is **absent**: no `database/creds/uc3-refund-writer` and no write-ca
 
 The human subject (`oscar` or `jaime`) contributes the *baseline* — what this specific user is permitted. Read it:
 
+**Why:** The other half of the intersection. The customer contributes what they are allowed; the agent contributes its ceiling; Vault grants only the overlap.
+
 ```bash
 vault policy read uc2-human-baseline
 ```
@@ -147,6 +159,8 @@ path "sys/leases/renew" {
 The effective grant Vault applies is **`uc2-human-baseline` (human baseline) ∩ `uc2-agent-ceiling` (agent ceiling)**. Both must permit a path for the request to succeed. This is ENFC-02 at the Vault layer, expressed as an intersection rather than a single flat policy.
 
 ### Step 4 — Verify the database credentials role
+
+**Why:** The database credential does not exist until someone asks. Read the SQL Vault runs to create it — `GRANT SELECT` and nothing else, so a widened Vault policy still buys no writes.
 
 ```bash
 vault read database/roles/uc2-personal-readonly
@@ -181,6 +195,8 @@ The Banking UI keeps the user's IVIA-issued JWTs in HttpOnly cookies. The one yo
 4. Find the row **`access_token`** and copy the **Value** column.
 
 Then present it as the Vault token — the JWT **is** the credential:
+
+**Why:** This is the whole mechanism in one command: the customer's OAuth token handed straight to Vault, with no Vault login in between, and a scoped database credential coming back.
 
 ```bash
 JWT_TOKEN="<paste-the-access_token-value>"; kubectl exec -n vault vault-0 -- sh -c "VAULT_TOKEN='${JWT_TOKEN}' vault read database/creds/uc2-personal-readonly"
