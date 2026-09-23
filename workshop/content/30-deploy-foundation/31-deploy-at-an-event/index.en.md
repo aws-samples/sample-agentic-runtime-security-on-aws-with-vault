@@ -65,6 +65,8 @@ Either way, the values are written only into the gitignored `terraform.tfvars` �
 
 Tier 2 also needs a **Vault Enterprise license** — Vault runs in Enterprise mode for the native Agent Registry. Unlike the two secrets above it is read from a **file**, not a prompt, so place it before you run the deploy: save the `.hclic` your organizer provides to `~/Downloads/vault-ent.hclic`, or point `VAULT_ENTERPRISE_LICENSE_PATH` at it. The preflight fails fast (and tells you the path) if the file is missing.
 
+On **AWS CloudShell** there is no `cp` source to copy from — upload the file instead: **Actions -> Upload file**, targeting `~/Downloads` (run `mkdir -p ~/Downloads` first). See [Running from AWS CloudShell](../../20-prerequisites/23-pre-flight-checks/#step-1-choose-where-you-will-run-the-workshop).
+
 ```bash
 # organizer-provided Vault Enterprise license — save to the default path...
 cp /path/to/vault-ent.hclic ~/Downloads/vault-ent.hclic
