@@ -20,11 +20,16 @@ pkill -f "kubectl port-forward -n vault svc/vault 8200:8200" 2>/dev/null; \
   kubectl port-forward -n vault svc/vault 8200:8200 >/dev/null 2>&1 & \
   sleep 2 && \
   export VAULT_ADDR=http://localhost:8200 && \
-  export VAULT_TOKEN=$(jq -r '.root_token' ~/vault-init.json) && \
-  echo && echo "Vault Web UI: $VAULT_ADDR/ui" && echo "Root token:   $VAULT_TOKEN"
+  VAULT_TOKEN=$(jq -er '.root_token' ~/vault-init.json) && export VAULT_TOKEN && \
+  echo && echo "Vault Web UI: $VAULT_ADDR/ui" && echo "Root token:   $VAULT_TOKEN" \
+  || echo "ERROR: no root token in ~/vault-init.json — the Tier-2 deploy has not run on this machine"
 ```
 
 To follow along in the browser too, open the **Vault Web UI** URL printed above, leave **Token** selected as the auth method, and paste the printed root token.
+
+:::alert{header="On CloudShell, skip the browser step" type="info"}
+`localhost:8200` is the CloudShell container, not the machine your browser runs on, so that URL will not open for you. The `vault` CLI reads below are the lesson and work identically either way.
+:::
 
 Read the Kubernetes auth role that binds `uc1-retriever-sa` to the `uc1-readonly` policy:
 

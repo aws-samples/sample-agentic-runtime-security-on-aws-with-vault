@@ -49,7 +49,7 @@ Point the `vault` CLI at Vault with the root token so the reads below are permit
 **Why:** Everything below is a read of Vault's own configuration. Point the CLI at Vault as the operator who set it up, so nothing on this page has to be taken on trust.
 
 ```bash
-pkill -f "kubectl port-forward -n vault svc/vault 8200:8200" 2>/dev/null; kubectl port-forward -n vault svc/vault 8200:8200 >/dev/null 2>&1 & sleep 2 && export VAULT_ADDR=http://localhost:8200 && export VAULT_TOKEN=$(jq -r '.root_token' ~/vault-init.json) && echo "Vault: $VAULT_ADDR"
+pkill -f "kubectl port-forward -n vault svc/vault 8200:8200" 2>/dev/null; kubectl port-forward -n vault svc/vault 8200:8200 >/dev/null 2>&1 & sleep 2 && export VAULT_ADDR=http://localhost:8200 && VAULT_TOKEN=$(jq -er '.root_token' ~/vault-init.json) && export VAULT_TOKEN && echo "Vault: $VAULT_ADDR" || echo "ERROR: no root token in ~/vault-init.json — the Tier-2 deploy has not run on this machine"
 ```
 
 Confirm there is **no** `jwt/` auth mount — the OAuth access token is the Vault token:
