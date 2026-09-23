@@ -3,25 +3,35 @@ title: 'Test the Refund Flow'
 weight: 70.5
 ---
 
-This is the heart of Use Case 3 — a refund write executes only after the human approves it out-of-band on a mobile device, and only with a 5-minute Vault-issued database credential.
+**Objective 3 · Actions tied to user intent.** This is the whole point of Use Case 3. Watch an agent ask for permission it does not have, wait for a human on a separate device, and only then be handed a database credential that lives five minutes and can write nothing but refunds.
 
-**1. Open the banking app** — incognito window, sign in `jaime` / `WorkshopUser1!`. The banking UI is served on the workshop FQDN that `bash infrastructure/scripts/deploy-workshop.sh` provisioned a Let's Encrypt cert for (stored in `infrastructure/.acme-state` as `NIP_FQDN_BANKING`):
+## 1. Open the banking app
+
+**Why:** The banking URL is minted per deployment, like the enrollment one. Resolve it rather than typing it.
 
 ```bash
 source infrastructure/.acme-state && echo "https://${NIP_FQDN_BANKING}/"
 ```
 
-Open the printed URL in your browser — you should see a lock icon (trusted Let's Encrypt cert). If you see a "Your connection is not private" warning, re-run `bash infrastructure/scripts/deploy-workshop.sh` to re-issue the cert.
+Open the printed URL, incognito window, sign in `jaime` / `WorkshopUser1!`.
 
-**2. Click the red `I need a refund` button** in the chat suggestions bar.
+## 2. Ask for a refund
 
-**3. Pick the transaction.** When the agent asks which transaction to refund, reply with the transaction number from your recent transactions list, then confirm when prompted.
+**Why:** You are talking to an agent that can read your transactions but cannot move money on its own. Watch where it stops.
 
-**4. Approve the push** on the IBM Verify app (tap **Approve**).
+Click the red **I need a refund** button in the chat suggestions bar. When the agent asks which transaction, reply with the transaction number from your recent transactions list, then confirm.
 
-**5. In the chat, type:** `I approved`
+## 3. Approve on your phone
 
-**6. Confirm.** The chat reports the refund succeeded. The transaction list shows the new refund row.
+**Why:** This is the control. The approval arrives somewhere the agent cannot reach, and nothing is written until you tap.
+
+Tap **Approve** in the IBM Verify app, then type `I approved` in the chat.
+
+## 4. Confirm the refund landed
+
+**Why:** The chat's answer and the transaction list should agree. If they do, a credential was issued, used once, and expired — all inside the time it took you to read the reply.
+
+The chat reports the refund succeeded and the transaction list shows the new row.
 
 Sample output:
 
@@ -41,21 +51,20 @@ Your IDs, amount, and timestamp will differ. What matters is that the chat retur
 
 ## If the approval push never arrives
 
-The agent is an LLM — occasionally it will *say* "I've sent an approval request to your IBM Verify app" without actually calling the tool that fires the push, so nothing reaches your phone.
+**Why:** The agent is an LLM, and occasionally it *says* it sent the push without calling the tool that fires one. Nothing reaches your phone, and the chat looks like it worked.
 
-**1. Force the agent to actually send it.** Reply in the chat:
+Force it to actually send. Reply in the chat:
 
 > Actually send it now — start the refund and push the approval request to my IBM Verify app. Don't just describe it.
 
-The push should land within a few seconds. Confirm the tool really fired — a `mmfa_push_fired` line appears only when the push actually went out:
+The push should land within a few seconds. Confirm the tool really fired — a `mmfa_push_fired` line appears only when a push actually went out:
 
 ```bash
 kubectl logs -n banking-app -l app=uc3-agent --tail=-1 | grep mmfa_push_fired
 ```
 
-`--tail=-1` is doing real work here. Given a label selector, `kubectl logs` returns only the
-last few lines per pod unless you ask for the whole log — and the agent writes a burst of
-polling lines after the push, so a short window scrolls the line you are looking for out of
-view. A blank result from a truncated log looks exactly like "the push never fired".
+:::alert{type="warning" header="`--tail=-1` is load-bearing — without it a working push looks like a broken one"}
+Given a label selector, `kubectl logs` returns only the last few lines per pod unless you ask for the whole log, and the agent writes a burst of polling lines after the push. A blank result from a truncated log is indistinguishable from "the push never fired".
+:::
 
-**2. If the push still doesn't arrive,** enable notifications for IBM Verify on your phone and confirm you completed device enrollment.
+If the push still doesn't arrive, enable notifications for IBM Verify on your phone and confirm you completed device enrollment.

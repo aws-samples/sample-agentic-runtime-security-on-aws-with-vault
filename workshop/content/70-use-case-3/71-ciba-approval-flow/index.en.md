@@ -3,11 +3,11 @@ title: 'CIBA Out-of-Band Approval'
 weight: 71
 ---
 
-## How CIBA Works
+**Objective 3 · Actions tied to user intent.** You ran the refund on the last page. This page is how it worked: the agent cannot open a browser for the customer, so it asks on a back channel and waits for an answer that arrives on a device it does not control.
 
-CIBA (OpenID Connect Client-Initiated Backchannel Authentication) lets an automated agent request user approval without controlling the browser session. The agent initiates the flow on the backchannel; the user approves out-of-band on a separate device — here, an **IBM Verify mobile push** that requires a physical tap on the enrolled phone.
+## How the approval reaches a phone
 
-## CIBA Mobile-Push Approval Flow
+**Why:** CIBA is what lets software ask a person for permission without driving their browser. The agent starts the flow; the human finishes it somewhere else entirely — here, a push that needs a physical tap.
 
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': {
@@ -57,24 +57,15 @@ sequenceDiagram
     OP-->>Agent: access_token (subject_token, sub=jaime)
 ```
 
-**Step-by-step:**
-
-1. The agent POSTs `/oauth2/ciba` (bc-authorize) directly to the OIDC Provider ClusterIP with `login_hint=<user_sub>`, `binding_message=<request_id>`, and the refund `authorization_details`. This is machine-to-machine — it bypasses the WRP. IVIA returns an `auth_req_id`.
-2. IVIA runs the `notifyuser` mapping rule. In the mobile-push design it does **not** serve a browser consent page — it wires CIBA completion to a server-polled check-status endpoint on the agent via `ExternalAuthenticatorWithCheckStatusEndpoint(<uc3-agent>/api/ciba/status, bearer)`.
-3. The agent fires the MMFA push itself, right after bc-authorize, to the authenticated user's IBM Verify device (AAC runtime authsvc policy `mmfa_initiate_simple_login`, message "Approve your OscarVault request"). Identity comes from the authenticated session — never an LLM parameter. The agent records `auth_req_id → {username, transaction_id}`.
-4. The user taps **Approve** on the IBM Verify app (physical device, biometric). The MMFA transaction resolves to `SUCCESS` in that user's SCIM record.
-5. The agent polls `/oauth2/token` (`grant_type=urn:openid:params:grant-type:ciba`, `auth_req_id`) every 5 seconds for up to 120 seconds. On **each** poll IVIA runs the `checkstatus` rule, which PUTs the agent's `/api/ciba/status` with the CIBA bearer. The agent reads the user's **own** SCIM MMFA transaction for the **exact** push it fired and returns `approved` / `denied` / `pending` — a stale or unrelated SUCCESS cannot complete the flow.
-6. When the agent returns `approved`, `checkstatus` calls `ciba.success({sub})` and the `/token` poll returns the access token (`subject_token`) carrying the user's identity. (Deny → `ciba.failed()`; otherwise `ciba.pending()` and the agent keeps polling.)
-
 :::alert{header="Why the approval is unforgeable" type="info"}
 Two independent facts must both hold before the refund proceeds: the user physically taps **Approve** on their enrolled device, AND the agent confirms that the **exact** MMFA transaction it fired (matched by `transactionId`, never "any SUCCESS for the user") resolved to `SUCCESS` in that user's own SCIM record. The CIBA bearer is replayed to the check-status endpoint as a per-request shared secret — defense-in-depth on top of the SCIM gate. The backchannel (bc-authorize and token poll) is machine-to-machine and never touches the WRP.
 :::
 
-## RFC 8693 Token Exchange
+## Attaching the agent's identity
 
-The CIBA access token proves the user approved, but it does not prove *which agent* is acting. Token Exchange (RFC 8693) produces a delegated JWT that carries both.
+**Why:** The tap proves *who* said yes. It says nothing about *which software* is acting on it. This second exchange staples the agent's own name to the approval, so Vault can judge both.
 
-The Use Case 3 agent presents only the user's token, authenticated as a **separate** OAuth client (`uc3-actor`) via HTTP Basic — IVIA rejects a client exchanging its own token (`FBTAQ5207E`), so no `actor_token` is sent:
+The agent presents only the user's token, authenticated as a **separate** OAuth client (`uc3-actor`) via HTTP Basic — IVIA rejects a client exchanging its own token (`FBTAQ5207E`), so no `actor_token` is sent:
 - `subject_token` = the CIBA-issued user access token (proves user identity + consent)
 
 IVIA returns a delegated JWT containing:
@@ -101,11 +92,11 @@ Together those mean the row written under a `request_id` is the row that was app
 **The honest limitation:** a user who taps Approve without reading the chat has approved a refund whose amount they were never shown. Displaying the amount on the device needs IVIA's transaction-detail push surface rather than the authentication policy this workshop uses, and that is not deployed here.
 :::
 
-### Prove the exchange is gated on the client, not just the token
+## Only one client may ask for delegation
 
-A fair objection to any delegation story is that the `act.sub` claim is simply stamped on by a mapping rule, so anything that can reach the token endpoint can mint a delegated token. Check it. Both requests below send the **same** junk `subject_token`; only the client credentials differ, so the difference in the answers is attributable to the client alone.
+**Why:** A fair objection — if the agent's name is just stamped on by a rule, couldn't anything reaching the endpoint claim it? Two requests, identical but for the credentials, settle it.
 
-First, resolve both clients' secrets from the cluster — each OAuth client has its own, and they are never in a ConfigMap:
+Resolve both clients' secrets from the cluster. Each OAuth client has its own, and they are never in a ConfigMap:
 
 ```bash
 UC2_SECRET=$(kubectl get secret -n banking-app banking-ui-oidc \
@@ -114,7 +105,7 @@ ACTOR_SECRET=$(kubectl get secret -n banking-app uc3-oidc-clients \
   -o jsonpath='{.data.IVIA_ACTOR_CLIENT_SECRET}' | base64 -d)
 ```
 
-Now attempt the RFC 8693 exchange as `agent-uc2` — the Use Case 2 banking client, which is not allowlisted for the token-exchange grant:
+Attempt the exchange as `agent-uc2` — the Use Case 2 banking client, not allowlisted for this grant:
 
 ```bash
 kubectl delete pod ivia-exch-probe -n verify-access --ignore-not-found --now >/dev/null 2>&1
@@ -152,7 +143,7 @@ Expected output — it gets past the client check and dies on the token, which i
 {"error":"invalid_request","error_description":"FBTAQ5226E Token is not valid or has expired."}
 ```
 
-Two different refusals from one identical request body. Delegation is not something any caller can ask for: the exchange grant is allowlisted per client, and `uc3-actor` is the only client in this deployment that holds it. A compromised Use Case 2 banking client cannot mint a Use Case 3 delegated token even with a genuine user token in hand — and if it somehow could, `agent-uc2`'s ceiling still omits the refund path, which the [Bypass Test](../73-bypass-test/) proves separately.
+Two different refusals from one identical request body. A compromised Use Case 2 client cannot mint a Use Case 3 delegated token even holding a genuine user token — and if it somehow could, `agent-uc2`'s ceiling still omits the refund path, which the [Bypass Test](../73-bypass-test/) proves separately.
 
 :::expand{header="Platform Track — IVIA CIBA Configuration"}
 The IVIA CIBA client (`agent-uc3`) is configured in the `verify_access` Terraform module:
@@ -211,9 +202,9 @@ async def ciba_status(request, auth_req_id: str):
 ```
 :::
 
-## Verification
+## Confirm the push path is live
 
-Check the CIBA mobile-push + token exchange path is working:
+**Why:** Before you rely on this in front of anyone, check the agent is up and that a push really left the building.
 
 ```bash
 # Confirm the Use Case 3 agent pod is running
@@ -225,10 +216,9 @@ kubectl get pods -n banking-app -l app=uc3-agent
 kubectl logs -n banking-app -l app=uc3-agent --tail=-1 | grep -E 'mmfa_push_fired|ciba_status_polled'
 ```
 
-Two things about that command. `--tail=-1` reads the whole log: with a label selector `kubectl
-logs` otherwise returns only the last few lines per pod, and the agent's polling chatter pushes
-the push line out of a short window within seconds. And it returns **nothing at all** until you
-have actually run a refund — that is the expected state on a fresh deployment, not a fault.
+:::alert{type="warning" header="Empty output here is expected until you have run a refund"}
+`--tail=-1` reads the whole log — with a label selector `kubectl logs` otherwise returns only the last few lines per pod, and the agent's polling chatter pushes the line you want out of a short window within seconds. On a fresh deployment the grep returns nothing at all, which is the correct state, not a fault.
+:::
 
 ```bash
 # Confirm the IVIA CIBA endpoint is reachable from the vault pod (direct ClusterIP path)

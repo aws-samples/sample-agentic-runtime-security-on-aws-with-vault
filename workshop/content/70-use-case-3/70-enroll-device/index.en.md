@@ -3,19 +3,33 @@ title: 'Enroll Your Device'
 weight: 70.4
 ---
 
-The refund approval arrives as a mobile push to IBM Verify on your phone. Enroll once per deployment.
+**Objective 3 · Actions tied to user intent.** A refund moves money, so the agent is not allowed to decide alone — it has to ask a person, on a device the agent does not control. This page gives you that device.
 
-If you have not installed the IBM Verify app yet, see [Prerequisites — IBM Verify app](../../20-prerequisites/#mobile-prerequisite--ibm-verify-app) first.
+Enroll once per deployment. If you have not installed the IBM Verify app yet, see [Prerequisites — IBM Verify app](../../20-prerequisites/#mobile-prerequisite--ibm-verify-app) first.
 
-**1. Open the enrollment URL** — incognito window, sign in `jaime` / `WorkshopUser1!`. The IVIA WRP is served on the workshop FQDN that `bash infrastructure/scripts/deploy-workshop.sh` provisioned a Let's Encrypt cert for (stored in `infrastructure/.acme-state` as `NIP_FQDN_WRP`):
+## 1. Open the enrollment URL
+
+**Why:** The enrollment link is minted per deployment, so it carries your own workshop hostname. Resolve it rather than typing one.
+
+Incognito window, sign in `jaime` / `WorkshopUser1!`.
 
 ```bash
 NIP_FQDN_WRP=$(grep '^NIP_FQDN_WRP=' infrastructure/.acme-state | cut -d= -f2)
 echo "https://${NIP_FQDN_WRP}/mga/sps/oauth/oauth20/authorize?response_type=code&client_id=AuthenticatorClient&scope=mmfaAuthn"
 ```
 
-You should see a lock icon in your browser address bar when the page loads (Let's Encrypt cert on the workshop ALB). If your browser shows a "Your connection is not private" warning, this is a regression — re-run `bash infrastructure/scripts/deploy-workshop.sh` to re-issue the cert.
+## 2. Scan the QR code
 
-**2. Scan the QR** — IBM Verify app → **+** → **Scan QR code** → approve. The IBM Verify app should accept the certificate without prompting you to trust an unknown cert. If you see a trust-override prompt, the Let's Encrypt cert is not yet serving on the ALB — check the output of `bash infrastructure/scripts/deploy-workshop.sh` for ACME errors and re-run.
+**Why:** This binds *your* phone to *this* IVIA. Until it happens the agent has nobody to ask, and the refund flow on the next page has nowhere to send its approval.
 
-**3. Refresh the page.** Your device appears in the "Authenticators" list. If empty, repeat step 1 (code expired).
+IBM Verify app → **+** → **Scan QR code** → approve.
+
+## 3. Refresh the page
+
+**Why:** Confirm the binding took before you rely on it. An empty list now is a failed refund later.
+
+Your device appears in the "Authenticators" list. If empty, repeat step 1 — the code expired.
+
+:::alert{type="warning" header="A certificate warning here is a real problem, not a click-through"}
+You should see a lock icon in the address bar, and IBM Verify should accept the certificate without prompting you to trust an unknown one. Either warning means the Let's Encrypt cert is not serving on the ALB — re-run `bash infrastructure/scripts/deploy-workshop.sh` and check its output for ACME errors.
+:::

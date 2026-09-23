@@ -3,11 +3,11 @@ title: 'Vault Enforces the RAR Ceiling'
 weight: 72
 ---
 
-## How Vault Enforces Delegation Natively
+**Objective 4 · Enforcement at the point of use.** The approval happened on the last page. This one is about who decides what that approval is *worth* — and the answer is Vault, on the request itself, not IVIA at issue time and not the agent.
 
-Use Case 3 is an **on-behalf-of** flow: the agent acts for a human who approved a specific refund out-of-band (the CIBA flow on the [previous page](../71-ciba-approval-flow/)). Vault Enterprise's **OAuth resource server** enforces that delegation directly — the delegated token authorizes the request itself, with no auth method in between.
+## The three layers a delegated token must satisfy
 
-When the delegated IVIA OAuth JWT is presented to Vault via `X-Vault-Token`, Vault validates it against the resource server profile and resolves **two** identities from its claims: the human subject (`sub = jaime`) and the agent actor (`act.sub = uc3-actor`). It then evaluates **three enforcing layers**:
+**Why:** The token names two identities — the human who approved and the agent acting for them — plus the one path it is asking for. Vault checks all three against each other and allows the request only where they overlap.
 
 ```
 Delegated OAuth JWT (X-Vault-Token)
@@ -22,7 +22,7 @@ Delegated OAuth JWT (X-Vault-Token)
   →  allow iff all three permit
 ```
 
-The decisive property: **Vault is the interpreter of the RAR.** A JWT whose `vault:path_access` path matches the requested path is allowed; a JWT whose RAR path is anything else is **denied — even though the human baseline and the agent ceiling both permit the target path.** Enforcement happens at the point of use, inside Vault, per request. (Use Case 3's RAR is mandatory: the `uc3-actor` registration sets `optional_authorization_details = false`, so a delegated token with *no* RAR is rejected.)
+Use Case 3 makes the third layer mandatory: `optional_authorization_details = false`, so a delegated token carrying *no* RAR is rejected outright.
 
 :::alert{header="Vault is the interpreter of the RAR, at the point of use" type="info"}
 All three layers are evaluated **inside Vault, on the request that uses the token** — not at
@@ -38,11 +38,15 @@ That is what makes Layer 3 checkable: the human baseline and the agent ceiling b
 
 ## Step 1 — Point the CLI at Vault
 
+**Why:** You are about to read Vault's own configuration as the operator who set it up, rather than take this page's word for any of it.
+
 ```bash
 pkill -f "kubectl port-forward -n vault svc/vault 8200:8200" 2>/dev/null; kubectl port-forward -n vault svc/vault 8200:8200 >/dev/null 2>&1 & sleep 2 && export VAULT_ADDR=http://localhost:8200 && export VAULT_TOKEN=$(jq -r '.root_token' ~/vault-init.json) && echo "Vault: $VAULT_ADDR"
 ```
 
-## Step 2 — Inspect the `uc3-actor` registration and its ceiling
+## Step 2 — Read the agent's registration and its ceiling
+
+**Why:** The ceiling is the most the agent may *ever* hold, whoever it is acting for. Read it yourself and see how small it is.
 
 ```bash
 vault read agent-registry/registration/display-name/uc3-actor
@@ -85,9 +89,9 @@ The ceiling *permits* `database/creds/uc3-refund-writer` — but the token still
 The `vault:path_access` RAR binds a **path** and **capabilities** — not a dollar amount. ISVAOP 25.10 does not expose the consent-time amount to any mapping rule at the token-exchange stage, and a path/capability grant cannot range-check a number regardless. The amount is consent-bound instead by three-plane audit correlation on `request_id` (see the [Three-Plane Audit Correlation](../74-three-plane-audit/) page): there is exactly one CIBA approval and one `banking.refunds` write under each `request_id`, so the amount written **is** the amount approved.
 :::
 
-## The DB Role: Time-Boxed Write Privileges
+## The credential itself is time-boxed and narrow
 
-The `uc3-refund-writer` Vault database role issues ephemeral credentials with a default lifetime of 5 minutes (renewable to a hard ceiling of 10 minutes). The PostgreSQL role created at issuance time has only the minimum grants needed for a refund write:
+**Why:** Even a request that passes all three layers gets something deliberately weak — five minutes of life, and write access to exactly one table.
 
 ```hcl
 # vault_config/main.tf — uc3-refund-writer DB role
@@ -117,7 +121,7 @@ resource "vault_database_secret_backend_role" "uc3_refund_writer" {
 }
 ```
 
-After the credential lease expires the PostgreSQL role is dropped. Any attempt to reuse the credentials after expiry returns `FATAL: role does not exist`.
+When the lease expires the PostgreSQL role is dropped. Reusing the credentials after that returns `FATAL: role does not exist`.
 
 :::expand{header="Platform Track — the native primitives that wire the three layers"}
 The `vault_config` Terraform module configures the OAuth resource server, the agent registration + ceiling, and the human/agent identity aliases (provider `hashicorp/vault >= 5.10.1`):
@@ -158,9 +162,9 @@ conn = psycopg2.connect(host=RDS_HOST, dbname="workshop",
 The delegated JWT carries the `vault:path_access` RAR naming `database/creds/uc3-refund-writer`. Vault validates it, resolves `sub`/`act.sub`, intersects baseline ∩ ceiling ∩ RAR, and only then vends. The credentials are never cached; a new pair is fetched for each approved refund.
 :::
 
-## Verification
+## Prove it from inside the cluster
 
-Read the registration, the DB role TTL, and (with the root token) prove JIT credential issuance:
+**Why:** Same three facts, read from the Vault pod rather than through your port-forward — the registration, the role's five-minute ceiling, and a credential actually being minted.
 
 ```bash
 kubectl exec -n vault vault-0 -- env VAULT_TOKEN="$(jq -r .root_token ~/vault-init.json)" vault read agent-registry/registration/display-name/uc3-actor

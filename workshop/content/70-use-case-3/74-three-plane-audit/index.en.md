@@ -3,13 +3,11 @@ title: 'Three-Plane Audit Correlation'
 weight: 74
 ---
 
-Each plane logs the same refund independently: IVIA records *who approved*, Vault records *which agent was authorized, for which human, and the exact path it was scoped to*, and Postgres records *the write that landed*. The `audit_correlation` Athena VIEW stitches all three together on **one shared key** — the agent's `request_id`, which reaches the Vault plane because the agent stamps it on the credential request as an `X-Correlation-Id` header that Vault is configured to audit. A single query returns one forensic row spanning approval, authorization, and database write. It was created automatically during Use Case 3 deployment — you only query it.
+**Objective 5 · Correlated audit evidence.** Three systems logged your refund independently and none of them knew about the others. This page joins them on one shared id and answers the question people actually ask after an incident: *who authorized this, when, against what, and how long did the credential live?*
 
-The Vault audit event carries **both halves of the on-behalf-of pair**: the agent-registry identity Vault resolved from the delegated token's `act.sub` claim (`uc3-actor`), and the identity entity of the human the token was issued for (`auth.entity_id`, which resolves to `jaime`). It also carries the per-request `vault:path_access` path Vault enforced, the token's audience, its issuer and its `jti`. You will read those fields out of the record yourself further down this page, rather than taking this paragraph's word for it.
+Each plane records its own half: IVIA *who approved*, Vault *which agent was authorized, for which human, scoped to which path*, Postgres *the write that landed*. They join on the agent's `request_id`, which reaches Vault because the agent stamps it on the credential request as an `X-Correlation-Id` header. The `audit_correlation` VIEW was created during deployment — you only query it.
 
-## The Pedagogical Money Shot
-
-Use Case 3 culminates in a single Athena query that answers all five workshop objectives in one row:
+## One row, all five objectives
 
 | Objective | Column | What It Proves |
 |---|---|---|
@@ -19,9 +17,9 @@ Use Case 3 culminates in a single Athena query that answers all five workshop ob
 | OBJ-4 — Enforcement at point of use | `vault_agent_registry_id` + `vault_rar_path` | Vault resolved the agent from the Agent Registry and narrowed the token to an exact path per request |
 | OBJ-5 — Correlated audit evidence | `request_id` — the same value in all three planes | One forensic row spans approval, authorization, and the database write, joined on a shared id rather than inferred from timing |
 
-## Run the Correlation Query — CLI
+## Set up the query helpers
 
-The `workshop` Athena workgroup ships with a preconfigured query-result location, so you do **not** need to resolve an S3 bucket. Define a base helper that runs a query and waits for it, plus three thin wrappers — `athena_query` (aligned multi-row table), `athena_record` (a single row printed vertically, `field → value`, ideal for the wide correlation row), and `athena_scalar` (just the first value, for capturing into a variable):
+**Why:** Athena is asynchronous — start, poll, fetch. These four helpers wrap that so the rest of the page reads as one command per question. The `workshop` workgroup already has a result location, so there is no bucket to resolve.
 
 ```bash
 # The Glue catalog + Athena 'workshop' workgroup were provisioned in YOUR deploy
@@ -117,17 +115,11 @@ authorized the credential at `22:21:49`, the approval and the database write bot
 `22:21:50`. The whole privileged window is about a second wide, and the credential that opened
 it expires 300 seconds later whether or not anything else happens.
 
-Every field maps directly to one of the five workshop objectives — `vault_principal` (verifiable agent identity), `db_credential_ttl` of `300` (no standing privilege, 5-minute lease), `user_approved_sub` (action tied to user intent), `vault_agent_registry_id` + `vault_rar_path` (enforcement at point of use — the Agent Registry identity Vault resolved and the exact path it scoped the token to), and the correlation across all three planes — one `request_id` carried by the IVIA approval, the Vault authorization and the Postgres write alike (correlated audit evidence).
+`vault_human_entity_id` is the column that answers *which person was this done for?* — Vault's own identity entity for the human, recorded on the same authorization decision as the agent, not inferred from the approval log sitting next to it. The last section turns that id into a name.
 
-`vault_human_entity_id` is the column that answers the question people actually ask after an
-incident: *which person was this done for?* It is Vault's own identity entity for the human,
-recorded on the same authorization decision as the agent — not inferred from the approval log
-next to it. The [Read the Vault Record Yourself](#read-the-vault-record-yourself) section below
-turns that id into a name.
+## The same query in the Athena console
 
-## Run the Correlation Query — Athena Console
-
-Prefer the AWS Console? The same query runs in the Athena query editor.
+**Why:** Same result without the CLI, if that is how your audit team works.
 
 **Step 1:** Navigate to **Athena** > **Query editor** and select the `workshop_logs` database from the dropdown.
 
@@ -151,12 +143,11 @@ FROM audit_correlation
 WHERE request_id = 'PASTE_REQUEST_ID_HERE'
 ```
 
-## Read the Vault Record Yourself
+## Read the Vault record yourself
 
-The correlation row is a summary. This section opens the underlying Vault audit record for your refund, so you can see what Vault actually validated rather than trusting a VIEW that someone else wrote.
+**Why:** The correlation row is a summary somebody else wrote. Open the underlying Vault audit event and see what Vault actually validated — the claims, the issuer, the exact RAR it enforced.
 
-`REQUEST_ID` is still set from Step 1 above, and `athena_record` is the helper you defined at
-the top of this page — the row is wide, so print it vertically:
+`REQUEST_ID` is still set from above. The row is wide, so print it vertically:
 
 ```bash
 echo "tracing: ${REQUEST_ID}"
