@@ -7,7 +7,20 @@ weight: 12
 
 ![Workshop Architecture](/static/images/architecture-overview.png)
 
-IBM Verify Identity Access owns the user-identity plane: OAuth, OIDC, CIBA, and the JWT signing key. IVIA authenticates users against your organization's directory (an in-cluster OpenLDAP directory in this workshop) via LDAP. HashiCorp Vault Enterprise 2.0.3 owns the workload-identity plane and the credential-vending plane: the Kubernetes auth method bound to the EKS OIDC provider, the **Agent Registry** (each agent a first-class identity — `uc1-agent`, `agent-uc2`, `uc3-actor` — with a `ceiling_policies` envelope), the **OAuth resource server** profile (`ivia`) bound to IVIA's OIDC discovery URL, and dynamic Postgres + AWS secrets engines. The two systems meet at a single seam — Vault's `ivia` OAuth resource-server profile trusts IVIA's issuer and JWKS — where the IVIA-issued OAuth JWT authorizes Vault **directly** via the `X-Vault-Token` header and user intent gets converted into a Vault-vended credential. Vault is the sole native enforcement point, intersecting the human baseline, the agent's ceiling, and the per-request `vault:path_access` RAR.
+Two systems own the identity story here, and they meet at exactly one place.
+
+**IBM Verify Identity Access owns the user-identity plane** — OAuth, OIDC, CIBA, and the JWT signing key. It authenticates users against your organization's directory over LDAP; in this workshop that directory is an in-cluster OpenLDAP.
+
+**HashiCorp Vault Enterprise 2.0.3 owns the workload-identity plane and the credential-vending plane.** Four pieces do that work:
+
+- the **Kubernetes auth method**, bound to the EKS OIDC provider
+- the **Agent Registry** — each agent a first-class identity (`uc1-agent`, `agent-uc2`, `uc3-actor`) carrying a `ceiling_policies` envelope
+- the **OAuth resource server** profile (`ivia`), bound to IVIA's OIDC discovery URL
+- dynamic **Postgres and AWS secrets engines**
+
+The seam between them is one line of configuration: Vault's `ivia` profile trusts IVIA's issuer and JWKS. An IVIA-issued OAuth JWT then authorizes Vault **directly** through the `X-Vault-Token` header — no intermediate Vault login — and that is where a user's intent becomes a Vault-vended credential.
+
+Vault is the sole native enforcement point. It grants a request at the intersection of three things: the human baseline, the agent's ceiling, and the per-request `vault:path_access` RAR.
 
 ### Responsibility split
 
