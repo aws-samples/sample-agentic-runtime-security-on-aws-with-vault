@@ -48,7 +48,7 @@ pkill -f "kubectl port-forward -n vault svc/vault 8200:8200" 2>/dev/null; kubect
 
 ## Step 2 — Read the agent's registration and its ceiling
 
-**Why:** The ceiling is the most the agent may *ever* hold, whoever it is acting for. Read it yourself and see how small it is.
+**Why:** When a person delegates to this agent, the agent does **not** inherit what that person can do. A ceiling is a fixed list of paths the agent can never step outside, no matter who it acts for — so delegating a refund hands over one narrow capability, not your account. Read the list and see how short it is.
 
 ```bash
 vault read agent-registry/registration/display-name/uc3-actor
@@ -65,10 +65,10 @@ optional_authorization_details    false
 ```
 
 - `display_name` `uc3-actor` — the actor Vault resolves from the delegated token's `act.sub` claim.
-- `ceiling_policies` `[uc3-agent-ceiling]` — the maximum this agent may ever hold; it restricts, never grants.
+- `ceiling_policies` `[uc3-agent-ceiling]` — the list of paths the agent is confined to. It only ever subtracts: if the human is allowed something this list omits, the agent still cannot do it.
 - `optional_authorization_details` `false` — **the per-request `vault:path_access` RAR is mandatory** for Use Case 3. A delegated token without it is denied.
 
-Read the ceiling — the envelope the agent is *ever* permitted to touch:
+Read the list itself. This is everything the agent can reach, on any request, for anybody:
 
 ```bash
 vault policy read uc3-agent-ceiling
@@ -85,7 +85,14 @@ path "auth/token/lookup-self"           { capabilities = ["read"] }
 path "sys/leases/renew"                 { capabilities = ["update"] }
 ```
 
-The ceiling *permits* `database/creds/uc3-refund-writer` — but the token still only reaches it when the **per-request `vault:path_access` RAR** names that exact path. That is Layer 3 narrowing the ceiling down to a single path for a single request.
+Six paths, and only one of them writes anything. A Vault administrator's own token reaches thousands; this agent reaches six, permanently — and on any single request it reaches exactly **one** of them, whichever the token's `vault:path_access` RAR names. The ceiling is the outer wall; the RAR is the door it opens this time.
+
+So there are two different questions with two different answers:
+
+| Question | Answered by | For how long |
+|---|---|---|
+| What could this agent *ever* touch? | the ceiling — these six paths | the life of the registration |
+| What may it touch *on this request*? | the token's `vault:path_access` RAR — one path | this one request |
 
 :::alert{header="Why the approved amount is not in the RAR" type="info"}
 The `vault:path_access` RAR binds a **path** and **capabilities** — not a dollar amount. ISVAOP 25.10 does not expose the consent-time amount to any mapping rule at the token-exchange stage, and a path/capability grant cannot range-check a number regardless. The amount is consent-bound instead by three-plane audit correlation on `request_id` (see the [Three-Plane Audit Correlation](../74-three-plane-audit/) page): there is exactly one CIBA approval and one `banking.refunds` write under each `request_id`, so the amount written **is** the amount approved.
