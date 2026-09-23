@@ -3,7 +3,7 @@ title: 'Enroll Your Device'
 weight: 70.4
 ---
 
-## Objective 3 · Actions tied to user intent
+### Objective 3 · Actions tied to user intent
 
 A refund moves money, so the agent is not allowed to decide alone — it has to ask a person, on a device the agent does not control. This page gives you that device.
 

@@ -3,7 +3,7 @@ title: 'Three-Plane Audit Correlation'
 weight: 74
 ---
 
-## Objective 5 · Correlated audit evidence
+### Objective 5 · Correlated audit evidence
 
 Three systems logged your refund independently and none of them knew about the others. This page joins them on one shared id and answers the question people actually ask after an incident: *who authorized this, when, against what, and how long did the credential live?*
 

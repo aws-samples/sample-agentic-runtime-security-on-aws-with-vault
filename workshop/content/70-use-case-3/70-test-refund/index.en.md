@@ -3,7 +3,7 @@ title: 'Test the Refund Flow'
 weight: 70.5
 ---
 
-## Objective 3 · Actions tied to user intent
+### Objective 3 · Actions tied to user intent
 
 This is the whole point of Use Case 3. Watch an agent ask for permission it does not have, wait for a human on a separate device, and only then be handed a database credential that lives five minutes and can write nothing but refunds.
 

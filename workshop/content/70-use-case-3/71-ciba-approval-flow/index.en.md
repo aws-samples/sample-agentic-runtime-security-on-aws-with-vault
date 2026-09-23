@@ -3,7 +3,7 @@ title: 'CIBA Out-of-Band Approval'
 weight: 71
 ---
 
-## Objective 3 · Actions tied to user intent
+### Objective 3 · Actions tied to user intent
 
 You ran the refund on the last page. This page is how it worked: the agent cannot open a browser for the customer, so it asks on a back channel and waits for an answer that arrives on a device it does not control.
 
