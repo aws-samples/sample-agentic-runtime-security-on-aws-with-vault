@@ -3,11 +3,11 @@ title: 'Verify Credentials and Enforcement'
 weight: 52
 ---
 
-## Overview
+### Overview
 
 Query the Use Case 1 agent, watch Vault issue just-in-time credentials, prove the agent **cannot** reach Use Case 3 credentials (ENFC-01), and run `verify-uc1.sh` to confirm every success criterion.
 
-## Step 1 — Ask the agent (no sign-in)
+### Step 1 — Ask the agent (no sign-in)
 
 The agent is exposed through a public, read-only chat page. Print the full clickable URL (the banking-UI FQDN backed by a Let's Encrypt cert, with the `/ask` path appended):
 
@@ -21,7 +21,7 @@ Open that URL in your browser. You should see a lock icon in your browser addres
 
 You get an answer grounded in the Knowledge Base corpus (PTO accrual: 15 days at 0–2 years, 20 at 2–5, 25 at 5+). The agent reached that answer using credentials it did not have until the moment you asked.
 
-## Step 2 — Inspect the credential metadata (CLI)
+### Step 2 — Inspect the credential metadata (CLI)
 
 To see the Vault authentication behind the answer, port-forward and call `/query` directly:
 
@@ -61,7 +61,7 @@ The response surfaces the Vault authentication state:
 
 `leases` is the OBJ-5 hook: one entry per Just-In-Time credential Vault issued while answering **this** request, with the lease id spelled exactly as Vault spells it. **Copy your `lease_id` — Step 3 finds the very same string in the Vault audit log.** The value is attached by the runtime, never written by the model: an agent that narrated its own credential ids would be quoting itself, not producing an audit trail. Ask a question the agent answers from the Knowledge Base alone and `leases` is `[]`, because no database credential was issued.
 
-## Step 3 — Observe credential issuance in the Vault audit log
+### Step 3 — Observe credential issuance in the Vault audit log
 
 The SQL-shaped question in Step 2 made the agent call Vault for a Just-In-Time database credential. Read the audit log for that issuance event:
 
@@ -93,7 +93,7 @@ Expected:
 
 **This `lease_id` is the one your Step 2 response just showed you** — the same string on both sides is the correlation: the answer an attendee read, tied to the credential Vault vended for it. `display_name` is `kubernetes-uc1-uc1-retriever-sa` — the Vault Kubernetes mount, the role, and the ServiceAccount that authenticated. `lease_id` is unique per issuance — every `query_database` call produces a fresh one, which is the audit-trail proof that credentials are JIT (not reused). This entry is the first link in the audit-correlation chain that Use Case 3 completes end-to-end. The 15-minute TTL comes from the `default_ttl = 900` on `vault_database_secret_backend_role.uc1_readonly` (visible via `vault read database/roles/uc1-readonly` from the previous page).
 
-## Step 4 — ENFC-01 enforcement test (the thing that must NOT happen)
+### Step 4 — ENFC-01 enforcement test (the thing that must NOT happen)
 
 Use Case 1 is read-only and must never obtain Use Case 3's refund-writer database credentials. Have the agent attempt it **with its own Vault identity** — Vault must refuse:
 
@@ -117,7 +117,7 @@ DENIED (expected): Forbidden
 
 The `403 Forbidden` is the passing result — the UC1 token can mint its own `database/creds/uc1-readonly` but is denied `database/creds/uc3-refund-writer`, because that path is absent from the `uc1-readonly` policy (you read that policy on the previous page).
 
-## Step 5 — Run verify-uc1.sh
+### Step 5 — Run verify-uc1.sh
 
 ```bash
 bash infrastructure/scripts/verify-uc1.sh

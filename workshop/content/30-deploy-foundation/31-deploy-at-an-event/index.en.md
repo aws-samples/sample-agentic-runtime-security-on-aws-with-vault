@@ -9,7 +9,7 @@ The EKS cluster was already provisioned as part of your AWS account setup. You'l
 Follow **[Deploy — Self-paced](../31-deploy-self-paced/)** — you bootstrap and apply all three tiers yourself.
 ::::
 
-#### Step 1 — Clone the repository
+##### Step 1 — Clone the repository
 
 Clone the workshop repo at the pinned event tag from the public mirror:
 
@@ -17,7 +17,7 @@ Clone the workshop repo at the pinned event tag from the public mirror:
 git clone https://github.com/aws-samples/sample-agentic-runtime-security-on-aws-with-vault.git && cd sample-agentic-runtime-security-on-aws-with-vault
 ```
 
-#### Step 2 — Bootstrap
+##### Step 2 — Bootstrap
 
 `bootstrap.sh` seeds the `terraform.tfvars` files from their templates and runs `terraform init` in all three roots. It does **not** deploy infrastructure and does **not** prompt for anything (you'll supply your IBM secrets at Step 4). It just prepares the repo so you can apply Tier 2 and Tier 3.
 
@@ -27,7 +27,7 @@ git clone https://github.com/aws-samples/sample-agentic-runtime-security-on-aws-
 bash infrastructure/scripts/bootstrap.sh --skip-prereq-gate --image-source ecr
 ```
 
-#### Step 3 — Pull the Tier-1 state and config
+##### Step 3 — Pull the Tier-1 state and config
 
 The CodeBuild build staged the Tier-1 Terraform **state** and its **`terraform.tfvars`** (which already carries the event's Let's Encrypt email) to an S3 bucket. Discover the bucket name from the CloudFormation stack output and pull both to the paths Tier 2 and Tier 3 read:
 
@@ -47,7 +47,7 @@ aws s3 ls | grep -i bootstrap-statebucket
 ```
 ::::
 
-#### Step 4 — Deploy Tier 2 (Vault + IVIA)
+##### Step 4 — Deploy Tier 2 (Vault + IVIA)
 
 The **first** time you run `deploy-workshop.sh`, a preflight check prompts for the two IBM secrets it needs — paste each when asked (input is hidden):
 
@@ -82,7 +82,7 @@ bash infrastructure/scripts/deploy-workshop.sh --tier 2
 ~10–15 min — Vault Raft converge ~3 min, IVIA pods ~5 min, ACME issuance + ACM import + IVIA re-apply ~3 min, Vault + IVIA configure ~2 min.
 ::::
 
-#### Step 5 — Deploy Tier 3 (Use Case workloads)
+##### Step 5 — Deploy Tier 3 (Use Case workloads)
 
 ```bash
 bash infrastructure/scripts/deploy-workshop.sh --tier 3
@@ -96,11 +96,11 @@ When both tiers report success, continue with **[Configure kubectl](../32-config
 
 ---
 
-## If Tier 2 fails on the Let's Encrypt cert (`Step 7: Certificate Ready=true`)
+### If Tier 2 fails on the Let's Encrypt cert (`Step 7: Certificate Ready=true`)
 
 Step 7 obtains the browser-trusted Let's Encrypt certificate. It has two distinct failure modes, and the Fix line tells you which one you hit.
 
-### Case A — Let's Encrypt refused the magic-DNS domain (rate limited)
+#### Case A — Let's Encrypt refused the magic-DNS domain (rate limited)
 
 ```
 ✗ Step 7: Certificate Ready=true
@@ -148,7 +148,7 @@ Re-run Tier 3 when you see that line. Until you do, banking is unreachable on bo
 Pick a third dashed-IPv4 magic-DNS suffix, or point `TLS_DNS_SUFFIX_FALLBACK` at a different one.
 ::::
 
-### Case B — issuance ran past the readiness gate (timing)
+#### Case B — issuance ran past the readiness gate (timing)
 
 ```
 ✗ Step 7: Certificate Ready=true

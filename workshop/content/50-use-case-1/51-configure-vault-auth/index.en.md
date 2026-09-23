@@ -3,13 +3,13 @@ title: 'Configure Vault Auth for Use Case 1'
 weight: 51
 ---
 
-## Overview
+### Overview
 
 The Vault Kubernetes auth method, database secrets engine role, AWS secrets engine role, and access policy for Use Case 1 were all configured by the `vault_config` Terraform module in the Deploy Foundation module (applied via local Terraform (`terraform -chdir=infrastructure apply`)). **You do not need to reconfigure anything in this module.**
 
 This page explains what was configured and why — understanding the Vault trust chain is essential before you observe credential issuance in the next module.
 
-## Step 1 — Inspect the Vault role binding
+### Step 1 — Inspect the Vault role binding
 
 Point the `vault` CLI at Vault and authenticate with the root token so the reads below are permitted (without `VAULT_TOKEN` the CLI sends no credential and Vault returns `403 permission denied`). One paste — kills any prior port-forward, opens a fresh one, exports `VAULT_ADDR` + `VAULT_TOKEN`, and prints the Web UI URL + token for the browser-side step further down:
 
@@ -52,7 +52,7 @@ Key observations:
 - `token_policies` is `[uc1-readonly]` — the Vault token issued after login is scoped to this policy only.
 - `token_ttl` is 1 hour — the Vault session (not the database credential) lifetime.
 
-## Step 2 — Inspect the uc1-readonly policy
+### Step 2 — Inspect the uc1-readonly policy
 
 ```bash
 vault policy read uc1-readonly
@@ -93,7 +93,7 @@ Notice what is **not** in the policy:
 - No `aws/iam/*` — the agent cannot create or modify IAM resources.
 - No `sys/mounts` — the agent cannot create new secrets engine mounts.
 
-## Step 3 — Verify the Kubernetes auth method is enabled
+### Step 3 — Verify the Kubernetes auth method is enabled
 
 ```bash
 vault auth list
@@ -116,7 +116,7 @@ vault read auth/kubernetes/config
 
 The `kubernetes_host` field should show the EKS API server endpoint. This is the address Vault calls when validating an incoming SA JWT via the Kubernetes TokenReview API.
 
-## Step 4 — Verify the database secrets engine role
+### Step 4 — Verify the database secrets engine role
 
 ```bash
 vault read database/roles/uc1-readonly
@@ -140,7 +140,7 @@ revocation_statements    ["REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public 
 
 The 15-minute TTL means each Postgres credential issued to the agent is valid for exactly 15 minutes. After expiry, Vault executes the `revocation_statements` to drop the dynamically created role from Postgres automatically.
 
-## Step 5 — Registry identity: the `uc1-agent` registration
+### Step 5 — Registry identity: the `uc1-agent` registration
 
 Use Case 1 keeps **Kubernetes auth** — its agent presents a ServiceAccount JWT, not an OAuth token — but it is *also* registered in the Vault **Agent Registry** so the agent carries a first-class, named identity in Vault rather than an anonymous entity. Read the registration:
 

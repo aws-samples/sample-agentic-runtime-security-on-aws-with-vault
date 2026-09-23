@@ -3,12 +3,12 @@ title: 'Resources'
 weight: 90
 ---
 
-## Videos
+### Videos
 
 - [Agentic Runtime Security — Executive Overview](https://youtu.be/HtnlUosO3XA?si=Xg9FxIB-B00Pq_So)
 - [Agentic Runtime Security — Technical Deep Dive](https://youtu.be/NH0plIdqDMk?si=Pu-afmrVn3HZxiKr) by Tyler Lynch
 
-## IBM Verify Identity Access (IVIA)
+### IBM Verify Identity Access (IVIA)
 
 - **IVIA Trial Certificate** — the signed trial certificate that activates the Config container modules (wga, mga, federation) ships bundled with the workshop at `infrastructure/modules/verify_access/base_layer/ISAM-Trial-HashiCorp.cer`; Terraform reads it automatically, so there is nothing to obtain or upload
 - [IVIA OIDC Provider — Kubernetes Deployment](https://docs.verify.ibm.com/ibm-security-verify-access/docs/deployment-k8s) — full K8s manifest examples, RBAC, probes
@@ -17,7 +17,7 @@ weight: 90
 - [IVIA OIDC Provider — Runtime Database (PostgreSQL)](https://docs.verify.ibm.com/ibm-security-verify-access/docs/deployment-postgres) — schema init, required tables, `SESSION_ID` column
 - [IVIA v11.0.2 Download (Technote 7247411)](https://www.ibm.com/support/pages/node/7247411)
 
-## HashiCorp Vault
+### HashiCorp Vault
 
 - [Vault 2.0 Release Notes](https://developer.hashicorp.com/vault/docs/updates/release-notes)
 - [Vault OAuth Resource Server](https://developer.hashicorp.com/vault/docs/concepts/oauth-resource-server) — validates the IVIA-issued OAuth access token directly via `X-Vault-Token` (JWKS discovery) — no Vault auth method in the path
@@ -31,7 +31,7 @@ weight: 90
 - [SPIFFE for Agentic AI Blog](https://www.hashicorp.com/en/blog/spiffe-securing-the-identity-of-agentic-ai-and-non-human-actors)
 - [Native AI Agent Support in Vault (May 2026)](https://www.hashicorp.com/en/blog/announcing-native-ai-agent-support-in-hashicorp-vault) — Agent Registry, ceiling-policy intersection, OBO delegation, ephemeral authorization
 
-### Native Agent Identity (deployed in this workshop — Enterprise 2.0.3)
+#### Native Agent Identity (deployed in this workshop — Enterprise 2.0.3)
 
 - [Vault Agent Registry — Concept](https://developer.hashicorp.com/vault/docs/concepts/agent-registry) — register each agent as a first-class identity (`agent-registry/registration/display-name/<name>`) with `ceiling_policies`, distinct from human users and traditional NHIs
 - [Vault OAuth Resource Server — Concept](https://developer.hashicorp.com/vault/docs/concepts/oauth-resource-server) — authorize a Vault request directly with an external OAuth JWT via `X-Vault-Token`; no `jwt_login`, no intermediate token

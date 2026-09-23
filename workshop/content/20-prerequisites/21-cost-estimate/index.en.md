@@ -9,7 +9,7 @@ Running this workshop in your own AWS account costs roughly **$4.20 for a 90-min
 Workshop Studio vends your account and absorbs everything it runs. Nothing on this page is billed to you. Read on only if you plan to deploy the workshop into an account you own.
 ::::
 
-## The two numbers
+### The two numbers
 
 | Run length | Infrastructure | Usage & one-time | Total |
 | --- | --- | --- | --- |
@@ -18,7 +18,7 @@ Workshop Studio vends your account and absorbs everything it runs. Nothing on th
 
 Both totals rest on the same hourly run rate of **$2.39/hour**. A two-hour run costs 1.28× a 90-minute run rather than the full 1.33×, because the usage block below is charged once no matter how long the stack lives.
 
-## Where the $2.39/hour goes
+### Where the $2.39/hour goes
 
 Quantities are read from a real deployment of this workshop, not from a sizing guess.
 
@@ -44,7 +44,7 @@ Three of these deserve a note:
 - **OpenSearch Serverless bills a 4-OCU minimum.** The collection is created with standby replicas enabled, which pins two indexing OCUs and two search OCUs regardless of how small the index is. The workshop's knowledge base holds 8 documents totalling 21 KB and would fit in a fraction of one OCU — you pay for four. At $0.24/OCU-hour that is $0.96/hour, tied with the entire five-node fleet as the largest line on the bill.
 - **Interface endpoints are billed per endpoint per Availability Zone.** Six services (`bedrock-runtime`, `bedrock-agent-runtime`, `kms`, `logs`, `secretsmanager`, `sts`) across three AZs is 18 billable endpoint-hours, not six. This keeps the sensitive plane off the NAT gateway, which is a deliberate design point of the workshop rather than an accident.
 
-## Usage and one-time charges
+### Usage and one-time charges
 
 | Item | Cost | Basis |
 | --- | --- | --- |
@@ -56,7 +56,7 @@ Three of these deserve a note:
 
 The two assumptions above are the only estimated quantities on this page; everything else is measured or read from AWS list prices. Exploring the agents more than the walkthrough asks will push the inference number up, but Nova Pro is $0.0008 per 1K input tokens and $0.0032 per 1K output tokens — you would need thousands of extra calls to move the total by a dollar.
 
-## What actually controls your bill
+### What actually controls your bill
 
 **Going faster barely helps.** Deploying the three tiers takes 40–60 minutes on its own — Tier 1 ~25–35 min, Tier 2 ~10–15 min, Tier 3 ~5–10 min — and none of that compresses. In a 90-minute window you are paying full rate for roughly 50 minutes of `terraform apply` and 40 minutes of hands-on work. Reading the pages quickly saves cents.
 
@@ -64,7 +64,7 @@ The two assumptions above are the only estimated quantities on this page; everyt
 
 **Tearing down promptly is the whole game.** Left running, the same stack costs about **$58 per day** and **$402 per week**. Forgetting it over a long weekend costs more than fifty workshop runs. When you finish, work through the **Cleanup** module — `teardown.sh` removes everything this page prices, and `teardown.sh --dry-run` shows you what it will destroy first.
 
-## Provenance
+### Provenance
 
 Every unit price above was pulled from the AWS Price List API for `us-east-1` on **18 August 2026**, and every quantity from the Terraform state of a completed deployment. One number is neither: the node root volumes are shown at EKS's default of 20 GiB per node, because the workshop sets no explicit `disk_size` — at $0.011/hour it does not move the total.
 

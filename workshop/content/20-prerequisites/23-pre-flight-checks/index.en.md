@@ -3,13 +3,13 @@ title: 'Run Pre-flight Checks'
 weight: 23
 ---
 
-## CLI tools
+### CLI tools
 
 The workshop expects these versions: kubectl 1.34.x, helm 3.12+, terraform 1.10+, vault 1.20.4+, aws CLI v2, jq, and yq.
 
 The pre-flight script installs them all and verifies your AWS account in one step. Manual install steps are intentionally omitted — running the script is the documented path. Windows users: use WSL2 (Linux subsystem).
 
-## Run the pre-flight script
+### Run the pre-flight script
 
 The pre-flight script auto-installs all CLI tools, then verifies Bedrock model access, AWS service quotas, and IAM permissions in one shot. It continues past individual failures and emits a consolidated summary with copy-paste remediation for each failure.
 
@@ -38,7 +38,7 @@ bash infrastructure/scripts/check-prerequisites.sh --skip-iam-sim --skip-quotas
 Self-paced attendees using their own account with `AdministratorAccess` (or `PowerUserAccess` + `IAMFullAccess`) should not skip these checks — there the failures are real and tell you which policy to attach.
 :::
 
-## Verify CLI tools are installed
+### Verify CLI tools are installed
 
 After the script completes, confirm the key tools:
 
@@ -46,7 +46,7 @@ After the script completes, confirm the key tools:
 terraform version && kubectl version --client && helm version --short && vault version && aws --version
 ```
 
-## Service quotas
+### Service quotas
 
 The script also verifies these service quotas in your deploy Region:
 
@@ -68,13 +68,13 @@ aws service-quotas get-service-quota --service-code ec2 --quota-code L-1216C47A 
 AWS Workshop Studio auto-provisions these quotas before account hand-off when the workshop's publisher configures them in the Catalog Builder admin UI (Account Configuration -> Service Quotas tab). If you still encounter quota errors during deploy, run `check-prerequisites.sh` and follow the printed remediation to request increases manually.
 :::
 
-## All checks passed?
+### All checks passed?
 
 Once every check is green, continue to [Deploy Foundation](../../30-deploy-foundation/).
 
 ---
 
-## Self-paced: container runtime (`--image-source ecr`)
+### Self-paced: container runtime (`--image-source ecr`)
 
 The default self-paced deploy **builds the five Use Case images and pushes them to your own account's private ECR**, so a running container runtime (Docker or Podman) is **required** — install and start it before you deploy. (An optional no-build path that pulls pre-built images from your own GHCR namespace needs no container runtime; it is an advanced option documented in the repository README, not part of this walkthrough.)
 

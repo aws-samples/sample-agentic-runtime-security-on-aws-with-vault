@@ -3,11 +3,11 @@ title: 'Verify Per-User Data Access'
 weight: 63
 ---
 
-## Overview
+### Overview
 
 In this module you log in as Oscar and then as Jaime and confirm that each user sees only their own accounts and transactions. You then inspect the PostgreSQL Row-Level Security (RLS) policy that enforces per-user isolation at the database layer and run `verify-uc2.sh` to validate all Use Case 2 end-to-end success criteria.
 
-## Step 1 — Log in as Oscar, inspect accounts
+### Step 1 — Log in as Oscar, inspect accounts
 
 Open the Banking UI URL in your browser and log in as `oscar`. The Banking UI is a chat interface — ask it a banking question such as "What are my account balances?" (or "show my accounts"). You should see accounts belonging to Oscar only.
 
@@ -57,7 +57,7 @@ SET
 pod "pg-client-oscar" deleted
 ```
 
-## Step 2 — Switch to Jaime, confirm data isolation
+### Step 2 — Switch to Jaime, confirm data isolation
 
 Open a **new Incognito / Private browser window**, go to the Banking UI URL, and sign in as `jaime` (password `WorkshopUser1!`). In the chat, ask "What are my account balances?" (or "show my accounts"). You should see Jaime's accounts only — no rows from Oscar's data.
 
@@ -88,7 +88,7 @@ SET
 pod "pg-client-jaime" deleted
 ```
 
-## Step 3 — Inspect the Row-Level Security policy
+### Step 3 — Inspect the Row-Level Security policy
 
 The RLS policy lives in the `pg_policy` system catalog. Reading it requires admin access (the `uc2-personal-readonly` Vault-vended role is non-superuser and cannot query `pg_policy`). The RDS master credentials are stored in AWS Secrets Manager — pull them and run a SELECT against the catalog from a transient `postgres:16-alpine` pod:
 
@@ -128,7 +128,7 @@ secret "db-master" deleted
 
 The `policy_expr` column shows the RLS predicate (PostgreSQL has normalised the column reference to `(user_sub)::text` and the setting name to `'app.current_user_sub'::text` — same semantic). Every `SELECT` on `banking.accounts` is automatically filtered by this predicate. If `app.current_user_sub` is not set, `current_setting(..., true)` returns `NULL` and no rows are returned — a safe default. The `polroles = {0}` value is Postgres's convention in `pg_policy` for "applies to every role" — the policy is not scoped to a specific role list, so any non-superuser role that touches the table is subject to it (the master `vault_root` role bypasses RLS because it is a superuser, which is why Step 3 reads `pg_policy` successfully).
 
-## Step 4 — Run verify-uc2.sh
+### Step 4 — Run verify-uc2.sh
 
 Run the end-to-end verification script:
 
@@ -293,7 +293,7 @@ Key design choices:
 
 ---
 
-### What Would Have Failed
+#### What Would Have Failed
 
 **Without workload identity for the MCP Server (OBJ-1 failure):** If the MCP Server pod used the `default` ServiceAccount instead of `uc2-mcp-server-sa`, Vault's Kubernetes auth role binding would reject its startup token request. The MCP Server could not authenticate to Vault with its workload identity — there is no separate `auth/jwt/login` path in the native model, so the workload-identity gate cannot be sidestepped. Vault's `bound_service_account_names = ["uc2-mcp-server-sa"]` is the gating check.
 

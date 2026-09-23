@@ -3,7 +3,7 @@ title: 'Scope Enforcement (Layer 2)'
 weight: 64
 ---
 
-## Overview
+### Overview
 
 Use Case 2 enforces the principle of least privilege at two independent layers:
 
@@ -12,9 +12,9 @@ Use Case 2 enforces the principle of least privilege at two independent layers:
 
 This defense-in-depth means that a single control being misconfigured does not open a write path. Both layers must be bypassed for a write to succeed.
 
-## Section 1 — Vault Policy Enforcement
+### Section 1 — Vault Policy Enforcement
 
-### Step 1.1 — Read the uc2-personal policy
+#### Step 1.1 — Read the uc2-personal policy
 
 ```bash
 export VAULT_ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)
@@ -51,7 +51,7 @@ This is distinct from `uc2-human-baseline`, the per-user policy Vault intersects
 ceiling on the on-behalf-of path shown on the previous pages. Neither carries a Use Case 3 write
 path — which is what the next step proves.
 
-### Step 1.2 — Attempt to read a write-capable credential role
+#### Step 1.2 — Attempt to read a write-capable credential role
 
 Obtain a Vault token carrying the `uc2-personal` policy — the same policy the MCP server's
 ServiceAccount receives — and attempt to read a Use Case 3 credential with it:
@@ -82,7 +82,7 @@ The 403 confirms the Vault policy layer is working. The `uc2-personal` policy ha
 
 The URL field shows `http://127.0.0.1:8200` (rather than the cluster-DNS address `vault.vault.svc.cluster.local:8200`) because the `vault` CLI is running **inside** the `vault-0` pod via `kubectl exec`. In-pod, `VAULT_ADDR` defaults to the loopback. When the MCP server or another pod calls Vault from outside, it uses the cluster-DNS form — but the 403 happens at the same authorization boundary regardless of which path you arrive on.
 
-### Step 1.3 — Confirm the policy boundary in the audit log
+#### Step 1.3 — Confirm the policy boundary in the audit log
 
 The audit log streams every Vault request and response. Filter the last 10 minutes for any denied response targeting a `uc3` path:
 
@@ -117,9 +117,9 @@ The `error` field is **HMAC-hashed** by Vault's audit device, not the human-read
 
 To verify what the hash represents, the operator hashes the candidate string with the audit device's HMAC accessor (`vault audit hash sys/audit/file 'permission denied'` returns the same `hmac-sha256:…` value when the hashes match). For the workshop, you saw the plaintext `permission denied` from Vault's HTTP response in Step 1.2 — the audit log is the corresponding evidence-of-record that the rejection actually happened.
 
-## Section 2 — Database GRANT Enforcement
+### Section 2 — Database GRANT Enforcement
 
-### Step 2.1 — Obtain Vault-vended uc2-personal-readonly credentials
+#### Step 2.1 — Obtain Vault-vended uc2-personal-readonly credentials
 
 This block issues a fresh credential, prints the `username` / `password` so you can see what Vault gave you, and exports them into `PG_USER` and `PG_PASS` so Step 2.2 picks them up automatically — no copy-paste required:
 
@@ -140,7 +140,7 @@ export RDS_HOST=$(kubectl get configmap banking-mcp-config -n banking-app -o jso
 The credential issued above lives for **15 minutes** (`default_ttl`). If you take longer than that before running Step 2.2's `psql` command, you will see `psql: error: FATAL: password authentication failed`. Re-run the whole Step 2.1 block to mint a fresh credential — `PG_USER` and `PG_PASS` get re-exported automatically.
 :::
 
-### Step 2.2 — Attempt INSERT with those credentials
+#### Step 2.2 — Attempt INSERT with those credentials
 
 No workshop pod has the `psql` binary pre-installed, so spawn a transient `postgres:16-alpine` pod that connects to RDS as the Vault-vended ephemeral role, attempts the INSERT, and auto-deletes when it exits. The `${PG_USER}`, `${PG_PASS}`, and `${RDS_HOST}` references resolve from the exports you just ran in Step 2.1:
 
@@ -163,7 +163,7 @@ pod banking-app/pg-insert-attempt terminated (Error)
 
 The Postgres GRANT layer rejected the INSERT independently of Vault policy. Even if an attacker obtained a `uc2-personal-readonly` credential through a Vault misconfiguration that widened the policy scope, the database GRANT would still prevent writes — and because every Vault-vended credential is its own freshly-created Postgres role (with grants applied directly to it), there is no permanent role to GRANT INSERT onto either.
 
-### Step 2.3 — Confirm the GRANT configuration
+#### Step 2.3 — Confirm the GRANT configuration
 
 The grant snapshot lives in the Postgres system catalog `pg_class.relacl`; `\dp banking.accounts` is `psql`'s pretty-printer for it. Reading it requires admin access (the ephemeral `uc2-personal-readonly` role cannot read `pg_class`), so pull the RDS master credentials from AWS Secrets Manager and run a transient `postgres:16-alpine` pod as the master:
 
@@ -212,11 +212,11 @@ What to read from this output:
 - **Each `"v-…"=r/vault_root` row** is a live Vault-vended ephemeral role. The `=r/` means *only the `r` (SELECT) privilege is granted* — no `a` for insert, no `w` for update, no `d` for delete. That's why your Step 2.2 INSERT got rejected. This is also the direct evidence of JIT identity at the DB layer: every active credential is visible as its own row, and the list shrinks as roles are dropped — immediately when the MCP server revokes the lease at the end of a query, or at lease expiry for the credentials you issued by hand with the root token on these pages, which nothing revokes for you.
 - **`Policies` column** — the RLS predicate from the previous page. The `(u)` USING clause is the SELECT filter; `(r)` indicates it applies to `SELECT` (read).
 
-## Section 3 — What a Stolen Token Gets You
+### Section 3 — What a Stolen Token Gets You
 
 Sections 1 and 2 showed what the token **cannot** reach. This one shows what it *can* — including when it is presented by someone who is not you. Every claim a workshop makes about token security is worth less than the five minutes it takes to check, so check this one.
 
-### Step 3.1 — Get your own access token
+#### Step 3.1 — Get your own access token
 
 The Banking UI keeps the token in an `httpOnly` cookie, which JavaScript cannot read but DevTools can show you.
 
@@ -230,7 +230,7 @@ echo "token length: ${#ACCESS_TOKEN}"
 
 A Use Case 2 access token is roughly 800 characters. If you got something much shorter you copied the wrong cookie — `id_token` and `pkce` also live there.
 
-### Step 3.2 — Present it to Vault twice
+#### Step 3.2 — Present it to Vault twice
 
 This is the exact call the MCP server makes: the token *is* the Vault token. Run it twice.
 
@@ -251,7 +251,7 @@ attempt 1 username=v-JWT Toke-uc2-pers-DiVXIMGjGIeX0uV8sFm9-1788385620
 attempt 2 username=v-JWT Toke-uc2-pers-gFzxJVMgIqTvaHP3K9R9-1788385654
 ```
 
-### What this means, stated plainly
+#### What this means, stated plainly
 
 **Vault has no replay cache.** The delegated token is a bearer credential: whoever holds it can present it as many times as they like until it expires, and each presentation issues a fresh database credential. Nothing about the OAuth resource server model changes that, and the workshop is not going to pretend otherwise.
 

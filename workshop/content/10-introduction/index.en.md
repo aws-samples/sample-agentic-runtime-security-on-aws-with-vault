@@ -3,7 +3,7 @@ title: 'Introduction'
 weight: 10
 ---
 
-## The problem
+### The problem
 
 AI agentic systems break the assumptions security tooling has relied on for two decades. Agents are not users — they don't fit IAM Identity Center personas. Agents are not workloads in the classic sense — they're sometimes acting on behalf of a user, sometimes acting autonomously, and the boundary moves request to request. Bearer tokens with hard-coded scopes don't compose. Standing database credentials with broad GRANTs accumulate sprawl with every new agent. And when something goes wrong, "which user authorized this action?" becomes unanswerable across IDP logs, IAM logs, and database logs that don't share a correlation key.
 

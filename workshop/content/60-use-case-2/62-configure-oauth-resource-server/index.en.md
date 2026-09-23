@@ -3,13 +3,13 @@ title: 'Configure the OAuth Resource Server'
 weight: 62
 ---
 
-## Overview
+### Overview
 
 In this module you inspect the Vault **OAuth resource server** — the native mechanism that authorizes Use Case 2's data access — and trace how a user's IVIA-issued OAuth JWT flows into per-user-scoped Postgres credentials **without any intermediate Vault login**.
 
 Vault Enterprise treats the IVIA-issued OAuth access token as a first-class credential. The MCP Server presents that JWT **directly** to Vault in the `X-Vault-Token` header — there is no `POST /v1/auth/jwt/login` round-trip and no separately-issued Vault token. Vault validates the JWT against the OAuth resource server profile, resolves the human subject and the agent actor from the token's claims, and evaluates policy at the moment of the request.
 
-## The Native OAuth Resource Server Model
+### The Native OAuth Resource Server Model
 
 Use Case 2 authorizes each request on behalf of a human:
 
@@ -42,7 +42,7 @@ Two consequences worth naming, because both are checks you run below:
   human baseline ∩ agent ceiling rather than an approximation of it.
 :::
 
-## Step 1 — Confirm there is no jwt auth mount and the resource server is active
+### Step 1 — Confirm there is no jwt auth mount and the resource server is active
 
 Point the `vault` CLI at Vault with the root token so the reads below are permitted. One paste — kills any prior port-forward, opens a fresh one, and exports `VAULT_ADDR` + `VAULT_TOKEN`:
 
@@ -73,7 +73,7 @@ vault secrets list | grep -E 'agent-registry|database|aws'
 
 Expected — `agent-registry/`, `aws/`, and `database/` are all present.
 
-## Step 2 — Inspect the `agent-uc2` registration and its ceiling
+### Step 2 — Inspect the `agent-uc2` registration and its ceiling
 
 Read the Agent Registry registration that represents the Use Case 2 agent. Its `ceiling_policies` are the restrict-only envelope Vault intersects on every on-behalf-of request:
 
@@ -121,7 +121,7 @@ path "sys/leases/renew" {
 
 Notice what is **absent**: no `database/creds/uc3-refund-writer` and no write-capable credential role. The ceiling cannot be widened at request time — a per-request RAR can only *narrow* it further.
 
-## Step 3 — Inspect the human baseline policy
+### Step 3 — Inspect the human baseline policy
 
 The human subject (`oscar` or `jaime`) contributes the *baseline* — what this specific user is permitted. Read it:
 
@@ -146,7 +146,7 @@ path "sys/leases/renew" {
 
 The effective grant Vault applies is **`uc2-human-baseline` (human baseline) ∩ `uc2-agent-ceiling` (agent ceiling)**. Both must permit a path for the request to succeed. This is ENFC-02 at the Vault layer, expressed as an intersection rather than a single flat policy.
 
-## Step 4 — Verify the database credentials role
+### Step 4 — Verify the database credentials role
 
 ```bash
 vault read database/roles/uc2-personal-readonly
@@ -169,7 +169,7 @@ The whole `creation_statements` value prints as **one** bracketed, semicolon-sep
 
 Each ephemeral role is created with login credentials scoped to the banking schema, read-only, with a 15-minute TTL. There is no permanent Postgres role — grants are applied directly to the ephemeral role, and no INSERT/UPDATE/DELETE is granted.
 
-## Step 5 — Present the OAuth JWT directly to Vault (demo)
+### Step 5 — Present the OAuth JWT directly to Vault (demo)
 
 To confirm the native path, present a real user JWT to Vault via `X-Vault-Token` and watch Vault vend a credential in a **single** call — no login step.
 
@@ -293,7 +293,7 @@ HTTP request → Authorization: Bearer <OAuth JWT>
 
 ---
 
-### What Would Have Failed
+#### What Would Have Failed
 
 **Without the agent registration (identity failure):** If `agent-uc2` were not registered, Vault could not resolve the actor from `act.sub` and the on-behalf-of request would fail closed — no credential is issued. The registry is the authority on *which* agent is acting.
 

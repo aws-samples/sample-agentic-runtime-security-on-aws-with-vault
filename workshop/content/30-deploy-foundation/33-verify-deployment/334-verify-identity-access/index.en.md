@@ -19,7 +19,7 @@ IBM Verify Identity Access (IVIA) runs as a self-contained seven-pod stack in th
 | `postgresql` | In-cluster PostgreSQL HVDB (`:5432`) — IVIA runtime DB, sessions, cluster store |
 ::::
 
-## Step 1 — Confirm all pods are Running
+### Step 1 — Confirm all pods are Running
 
 ```bash
 kubectl get pods -n verify-access
@@ -65,7 +65,7 @@ terraform -chdir=infrastructure apply
 ```
 :::
 
-## Step 2 — Confirm the WRP ALB Ingress
+### Step 2 — Confirm the WRP ALB Ingress
 
 ```bash
 kubectl get ingress -n verify-access
@@ -85,7 +85,7 @@ Compare this value; don't open it. The bare host serves a login page that takes 
 The browser and mobile app validate against the workshop FQDN (`NIP_FQDN_WRP`), not the raw `k8s-workshopacme-*.elb.amazonaws.com` hostname — hitting the raw host shows a TLS warning, which is expected. `deploy-workshop.sh` Step 7 issued that trusted Let's Encrypt cert and wrote `.acme-state`. If Step 7 failed, return to page 31 and re-run.
 :::
 
-## Step 3 — Confirm OIDC discovery via WRP junction
+### Step 3 — Confirm OIDC discovery via WRP junction
 
 Browser flows reach the OIDC Provider through the WRP `/isvaop` junction:
 
@@ -103,7 +103,7 @@ Expected:
 
 A `curl: (60) SSL certificate problem` here means Step 7's ACME issuance did not complete — check `kubectl get certificate workshop-le-tls -n cert-manager` shows `READY=True`.
 
-## Step 4 — Confirm internal OIDC discovery
+### Step 4 — Confirm internal OIDC discovery
 
 Vault and agent workloads reach the OIDC Provider via its ClusterIP service. Verify from inside the cluster (the `--quiet` flag keeps `kubectl run`'s pod-lifecycle messages out of the `jq` pipe):
 

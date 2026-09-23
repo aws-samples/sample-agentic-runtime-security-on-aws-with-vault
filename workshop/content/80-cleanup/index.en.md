@@ -5,7 +5,7 @@ weight: 80
 
 Run the teardown script to destroy all workshop resources and verify no chargeable resources remain.
 
-## 1. Run the teardown script
+### 1. Run the teardown script
 
 From the repo root, run:
 
@@ -35,7 +35,7 @@ This single command performs the full teardown in order:
 
 The script exits non-zero if verification finds residuals; review the output for `FAIL` lines.
 
-## 2. Available flags
+### 2. Available flags
 
 | Flag | What it does |
 |---|---|
@@ -49,7 +49,7 @@ To preview the full sweep without making changes:
 bash infrastructure/scripts/teardown.sh --dry-run
 ```
 
-## 3. Spot-check after teardown
+### 3. Spot-check after teardown
 
 The script runs a built-in audit, but you can run these spot-checks manually to confirm nothing chargeable remains.
 

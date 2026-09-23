@@ -11,7 +11,7 @@ This workshop focuses on five control objectives for agentic systems:
 4. **Enforcement at the point of use** — Vault is the decision point. The IVIA-issued OAuth JWT authorizes Vault directly via the `X-Vault-Token` header (the `ivia` OAuth resource-server profile), and Vault narrows the token per request through `authorization_details` of `type: vault:path_access`. Defense-in-depth still layers DB GRANTs + AWS IAM and Kubernetes NetworkPolicy underneath, so a compromise of any one layer doesn't bypass the others.
 5. **Correlated audit evidence** — one `request_id` runs through all three planes: the IVIA decision log (who approved), the HashiCorp Vault audit log (which agent was authorized, for which human, scoped to which path), and the RDS pgaudit log (the write that landed). The Vault record carries the agent-registry identity in `actor_entity_name` and the approving human's identity entity in `auth.entity_id`, and the agent stamps the flow's `request_id` on the Vault request as `X-Correlation-Id` so all three join on the same key. Athena stitches the three planes into one row.
 
-## Three use cases, in order
+### Three use cases, in order
 
 The workshop walks through three use cases in strict topological order — Use Case 3 is a strict superset of Use Case 1 + Use Case 2.
 

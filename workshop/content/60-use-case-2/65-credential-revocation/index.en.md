@@ -3,7 +3,7 @@ title: 'Credential Revocation'
 weight: 65
 ---
 
-## Overview
+### Overview
 
 In this module you observe the full credential lifecycle for a Use Case 2 session: a Postgres credential is issued, used to confirm its existence, then explicitly revoked, and you verify three things in succession — (a) the Postgres role is gone, (b) Vault's active-leases list no longer contains your lease, (c) both the issuance and the revocation appear in the audit log keyed by `lease_id`.
 
@@ -15,7 +15,7 @@ Load the Vault root token once at the start of the page — several admin-only p
 export VAULT_ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)
 ```
 
-## Step 1 — Issue a fresh credential and capture the lease_id
+### Step 1 — Issue a fresh credential and capture the lease_id
 
 This block reads a credential, prints the `lease_id` and Postgres `username`, and exports them into your shell so subsequent steps pick them up automatically — no copy-paste required:
 
@@ -39,7 +39,7 @@ PG_USER=v-root-uc2-pers-IwaMUs8kxzRLvjsvSjwO-1780000048
 
 You now hold the credential's full `lease_id` and the ephemeral Postgres role name. Keep this shell session for the rest of the page — the exports are how `LEASE_ID` and `PG_USER` flow into later commands.
 
-## Step 2 — Confirm the Postgres role exists
+### Step 2 — Confirm the Postgres role exists
 
 The Vault dynamic secrets engine just created `${PG_USER}` as a real Postgres role. Pull the RDS master credentials from AWS Secrets Manager and run a transient `postgres:16-alpine` pod to confirm:
 
@@ -75,7 +75,7 @@ secret/db-master created
 pod "pg-role-before" deleted
 ```
 
-## Step 3 — Revoke the lease (the production code path)
+### Step 3 — Revoke the lease (the production code path)
 
 Call the same Vault API a production session-end handler would call:
 
@@ -92,7 +92,7 @@ All revocation operations queued successfully!
 
 Vault has queued the revocation. Internally Vault now runs the `revocation_statements` configured on the `uc2-personal-readonly` role against Postgres — the symmetric `REVOKE`s that undo every `GRANT` from the role's `creation_statements`, followed by `DROP ROLE IF EXISTS`. This happens within milliseconds.
 
-## Step 4 — Confirm the Postgres role is gone
+### Step 4 — Confirm the Postgres role is gone
 
 Re-run the role check. The lease's ephemeral Postgres role should be gone:
 
@@ -119,7 +119,7 @@ secret "db-master" deleted
 
 Zero rows. The ephemeral role has been dropped. Any open Postgres connection that was using this credential is now broken at its next query — `password authentication failed`. **This is the credential-revocation enforcement payoff: the moment the lease is revoked, the database access it granted is physically impossible.** No grace period, no rollback path, no orphan role left behind.
 
-## Step 5 — Confirm your lease is no longer in Vault's active-leases list
+### Step 5 — Confirm your lease is no longer in Vault's active-leases list
 
 The lease-list lookup is the operator's view of "what credentials are currently issued and still considered live by Vault." Run it and grep for your specific lease suffix — it should NOT be present:
 
@@ -160,7 +160,7 @@ Two possible outputs:
 Either way, your specific revoked lease is absent — that's the point Step 5's grep check above confirms unambiguously.
 :::
 
-## Step 6 — Find the issuance event in the audit log (Athena)
+### Step 6 — Find the issuance event in the audit log (Athena)
 
 The Vault audit device streams every API request and response into S3 via Firehose. Cross-reference the lease you just revoked with the lifecycle events recorded for it.
 
@@ -241,7 +241,7 @@ kubectl exec -n vault vault-0 -- \
 }
 ```
 
-## Step 7 — Find the revocation event for the lease you revoked
+### Step 7 — Find the revocation event for the lease you revoked
 
 The revocation event lives at the path `sys/leases/revoke/<lease_id>`. Query for the specific lease you captured in Step 1:
 
@@ -278,7 +278,7 @@ obtained `lease_id` X at 23:17; the MCP server handed X back seconds later" — 
 attribution for a single session, from the Vault plane alone, with no timestamp guessing
 involved.
 
-## Step 8 — Watch the MCP server hand a credential back on its own
+### Step 8 — Watch the MCP server hand a credential back on its own
 
 Steps 1 through 7 revoked a credential *you* issued, as root, from your terminal. That proves the API works. This step proves the workshop's actual claim: that no operator is involved, and every credential the application obtains is returned the moment the query it was issued for finishes.
 
@@ -434,7 +434,7 @@ Step 8 below is where you watch all of this happen against your own cluster.
 
 ---
 
-### What Would Have Failed
+#### What Would Have Failed
 
 **Without explicit revocation (TTL-only design):** A credential issued at `T+0` would remain valid for up to 15 minutes after a user closes their browser tab. If the credential were leaked (clipboard, log line, memory dump), the attacker would have a 15-minute window of valid access regardless of whether the legitimate session is still alive. Explicit revocation closes the window in milliseconds — leakage windows shrink from minutes to "the time between the leak and the session-end signal".
 

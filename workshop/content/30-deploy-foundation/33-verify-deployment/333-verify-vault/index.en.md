@@ -20,7 +20,7 @@ export VAULT_ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)
 ```
 :::
 
-## Step 1 — Confirm pods are Running
+### Step 1 — Confirm pods are Running
 
 ```bash
 kubectl get pods -n vault
@@ -38,7 +38,7 @@ vault-agent-injector-<hash>             1/1     Running   0          5m
 
 `vault-0`, `vault-1` and `vault-2` are the Raft cluster. Remember there are three of them — some later steps read Vault's audit log, and the node that served a request is the one that logged it.
 
-## Step 2 — Confirm KMS auto-unseal
+### Step 2 — Confirm KMS auto-unseal
 
 ```bash
 kubectl exec -n vault vault-0 -- vault status
@@ -56,7 +56,7 @@ Sealed                   false
 ...
 ```
 
-## Step 3 — Confirm Raft peers
+### Step 3 — Confirm Raft peers
 
 ```bash
 kubectl exec -n vault vault-0 -- \
@@ -73,7 +73,7 @@ vault-1    vault-1.vault-internal:8201    follower    true
 vault-2    vault-2.vault-internal:8201    follower    true
 ```
 
-## Step 4 — Confirm audit device
+### Step 4 — Confirm audit device
 
 ```bash
 kubectl exec -n vault vault-0 -- \
@@ -82,7 +82,7 @@ kubectl exec -n vault vault-0 -- \
 
 Expected — at least one audit device listed. If the list is empty, `deploy-workshop.sh` has not completed successfully — re-run it.
 
-## Step 5 — Confirm Vault Enterprise + the Agent Registry
+### Step 5 — Confirm Vault Enterprise + the Agent Registry
 
 The native agent-identity model this workshop teaches — the **Agent Registry** and the **OAuth resource server** — is a Vault **Enterprise** capability. Confirm the running binary is Enterprise and that the Agent Registry secrets engine is mounted before you rely on either.
 

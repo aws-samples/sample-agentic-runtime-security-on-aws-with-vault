@@ -7,7 +7,7 @@ weight: 21
 If you received a Workshop Studio invite link or a 12-digit event code from an instructor, your AWS account is already provisioned and Tier-1 infrastructure is already running. Go to [At an Event](../21-at-an-event/) instead. The steps on this page apply only to self-paced attendees running the workshop in their own AWS account.
 ::::
 
-## Tooling Prerequisites
+### Tooling Prerequisites
 
 Install the following tools before running any workshop scripts. The workshop's `check-prerequisites.sh` script verifies each one and installs missing tools automatically (Homebrew on macOS, apt on Linux).
 
@@ -26,19 +26,19 @@ Run the pre-flight checker to install and verify all tools in one shot:
 bash infrastructure/scripts/check-prerequisites.sh
 ```
 
-## Deployer IAM Permissions
+### Deployer IAM Permissions
 
 Your AWS CLI identity needs permissions to create all Tier-1 resources: EKS cluster, VPC, RDS, Bedrock KB, IAM roles, KMS keys, CloudWatch log groups, Firehose delivery streams, Athena workgroup, and AOSS collection. The `bootstrap.sh` script stamps your current identity as `admin_principal_arn` in `infrastructure/terraform.tfvars`.
 
 At minimum you need the AWS managed policies **PowerUserAccess** plus **IAMFullAccess**, or an equivalent custom policy. The workshop does not restrict attendees to least-privilege for the deployer identity — the lesson focuses on workload-identity controls at runtime, not on deployer IAM.
 
-## Step 1: Clone the Repository
+### Step 1: Clone the Repository
 
 ```bash
 git clone https://github.com/aws-samples/sample-agentic-runtime-security-on-aws-with-vault.git && cd sample-agentic-runtime-security-on-aws-with-vault
 ```
 
-## Step 2: Verify AWS Access
+### Step 2: Verify AWS Access
 
 Confirm your AWS CLI is configured and you can reach the target account:
 
@@ -58,7 +58,7 @@ aws sts get-caller-identity
 
 If the output starts with `arn:aws:sts::` (assumed role), note the underlying IAM role ARN — `bootstrap.sh` stamps it as `admin_principal_arn` in `infrastructure/terraform.tfvars`.
 
-## Step 3: Verify Bedrock Model Access
+### Step 3: Verify Bedrock Model Access
 
 The workshop uses two Amazon Nova models. Verify they are enabled before deploying.
 
@@ -84,7 +84,7 @@ If either command returns access denied, request access via the Bedrock console 
 Amazon's own Nova family is generally enabled by default in fresh AWS accounts (no click-through acceptance), unlike Anthropic Claude models.
 ::::
 
-## Step 4: Gather Your Inputs
+### Step 4: Gather Your Inputs
 
 The deploy script needs these inputs on its first run. Have them ready:
 
@@ -97,11 +97,11 @@ The deploy script needs these inputs on its first run. Have them ready:
 
 The script writes the prompted values into the gitignored `terraform.tfvars` files; subsequent tiers and re-runs reuse them silently. The Vault Enterprise license is re-read from its file on every run.
 
-## Step 5: Deploy
+### Step 5: Deploy
 
 Go to [Deploy — Self-paced](../../30-deploy-foundation/31-deploy-self-paced/): `bootstrap.sh` → Tier 1 → Tier 2 → Tier 3.
 
-## Cleanup
+### Cleanup
 
 When you are done with the workshop, remove all AWS resources:
 
