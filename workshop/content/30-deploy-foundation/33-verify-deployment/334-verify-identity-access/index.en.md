@@ -79,6 +79,8 @@ The hostname the browser trusts is the **workshop FQDN** the cert was issued for
 source infrastructure/.acme-state && WRP_HOST="$NIP_FQDN_WRP" && echo "WRP host: $WRP_HOST"
 ```
 
+Compare this value; don't open it. The bare host serves a login page that takes your password and goes nowhere — sign in at the **banking** URL, on the [OAuth Login Flow](../../../60-use-case-2/61-oauth-pkce-flow/) page.
+
 :::alert{header="Trusted cert vs. raw ALB" type="info"}
 The browser and mobile app validate against the workshop FQDN (`NIP_FQDN_WRP`), not the raw `k8s-workshopacme-*.elb.amazonaws.com` hostname — hitting the raw host shows a TLS warning, which is expected. `deploy-workshop.sh` Step 7 issued that trusted Let's Encrypt cert and wrote `.acme-state`. If Step 7 failed, return to page 31 and re-run.
 :::
