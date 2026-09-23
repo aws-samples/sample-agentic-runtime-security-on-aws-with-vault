@@ -51,7 +51,7 @@ Sample output:
 
 Your IDs, amount, and timestamp will differ. What matters is that the chat returns `Status: approved` and the new row appears in your transaction list.
 
-### If the approval push never arrives
+::::expand{header="If the approval push never arrives"}
 
 **Why:** The agent is an LLM, and occasionally it *says* it sent the push without calling the tool that fires one. Nothing reaches your phone, and the chat looks like it worked.
 
@@ -70,3 +70,5 @@ Given a label selector, `kubectl logs` returns only the last few lines per pod u
 :::
 
 If the push still doesn't arrive, enable notifications for IBM Verify on your phone and confirm you completed device enrollment.
+
+::::
