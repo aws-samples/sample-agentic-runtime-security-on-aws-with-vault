@@ -11,7 +11,7 @@ Follow **[Deploy — Self-paced](../31-deploy-self-paced/)** — you bootstrap a
 
 #### Step 1 — Clone the repository
 
-Clone the workshop repo at the pinned event tag from the public mirror:
+Clone the workshop repo:
 
 ```bash
 git clone https://github.com/aws-samples/sample-agentic-runtime-security-on-aws-with-vault.git && cd sample-agentic-runtime-security-on-aws-with-vault
@@ -98,7 +98,7 @@ When both tiers report success, continue with **[Configure kubectl](../32-config
 
 ---
 
-## If Tier 2 fails on the Let's Encrypt cert (`Step 7: Certificate Ready=true`)
+:::::expand{header="Troubleshooting — if Tier 2 fails on the Let's Encrypt certificate"}
 
 Step 7 obtains the browser-trusted Let's Encrypt certificate. It has two distinct failure modes, and the Fix line tells you which one you hit.
 
@@ -188,3 +188,4 @@ issuer_id    https://wrp.<deploy-id>.<alb-ip-dashed>.nip.io
 ```
 
 If it still shows an `*.elb.amazonaws.com` host, the IVIA re-apply did not run — confirm the certificate is `Ready=True`, that you did **not** pass `--skip-acme`, then re-run the Tier 2 command above.
+:::::

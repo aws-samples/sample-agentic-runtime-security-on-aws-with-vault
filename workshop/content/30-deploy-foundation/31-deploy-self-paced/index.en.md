@@ -99,7 +99,7 @@ bash infrastructure/scripts/deploy-workshop.sh --tier 1 --skip-infra --skip-buil
 
 Tier-1 outputs referenced by later pages: `kubectl_config_command`, `kb_id`, `rds_endpoint`.
 
-### Tier 2: `Step 7: Certificate Ready=true` failed
+:::::expand{header="Troubleshooting — if Tier 2 fails on the Let's Encrypt certificate"}
 
 Step 7 obtains the browser-trusted Let's Encrypt certificate. It has two distinct failure modes, and the Fix line tells you which one you hit.
 
@@ -189,3 +189,4 @@ issuer_id    https://wrp.<deploy-id>.<alb-ip-dashed>.nip.io
 ```
 
 If it still shows an `*.elb.amazonaws.com` host, the IVIA re-apply did not run — confirm the certificate is `Ready=True`, that you did **not** pass `--skip-acme`, then re-run the Tier 2 command above.
+:::::
