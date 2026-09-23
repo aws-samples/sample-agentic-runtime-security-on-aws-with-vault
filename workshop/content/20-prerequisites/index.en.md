@@ -5,7 +5,7 @@ weight: 20
 
 Before deploying any infrastructure, set up your environment using the workshop's automation scripts. Work through the sub-modules in the left navigation in order.
 
-### Mobile prerequisite — IBM Verify app
+## Mobile prerequisite — IBM Verify app
 
 Use Case 3 (Privileged Action with CIBA) requires you to approve a refund on a **separate device** — your phone — via an MMFA mobile push notification. Install the free **IBM Verify** app on your mobile device before the workshop starts.
 
