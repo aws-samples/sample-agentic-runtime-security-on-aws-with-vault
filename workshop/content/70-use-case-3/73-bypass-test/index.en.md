@@ -3,11 +3,11 @@ title: 'The Bypass Test'
 weight: 73
 ---
 
-### Objective 4 · Enforcement at the point of use
+## Objective 4 · Enforcement at the point of use
 
 Every page so far built the approval path. This one tries to get round it — and every route fails at Vault, not in the application code.
 
-## Run the bypass test
+### Run the bypass test
 
 **Why:** Everything so far has been the happy path. Now we attack it three ways: forge the signature, act as the wrong agent, and ask for a path the token does not name. All three have to fail before any credential is issued.
 
@@ -60,7 +60,7 @@ load-bearing by denying a genuine token whose actor is a *different registered* 
 have such a token, set `UC3_WRONG_ACTOR_TOKEN` and re-run to exercise it.
 :::
 
-## Three independent denials, each sufficient on its own
+### Three independent denials, each sufficient on its own
 
 | Layer | Mechanism | What It Enforces |
 |---|---|---|
@@ -74,11 +74,11 @@ The RAR-path control is the one that proves enforcement moved *into* Vault: the 
 A compromised agent pod with its service account JWT intact could initiate a CIBA flow and present the resulting delegated token to Vault. Mitigations for pod compromise — runtime rules, session policy restrictions — are the next layer of defense and out of scope here.
 :::
 
-## Row-level security holds on the read path too
+### Row-level security holds on the read path too
 
 **Why:** Approval protects the write. This checks the read — one legitimate credential, two customers, and neither can see the other's money.
 
-### In the browser
+#### In the browser
 
 1. Open an **Incognito / Private browser window**, go to the banking application URL, and sign in as **jaime** using the IVIA login page.
 2. Navigate to the Use Case 3 chat interface and send the message: `List my recent transactions`.
@@ -91,11 +91,11 @@ IVIA keeps its own SSO session cookie, so **Logout** in the banking app leaves y
 
 A refund lookup works the same way: ask `What is the status of refund <jaime-refund-id>` while signed in as Oscar — the agent returns "Refund not found" with no detail about Jaime's refund (no information disclosure).
 
-### Now prove it without the agent in the path
+#### Now prove it without the agent in the path
 
 **Why:** The browser result could be the application filtering for you. Do it yourself against the database, with a real credential, and see the filter is in Postgres.
 
-#### Get a read-only credential
+##### Get a read-only credential
 
 ```bash
 export VAULT_ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)
@@ -113,7 +113,7 @@ export RDS_HOST=$(kubectl get configmap uc3-agent-config -n banking-app -o jsonp
 The `uc3-readonly` credential expires after 15 minutes. If you see `psql: FATAL: password authentication failed`, re-run Step 2.1 to mint a fresh credential.
 :::
 
-#### Count transactions as each persona
+##### Count transactions as each persona
 
 The value RLS filters on is the IVIA `sub` claim, seeded as the plain strings `oscar` and `jaime` (`seed.sql`, column `banking.accounts.user_sub`). You do **not** need to look anything up in the IVIA LMI or decode an id_token — use those two values directly.
 
@@ -156,7 +156,7 @@ kubectl run pg-rls-test --rm -i --restart=Never --image=postgres:16-alpine -n ba
 
 Each count includes only the active `sub`'s rows — cross-tenant rows are invisible. This is the RLS policy (the `USING (user_sub = current_setting('app.current_user_sub', true))` clause) enforcing isolation at the Postgres layer, independently of the agent. The pod is deleted automatically (`--rm`) when the query finishes.
 
-## The read-only credential cannot write
+### The read-only credential cannot write
 
 **Why:** The agent holds two credentials. This is the one it uses to look things up — if it could also write, the approval step would be theatre.
 
@@ -184,7 +184,7 @@ pod "pg-insert-uc3" deleted
 
 The Postgres GRANT layer rejects the INSERT before the RLS policy (or any constraint) is even evaluated. This confirms that a bug in the agent code that accidentally attempted a write would fail closed at the database layer — Vault's `uc3-readonly` role has no write capability.
 
-## Knowing a refund id gets you nothing
+### Knowing a refund id gets you nothing
 
 **Why:** A refund id is not a secret — it sits in the chat transcript. So hand it to the wrong customer and check they still get zero rows.
 
@@ -192,7 +192,7 @@ RLS is not the only layer scoping refund reads. The `check_refund_status` tool a
 
 Refunds are **created by you** during the CIBA approval flow (page 71) — they are never seeded — so the IDs below are examples from one run; **yours will differ.**
 
-#### Step 4.1 — Find a refund you created
+##### Step 4.1 — Find a refund you created
 
 A refund is visible only to its owner (RLS), so list refunds under each persona you ran a refund as:
 
@@ -229,7 +229,7 @@ export OWNER=<the persona it appeared under: oscar or jaime>
 export ATTACKER=<the other persona>
 ```
 
-#### Step 4.2 — Cross-owner read returns nothing; owner read returns the row
+##### Step 4.2 — Cross-owner read returns nothing; owner read returns the row
 
 Run the exact owner-predicate JOIN `check_refund_status` executes — first as the **other** persona (the hostile reader), then as the **owner**:
 
@@ -275,7 +275,7 @@ kubectl run pg-owner-test --rm -i --restart=Never --image=postgres:16-alpine -n 
 
 The cross-owner read returns zero rows because of the `AND a.user_sub = <authenticated_sub>` predicate — the same one `check_refund_status` applies on every call. That is why asking the agent for a refund you don't own returns `{"error": "Refund <id> not found"}` instead of another user's data: a cross-tenant refund is made indistinguishable from one that does not exist (no information disclosure). `list_transactions` and account lookups use the same pattern — they set `app.current_user_sub` to the verified `sub` from the bearer token before querying, so RLS filters cross-tenant rows before they ever reach the agent.
 
-## One approval pays once
+### One approval pays once
 
 **Why:** A tap on a phone authorizes one refund. A five-minute credential limits how *long* the agent can write, not how *many times* — so replay needs its own answer. Two layers give one:
 
@@ -290,7 +290,7 @@ You exercise the **database** layer directly here — real credential, real SQL,
 These steps replay *your* refund, so run the **Test the Refund Flow** page first. If `banking.refunds` is empty the `SELECT` feeding the `INSERT` returns no rows and you will see `INSERT 0 0` — nothing was tested.
 :::
 
-### Get a write-capable credential
+#### Get a write-capable credential
 
 **Why:** Taking Vault's authorization out of the picture on purpose. The delegation path was proved above; what is on trial now is Postgres alone.
 
@@ -310,7 +310,7 @@ echo "$CREDS_JSON" | jq '{username: .data.username}'
 `uc3-refund-writer` is the shortest-lived role in the workshop. If Step 3 fails with `password authentication failed`, re-run Step 1 and continue.
 :::
 
-### Positive control — the credential really can write
+#### Positive control — the credential really can write
 
 **Why:** If the replay fails and you never checked this, you have not proved anything: you cannot tell a working guard from a broken credential.
 
@@ -343,7 +343,7 @@ ROLLBACK
 pod "pg-replay-uc3" deleted
 ```
 
-### The replay — same approval, second refund
+#### The replay — same approval, second refund
 
 **Why:** This is the test. Same terms, same `request_id`, and the database refuses.
 

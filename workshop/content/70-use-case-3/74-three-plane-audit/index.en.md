@@ -3,13 +3,13 @@ title: 'Three-Plane Audit Correlation'
 weight: 74
 ---
 
-### Objective 5 · Correlated audit evidence
+## Objective 5 · Correlated audit evidence
 
 Three systems logged your refund independently and none of them knew about the others. This page joins them on one shared id and answers the question people actually ask after an incident: *who authorized this, when, against what, and how long did the credential live?*
 
 Each plane records its own half: IVIA *who approved*, Vault *which agent was authorized, for which human, scoped to which path*, Postgres *the write that landed*. They join on the agent's `request_id`, which reaches Vault because the agent stamps it on the credential request as an `X-Correlation-Id` header. The `audit_correlation` VIEW was created during deployment — you only query it.
 
-## One row, all five objectives
+### One row, all five objectives
 
 | Objective | Column | What It Proves |
 |---|---|---|
@@ -19,7 +19,7 @@ Each plane records its own half: IVIA *who approved*, Vault *which agent was aut
 | OBJ-4 — Enforcement at point of use | `vault_agent_registry_id` + `vault_rar_path` | Vault resolved the agent from the Agent Registry and narrowed the token to an exact path per request |
 | OBJ-5 — Correlated audit evidence | `request_id` — the same value in all three planes | One forensic row spans approval, authorization, and the database write, joined on a shared id rather than inferred from timing |
 
-## Set up the query helpers
+### Set up the query helpers
 
 **Why:** Athena is asynchronous — start, poll, fetch. These four helpers wrap that so the rest of the page reads as one command per question. The `workshop` workgroup already has a result location, so there is no bucket to resolve.
 
@@ -119,7 +119,7 @@ it expires 300 seconds later whether or not anything else happens.
 
 `vault_human_entity_id` is the column that answers *which person was this done for?* — Vault's own identity entity for the human, recorded on the same authorization decision as the agent, not inferred from the approval log sitting next to it. The last section turns that id into a name.
 
-## The same query in the Athena console
+### The same query in the Athena console
 
 **Why:** Same result without the CLI, if that is how your audit team works.
 
@@ -145,7 +145,7 @@ FROM audit_correlation
 WHERE request_id = 'PASTE_REQUEST_ID_HERE'
 ```
 
-## Read the Vault record yourself
+### Read the Vault record yourself
 
 **Why:** The correlation row is a summary somebody else wrote. Open the underlying Vault audit event and see what Vault actually validated — the claims, the issuer, the exact RAR it enforced.
 
@@ -199,7 +199,7 @@ Six things are worth finding in that output:
 - **`jti`** — the token's unique id. This is what the audit trail names instead of the raw token, so the record identifies the credential without containing it.
 - **`authorization_details`** — the `vault:path_access` entry naming `database/creds/uc3-refund-writer` with capability `read`, alongside the `refund_approval` type. This is the per-request narrowing Vault enforced, recorded in the same breath as the request it authorized.
 
-### Resolve the human entity to a name
+#### Resolve the human entity to a name
 
 The entity id is deliberately opaque in the log. Ask Vault who it is:
 
@@ -241,7 +241,7 @@ That pair — a named human and a named agent on one authorization decision, wit
 Everything above comes from Vault's own view of the token. The one thing Vault has no way to know is *which refund* this was, because `request_id` is the application's concept and never appears in the token — IBM Verify does not carry the consent-time detail through the exchange (see the [CIBA Approval Flow](../71-ciba-approval-flow/) page). So the agent sends it explicitly, as an `X-Correlation-Id` header on the credential request, and Vault records it because a `vault_audit_request_header` resource allowlists that header with `hmac = false`. Without the allowlist Vault drops the header silently; without the header the Vault plane could only be matched to the other two by credential path and a time window, which stops being trustworthy the moment two refunds overlap.
 :::
 
-## Interpreting the Result
+### Interpreting the Result
 
 A complete row demonstrates that:
 

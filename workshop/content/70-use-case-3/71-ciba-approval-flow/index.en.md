@@ -3,11 +3,11 @@ title: 'CIBA Out-of-Band Approval'
 weight: 71
 ---
 
-### Objective 3 · Actions tied to user intent
+## Objective 3 · Actions tied to user intent
 
 You ran the refund on the last page. This page is how it worked: the agent cannot open a browser for the customer, so it asks on a back channel and waits for an answer that arrives on a device it does not control.
 
-## How the approval reaches a phone
+### How the approval reaches a phone
 
 **Why:** CIBA is what lets software ask a person for permission without driving their browser. The agent starts the flow; the human finishes it somewhere else entirely — here, a push that needs a physical tap.
 
@@ -63,7 +63,7 @@ sequenceDiagram
 Two independent facts must both hold before the refund proceeds: the user physically taps **Approve** on their enrolled device, AND the agent confirms that the **exact** MMFA transaction it fired (matched by `transactionId`, never "any SUCCESS for the user") resolved to `SUCCESS` in that user's own SCIM record. The CIBA bearer is replayed to the check-status endpoint as a per-request shared secret — defense-in-depth on top of the SCIM gate. The backchannel (bc-authorize and token poll) is machine-to-machine and never touches the WRP.
 :::
 
-## Attaching the agent's identity
+### Attaching the agent's identity
 
 **Why:** The tap proves *who* said yes. It says nothing about *which software* is acting on it. This second exchange staples the agent's own name to the approval, so Vault can judge both.
 
@@ -94,7 +94,7 @@ Together those mean the row written under a `request_id` is the row that was app
 **The honest limitation:** a user who taps Approve without reading the chat has approved a refund whose amount they were never shown. Displaying the amount on the device needs IVIA's transaction-detail push surface rather than the authentication policy this workshop uses, and that is not deployed here.
 :::
 
-## Only one client may ask for delegation
+### Only one client may ask for delegation
 
 **Why:** A fair objection — if the agent's name is just stamped on by a rule, couldn't anything reaching the endpoint claim it? Two requests, identical but for the credentials, settle it.
 
@@ -204,7 +204,7 @@ async def ciba_status(request, auth_req_id: str):
 ```
 :::
 
-## Confirm the push path is live
+### Confirm the push path is live
 
 **Why:** Before you rely on this in front of anyone, check the agent is up and that a push really left the building.
 

@@ -3,11 +3,11 @@ title: 'Test the Refund Flow'
 weight: 70.5
 ---
 
-### Objective 3 · Actions tied to user intent
+## Objective 3 · Actions tied to user intent
 
 This is the whole point of Use Case 3. Watch an agent ask for permission it does not have, wait for a human on a separate device, and only then be handed a database credential that lives five minutes and can write nothing but refunds.
 
-## 1. Open the banking app
+### 1. Open the banking app
 
 **Why:** The banking URL is minted per deployment, like the enrollment one. Resolve it rather than typing it.
 
@@ -17,19 +17,19 @@ source infrastructure/.acme-state && echo "https://${NIP_FQDN_BANKING}/"
 
 Open the printed URL, incognito window, sign in `jaime` / `WorkshopUser1!`.
 
-## 2. Ask for a refund
+### 2. Ask for a refund
 
 **Why:** You are talking to an agent that can read your transactions but cannot move money on its own. Watch where it stops.
 
 Click the red **I need a refund** button in the chat suggestions bar. When the agent asks which transaction, reply with the transaction number from your recent transactions list, then confirm.
 
-## 3. Approve on your phone
+### 3. Approve on your phone
 
 **Why:** This is the control. The approval arrives somewhere the agent cannot reach, and nothing is written until you tap.
 
 Tap **Approve** in the IBM Verify app, then type `I approved` in the chat.
 
-## 4. Confirm the refund landed
+### 4. Confirm the refund landed
 
 **Why:** The chat's answer and the transaction list should agree. If they do, a credential was issued, used once, and expired — all inside the time it took you to read the reply.
 
@@ -51,7 +51,7 @@ Sample output:
 
 Your IDs, amount, and timestamp will differ. What matters is that the chat returns `Status: approved` and the new row appears in your transaction list.
 
-## If the approval push never arrives
+### If the approval push never arrives
 
 **Why:** The agent is an LLM, and occasionally it *says* it sent the push without calling the tool that fires one. Nothing reaches your phone, and the chat looks like it worked.
 
