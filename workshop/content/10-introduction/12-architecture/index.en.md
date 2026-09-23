@@ -35,7 +35,7 @@ Vault is the sole native enforcement point. It grants a request at the intersect
 
 Verify never sees the database. Vault never authenticates an end user. Each system is the source of truth for one trust plane, and the boundary between them is a single, auditable, OIDC-mediated seam.
 
-## What you'll have at the end
+:::expand{header="What you'll have at the end"}
 
 - A **5-node EKS cluster** (min 3 / desired 5 / max 7, Kubernetes 1.34) with three deployed Strands agents, each with its own ServiceAccount and NetworkPolicy.
 - A **3-node Vault Enterprise 2.0.3 Raft HA cluster** with KMS auto-unseal, the Kubernetes auth method, the OAuth resource server (`ivia` profile), the Agent Registry (`uc1-agent`, `agent-uc2`, `uc3-actor` with ceiling policies), and dynamic Postgres + AWS secrets engines.
@@ -47,4 +47,4 @@ Verify never sees the database. Vault never authenticates an end user. Each syst
 - **KMS encryption** across all storage (RDS, AOSS, S3, CloudWatch) under a single workshop CMK.
 
 More importantly: the mental model and the working configuration to extend the same pattern to your own agentic systems.
-
+:::
