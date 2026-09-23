@@ -3,26 +3,69 @@ title: 'Run Pre-flight Checks'
 weight: 23
 ---
 
-## CLI tools
+## Step 1 — Choose where you will run the workshop
 
-The workshop expects these versions: kubectl 1.34.x, helm 3.12+, terraform 1.10+, vault 1.20.4+, aws CLI v2, jq, and yq.
+Every command in this workshop runs from one shell. Pick it now — your choice follows you down the page.
 
-The pre-flight script installs them all and verifies your AWS account in one step. Manual install steps are intentionally omitted — running the script is the documented path. Windows users: use WSL2 (Linux subsystem).
+:::::tabs{groupId="workshop-env"}
 
-## Run the pre-flight script
+::::tab{label="AWS CloudShell" id="cs"}
 
-The pre-flight script auto-installs all CLI tools, then verifies Bedrock model access, AWS service quotas, and IAM permissions in one shot. It continues past individual failures and emits a consolidated summary with copy-paste remediation for each failure.
+Open **CloudShell** from the AWS console toolbar, in the same Region you will deploy into. It runs with your console session's own credentials, so there is nothing to configure.
+
+Two things about CloudShell that the rest of the workshop assumes you have done:
+
+**CloudShell keeps only your home directory.** Tools installed outside `$HOME` are gone after an idle disconnect. If your session drops, re-run the pre-flight script in Step 2 — it reinstalls whatever is missing.
+
+**Put the Vault Enterprise license in your home directory**, at the path the Deploy Foundation pages already use. Create the directory first:
+
+```bash
+mkdir -p ~/Downloads
+```
+
+Then **Actions → Upload file**, target `~/Downloads`, and confirm it landed:
+
+```bash
+ls -la ~/Downloads/vault-ent.hclic
+```
+
+:::alert{header="Self-paced: deploy from a local terminal, not CloudShell" type="warning"}
+The self-paced deploy builds the five Use Case container images on the machine you run it from, and CloudShell has no container runtime. Run the self-paced path from a local terminal instead.
+
+At an AWS-led event this does not apply — CodeBuild built and pushed those images during Tier 1, so you run only Tiers 2 and 3 and never build anything.
+:::
+::::
+
+::::tab{label="Local terminal or IDE" id="local"}
+
+Use your own terminal on macOS or Linux. On Windows, use **WSL2** — the scripts are bash and expect a Linux shell.
+
+The pre-flight script in Step 2 installs every CLI tool for you, through Homebrew, apt or yum depending on your system.
+
+Note where you saved the Vault Enterprise license — the Deploy Foundation pages ask for its path, and show `~/Downloads/vault-ent.hclic` as the default.
+
+If you are self-paced, you also need a container runtime running before you deploy — see **the container runtime you install yourself** at the bottom of this page.
+::::
+
+:::::
+
+## Step 2 — Run the pre-flight script
+
+**Why:** One command installs every CLI tool, then checks the things that silently break a deploy two hours later — Bedrock model access, service quotas, IAM permissions. It continues past individual failures and ends with one summary carrying a copy-paste fix for each.
 
 ```bash
 bash infrastructure/scripts/check-prerequisites.sh
 ```
 
-Available flags:
-  - `--interactive` — prompt before each install AND before each check section
-  - `--dry-run` — print install plan without executing
-  - `--skip-iam-sim` — skip the IAM permission simulation (see the note below on at-an-event accounts)
-  - `--skip-quotas` — skip the service-quota probe when the account blocks the `servicequotas` API
-  - `--help` — usage
+The workshop expects kubectl 1.34.x, helm 3.12+, terraform 1.10+, vault 1.20.4+, aws CLI v2, jq and yq. The script installs them all — there are no manual install steps to follow.
+
+Flags:
+
+- `--interactive` — prompt before each install and each check section
+- `--dry-run` — print the install plan without executing
+- `--skip-iam-sim` — skip the IAM permission simulation (see the note below)
+- `--skip-quotas` — skip the service-quota probe when the account blocks the `servicequotas` API
+- `--help` — usage
 
 :::alert{header="At an AWS-led event: IAM permission checks will report failures, and that is expected" type="info"}
 If you are running this in a Workshop Studio event account (your role is `WSParticipantRole`), the IAM permissions section will report `implicitDeny` failures for actions such as `iam:CreateRole`, `eks:CreateCluster`, and `rds:CreateDBInstance`. This is expected and does not mean anything is broken.
@@ -38,17 +81,23 @@ bash infrastructure/scripts/check-prerequisites.sh --skip-iam-sim --skip-quotas
 Self-paced attendees using their own account with `AdministratorAccess` (or `PowerUserAccess` + `IAMFullAccess`) should not skip these checks — there the failures are real and tell you which policy to attach.
 :::
 
-## Verify CLI tools are installed
+## Step 3 — Confirm the tools are installed
 
-After the script completes, confirm the key tools:
+**Why:** The script reports its own success. This is the independent check, and it is the one command to re-run first if anything later says "command not found".
 
 ```bash
 terraform version && kubectl version --client && helm version --short && vault version && aws --version
 ```
 
-## Service quotas
+## All checks passed?
 
-The script also verifies these service quotas in your deploy Region:
+Once every check is green, continue to [Deploy Foundation](../../30-deploy-foundation/).
+
+---
+
+::::expand{header="Reference — the service quotas the script checks"}
+
+The script verifies these quotas in your deploy Region:
 
 | Quota | Minimum | Quota code |
 |-------|---------|------------|
@@ -58,7 +107,7 @@ The script also verifies these service quotas in your deploy Region:
 | AOSS indexing OCUs | 2 | `L-50FA809B` |
 | AOSS search OCUs | 2 | `L-4E98D4EB` |
 
-If any quota is insufficient, the script prints the exact `aws service-quotas request-service-quota-increase` command. You can also check manually:
+If any quota is insufficient, the script prints the exact `aws service-quotas request-service-quota-increase` command. You can also check one manually:
 
 ```bash
 aws service-quotas get-service-quota --service-code ec2 --quota-code L-1216C47A --query 'Quota.Value' --output text
@@ -67,18 +116,15 @@ aws service-quotas get-service-quota --service-code ec2 --quota-code L-1216C47A 
 :::alert{header="Workshop Studio quota auto-provisioning" type="info"}
 AWS Workshop Studio auto-provisions these quotas before account hand-off when the workshop's publisher configures them in the Catalog Builder admin UI (Account Configuration -> Service Quotas tab). If you still encounter quota errors during deploy, run `check-prerequisites.sh` and follow the printed remediation to request increases manually.
 :::
+::::
 
-## All checks passed?
+::::expand{header="Self-paced only — the container runtime you install yourself"}
 
-Once every check is green, continue to [Deploy Foundation](../../30-deploy-foundation/).
+The default self-paced deploy **builds the five Use Case images and pushes them to your own account's private ECR**, so a running container runtime is **required**. This is the one tool the pre-flight script detects but does not install, and **CloudShell cannot provide it** — run the self-paced deploy from a local terminal.
 
----
+At an AWS-led event none of this applies: CodeBuild built and pushed the images during Tier 1.
 
-## Self-paced: container runtime (`--image-source ecr`)
-
-The default self-paced deploy **builds the five Use Case images and pushes them to your own account's private ECR**, so a running container runtime (Docker or Podman) is **required** — install and start it before you deploy. (An optional no-build path that pulls pre-built images from your own GHCR namespace needs no container runtime; it is an advanced option documented in the repository README, not part of this walkthrough.)
-
-**A container runtime is the one exception you install *and start* yourself — Docker *or* Podman.** The deploy builds and pushes the Use Case agent container images with whichever one you have; the pre-flight script auto-detects it but does not install it. Installing it is not enough — the engine must be **running** before you deploy (the pre-flight check fails with a clear "installed but not running" message otherwise). Set up **one** of:
+Installing a runtime is not enough — the engine must be **running** before you deploy, or the pre-flight check fails with "installed but not running". Set up **one** of:
 
 - **Docker** — install Docker Desktop (macOS/Windows) or Docker Engine (Linux), then **start it** and confirm `docker info` succeeds.
 - **Podman** — `brew install podman` (macOS) then `podman machine init && podman machine start`; on Linux install Podman 4.0+ from [podman.io](https://podman.io/docs/installation). Confirm `podman info` succeeds.
@@ -108,3 +154,4 @@ Confirm your container runtime is ready before running `deploy-workshop.sh`:
 ```bash
 docker info --format '{{.ServerVersion}}' 2>/dev/null || podman info --format '{{.Version.Version}}'
 ```
+::::
