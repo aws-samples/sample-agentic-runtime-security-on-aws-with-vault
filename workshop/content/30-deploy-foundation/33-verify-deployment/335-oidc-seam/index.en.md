@@ -12,7 +12,7 @@ login round-trip and no second Vault token in the path. If you see no `jwt/` row
 deploy is correct — its absence is asserted by `test-vault-verify.sh`.
 :::
 
-### The OIDC Seam at Runtime
+## The OIDC Seam at Runtime
 
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': {
@@ -78,7 +78,7 @@ Load the root token before running the checks below:
 export VAULT_ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)
 ```
 
-### Step 1 — Confirm Vault auth methods
+## Step 1 — Confirm Vault auth methods
 
 ```bash
 kubectl exec -n vault vault-0 -- \
@@ -94,7 +94,7 @@ kubernetes/    kubernetes    auth_kubernetes_...         n/a                    
 token/         token         auth_token_...              token based credentials    n/a
 ```
 
-### Step 2 — Confirm secrets engines
+## Step 2 — Confirm secrets engines
 
 ```bash
 kubectl exec -n vault vault-0 -- \
@@ -114,7 +114,7 @@ identity/          identity          identity_...               identity store
 sys/               system            system_...                 system endpoints used for control, policy and debugging
 ```
 
-### Step 3 — Confirm the OAuth resource server trusts IVIA
+## Step 3 — Confirm the OAuth resource server trusts IVIA
 
 Vault Enterprise validates the IVIA-issued OAuth JWT directly through its **OAuth resource server** profile (`ivia`) — there is no `jwt` auth backend to configure. Read the profile:
 
@@ -133,7 +133,7 @@ issuer_id    https://<NIP_FQDN_WRP from infrastructure/.acme-state>
 
 Vault validates IVIA-issued JWTs against the IVIA JWKS (the signing CA is pinned in the profile's `jwks_ca_pem`). `issuer_id` matches the `iss` claim IVIA stamps on its tokens (the WRP host attendees navigate to in their browser — `NIP_FQDN_WRP` in `infrastructure/.acme-state`). The exact value is per-deploy and is not captured live in this doc; resolve it locally with `grep NIP_FQDN_WRP infrastructure/.acme-state`.
 
-### Step 4 — Confirm database connection
+## Step 4 — Confirm database connection
 
 ```bash
 kubectl exec -n vault vault-0 -- \
@@ -147,7 +147,7 @@ connection_details    map[username:vault_root ...]
 allowed_roles         [uc1-readonly uc2-personal-readonly uc3-refund-writer uc3-readonly]
 ```
 
-### Step 5 — Confirm IVIA OIDC discovery (cluster-internal)
+## Step 5 — Confirm IVIA OIDC discovery (cluster-internal)
 
 ```bash
 kubectl run oidc-check --image=curlimages/curl --rm -i --restart=Never --quiet -n verify-access -- curl -sk https://iviaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration </dev/null | jq .

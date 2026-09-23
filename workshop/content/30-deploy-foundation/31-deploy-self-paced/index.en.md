@@ -15,7 +15,7 @@ If you joined via a Workshop Studio invite link, Tier 1 is already running — f
 
 By default `deploy-workshop.sh` **builds the five Use Case images from source and pushes them to your own account's private ECR** (`<account>.dkr.ecr.<region>.amazonaws.com/...`); the pods then pull from there. This requires a running container runtime (Docker or Podman) — see [Self-paced: container runtime](../../20-prerequisites/23-pre-flight-checks/#self-paced-container-runtime---image-source-ecr) in pre-flight checks. The Dockerfile base images come from Amazon ECR Public, so the build never touches Docker Hub. (An optional no-build path that pulls pre-built images from your own GHCR namespace exists for advanced users — it is documented in the repository README, not walked through here.)
 
-##### Step 1 — Bootstrap (one-time)
+#### Step 1 — Bootstrap (one-time)
 
 Seeds the three `terraform.tfvars` files from their templates, stamps the Tier-1 admin ARN from your account, and runs `terraform init` in all three roots. Idempotent.
 
@@ -23,7 +23,7 @@ Seeds the three `terraform.tfvars` files from their templates, stamps the Tier-1
 bash infrastructure/scripts/bootstrap.sh
 ```
 
-##### Step 2 — Deploy Tier 1 (core infrastructure)
+#### Step 2 — Deploy Tier 1 (core infrastructure)
 
 VPC, EKS cluster, managed add-ons (cert-manager, external-dns, AWS Load Balancer Controller), RDS PostgreSQL with pgaudit, Bedrock KB, IAM, and the audit substrate. In the default `ecr` mode it also provisions the five ECR repositories and **builds and pushes the Use Case images to them** (this is where the container runtime is used). **No application pods yet.**
 
@@ -50,7 +50,7 @@ export IVIA_MMFA_PUSH_CLIENT_SECRET=[REDACTED_PASSWORD] secret>"
 ~25–35 min on first run — EKS ~12 min, RDS ~10 min (incl. pgaudit reboot), Bedrock KB ~3 min, add-ons ~5 min, image build + ECR push ~3–5 min. Timing tracks AWS API response.
 ::::
 
-##### Step 3 — Deploy Tier 2 (Vault + IVIA)
+#### Step 3 — Deploy Tier 2 (Vault + IVIA)
 
 Applies Vault HA + IVIA, initializes Vault (`~/vault-init.json`), issues the Let's Encrypt `nip.io` cert, imports it into ACM, re-applies IVIA on the trusted host, configures Vault auth/policies/secrets engines, and verifies the IVIA OIDC discovery endpoint.
 
@@ -69,7 +69,7 @@ bash infrastructure/scripts/deploy-workshop.sh --tier 2
 ~10–15 min — Vault Raft converge ~3 min, IVIA pods ~5 min, ACME issuance + ACM import + IVIA re-apply ~3 min, Vault + IVIA configure ~2 min.
 ::::
 
-##### Step 4 — Deploy Tier 3 (Use Case workloads)
+#### Step 4 — Deploy Tier 3 (Use Case workloads)
 
 Applies the Use Case 1, 2, and 3 agent pods, which pull the images you built and pushed to your account ECR in Tier 1. The step also runs the shared-ALB assertion + IVIA redirect reconcile, verifies the OpenLDAP `oscar` user, seeds the banking database, and ingests the Bedrock KB corpus.
 
@@ -85,7 +85,7 @@ When all three tiers report success, continue with **[Configure kubectl](../32-c
 
 ---
 
-### Re-runs and recovery
+## Re-runs and recovery
 
 Every step is idempotent — re-running a tier converges what's missing and skips what's already done. If a step fails the script hard-stops on it and prints a `Fix:` hint; fix the cause and re-run the same `--tier N` command.
 
@@ -97,11 +97,11 @@ bash infrastructure/scripts/deploy-workshop.sh --tier 1 --skip-infra --skip-buil
 
 Tier-1 outputs referenced by later pages: `kubectl_config_command`, `kb_id`, `rds_endpoint`.
 
-#### Tier 2: `Step 7: Certificate Ready=true` failed
+### Tier 2: `Step 7: Certificate Ready=true` failed
 
 Step 7 obtains the browser-trusted Let's Encrypt certificate. It has two distinct failure modes, and the Fix line tells you which one you hit.
 
-##### Case A — Let's Encrypt refused the magic-DNS domain (rate limited)
+#### Case A — Let's Encrypt refused the magic-DNS domain (rate limited)
 
 ```
 ✗ Step 7: Certificate Ready=true
@@ -149,7 +149,7 @@ Re-run Tier 3 when you see that line. Until you do, banking is unreachable on bo
 Pick a third dashed-IPv4 magic-DNS suffix, or point `TLS_DNS_SUFFIX_FALLBACK` at a different one.
 ::::
 
-##### Case B — issuance ran past the readiness gate (timing)
+#### Case B — issuance ran past the readiness gate (timing)
 
 ```
 ✗ Step 7: Certificate Ready=true

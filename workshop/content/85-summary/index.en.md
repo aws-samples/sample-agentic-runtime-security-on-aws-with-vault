@@ -3,11 +3,11 @@ title: 'Summary'
 weight: 85
 ---
 
-### What You Built — Vault's Native Agent Identity Model
+## What You Built — Vault's Native Agent Identity Model
 
 This workshop deployed **HashiCorp Vault Enterprise 2.0.3** on EKS and wired it to enforce the five control objectives for agentic systems using Vault's **native AI agent primitives** — the first-class agent identity model HashiCorp ships in the product today. You configured the security primitives — Kubernetes auth, the OAuth resource server, the Agent Registry, ceiling-policy intersection, and Vault-side per-request Rich Authorization Requests (RAR) — at the layer where enforcement actually happens.
 
-#### Vault's Native AI Agent Support Is Deployed Here
+### Vault's Native AI Agent Support Is Deployed Here
 
 HashiCorp's [native AI agent support in Vault](https://www.hashicorp.com/en/blog/announcing-native-ai-agent-support-in-hashicorp-vault) is a released Enterprise capability, and this workshop runs it. Four native primitives carry the authorization model:
 
@@ -26,7 +26,7 @@ The table below maps each workshop use case to the native Vault capability it de
 | **Use Case 3** — three-plane audit correlation: the IVIA approval, the Vault authorization and the RDS pgaudit write all carry the same `request_id`, so one query returns one row spanning all three | **End-to-end tracing and attribution** — the Vault record names both halves of the pair (the approving human in `auth.entity_id`, the agent in `actor_entity_name`), so the correlation reads "agent X acting for human Y" and is an equality on a shared id, not an inference from timing |
 | All use cases — no standing privileges; every database credential is created for one request and destroyed after it | **Ephemeral per-request authorization** — the credential's life is the Vault role's TTL counted from issue, *not* the token's. Measured on this deployment a Use Case 2 access token lives two hours while the credential it obtains lives fifteen minutes, and the Use Case 2 MCP server hands its credential back the moment the query returns rather than waiting out even that. The token's expiry stops the agent obtaining a *new* credential; it is the lease that governs the one already issued |
 
-#### How the Native Layers Map to the Five Control Objectives
+### How the Native Layers Map to the Five Control Objectives
 
 Vault's native model enforces a **policy intersection** — a request is permitted only if it falls within the overlap of every layer that applies to that use case. **The number of enforcing layers differs by use case**, because the identity each agent presents to Vault differs:
 
@@ -36,7 +36,7 @@ Vault's native model enforces a **policy intersection** — a request is permitt
 
 Objective 5 (correlated audit evidence) maps to Vault's native end-to-end tracing: the audit event carries the agent-registry identity and the approving human's entity, and the Use Case 3 agent stamps its `request_id` on the Vault request as `X-Correlation-Id`, so the Vault plane joins the IVIA and RDS pgaudit planes on the same id they use.
 
-#### Key Takeaway
+### Key Takeaway
 
 Agent identity, the ceiling envelope, and per-request scoping are **native Vault capabilities you configured and enforced today** — not a roadmap item. Vault is where the *authorization* decision is made: IVIA remains the issuer, delegation and CIBA-consent authority, and every decision about which credential an agent may hold is made natively by Vault against the registered agent's ceiling and the request's `vault:path_access` RAR.
 
