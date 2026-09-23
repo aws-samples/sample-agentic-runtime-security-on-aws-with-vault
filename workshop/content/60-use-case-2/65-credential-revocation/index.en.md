@@ -3,7 +3,7 @@ title: 'Credential Revocation'
 weight: 65
 ---
 
-## Overview
+## Objective 2 · No standing privileges
 
 In this module you observe the full credential lifecycle for a Use Case 2 session: a Postgres credential is issued, used to confirm its existence, then explicitly revoked, and you verify three things in succession — (a) the Postgres role is gone, (b) Vault's active-leases list no longer contains your lease, (c) both the issuance and the revocation appear in the audit log keyed by `lease_id`.
 

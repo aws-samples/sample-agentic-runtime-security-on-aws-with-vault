@@ -3,7 +3,7 @@ title: 'Request Flow'
 weight: 50
 ---
 
-## Overview
+## Objective 1 · Verifiable identity
 
 This module walks through the end-to-end credential and data flow for Use Case 1. No user identity is involved — the agent authenticates purely as a **workload** using its Kubernetes ServiceAccount JWT. Every credential is just-in-time, short-lived, and automatically revoked.
 

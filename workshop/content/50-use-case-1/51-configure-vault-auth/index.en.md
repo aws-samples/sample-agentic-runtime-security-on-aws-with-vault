@@ -3,7 +3,7 @@ title: 'Configure Vault Auth for Use Case 1'
 weight: 51
 ---
 
-## Overview
+## Objective 1 · Verifiable identity
 
 The Vault Kubernetes auth method, database secrets engine role, AWS secrets engine role, and access policy for Use Case 1 were all configured by the `vault_config` Terraform module in the Deploy Foundation module (applied via local Terraform (`terraform -chdir=infrastructure apply`)). **You do not need to reconfigure anything in this module.**
 

@@ -3,7 +3,7 @@ title: 'Configure the OAuth Resource Server'
 weight: 62
 ---
 
-## Overview
+## Objective 4 · Enforcement at the point of use
 
 In this module you inspect the Vault **OAuth resource server** — the native mechanism that authorizes Use Case 2's data access — and trace how a user's IVIA-issued OAuth JWT flows into per-user-scoped Postgres credentials **without any intermediate Vault login**.
 

@@ -3,7 +3,7 @@ title: 'Verify Credentials and Enforcement'
 weight: 52
 ---
 
-## Overview
+## Objective 2 · No standing privileges
 
 Query the Use Case 1 agent, watch Vault issue just-in-time credentials, prove the agent **cannot** reach Use Case 3 credentials (ENFC-01), and run `verify-uc1.sh` to confirm every success criterion.
 
