@@ -4,7 +4,7 @@
 #
 # Single entry-point that:
 #   1. Installs missing CLI prereqs (kubectl 1.34.x, helm 3.12+, terraform 1.10+,
-#      vault 1.21.x, aws v2, jq, yq) — macOS Homebrew or Linux apt/yum
+#      vault 1.20.4+, aws v2, jq, yq) — macOS Homebrew or Linux apt/yum
 #   2. Verifies Amazon Bedrock model access (us.amazon.nova-pro-v1:0
 #      Amazon Nova Pro cross-region inference profile) in the resolved
 #      deploy region via a 1-token Converse invocation
@@ -166,6 +166,12 @@ export AWS_PAGER=""
 # Terraform 1.10 is the floor: Stacks features require 1.10+ for the
 # `terraform stacks plan/apply` workflow used in the workshop.
 TERRAFORM_MIN_VERSION="1.10.0"
+
+# Vault CLI 1.20.4 is the floor because it is the version the workshop has been
+# run against end-to-end — every Vault command the content executes (agent-registry
+# reads, policy reads, database roles/creds, identity entity lookups, audit device
+# and raft peer checks) verified on it. Not a guess at the lowest workable release.
+VAULT_MIN_VERSION="1.20.4"
 
 # ---- Portable semver compare (returns 0 if $1 >= $2) ----
 # Uses `sort -V` (GNU version-sort, available on macOS 10.14+ and all Linux).
@@ -452,6 +458,22 @@ if command -v terraform >/dev/null 2>&1; then
 else
     print_fail "terraform not found" \
         "Install via the install loop above, or manually from https://developer.hashicorp.com/terraform/install. Minimum: ${TERRAFORM_MIN_VERSION}"
+fi
+
+# vault >= VAULT_MIN_VERSION
+if command -v vault >/dev/null 2>&1; then
+    # `vault version` prints e.g. "Vault v1.20.4 (<sha>), built <date>" — take the
+    # numeric core only, so a +ent / -rc suffix does not defeat the semver compare.
+    vault_current=$(vault version 2>/dev/null | head -1 | sed -E 's/^Vault v([0-9]+\.[0-9]+\.[0-9]+).*/\1/')
+    if [ -n "$vault_current" ] && version_gte "$vault_current" "$VAULT_MIN_VERSION"; then
+        print_pass "vault v${vault_current} (>= ${VAULT_MIN_VERSION} required)"
+    else
+        print_fail "vault v${vault_current:-unknown} is below ${VAULT_MIN_VERSION}" \
+            "The workshop is verified on >= ${VAULT_MIN_VERSION}. Upgrade: macOS \`brew upgrade hashicorp/tap/vault\` | Linux apt \`sudo apt-get install --only-upgrade vault\` | Linux yum \`sudo yum upgrade vault\` | Or download from https://developer.hashicorp.com/vault/install"
+    fi
+else
+    print_fail "vault CLI not found" \
+        "Install via the install loop above, or manually from https://developer.hashicorp.com/vault/install. Minimum: ${VAULT_MIN_VERSION}"
 fi
 
 # Container runtime (Podman OR Docker) — required by build-images.sh (deploy
