@@ -50,7 +50,13 @@ If you are self-paced, you also need Docker or Podman running before you deploy 
 
 :::::
 
-## Step 2 — Run the pre-flight script
+## Step 2 — Clone the repo and run the pre-flight script
+
+**Why:** The pre-flight script lives in the workshop repo, so the repo has to be on disk before you can run it. This clone is safe to re-run — if the repo is already there it just moves you into it.
+
+```bash
+cd ~ && { [ -d sample-agentic-runtime-security-on-aws-with-vault ] || git clone https://github.com/aws-samples/sample-agentic-runtime-security-on-aws-with-vault.git; } && cd sample-agentic-runtime-security-on-aws-with-vault && pwd
+```
 
 **Why:** One command installs every CLI tool, then checks the things that silently break a deploy two hours later — Bedrock model access, service quotas, IAM permissions. It continues past individual failures and ends with one summary carrying a copy-paste fix for each.
 

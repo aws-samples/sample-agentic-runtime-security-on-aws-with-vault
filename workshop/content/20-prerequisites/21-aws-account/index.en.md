@@ -20,11 +20,7 @@ Install the following tools before running any workshop scripts. The workshop's 
 | Docker or Podman | Any recent | Required for the default self-paced deploy (builds the images into your account ECR). Only the optional no-build GHCR path (advanced; documented in the repo README) skips it. |
 | jq | 1.6+ | `jq --version` |
 
-Run the pre-flight checker to install and verify all tools in one shot:
-
-```bash
-bash infrastructure/scripts/check-prerequisites.sh
-```
+The checker lives inside the workshop repo, so you clone first and run it in **Step 1** below.
 
 ## Deployer IAM Permissions
 
@@ -32,10 +28,18 @@ Your AWS CLI identity needs permissions to create all Tier-1 resources: EKS clus
 
 At minimum you need the AWS managed policies **PowerUserAccess** plus **IAMFullAccess**, or an equivalent custom policy. The workshop does not restrict attendees to least-privilege for the deployer identity — the lesson focuses on workload-identity controls at runtime, not on deployer IAM.
 
-## Step 1: Clone the Repository
+## Step 1: Clone the Repository and Run the Pre-flight Checker
+
+**Why:** Everything below runs from inside the repo. This clone is safe to re-run — if the repo is already there it just moves you into it.
 
 ```bash
-git clone https://github.com/aws-samples/sample-agentic-runtime-security-on-aws-with-vault.git && cd sample-agentic-runtime-security-on-aws-with-vault
+cd ~ && { [ -d sample-agentic-runtime-security-on-aws-with-vault ] || git clone https://github.com/aws-samples/sample-agentic-runtime-security-on-aws-with-vault.git; } && cd sample-agentic-runtime-security-on-aws-with-vault && pwd
+```
+
+**Why:** One command installs and verifies every CLI tool in the table above, then checks the things that silently break a deploy two hours later — Bedrock model access, service quotas, IAM permissions.
+
+```bash
+bash infrastructure/scripts/check-prerequisites.sh
 ```
 
 ## Step 2: Verify AWS Access
