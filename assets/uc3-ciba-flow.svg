@@ -84,7 +84,7 @@
     <text x="185.0" y="337.1">authorization_details=[{type:refund,amount:1200,order:42}]</text>
   </g>
   <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="11" fill="#1971c2" text-anchor="middle">
-    <text x="385.0" y="415.4">5. Vault login (role=uc3-refund-writer, TTL=5m)</text>
+    <text x="385.0" y="415.4">5. delegated JWT presented directly as X-Vault-Token</text>
   </g>
   <g font-family="Segoe Print, Comic Sans MS, Caveat, cursive" font-size="11" fill="#2f9e44" text-anchor="middle">
     <text x="385.0" y="465.4">6. write creds  TTL=5m  request_id</text>
