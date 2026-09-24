@@ -49,7 +49,7 @@
 	async function openMenu() {
 		menuOpen = true;
 		await tick();
-		drawerFocusables()[0]?.focus();
+		drawerLinks()[0]?.focus();
 	}
 
 	// Escape, the scrim and the menu button return focus to the menu button. Following a
@@ -75,16 +75,24 @@
 		return () => query.removeEventListener('change', onChange);
 	});
 
-	// What a keyboard user can reach in the drawer. The desktop brand link stays in the DOM
-	// but is display: none here, and an element with no layout box has no client rects.
-	function drawerFocusables(): HTMLElement[] {
+	// The drawer's links. The desktop brand link stays in the DOM but is display: none here,
+	// and an element with no layout box has no client rects.
+	function drawerLinks(): HTMLElement[] {
 		if (!nav) return [];
 		return [...nav.querySelectorAll<HTMLElement>('a[href], button:not([disabled])')].filter(
 			(el) => el.getClientRects().length > 0
 		);
 	}
 
-	// While the drawer is open: Escape closes it, and Tab / Shift+Tab wrap inside it.
+	// What Tab reaches while the drawer is open: the menu button, which closes it, then the
+	// drawer's links. The button comes first because it comes first on screen and in the DOM.
+	function focusCycle(): HTMLElement[] {
+		const links = drawerLinks();
+		return menuButton ? [menuButton, ...links] : links;
+	}
+
+	// While the drawer is open: Escape closes it, and Tab / Shift+Tab wrap through the menu
+	// button and the drawer.
 	function onWindowKeydown(e: KeyboardEvent) {
 		if (!menuOpen) return;
 		if (e.key === 'Escape') {
@@ -93,12 +101,12 @@
 			return;
 		}
 		if (e.key !== 'Tab') return;
-		const items = drawerFocusables();
+		const items = focusCycle();
 		if (items.length === 0) return;
 		const first = items[0];
 		const last = items[items.length - 1];
 		const active = document.activeElement;
-		const inside = nav?.contains(active) ?? false;
+		const inside = items.includes(active as HTMLElement);
 		if (e.shiftKey && (active === first || !inside)) {
 			e.preventDefault();
 			last.focus();
