@@ -93,12 +93,24 @@ Body: `{"query": "<question>"}`. The `Accept` header picks the reply format.
 | `agent:narration` | no user is signed in; the agent either signs in to Vault as itself (Kubernetes auth, with the service account and Vault role Vault reports) or reuses its current login |
 | `tool_call` | each tool call, `in_progress` then `success` or `error`, with `args`, `result` and `durationMs`. A `retrieve_from_knowledge_base` result carries `sources`: `document` (S3 URI), `score`, `text`. A `query_database` result carries `row_count` and up to 50 `rows` when the rows are JSON; rows with values JSON cannot hold (dates, decimals) arrive as text in `output` |
 | `agent:narration` | during a tool call: Vault issued short-lived AWS credentials for the Knowledge Base (`aws/sts/bedrock-reader`, TTL), or a database credential (`database/creds/uc1-readonly`, lease id, TTL) |
+| `agent:credential` | each credential the turn used, in full (see below) |
 | `agent:audit_seed` | `requestId`, `vaultRole`, `leases` — the same leases as the JSON reply |
 | `agent:narration` | the `credential_metadata` the JSON reply would carry, then "Writing the answer." |
 | `agent:text_delta` + `delta` (legacy) | the answer, whole |
 | `end` (legacy), then `agent:done` | the turn is over; nothing follows `agent:done` |
 
-Tool and narration events arrive in the order they happen. On failure the stream ends `agent:error` → `error` (legacy) → `end` → `agent:done`. Every current event carries `requestId` (a UUID per turn, also written to the agent's `query_received` / `query_complete` log lines) and `ts` (epoch milliseconds). A client that disconnects stops the agent at its next checkpoint.
+Tool, narration and credential events arrive in the order they happen. On failure the stream ends `agent:error` → `error` (legacy) → `end` → `agent:done`. Every current event carries `requestId` (a UUID per turn, also written to the agent's `query_received` / `query_complete` log lines) and `ts` (epoch milliseconds). A client that disconnects stops the agent at its next checkpoint.
+
+`agent:credential` events show the credentials in full, for the workshop's live view of what happens behind each answer:
+
+| `kind` | Credential | When |
+|---|---|---|
+| `k8s_sa_token` | the service-account JWT the agent presented to Vault, with its decoded (unverified) `claims` | each turn whose Vault login check succeeds, and again whenever the agent signs in mid-turn; the label says when the turn reused an earlier login |
+| `vault_token` | the Vault token that login returned, with `ttlSeconds` | with each `k8s_sa_token` |
+| `aws_sts_credentials` | `fields.access_key_id`, `secret_access_key`, `session_token` from `aws/sts/bedrock-reader` | each Knowledge Base call |
+| `db_credentials` | `fields.username`, `password` from `database/creds/uc1-readonly`, with `leaseId` | each `query_database` call |
+
+These values go only onto the requesting visitor's stream. They are never written to the pod log, never returned from a tool (tool results go to Bedrock), and never added to the JSON reply. The AWS keys and the database login are issued per request. The service-account JWT and the Vault token are the agent's own login, so every visitor sees the same ones until the agent signs in again.
 
 **Concurrency.** The Vault login and the Bedrock model are set up once at pod startup. Each `/query` builds its own Strands `Agent` and runs it in a worker thread, so visitors are answered in parallel and no visitor's question or answer enters another visitor's conversation.
 
