@@ -415,35 +415,6 @@ resource "vault_policy" "uc2_personal" {
   EOT
 }
 
-resource "vault_policy" "uc3_refund_writer" {
-  name = "uc3-refund-writer"
-
-  policy = <<-EOT
-    # UC3: Refund-writer agent policy
-    # Allows: kubernetes auth + OAuth resource server (X-Vault-Token), database write creds, read-only creds,
-    # AWS (Bedrock) STS creds, AWS (CloudWatch logs) STS creds for the
-    # ivia_decisions anchor emission (OBJ-5)
-    path "database/creds/uc3-refund-writer" {
-      capabilities = ["read"]
-    }
-    path "database/creds/uc3-readonly" {
-      capabilities = ["read"]
-    }
-    path "aws/sts/bedrock-reader" {
-      capabilities = ["read", "update"]
-    }
-    path "aws/sts/uc3-logs-writer" {
-      capabilities = ["read", "update"]
-    }
-    path "auth/token/lookup-self" {
-      capabilities = ["read"]
-    }
-    path "sys/leases/renew" {
-      capabilities = ["update"]
-    }
-  EOT
-}
-
 ################################################################################
 # Kubernetes auth roles — one per use case
 # bound_service_account_namespaces references the agent namespace (uc1/uc2/uc3)
@@ -510,6 +481,42 @@ resource "vault_kubernetes_auth_backend_role" "uc2_agent" {
   token_max_ttl                    = 7200
 }
 
+# The UC3 agent's OWN workload identity, obtained by Kubernetes auth login with
+# the uc3-privileged-actor-sa ServiceAccount (vault_kubernetes_auth_backend_role.uc3)
+# and held for the life of the pod. It covers only what the agent does as itself,
+# with no human in the picture: list transactions and refund status (read-only DB
+# creds), answer at all (Bedrock STS), and write its own IVIA-decision anchor
+# records (CloudWatch Logs STS, OBJ-5).
+#
+# It deliberately does NOT grant database/creds/uc3-refund-writer. A refund write
+# is reachable only with the delegated OAuth token an approved CIBA request
+# produces, presented as X-Vault-Token and authorized by human baseline ∩ agent
+# ceiling ∩ per-request RAR (uc3-human-baseline, uc3-agent-ceiling below). Granting
+# it here was a standing path to the write with no approval at all (issue #72).
+resource "vault_policy" "uc3_agent" {
+  name = "uc3-agent"
+
+  policy = <<-EOT
+    # UC3 Agent: acting as itself — no refund-writer credentials.
+    # The refund write is reachable only through the delegated token (OBO + RAR).
+    path "database/creds/uc3-readonly" {
+      capabilities = ["read"]
+    }
+    path "aws/sts/bedrock-reader" {
+      capabilities = ["read", "update"]
+    }
+    path "aws/sts/uc3-logs-writer" {
+      capabilities = ["read", "update"]
+    }
+    path "auth/token/lookup-self" {
+      capabilities = ["read"]
+    }
+    path "sys/leases/renew" {
+      capabilities = ["update"]
+    }
+  EOT
+}
+
 resource "vault_kubernetes_auth_backend_role" "uc3" {
   backend                     = vault_auth_backend.kubernetes.path
   role_name                   = "uc3"
@@ -517,7 +524,7 @@ resource "vault_kubernetes_auth_backend_role" "uc3" {
   # Pitfall 5 fix: UC3 agent runs in banking-app namespace (same as UC1/UC2 agents)
   # not a dedicated "uc3" namespace — bound namespace must match actual pod namespace.
   bound_service_account_namespaces = ["banking-app"]
-  token_policies                   = [vault_policy.uc3_refund_writer.name]
+  token_policies                   = [vault_policy.uc3_agent.name]
   token_ttl                        = 3600
   token_max_ttl                    = 7200
 }
@@ -615,7 +622,8 @@ resource "vault_policy" "uc2_human_baseline" {
 # UC3 human baseline — jaime's refund-approver envelope (his MAX for UC3). jaime's
 # entity carries BOTH this and uc2-human-baseline (his max across both UCs); the
 # per-UC agent ceiling intersects it down per request. Starting envelope:
-# 09-DISCOVERY line 206 (uc3 human baseline, from the uc3-refund-writer policy set).
+# 09-DISCOVERY line 206 (uc3 human baseline, taken from the former uc3-refund-writer
+# ACL policy, which was retired in issue #72 — no k8s role grants the refund path).
 resource "vault_policy" "uc3_human_baseline" {
   name = "uc3-human-baseline"
 
