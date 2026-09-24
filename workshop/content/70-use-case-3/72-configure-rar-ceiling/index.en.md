@@ -18,7 +18,7 @@ Delegated OAuth JWT (X-Vault-Token)
    authorization_details = [ { "type": "vault:path_access",
                                "path": "database/creds/uc3-refund-writer",
                                "capabilities": ["read"] } ]   (per-request RAR — MANDATORY for UC3)
-  →  Layer 1  human baseline    (uc3-refund-writer policy set — what jaime may do)
+  →  Layer 1  human baseline    (uc3-human-baseline policy on jaime's entity — what jaime may do)
   ∩  Layer 2  agent ceiling     (uc3-actor registration ceiling_policies — the max the agent may EVER hold)
   ∩  Layer 3  per-request RAR   (vault:path_access — Vault narrows the token to this EXACT path this request)
   →  allow iff all three permit
