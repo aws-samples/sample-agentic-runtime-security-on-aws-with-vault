@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 1080" width="1400" height="1080" style="background:#0d1117; font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;">
+  <rect width="1400" height="1080" fill="#0d1117"/>
+
+  <defs>
+    <marker id="arrowblue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#60a5fa"/>
+    </marker>
+    <marker id="arrowteal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2dd4bf"/>
+    </marker>
+    <marker id="arrowgrey" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#8b949e"/>
+    </marker>
+  </defs>
+
+  <text x="700" y="46" text-anchor="middle" font-size="26" font-weight="600" fill="#e6edf3">Choose your path</text>
+  <text x="700" y="76" text-anchor="middle" font-size="15" fill="#8b949e">Two choices decide which pages you follow — where your AWS account comes from, and where you run the commands</text>
+
+  <!-- CHOICE 1 -->
+  <text x="44" y="118" font-size="13" font-weight="600" letter-spacing="1.2" fill="#f59e0b">CHOICE 1 — WHERE YOUR AWS ACCOUNT COMES FROM</text>
+
+  <rect x="40" y="136" width="630" height="214" rx="12" fill="#0a1626" stroke="#3b82f6" stroke-width="2"/>
+  <text x="355" y="174" text-anchor="middle" font-size="22" font-weight="700" fill="#60a5fa">At an Event</text>
+  <text x="355" y="198" text-anchor="middle" font-size="13" fill="#f59e0b">an AWS-led event gave you an account</text>
+  <rect x="66" y="214" width="578" height="56" rx="8" fill="#161b22" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="355" y="238" text-anchor="middle" font-size="15" font-weight="600" fill="#e6edf3">Prerequisites page: At an Event</text>
+  <text x="355" y="259" text-anchor="middle" font-size="13" fill="#8b949e">join link, email passcode, then Open AWS console</text>
+  <rect x="66" y="280" width="578" height="56" rx="8" fill="#161b22" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="355" y="304" text-anchor="middle" font-size="15" font-weight="600" fill="#e6edf3">Tier 1 is already deployed for you</text>
+  <text x="355" y="325" text-anchor="middle" font-size="13" fill="#8b949e">CodeBuild provisioned EKS, RDS and the knowledge base</text>
+
+  <rect x="730" y="136" width="630" height="214" rx="12" fill="#0a1626" stroke="#14b8a6" stroke-width="2"/>
+  <text x="1045" y="174" text-anchor="middle" font-size="22" font-weight="700" fill="#2dd4bf">Self-paced</text>
+  <text x="1045" y="198" text-anchor="middle" font-size="13" fill="#f59e0b">your own AWS account</text>
+  <rect x="756" y="214" width="578" height="56" rx="8" fill="#161b22" stroke="#14b8a6" stroke-width="1.5"/>
+  <text x="1045" y="238" text-anchor="middle" font-size="15" font-weight="600" fill="#e6edf3">Prerequisites page: Self-paced AWS Account</text>
+  <text x="1045" y="259" text-anchor="middle" font-size="13" fill="#8b949e">configure the AWS CLI with your own identity</text>
+  <rect x="756" y="280" width="578" height="56" rx="8" fill="#161b22" stroke="#14b8a6" stroke-width="1.5"/>
+  <text x="1045" y="304" text-anchor="middle" font-size="15" font-weight="600" fill="#e6edf3">You deploy all three tiers yourself</text>
+  <text x="1045" y="325" text-anchor="middle" font-size="13" fill="#8b949e">Tier 1 first, then Tier 2 and Tier 3</text>
+
+  <line x1="355" y1="350" x2="355" y2="376" stroke="#60a5fa" stroke-width="2" marker-end="url(#arrowblue)"/>
+  <line x1="1045" y1="350" x2="1045" y2="376" stroke="#2dd4bf" stroke-width="2" marker-end="url(#arrowteal)"/>
+
+  <!-- SHARED BAND -->
+  <rect x="40" y="382" width="1320" height="70" rx="12" fill="#0a1626" stroke="#8b949e" stroke-width="2"/>
+  <text x="700" y="412" text-anchor="middle" font-size="17" font-weight="600" fill="#e6edf3">Both paths — Obtain IVIA Licenses, then Run Pre-flight Checks</text>
+  <text x="700" y="434" text-anchor="middle" font-size="13" fill="#8b949e">the same two pages, whichever account you are using</text>
+
+  <line x1="700" y1="452" x2="700" y2="500" stroke="#8b949e" stroke-width="2" marker-end="url(#arrowgrey)"/>
+
+  <!-- CHOICE 2 -->
+  <text x="44" y="488" font-size="13" font-weight="600" letter-spacing="1.2" fill="#f59e0b">CHOICE 2 — WHERE YOU RUN THE COMMANDS</text>
+
+  <rect x="40" y="506" width="1320" height="210" rx="12" fill="#0a1626" stroke="#f59e0b" stroke-width="2"/>
+  <text x="700" y="534" text-anchor="middle" font-size="13" fill="#8b949e">chosen on Run Pre-flight Checks, Step 1 — either account can use either one</text>
+
+  <rect x="70" y="548" width="620" height="140" rx="8" fill="#161b22" stroke="#fdba74" stroke-width="1.5"/>
+  <text x="380" y="580" text-anchor="middle" font-size="17" font-weight="600" fill="#e6edf3">AWS CloudShell</text>
+  <text x="380" y="608" text-anchor="middle" font-size="13" fill="#8b949e">browser terminal in the AWS console — nothing to install</text>
+  <text x="380" y="630" text-anchor="middle" font-size="13" fill="#8b949e">runs with your console session's own credentials</text>
+  <text x="380" y="652" text-anchor="middle" font-size="13" fill="#8b949e">keeps only your home directory — re-run the pre-flight if it drops</text>
+  <text x="380" y="674" text-anchor="middle" font-size="13" fill="#8b949e">upload the Vault license with Actions, then Upload file</text>
+
+  <rect x="710" y="548" width="620" height="140" rx="8" fill="#161b22" stroke="#fdba74" stroke-width="1.5"/>
+  <text x="1020" y="580" text-anchor="middle" font-size="17" font-weight="600" fill="#e6edf3">Your own terminal or IDE</text>
+  <text x="1020" y="608" text-anchor="middle" font-size="13" fill="#8b949e">macOS or Linux — the pre-flight script installs every CLI tool</text>
+  <text x="1020" y="630" text-anchor="middle" font-size="13" fill="#8b949e">at an event: paste Get AWS CLI credentials from Workshop Studio first</text>
+  <text x="1020" y="652" text-anchor="middle" font-size="13" fill="#8b949e">self-paced: Docker or Podman must be running before you deploy</text>
+  <text x="1020" y="674" text-anchor="middle" font-size="13" fill="#8b949e">note where you saved the Vault Enterprise license file</text>
+
+  <!-- FORK BACK TO THE DEPLOY PAGES -->
+  <text x="44" y="740" font-size="13" font-weight="600" letter-spacing="1.2" fill="#f59e0b">YOUR ACCOUNT DECIDES THE DEPLOY PAGE</text>
+  <line x1="700" y1="716" x2="700" y2="744" stroke="#8b949e" stroke-width="2"/>
+  <line x1="355" y1="744" x2="1045" y2="744" stroke="#8b949e" stroke-width="2"/>
+  <line x1="355" y1="744" x2="355" y2="764" stroke="#60a5fa" stroke-width="2" marker-end="url(#arrowblue)"/>
+  <line x1="1045" y1="744" x2="1045" y2="764" stroke="#2dd4bf" stroke-width="2" marker-end="url(#arrowteal)"/>
+
+  <rect x="40" y="770" width="630" height="158" rx="12" fill="#0a1626" stroke="#3b82f6" stroke-width="2"/>
+  <text x="355" y="804" text-anchor="middle" font-size="17" font-weight="600" fill="#60a5fa">Deploy — At an Event</text>
+  <text x="355" y="834" text-anchor="middle" font-size="13" fill="#c9d1d9">1 · clone the workshop repo</text>
+  <text x="355" y="856" text-anchor="middle" font-size="13" fill="#c9d1d9">2 · bootstrap, pointing the images at your own ECR</text>
+  <text x="355" y="878" text-anchor="middle" font-size="13" fill="#c9d1d9">3 · pull the Tier-1 state and config from S3</text>
+  <text x="355" y="900" text-anchor="middle" font-size="13" fill="#c9d1d9">4 · deploy Tier 2, then Tier 3</text>
+
+  <rect x="730" y="770" width="630" height="158" rx="12" fill="#0a1626" stroke="#14b8a6" stroke-width="2"/>
+  <text x="1045" y="804" text-anchor="middle" font-size="17" font-weight="600" fill="#2dd4bf">Deploy — Self-paced</text>
+  <text x="1045" y="834" text-anchor="middle" font-size="13" fill="#c9d1d9">1 · clone the workshop repo</text>
+  <text x="1045" y="856" text-anchor="middle" font-size="13" fill="#c9d1d9">2 · bootstrap</text>
+  <text x="1045" y="878" text-anchor="middle" font-size="13" fill="#c9d1d9">3 · deploy Tier 1 — EKS, RDS, knowledge base</text>
+  <text x="1045" y="900" text-anchor="middle" font-size="13" fill="#c9d1d9">4 · deploy Tier 2, then Tier 3</text>
+
+  <line x1="355" y1="928" x2="355" y2="954" stroke="#60a5fa" stroke-width="2" marker-end="url(#arrowblue)"/>
+  <line x1="1045" y1="928" x2="1045" y2="954" stroke="#2dd4bf" stroke-width="2" marker-end="url(#arrowteal)"/>
+
+  <!-- MERGE -->
+  <rect x="40" y="960" width="1320" height="76" rx="12" fill="#0a1626" stroke="#22c55e" stroke-width="2"/>
+  <text x="700" y="994" text-anchor="middle" font-size="19" font-weight="600" fill="#4ade80">Configure kubectl</text>
+  <text x="700" y="1018" text-anchor="middle" font-size="13" fill="#8b949e">from here the remaining pages are identical for every attendee</text>
+</svg>
