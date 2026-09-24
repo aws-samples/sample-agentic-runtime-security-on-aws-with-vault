@@ -215,6 +215,7 @@
 		background: transparent;
 		font: 15px var(--ovi-font-sans);
 		color: var(--ovi-text-primary);
+		text-overflow: ellipsis;
 	}
 
 	.nav-search input::placeholder {
