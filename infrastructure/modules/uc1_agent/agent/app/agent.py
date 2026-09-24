@@ -15,14 +15,19 @@ SA JWT rotation projected by the Kubernetes token controller (OBJ-1).
 import json
 import logging
 import os
+import threading
 from contextvars import ContextVar
 from typing import Any
 
 import psycopg2
 import psycopg2.extras
 from strands import Agent, tool
+from strands.agent import AgentResult
+from strands.hooks import AfterToolCallEvent, BeforeToolCallEvent, HookProvider, HookRegistry
 from strands.models import BedrockModel
+from strands.types.tools import ToolContext
 
+from . import activity
 from .vault_client import VaultClient, _build_default_client
 
 logger = logging.getLogger(__name__)
@@ -46,23 +51,49 @@ def _record_issuance(vault_path: str, creds: dict) -> None:
 
     Captures only audit-correlatable metadata: the lease id exactly as Vault
     spelled it, and its TTL. NEVER the username or password — this record is
-    serialized into the /query response body.
+    serialized into the /query response body and the streamed events.
     """
+    lease = {
+        "vault_path": vault_path,
+        "lease_id": creds["lease_id"],
+        "ttl_seconds": creds["lease_duration"],
+    }
+    activity.narrate(
+        f"Vault issued a short-lived database credential for this question "
+        f"({vault_path}, lease {lease['lease_id']}, {lease['ttl_seconds']}s)."
+    )
     sink = _ISSUED_CREDENTIALS.get()
     if sink is None:
         return
-    sink.append(
-        {
-            "vault_path": vault_path,
-            "lease_id": creds["lease_id"],
-            "ttl_seconds": creds["lease_duration"],
-        }
+    sink.append(lease)
+
+
+def _describe_identity(identity: dict) -> str:
+    """'my Kubernetes service account X (Vault role Y)', from Vault's own login metadata."""
+    account = identity.get("service_account_name")
+    role = identity.get("role") or os.getenv("VAULT_ROLE", "uc1-agent")
+    if account:
+        return f"my Kubernetes service account {account} (Vault role {role})"
+    return f"my Kubernetes service account (Vault role {role})"
+
+
+def _narrate_vault_login(identity: dict) -> None:
+    """Called by VaultClient after every successful login; silent outside a streamed request."""
+    activity.narrate(
+        f"No user is signed in. I authenticate to Vault as myself, using {_describe_identity(identity)}."
+    )
+
+
+def _narrate_kb_credentials(issued: dict) -> None:
+    activity.narrate(
+        "Vault issued short-lived AWS credentials for reading the knowledge base "
+        f"({issued['vault_path']}, {issued['ttl_seconds']}s)."
     )
 
 
 # Module-level VaultClient: authenticated once at startup.
 # login() is called in init_uc1_model(), which runs during FastAPI startup.
-_vault: VaultClient = _build_default_client()
+_vault: VaultClient = _build_default_client(on_login=_narrate_vault_login)
 
 
 @tool
@@ -114,8 +145,8 @@ def query_database(query: str) -> list[dict]:
     return rows
 
 
-@tool
-def retrieve_from_knowledge_base(query: str) -> list[str]:
+@tool(context=True)
+def retrieve_from_knowledge_base(query: str, tool_context: ToolContext) -> list[str]:
     """Retrieve relevant passages from the Bedrock Knowledge Base.
 
     Obtains ephemeral STS credentials from Vault on each call. The Bedrock
@@ -128,10 +159,13 @@ def retrieve_from_knowledge_base(query: str) -> list[str]:
     Returns:
         List of text passages from the Knowledge Base, ordered by relevance.
     """
+    # tool_context is injected by Strands and is not part of the tool spec the
+    # model sees; it identifies this call so its sources reach the right
+    # tool_call event when the model runs several calls at once.
     kb_region = os.getenv("KB_REGION", "")
     knowledge_base_id = os.getenv("KNOWLEDGE_BASE_ID", "")
 
-    bedrock_session = _vault.get_bedrock_session(kb_region=kb_region)
+    bedrock_session = _vault.get_bedrock_session(kb_region=kb_region, on_issued=_narrate_kb_credentials)
     client = bedrock_session.client("bedrock-agent-runtime", region_name=kb_region)
 
     logger.info(
@@ -149,11 +183,22 @@ def retrieve_from_knowledge_base(query: str) -> list[str]:
         },
     )
 
-    results = [
-        item["content"]["text"]
-        for item in response.get("retrievalResults", [])
-        if item.get("content", {}).get("text")
-    ]
+    items = [item for item in response.get("retrievalResults", []) if item.get("content", {}).get("text")]
+    results = [item["content"]["text"] for item in items]
+
+    # The same passages, with the document each came from and its relevance
+    # score, for the Sources card. The model still receives only `results`.
+    activity.record_sources(
+        tool_context.tool_use["toolUseId"],
+        [
+            {
+                "document": ((item.get("location") or {}).get("s3Location") or {}).get("uri"),
+                "score": item.get("score"),
+                "text": item["content"]["text"],
+            }
+            for item in items
+        ],
+    )
 
     logger.info(
         "kb_retrieve_complete",
@@ -199,6 +244,88 @@ def init_uc1_model() -> None:
     )
 
 
+# A query_database result can be any number of rows; the event that reports it
+# carries at most this many, so one frame never outgrows what the UI's filter
+# accepts. row_count still reports the full number.
+_MAX_ROWS_IN_EVENT = 50
+
+
+def _tool_output_text(result: dict | None) -> str:
+    """The text a tool handed back to the model (Strands wraps it in content blocks)."""
+    blocks = (result or {}).get("content") or []
+    return "\n".join(b["text"] for b in blocks if isinstance(b, dict) and isinstance(b.get("text"), str))
+
+
+class _ActivityHooks(HookProvider):
+    """Reports every tool call as a tool_call event: once when it starts, once when it ends.
+
+    Stateless and shared: the request an event belongs to is looked up through
+    the activity ContextVar at the moment the callback fires (in a Strands
+    worker thread), never held on this object.
+    """
+
+    def register_hooks(self, registry: HookRegistry, **kwargs: Any) -> None:
+        registry.add_callback(BeforeToolCallEvent, self._started)
+        registry.add_callback(AfterToolCallEvent, self._finished)
+
+    @staticmethod
+    def _started(event: BeforeToolCallEvent) -> None:
+        tool_use = event.tool_use
+        activity.emit(
+            {
+                "type": "tool_call",
+                "toolCallId": tool_use["toolUseId"],
+                "name": tool_use["name"],
+                "status": "in_progress",
+                "args": tool_use.get("input"),
+            }
+        )
+
+    @staticmethod
+    def _finished(event: AfterToolCallEvent) -> None:
+        turn = activity.current()
+        if turn is None:
+            return
+        tool_use = event.tool_use
+        tool_use_id = tool_use["toolUseId"]
+        sources = turn.sources.pop(tool_use_id, None)
+        text = _tool_output_text(event.result)
+        failed = (
+            event.exception is not None
+            or event.cancel_message is not None
+            or (event.result or {}).get("status") == "error"
+        )
+
+        result: Any
+        if failed:
+            result = {"error": (event.cancel_message or text)[:1000]}
+        elif sources is not None:
+            result = {"sources": sources}
+        else:
+            try:
+                output = json.loads(text)
+            except ValueError:
+                output = text[:4000]
+            if tool_use["name"] == "query_database" and isinstance(output, list):
+                result = {"row_count": len(output), "rows": output[:_MAX_ROWS_IN_EVENT]}
+            else:
+                result = {"output": output}
+
+        payload: dict[str, Any] = {
+            "type": "tool_call",
+            "toolCallId": tool_use_id,
+            "name": tool_use["name"],
+            "status": "error" if failed else "success",
+            "result": result,
+        }
+        if event.duration is not None:
+            payload["durationMs"] = round(event.duration * 1000)
+        activity.emit(payload)
+
+
+_ACTIVITY_HOOKS = _ActivityHooks()
+
+
 def build_uc1_agent() -> Agent:
     """Construct a fresh UC1 Strands Agent for ONE request.
 
@@ -235,4 +362,25 @@ def build_uc1_agent() -> Agent:
         model=_model,
         tools=[query_database, retrieve_from_knowledge_base],
         system_prompt=system_prompt,
+        hooks=[_ACTIVITY_HOOKS],
     )
+
+
+def run_uc1_turn(query: str, cancel_signal: threading.Event | None = None) -> AgentResult:
+    """Answer one /query. Blocking — the caller runs it in asyncio.to_thread.
+
+    First confirms the agent's own Vault login, so a streamed request can say
+    truthfully whether it signed in again or reused its login, then runs a
+    fresh Agent. `cancel_signal` stops the Agent at its next checkpoint (set
+    when a streaming visitor disconnects).
+    """
+    try:
+        if not _vault.ensure_authenticated():
+            activity.narrate(
+                "No user is signed in. I am already authenticated to Vault as myself, using "
+                f"{_describe_identity(_vault.identity)}, so I reuse that login."
+            )
+    except Exception as exc:  # noqa: BLE001 — each tool checks the login again itself
+        logger.warning("turn_vault_check_failed", exc_info=True)
+        activity.narrate(f"I could not confirm my Vault login ({type(exc).__name__}); each tool will try again.")
+    return build_uc1_agent()(query, cancel_signal=cancel_signal)

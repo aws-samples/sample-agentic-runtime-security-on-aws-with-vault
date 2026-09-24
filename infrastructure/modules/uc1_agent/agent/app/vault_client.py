@@ -9,6 +9,7 @@ credential has a finite TTL and is auditable in the Vault audit log stream.
 
 import logging
 import os
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 
 import boto3
@@ -30,10 +31,21 @@ class VaultClient:
 
     SA_JWT_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
 
-    def __init__(self, vault_addr: str, vault_role: str) -> None:
+    def __init__(
+        self,
+        vault_addr: str,
+        vault_role: str,
+        on_login: Callable[[dict], None] | None = None,
+    ) -> None:
         self._addr = vault_addr
         self._role = vault_role
         self.client = hvac.Client(url=vault_addr)
+        # Who Vault says we are after the last successful login, from the
+        # Kubernetes auth method's metadata: role, service_account_name,
+        # service_account_namespace. Never the Vault token itself.
+        self.identity: dict = {}
+        # Called with self.identity after every successful login.
+        self._on_login = on_login
 
     def login(self) -> None:
         """Authenticate using the Kubernetes Service Account JWT (OBJ-1).
@@ -49,7 +61,13 @@ class VaultClient:
             role=self._role,
             jwt=jwt,
         )
-        ttl = response.get("auth", {}).get("lease_duration", "unknown")
+        auth = response.get("auth", {})
+        ttl = auth.get("lease_duration", "unknown")
+        metadata = auth.get("metadata") or {}
+        self.identity = {
+            key: metadata.get(key)
+            for key in ("role", "service_account_name", "service_account_namespace")
+        }
         logger.info(
             "vault_auth_success",
             extra={
@@ -58,8 +76,10 @@ class VaultClient:
                 "auth_method": "kubernetes",
             },
         )
+        if self._on_login is not None:
+            self._on_login(dict(self.identity))
 
-    def ensure_authenticated(self) -> None:
+    def ensure_authenticated(self) -> bool:
         """Re-login if the pod's Vault token has expired.
 
         The agent logs in once at startup, but the Vault token has a finite TTL.
@@ -72,10 +92,16 @@ class VaultClient:
         Public because /health calls it too: a probe that only inspects the
         cached token reports "degraded" on a perfectly serviceable agent as soon
         as the TTL elapses, while the very next /query silently re-logs in.
+
+        Returns:
+            True when this call logged in again, False when the cached login was
+            still valid and was reused.
         """
         if not self.client.is_authenticated():
             logger.info("vault_token_expired_relogin")
             self.login()
+            return True
+        return False
 
     def get_db_credentials(self, role_name: str = "uc1-readonly") -> dict:
         """Issue JIT Postgres credentials from the Vault database secrets engine (OBJ-2).
@@ -107,7 +133,11 @@ class VaultClient:
         )
         return creds
 
-    def get_bedrock_session(self, kb_region: str) -> boto3.Session:
+    def get_bedrock_session(
+        self,
+        kb_region: str,
+        on_issued: Callable[[dict], None] | None = None,
+    ) -> boto3.Session:
         """Obtain a boto3.Session with auto-refreshing Vault STS creds (OBJ-2).
 
         The returned session is backed by botocore RefreshableCredentials: when
@@ -120,11 +150,17 @@ class VaultClient:
 
         Args:
             kb_region: AWS region where the Bedrock Knowledge Base resides.
+            on_issued: Called each time Vault issues credentials for this
+                session, with {"vault_path", "ttl_seconds"} only — never the
+                keys. The knowledge-base tool passes it to narrate the
+                issuance; the model session built at startup does not, so a
+                model-credential refresh is never reported as a KB credential.
         """
+        vault_path = "aws/sts/bedrock-reader"
 
         def _refresh() -> dict:
             self.ensure_authenticated()
-            response = self.client.read("aws/sts/bedrock-reader")
+            response = self.client.read(vault_path)
             data = response["data"]
             lease_seconds = int(response.get("lease_duration") or 900)
             expiry = datetime.now(timezone.utc) + timedelta(seconds=lease_seconds)
@@ -137,6 +173,8 @@ class VaultClient:
                     "kb_region": kb_region,
                 },
             )
+            if on_issued is not None:
+                on_issued({"vault_path": vault_path, "ttl_seconds": lease_seconds})
             return {
                 "access_key": data["access_key"],
                 "secret_key": data["secret_key"],
@@ -159,7 +197,7 @@ class VaultClient:
         return self.client.is_authenticated()
 
 
-def _build_default_client() -> VaultClient:
+def _build_default_client(on_login: Callable[[dict], None] | None = None) -> VaultClient:
     """Build a VaultClient from environment variables.
 
     Expected env vars (set via ConfigMap in the Kubernetes deployment):
@@ -168,4 +206,4 @@ def _build_default_client() -> VaultClient:
     """
     vault_addr = os.getenv("VAULT_ADDR", "http://vault.vault.svc.cluster.local:8200")
     vault_role = os.getenv("VAULT_ROLE", "uc1-agent")
-    return VaultClient(vault_addr=vault_addr, vault_role=vault_role)
+    return VaultClient(vault_addr=vault_addr, vault_role=vault_role, on_login=on_login)
