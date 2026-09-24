@@ -44,13 +44,25 @@ After signing in you land on the event page. Click **Join event**, then **Open A
 
 This opens a federated AWS console session under the **`WSParticipantRole`** identity — your workshop account for the event.
 
-Most of the hands-on work runs from **AWS CloudShell** (a browser-based terminal with the AWS CLI pre-installed). Once your console session is open, launch CloudShell in the workshop region:
+Most of the hands-on work runs from **AWS CloudShell** (a browser-based terminal with the AWS CLI pre-installed). CloudShell inherits that console session's credentials, so there is nothing to configure. Once your console session is open, launch CloudShell in the workshop region:
 
 :button[Open CloudShell]{href="https://:param{key=region}.console.aws.amazon.com/cloudshell/home?region=:param{key=region}" target="_blank" variant="primary" iconName="external" iconAlign="right"}
 
 ### Step 4 — Confirm the region
 
 In the AWS console, check the region selector in the top-right corner. It must show **`:param{key=region}`**. If it shows a different region, click the selector and switch to **`:param{key=region}`** before proceeding.
+
+### Step 5 — If you prefer your own terminal
+
+CloudShell is the supported path and needs no setup. To use your own terminal instead, take the short-term credentials Workshop Studio issues for `WSParticipantRole`: on the event page, open the **AWS CLI credentials** panel (next to **Open AWS console**) and follow the option it shows for your shell. They expire when the event session does.
+
+**Why:** Confirm the CLI is carrying the workshop identity — `WSParticipantRole` is the principal that holds EKS cluster access and can read the staged Tier-1 state.
+
+```bash
+aws sts get-caller-identity
+```
+
+The `Arn` must contain **`WSParticipantRole`**. If it shows your own account's identity instead, the credentials did not take effect in this shell.
 
 ## What Is Already Provisioned for You
 

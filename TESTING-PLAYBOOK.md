@@ -12,8 +12,10 @@ Four combinations. They diverge in three places and rejoin at **Configure kubect
 
 |                  | **CloudShell** | **Your own terminal / IDE** |
 |---|---|---|
-| **At an event**  | The default. Console session credentials, nothing to configure. | Supported; you supply your own credentials. |
-| **Self-paced**   | Supported. | The default. macOS or Linux only. |
+| **At an event**  | The default. Console session credentials, nothing to configure. | **At an Event** Step 5 — the short-term `WSParticipantRole` credentials from the event page's AWS CLI credentials panel. |
+| **Self-paced**   | Supported — **Self-paced AWS Account** Step 1 says to skip the configuration. | The default. macOS or Linux only. **Self-paced AWS Account** Step 1 covers SSO, access keys and an existing profile. |
+
+Credentials are the first thing to get right in every cell — the pre-flight checker, `bootstrap.sh` and every `terraform apply` run as whatever the CLI is configured with. Test that step before anything else.
 
 **Where the paths split:**
 

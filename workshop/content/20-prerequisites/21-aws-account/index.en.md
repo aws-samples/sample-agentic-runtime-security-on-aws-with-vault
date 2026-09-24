@@ -20,7 +20,7 @@ Install the following tools before running any workshop scripts. The workshop's 
 | Docker or Podman | Any recent | Required for the default self-paced deploy (builds the images into your account ECR). Only the optional no-build GHCR path (advanced; documented in the repo README) skips it. |
 | jq | 1.6+ | `jq --version` |
 
-The checker lives inside the workshop repo, so you clone first and run it in **Step 1** below.
+The checker lives inside the workshop repo, so you clone first and run it in **Step 2** below.
 
 ## Deployer IAM Permissions
 
@@ -28,23 +28,35 @@ Your AWS CLI identity needs permissions to create all Tier-1 resources: EKS clus
 
 At minimum you need the AWS managed policies **PowerUserAccess** plus **IAMFullAccess**, or an equivalent custom policy. The workshop does not restrict attendees to least-privilege for the deployer identity — the lesson focuses on workload-identity controls at runtime, not on deployer IAM.
 
-## Step 1: Clone the Repository and Run the Pre-flight Checker
+## Step 1: Configure Your AWS CLI Credentials
 
-**Why:** Everything below runs from inside the repo. This clone is safe to re-run — if the repo is already there it just moves you into it.
+Everything that follows — the pre-flight checker, `bootstrap.sh`, every `terraform apply` — runs as whatever identity your AWS CLI is configured with. Set that up first.
 
-```bash
-cd ~ && { [ -d sample-agentic-runtime-security-on-aws-with-vault ] || git clone https://github.com/aws-samples/sample-agentic-runtime-security-on-aws-with-vault.git; } && cd sample-agentic-runtime-security-on-aws-with-vault && pwd
-```
+**If you use AWS CloudShell**, skip to the verification command below: CloudShell runs with your console session's own credentials and needs no configuration.
 
-**Why:** One command installs and verifies every CLI tool in the table above, then checks the things that silently break a deploy two hours later — Bedrock model access, service quotas, IAM permissions.
+**If your account uses IAM Identity Center (AWS SSO)** — the usual case for an organization account:
 
 ```bash
-bash infrastructure/scripts/check-prerequisites.sh
+aws configure sso
 ```
 
-## Step 2: Verify AWS Access
+Answer the prompts, then sign in from the browser tab it opens. It writes a named profile; select it for this shell with `export AWS_PROFILE=<profile-name>`.
 
-Confirm your AWS CLI is configured and you can reach the target account:
+**If you use long-lived IAM access keys:**
+
+```bash
+aws configure
+```
+
+It prompts for your access key ID, secret access key, default region (**us-east-1**) and output format. Create the key pair in the IAM console under your own user — never reuse someone else's.
+
+**If you already have a working profile**, just select it:
+
+```bash
+export AWS_PROFILE=<profile-name>
+```
+
+**Why:** Confirm the CLI is configured, pointed at the account you meant, and carrying the identity that will own everything the deploy creates.
 
 ```bash
 aws sts get-caller-identity
@@ -61,6 +73,22 @@ aws sts get-caller-identity
 ```
 
 If the output starts with `arn:aws:sts::` (assumed role), note the underlying IAM role ARN — `bootstrap.sh` stamps it as `admin_principal_arn` in `infrastructure/terraform.tfvars`.
+
+If it fails with `Unable to locate credentials`, nothing above took effect — re-run the configuration route that matches your account.
+
+## Step 2: Clone the Repository and Run the Pre-flight Checker
+
+**Why:** Everything below runs from inside the repo. This clone is safe to re-run — if the repo is already there it just moves you into it.
+
+```bash
+cd ~ && { [ -d sample-agentic-runtime-security-on-aws-with-vault ] || git clone https://github.com/aws-samples/sample-agentic-runtime-security-on-aws-with-vault.git; } && cd sample-agentic-runtime-security-on-aws-with-vault && pwd
+```
+
+**Why:** One command installs and verifies every CLI tool in the table above, then checks the things that silently break a deploy two hours later — Bedrock model access, service quotas, IAM permissions. It authenticates as the identity you set up in Step 1.
+
+```bash
+bash infrastructure/scripts/check-prerequisites.sh
+```
 
 ## Step 3: Verify Bedrock Model Access
 
