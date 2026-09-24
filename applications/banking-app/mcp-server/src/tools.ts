@@ -161,6 +161,8 @@ function credentialReport({ creds, sub, leaseRevoked, callerPolicies }: UserQuer
       vault_path: creds.vaultPath,
       lease_id: creds.leaseId,
       lease_duration_seconds: creds.leaseDuration,
+      // When the credential stops working if the revoke did not happen.
+      ...(creds.leaseExpiresAt ? { lease_expires_at: creds.leaseExpiresAt } : {}),
       lease_revoked: leaseRevoked,
       user_sub: sub,
       ...(callerPolicies

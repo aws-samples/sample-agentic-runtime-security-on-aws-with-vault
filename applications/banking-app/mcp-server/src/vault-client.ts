@@ -104,6 +104,12 @@ export interface DbCredentials {
   vaultPath: string;
   /** The Vault database role in that path, e.g. uc2-personal-readonly. */
   dbRole: string;
+  /**
+   * When the lease ends unless it is revoked first (ISO 8601, UTC): the time
+   * this server received the credential plus the lease_duration Vault returned.
+   * Null when Vault returned no lease_duration.
+   */
+  leaseExpiresAt: string | null;
 }
 
 /** The policies Vault attaches to the caller's token, as auth/token/lookup-self reports them. */
@@ -150,6 +156,7 @@ export async function getDbCreds(
     lease_id?: string;
     lease_duration?: number;
   };
+  const receivedAt = Date.now();
 
   const username = data?.data?.username;
   const password = data?.data?.password;
@@ -158,13 +165,15 @@ export async function getDbCreds(
     throw new Error('Vault DB creds response missing data.username or data.password');
   }
 
+  const leaseDuration = data.lease_duration ?? 0;
   return {
     username,
     password,
     leaseId: data.lease_id ?? 'unknown',
-    leaseDuration: data.lease_duration ?? 0,
+    leaseDuration,
     vaultPath,
     dbRole: role,
+    leaseExpiresAt: leaseDuration > 0 ? new Date(receivedAt + leaseDuration * 1000).toISOString() : null,
   };
 }
 
