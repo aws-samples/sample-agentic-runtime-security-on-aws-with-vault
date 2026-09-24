@@ -45,8 +45,9 @@ credential by accident:
     correlation keys the audit story needs (lease_id, request_id, sub, ...);
   - every string has JWTs and Vault tokens replaced by "[token redacted]".
 
-An emit never raises into the tool that called it: reporting a step must not be
-able to break the step.
+An emit never raises into the tool that called it, and a tool-call hook never
+raises into the tool call it reports: reporting a step must not be able to
+break the step.
 """
 
 import asyncio
@@ -500,6 +501,13 @@ class ToolActivityHooks(HookProvider):
     `refund_tools` names the tools that bind a refund's request_id. When any
     other tool starts, the turn has no refund in play, so credentials held for
     a request_id are sent without one.
+
+    A hook only reports; it must never change what the tool call does. Strands
+    hands an exception raised in a hook to the tool call itself: from the
+    Before hook it fails the whole turn, and from the After hook it replaces a
+    tool's real result with an error, so a refund that WAS written would be
+    reported to the model, and so to the user, as a failure. Each hook
+    therefore swallows its own failure and logs it without any value.
     """
 
     def __init__(self, refund_tools: frozenset[str] = frozenset()) -> None:
@@ -515,6 +523,18 @@ class ToolActivityHooks(HookProvider):
         return sink.request_id_for(tool_call_id) if sink is not None else None
 
     def _before_tool(self, event: BeforeToolCallEvent) -> None:
+        try:
+            self._report_start(event)
+        except Exception as exc:  # noqa: BLE001 — reporting a tool call must never break it
+            logger.warning("uc3_activity_hook_failed", extra={"hook": "before_tool_call", "error_type": type(exc).__name__})
+
+    def _after_tool(self, event: AfterToolCallEvent) -> None:
+        try:
+            self._report_finish(event)
+        except Exception as exc:  # noqa: BLE001 — reporting a tool call must never break it
+            logger.warning("uc3_activity_hook_failed", extra={"hook": "after_tool_call", "error_type": type(exc).__name__})
+
+    def _report_start(self, event: BeforeToolCallEvent) -> None:
         tool_use = event.tool_use
         tool_call_id = str(tool_use.get("toolUseId", ""))
         sink = _EVENT_SINK.get()
@@ -529,7 +549,7 @@ class ToolActivityHooks(HookProvider):
             requestId=self._request_id(tool_call_id),
         )
 
-    def _after_tool(self, event: AfterToolCallEvent) -> None:
+    def _report_finish(self, event: AfterToolCallEvent) -> None:
         tool_use = event.tool_use
         tool_call_id = str(tool_use.get("toolUseId", ""))
         result = event.result or {}
