@@ -333,13 +333,24 @@ def current() -> TurnActivity | None:
 # Repeating the label would tell the attendee something false.
 _CREDENTIAL_METADATA_KEYS = (
     "vault_authenticated",
+    "vault_auth_header",
     "db_role",
     "vault_path",
     "lease_id",
     "lease_duration_seconds",
     "lease_revoked",
     "user_sub",
+    "vault_policies",
+    "vault_identity_policies",
 )
+
+
+def _policy_names(value: Any) -> str | None:
+    """A reported policy list as text, or None when it was not reported."""
+    if not isinstance(value, list):
+        return None
+    names = [name for name in value if isinstance(name, str)]
+    return ", ".join(names) if names else "none"
 
 
 def report_mcp_call(tool_name: str, mcp_url: str, jwt: str) -> None:
@@ -380,7 +391,9 @@ def report_credential_metadata(tool_name: str, meta: Any, issued: Any = None) ->
     issued_db_credentials ({username, password}), which the tool has already
     taken out of the response so the model never sees it. An MCP server older
     than lease_revoked / issued_db_credentials still works: the credential is
-    then not shown and the revoke is narrated as not observed.
+    then not shown and the revoke is narrated as not observed. Likewise the
+    auth-path and policy lines appear only when the server reports
+    vault_auth_header and vault_policies / vault_identity_policies.
     """
     turn = current()
     if turn is None or not isinstance(meta, dict) or not meta:
@@ -401,6 +414,15 @@ def report_credential_metadata(tool_name: str, meta: Any, issued: Any = None) ->
         glyph="⚡",
         accent="tool_output",
     )
+
+    # Only the credential READ uses the caller's token; the MCP server revokes with
+    # its own Kubernetes-auth identity, so "no Vault login" is scoped to the read.
+    if reported.get("vault_auth_header") == "X-Vault-Token":
+        where = f" {vault_path}" if isinstance(vault_path, str) and vault_path else ""
+        turn.narrate(
+            f"The MCP server reports it read{where} for {tool_name} by presenting the caller's access token "
+            "to Vault as X-Vault-Token — no Vault login for the credential read."
+        )
 
     # "lease duration", not "valid for": the MCP server has already tried to
     # revoke the lease by the time it returns, so nothing may imply it is live.
@@ -462,6 +484,23 @@ def report_credential_metadata(tool_name: str, meta: Any, issued: Any = None) ->
                 f"Credential revoked: not observed in this flow. The MCP server revokes the {tool_name} lease "
                 f"{lease_id} itself and does not report the outcome to the agent."
             )
+
+    # Exactly as Vault labels them on the caller's token (auth/token/lookup-self).
+    # Not called "what the agent may do": Vault also bounds the request by the
+    # agent's ceiling, which lookup-self does not list.
+    token_policies = _policy_names(reported.get("vault_policies"))
+    identity_policies = _policy_names(reported.get("vault_identity_policies"))
+    if token_policies is not None or identity_policies is not None:
+        listed = []
+        if token_policies is not None:
+            listed.append(f"token policies {token_policies}")
+        if identity_policies is not None:
+            listed.append(f"identity policies {identity_policies}")
+        turn.narrate(
+            f"The MCP server reports Vault's lookup-self for the caller's token during {tool_name} lists "
+            + "; ".join(listed)
+            + "."
+        )
 
 
 # ---------------------------------------------------------------------------
