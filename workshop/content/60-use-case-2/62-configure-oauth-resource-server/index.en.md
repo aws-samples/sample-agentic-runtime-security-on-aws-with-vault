@@ -3,13 +3,13 @@ title: 'Configure the OAuth Resource Server'
 weight: 62
 ---
 
-## Overview
+## Objective 4 · Enforcement at the point of use
 
 In this module you inspect the Vault **OAuth resource server** — the native mechanism that authorizes Use Case 2's data access — and trace how a user's IVIA-issued OAuth JWT flows into per-user-scoped Postgres credentials **without any intermediate Vault login**.
 
-This is the native cutover: Vault Enterprise treats IVIA's OAuth JWT as a first-class credential. The MCP Server presents that JWT **directly** to Vault in the `X-Vault-Token` header — there is no `POST /v1/auth/jwt/login` round-trip and no separately-issued Vault token. Vault validates the JWT against the OAuth resource server profile, resolves the human subject and the agent actor from the token's claims, and evaluates policy at the moment of the request.
+Vault Enterprise treats the IVIA-issued OAuth access token as a first-class credential. The MCP Server presents that JWT **directly** to Vault in the `X-Vault-Token` header — there is no `POST /v1/auth/jwt/login` round-trip and no separately-issued Vault token. Vault validates the JWT against the OAuth resource server profile, resolves the human subject and the agent actor from the token's claims, and evaluates policy at the moment of the request.
 
-## The Native OAuth Resource Server Model
+### The Native OAuth Resource Server Model
 
 Use Case 2 authorizes each request on behalf of a human:
 
@@ -27,27 +27,34 @@ User OAuth JWT (issued by IVIA — authorization-code grant)
 
 Every successful request resolves **three enforcing controls** for Use Case 2: the human's baseline policy (what this user is permitted), the `agent-uc2` registration's `ceiling_policies` (the maximum the agent may *ever* hold — restrict-only), and an optional per-request authorization-details (RAR) scope. For Use Case 2 the RAR is optional, so when absent the effective grant is **human baseline ∩ agent-uc2 ceiling**.
 
-:::alert{header="Migration: this replaces a hand-rolled jwt auth backend" type="info"}
-Earlier iterations of this workshop used a Vault **`jwt` auth backend**: the MCP Server called `POST /v1/auth/jwt/login` with role `uc2-jwt`, Vault matched hand-rolled `bound_claims` / `bound_audiences`, and returned a *separate* Vault token that the server then used to read credentials. That `jwt` auth backend has been **removed**. The before/after:
+:::alert{header="One call, and nothing to configure in between" type="info"}
+There is **no Vault auth method in this path at all**. The MCP Server does not log in to Vault and
+does not hold a Vault token of its own for the read — it presents the OAuth access token itself in
+`X-Vault-Token`, and Vault validates it against the resource server profile on that single request.
 
-| | Before (removed) | After (native) |
-|---|---|---|
-| Auth path | `POST auth/jwt/login` → Vault token, then read creds | Present the OAuth JWT directly via `X-Vault-Token` — one call |
-| Who-may-act check | hand-rolled `bound_claims` on the `uc2-jwt` role | agent actor resolved from `act.sub = agent-uc2` against the registry |
-| Max-permission envelope | approximated by `bound_*` role fields | `ceiling_policies` on the `agent-uc2` registration (true intersection) |
+Two consequences worth naming, because both are checks you run below:
 
-The old `bound_claims` are shown here only as the *before* of that migration — they are no longer a live control.
+- **Who may act is not configured on a role.** The agent actor is resolved from the token's
+  `act.sub` claim against the Agent Registry, so there is no per-role claim matching to keep in
+  sync with the issuer.
+- **The maximum an agent may hold is a real intersection.** `ceiling_policies` on the
+  `agent-uc2` registration restricts and never grants, so the effective permission is
+  human baseline ∩ agent ceiling rather than an approximation of it.
 :::
 
-## Step 1 — Confirm the jwt backend is gone and the resource server is active
+### Step 1 — Confirm there is no jwt auth mount and the resource server is active
 
 Point the `vault` CLI at Vault with the root token so the reads below are permitted. One paste — kills any prior port-forward, opens a fresh one, and exports `VAULT_ADDR` + `VAULT_TOKEN`:
 
+**Why:** Everything below is a read of Vault's own configuration. Point the CLI at Vault as the operator who set it up, so nothing on this page has to be taken on trust.
+
 ```bash
-pkill -f "kubectl port-forward -n vault svc/vault 8200:8200" 2>/dev/null; kubectl port-forward -n vault svc/vault 8200:8200 >/dev/null 2>&1 & sleep 2 && export VAULT_ADDR=http://localhost:8200 && export VAULT_TOKEN=$(jq -r '.root_token' ~/vault-init.json) && echo "Vault: $VAULT_ADDR"
+pkill -f "kubectl port-forward -n vault svc/vault 8200:8200" 2>/dev/null; kubectl port-forward -n vault svc/vault 8200:8200 >/dev/null 2>&1 & sleep 2 && export VAULT_ADDR=http://localhost:8200 && VAULT_TOKEN=$(jq -er '.root_token' ~/vault-init.json) && export VAULT_TOKEN && echo "Vault: $VAULT_ADDR" || echo "ERROR: no root token in ~/vault-init.json — the Tier-2 deploy has not run on this machine"
 ```
 
-Confirm there is **no** `jwt/` auth mount — the retired backend is gone:
+Confirm there is **no** `jwt/` auth mount — the OAuth access token is the Vault token:
+
+**Why:** The expected answer here is an absence. There is no `jwt/` mount because there is no login step to mount one for — the user's OAuth token is presented to Vault as the Vault token itself.
 
 ```bash
 vault auth list
@@ -64,15 +71,19 @@ token/         token         auth_token_<id>             token based credentials
 
 Confirm the Agent Registry secrets engine is mounted (the OAuth resource server profile and the agent registrations live under Enterprise identity):
 
+**Why:** The Agent Registry is where an agent stops being an anonymous caller and becomes a named identity Vault can reason about. Confirm it is mounted before reading what is in it.
+
 ```bash
 vault secrets list | grep -E 'agent-registry|database|aws'
 ```
 
 Expected — `agent-registry/`, `aws/`, and `database/` are all present.
 
-## Step 2 — Inspect the `agent-uc2` registration and its ceiling
+### Step 2 — Inspect the `agent-uc2` registration and its ceiling
 
 Read the Agent Registry registration that represents the Use Case 2 agent. Its `ceiling_policies` are the restrict-only envelope Vault intersects on every on-behalf-of request:
+
+**Why:** When a customer delegates to this agent, the agent does not inherit what that customer can do. The ceiling named here is a fixed list of paths it can never step outside, whoever it is acting for.
 
 ```bash
 vault read agent-registry/registration/display-name/agent-uc2
@@ -93,6 +104,8 @@ optional_authorization_details    true
 - `optional_authorization_details` `true` — a per-request `vault:path_access` RAR is *optional* for Use Case 2 (mandatory for Use Case 3). When absent, enforcement is human baseline ∩ ceiling.
 
 Read the `uc2-agent-ceiling` policy — the paths the agent is *ever* permitted to touch:
+
+**Why:** Read the ceiling itself and see how short it is. This is the most the agent can ever hold — not the most it holds today.
 
 ```bash
 vault policy read uc2-agent-ceiling
@@ -118,9 +131,11 @@ path "sys/leases/renew" {
 
 Notice what is **absent**: no `database/creds/uc3-refund-writer` and no write-capable credential role. The ceiling cannot be widened at request time — a per-request RAR can only *narrow* it further.
 
-## Step 3 — Inspect the human baseline policy
+### Step 3 — Inspect the human baseline policy
 
 The human subject (`oscar` or `jaime`) contributes the *baseline* — what this specific user is permitted. Read it:
+
+**Why:** The other half of the intersection. The customer contributes what they are allowed; the agent contributes its ceiling; Vault grants only the overlap.
 
 ```bash
 vault policy read uc2-human-baseline
@@ -143,7 +158,9 @@ path "sys/leases/renew" {
 
 The effective grant Vault applies is **`uc2-human-baseline` (human baseline) ∩ `uc2-agent-ceiling` (agent ceiling)**. Both must permit a path for the request to succeed. This is ENFC-02 at the Vault layer, expressed as an intersection rather than a single flat policy.
 
-## Step 4 — Verify the database credentials role
+### Step 4 — Verify the database credentials role
+
+**Why:** The database credential does not exist until someone asks. Read the SQL Vault runs to create it — `GRANT SELECT` and nothing else, so a widened Vault policy still buys no writes.
 
 ```bash
 vault read database/roles/uc2-personal-readonly
@@ -166,7 +183,7 @@ The whole `creation_statements` value prints as **one** bracketed, semicolon-sep
 
 Each ephemeral role is created with login credentials scoped to the banking schema, read-only, with a 15-minute TTL. There is no permanent Postgres role — grants are applied directly to the ephemeral role, and no INSERT/UPDATE/DELETE is granted.
 
-## Step 5 — Present the OAuth JWT directly to Vault (demo)
+### Step 5 — Present the OAuth JWT directly to Vault (demo)
 
 To confirm the native path, present a real user JWT to Vault via `X-Vault-Token` and watch Vault vend a credential in a **single** call — no login step.
 
@@ -178,6 +195,8 @@ The Banking UI keeps the user's IVIA-issued JWTs in HttpOnly cookies. The one yo
 4. Find the row **`access_token`** and copy the **Value** column.
 
 Then present it as the Vault token — the JWT **is** the credential:
+
+**Why:** This is the whole mechanism in one command: the customer's OAuth token handed straight to Vault, with no Vault login in between, and a scoped database credential coming back.
 
 ```bash
 JWT_TOKEN="<paste-the-access_token-value>"; kubectl exec -n vault vault-0 -- sh -c "VAULT_TOKEN='${JWT_TOKEN}' vault read database/creds/uc2-personal-readonly"
@@ -238,7 +257,7 @@ Key design decision: **Vault validates the JWT signature and resolves identity; 
 
 :::expand{header="Agent Developer Track — MCP server presents X-Vault-Token directly"}
 
-With the native cutover, the MCP Server's `vault-client.ts` no longer performs a login. It presents the user's OAuth JWT as the Vault token and reads credentials in a single request:
+The MCP Server's `vault-client.ts` performs no login. It presents the user's OAuth access token as the Vault token and reads credentials in a single request:
 
 ```typescript
 export class VaultClient {
@@ -290,7 +309,7 @@ HTTP request → Authorization: Bearer <OAuth JWT>
 
 ---
 
-### What Would Have Failed
+#### What Would Have Failed
 
 **Without the agent registration (identity failure):** If `agent-uc2` were not registered, Vault could not resolve the actor from `act.sub` and the on-behalf-of request would fail closed — no credential is issued. The registry is the authority on *which* agent is acting.
 

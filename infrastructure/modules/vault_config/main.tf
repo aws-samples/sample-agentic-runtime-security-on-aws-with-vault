@@ -848,9 +848,17 @@ resource "vault_generic_endpoint" "oauth_alias" {
   path = "identity/entity-alias"
   # identity/entity-alias has no readable-by-name GET and no deletable item URL
   # from this collection path — the documented generic_endpoint identity pattern.
-  # Create is an upsert keyed by (mount_accessor, name), so re-apply is idempotent.
-  # Alias lifecycle/cleanup is reconciled at the apply wave; workshop teardown
-  # destroys the Vault server, so per-alias deletes are moot.
+  #
+  # NOT an upsert. Vault enforces (issuer, external_id) UNIQUE per namespace, so
+  # a write collides with ANY alias already holding this issuer + external_id,
+  # whatever mount accessor it is bound to. And because this resource's state id
+  # is the collection path rather than an alias id, Terraform cannot address an
+  # individual alias — hence disable_delete, and hence nothing here removes the
+  # previous generation when issuer_id (ForceNew) replaces the profile below.
+  # Those strays are swept by heal_orphan_oauth_aliases() in vault-configure.sh,
+  # which deletes only aliases whose accessor names a profile that no longer
+  # exists. See issue #5: the host names embed the ALB IP, and a recurring IP
+  # makes a stranded alias squat the issuer a later run needs.
   disable_read         = true
   disable_delete       = true
   ignore_absent_fields = true

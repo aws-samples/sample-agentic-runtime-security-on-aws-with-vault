@@ -53,10 +53,9 @@ body:
     id: region
     attributes:
       label: AWS region
-      description: Most of the workshop runs in us-west-2; Knowledge Base steps run in us-east-1.
+      description: The workshop deploys single-region to us-east-1 — the Nova 2 embedding model the Knowledge Base uses is only there.
       options:
-        - us-west-2 (default)
-        - us-east-1 (Knowledge Base step)
+        - us-east-1 (default)
         - Other (note it in the diagnostics box)
     validations:
       required: true

@@ -7,46 +7,73 @@ weight: 21
 If you received a Workshop Studio invite link or a 12-digit event code from an instructor, your AWS account is already provisioned and Tier-1 infrastructure is already running. Go to [At an Event](../21-at-an-event/) instead. The steps on this page apply only to self-paced attendees running the workshop in their own AWS account.
 ::::
 
-## Tooling Prerequisites
-
-Install the following tools before running any workshop scripts. The workshop's `check-prerequisites.sh` script verifies each one and installs missing tools automatically (Homebrew on macOS, apt on Linux).
-
-| Tool | Minimum version | Notes |
-|------|----------------|-------|
-| AWS CLI | v2 | `aws --version` |
-| Terraform | 1.10+ | `terraform -version` — 1.10 is required for the workshop's deploy scripts |
-| kubectl | 1.34+ | `kubectl version --client` |
-| Helm | 3.12+ | `helm version` |
-| Docker or Podman | Any recent | Required for the default self-paced deploy (builds the images into your account ECR). Only the optional no-build GHCR path (advanced; documented in the repo README) skips it. |
-| jq | 1.6+ | `jq --version` |
-
-Run the pre-flight checker to install and verify all tools in one shot:
-
-```bash
-bash infrastructure/scripts/check-prerequisites.sh
-```
-
 ## Deployer IAM Permissions
 
 Your AWS CLI identity needs permissions to create all Tier-1 resources: EKS cluster, VPC, RDS, Bedrock KB, IAM roles, KMS keys, CloudWatch log groups, Firehose delivery streams, Athena workgroup, and AOSS collection. The `bootstrap.sh` script stamps your current identity as `admin_principal_arn` in `infrastructure/terraform.tfvars`.
 
 At minimum you need the AWS managed policies **PowerUserAccess** plus **IAMFullAccess**, or an equivalent custom policy. The workshop does not restrict attendees to least-privilege for the deployer identity — the lesson focuses on workload-identity controls at runtime, not on deployer IAM.
 
-## Step 1: Clone the Repository
+## Step 1: Configure Your AWS CLI Credentials
+
+Everything that follows — the pre-flight checker, `bootstrap.sh`, every `terraform apply` — runs as whatever identity your AWS CLI is configured with. Set that up first. Pick the environment you will work in:
+
+### Option A — AWS CloudShell (nothing to configure)
+
+Sign in to the AWS console as your own account, confirm the region selector reads **`:param{key=region}`**, then launch CloudShell:
+
+:button[Open CloudShell]{href="https://:param{key=region}.console.aws.amazon.com/cloudshell/home?region=:param{key=region}" target="_blank" variant="primary" iconName="external" iconAlign="right"}
+
+CloudShell runs with your console session's own credentials, so there is nothing to configure. Skip to the verification command below.
+
+::::alert{header="CloudShell forgets your tools, not your files" type="info"}
+Tools installed outside `$HOME` are gone after an idle disconnect. If your session drops, re-run the pre-flight script in Step 2. The Vault license you upload and the `~/vault-init.json` the deploy writes both live in `$HOME` and survive.
+::::
+
+### Option B — Your own terminal or IDE
+
+macOS or Linux. Configure the AWS CLI with whichever of these matches your account.
+
+**IAM Identity Center (AWS SSO)** — the usual case for an organization account:
 
 ```bash
-git clone https://github.com/aws-samples/sample-agentic-runtime-security-on-aws-with-vault.git && cd sample-agentic-runtime-security-on-aws-with-vault
+aws configure sso
 ```
 
-## Step 2: Verify AWS Access
+Answer the prompts, then sign in from the browser tab it opens. It writes a named profile; select it for this shell with `export AWS_PROFILE=<profile-name>`.
 
-Confirm your AWS CLI is configured and you can reach the target account:
+**Long-lived IAM access keys:**
+
+```bash
+aws configure
+```
+
+It prompts for your access key ID, secret access key, default region (**`:param{key=region}`**) and output format. Create the key pair in the IAM console under your own user — never reuse someone else's.
+
+**A profile you already have** — just select it:
+
+```bash
+export AWS_PROFILE=<profile-name>
+```
+
+### Verify — both options
+
+**Why:** Confirm the CLI is configured, pointed at the account you meant, and carrying the identity that will own everything the deploy creates.
 
 ```bash
 aws sts get-caller-identity
 ```
 
-**Expected output:**
+**Expected output** — the `Arn` depends on how you signed in. With SSO or any assumed role:
+
+```json
+{
+    "UserId": "AROAXXXXXXXXXXXXXXXXX:your-name",
+    "Account": "123456789012",
+    "Arn": "arn:aws:sts::123456789012:assumed-role/AWSReservedSSO_AdministratorAccess_xxxx/your-name"
+}
+```
+
+With long-lived IAM access keys:
 
 ```json
 {
@@ -56,7 +83,15 @@ aws sts get-caller-identity
 }
 ```
 
-If the output starts with `arn:aws:sts::` (assumed role), note the underlying IAM role ARN — `bootstrap.sh` stamps it as `admin_principal_arn` in `infrastructure/terraform.tfvars`.
+Either is fine. `bootstrap.sh` stamps whichever identity you are as `admin_principal_arn` in `infrastructure/terraform.tfvars`.
+
+If it fails with `Unable to locate credentials`, nothing above took effect — re-run the configuration route that matches your account.
+
+## Step 2: Run the Pre-flight Checks
+
+[Run Pre-flight Checks](../23-pre-flight-checks/) clones the workshop repo and runs `check-prerequisites.sh`, which installs every CLI tool and checks the things that silently break a deploy two hours later — Bedrock model access, service quotas, IAM permissions. It authenticates as the identity you configured in Step 1, so do that first.
+
+Come back here for Step 3 once it reports green.
 
 ## Step 3: Verify Bedrock Model Access
 
@@ -100,13 +135,3 @@ The script writes the prompted values into the gitignored `terraform.tfvars` fil
 ## Step 5: Deploy
 
 Go to [Deploy — Self-paced](../../30-deploy-foundation/31-deploy-self-paced/): `bootstrap.sh` → Tier 1 → Tier 2 → Tier 3.
-
-## Cleanup
-
-When you are done with the workshop, remove all AWS resources:
-
-```bash
-bash infrastructure/scripts/teardown.sh
-```
-
-The teardown script destroys all three Terraform roots in reverse dependency order (workloads → services → infrastructure) and removes the IAM role and S3 state bucket created by `bootstrap.sh`.

@@ -40,17 +40,31 @@ Check your inbox for the 6-digit passcode and enter it:
 
 After signing in you land on the event page. Click **Join event**, then **Open AWS console**:
 
-![Workshop Studio event page — Join event button, then Open AWS console](/static/images/ws-open-console.png)
+![Workshop Studio event dashboard — the AWS account access section of the left nav, with Open AWS console and Get AWS CLI credentials](/static/images/ws-open-console.png)
 
 This opens a federated AWS console session under the **`WSParticipantRole`** identity — your workshop account for the event.
 
-Most of the hands-on work runs from **AWS CloudShell** (a browser-based terminal with the AWS CLI pre-installed). Once your console session is open, launch CloudShell in the workshop region:
+Most of the hands-on work runs from **AWS CloudShell** (a browser-based terminal with the AWS CLI pre-installed). CloudShell inherits that console session's credentials, so there is nothing to configure. Once your console session is open, launch CloudShell in the workshop region:
 
 :button[Open CloudShell]{href="https://:param{key=region}.console.aws.amazon.com/cloudshell/home?region=:param{key=region}" target="_blank" variant="primary" iconName="external" iconAlign="right"}
 
 ### Step 4 — Confirm the region
 
 In the AWS console, check the region selector in the top-right corner. It must show **`:param{key=region}`**. If it shows a different region, click the selector and switch to **`:param{key=region}`** before proceeding.
+
+### Step 5 — If you prefer your own terminal
+
+CloudShell is the supported path and needs no setup. To use your own terminal instead, take the short-term credentials Workshop Studio issues for `WSParticipantRole`.
+
+Scroll the left navigation to the bottom, past the workshop content tree, to the **AWS account access** section — the same place you clicked **Open AWS console** in Step 3. Directly below it is **Get AWS CLI credentials**. Click it and paste the block that matches your shell into that shell. These credentials expire when your event session does; re-copy them if the CLI starts returning `ExpiredToken`.
+
+**Why:** Confirm the CLI is carrying the workshop identity — `WSParticipantRole` is the principal that holds EKS cluster access and can read the staged Tier-1 state.
+
+```bash
+aws sts get-caller-identity
+```
+
+The `Arn` must contain **`WSParticipantRole`**. If it shows your own account's identity instead, the credentials did not take effect in this shell.
 
 ## What Is Already Provisioned for You
 
@@ -73,4 +87,5 @@ Your `WSParticipantRole` session already has EKS cluster access (granted by the 
 
 1. **IVIA licensing** — [IVIA Licensing](../22-ivia-licensing/) covers the IBM-supplied artifacts the IVIA deployment needs. You supply the IBM Container Registry entitlement key (and, for Use Case 3, the MMFA push client secret) at deploy time; the trial activation certificate is already included with the workshop. Tier 2 also needs a **Vault Enterprise license** (`.hclic`) your organizer provides — save it to `~/Downloads/vault-ent.hclic`. Have your entitlement key and license file ready before you deploy Tier 2.
 2. **Install the IBM Verify app** — Use Case 3 (CIBA mobile push) requires the IBM Verify mobile app. Install it on your phone now — see the [Prerequisites overview](../) for download links.
-3. **Continue to Deploy — At an Event** — [Deploy — At an Event](../../30-deploy-foundation/31-deploy-at-an-event/) is where you pull the Tier-1 state and run Tier 2 and Tier 3.
+3. **Run the pre-flight checks** — [Run Pre-flight Checks](../23-pre-flight-checks/) clones the workshop repo and installs `terraform`, `helm`, `vault` and the rest. Tier 2 will not deploy without them, and nothing in the deploy path installs them for you.
+4. **Continue to Deploy Foundation** — [Deploy Foundation](../../30-deploy-foundation/) is where you pull the Tier-1 state and run Tier 2 and Tier 3.

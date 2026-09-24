@@ -12,17 +12,9 @@ Step-by-step **hands-on** AWS Workshop Studio workshop that deploys the IBM Veri
 
 ---
 
-## Distributions
-
-The workshop ships in **two** parallel distributions. Both deploy the same underlying AWS reference architecture and share every script under `infrastructure/scripts/`, every Terraform module under `infrastructure/modules/`, and every page of narrative under `workshop/content/`. Choose the distribution that matches your delivery channel.
-
-### AWS Workshop Studio (`workshop/`)
+## Delivery
 
 Hosted on AWS Workshop Studio v2. Attendees consume the workshop as 39 guided `index.en.md` pages (`workshop/content/**`). Admin deploys the whole stack with one `bash infrastructure/scripts/deploy-workshop.sh` invocation against an AWS account they own. See "Quick start (admin)" below and "Workshop content (preview + publish)" further down.
-
-### Instruqt (`instruqt/`)
-
-Hosted on Instruqt as a single ~4-hour mega-track. Each attendee receives a fresh **Instruqt-provisioned AWS sandbox account** and works through 18 challenges that drive the same `deploy-workshop.sh` orchestration in three tiers (one challenge per tier), then walk the three use cases end-to-end. The 14-step deploy is split via the `--tier <1|2|3>` flag on `deploy-workshop.sh`; AWS credentials, SSH deploy key, and IBM licensing artifacts are injected from Instruqt org secrets so the attendee never touches plaintext. See `instruqt/README.md` for the full authoring + publish loop.
 
 ---
 
@@ -65,17 +57,23 @@ Bedrock access required: enable `us.amazon.nova-pro-v1:0` (Nova Pro via CRIS) in
 
 ---
 
-## Event capacity (multi-attendee TLS limit)
+## Browser-trusted TLS (shared magic-DNS domain)
 
-Browser-trusted TLS is issued per attendee account from Let's Encrypt over `nip.io` hostnames. `nip.io` is **not** on the Public Suffix List, so every `*.nip.io` certificate on the internet — not just this workshop's — counts against the single registered domain `nip.io`, which Let's Encrypt caps at **50 certificate issuances per rolling 7 days** (~1 refill every 202 min). Each attendee's Tier-2 deploy burns **one** issuance (more if the Step 7 HTTP-01 readiness gate retries); teardown does **not** refund it.
+Every attendee's browser-trusted certificate comes from Let's Encrypt over a `nip.io` hostname, which resolves an IP embedded in the name (`10-1-2-3.nip.io` → `10.1.2.3`). That is what gets a publicly-trusted certificate with no domain purchase and no DNS hosting.
 
-Plan events accordingly:
+`nip.io` is **not** on the Public Suffix List, so every `*.nip.io` certificate on the internet — not just this workshop's — counts against the single registered domain `nip.io`. Let's Encrypt budgets certificates per registered domain, so the whole internet draws on one bucket.
 
-- **~12–20 attendees per event.** 12 is the safe floor — the 50/week bucket is shared with every `nip.io` user on the internet, and your own retries burn extra; 20 is the upper edge for a low-usage week. Never plan against the full 50 — you never own the whole bucket.
-- **One event per rolling 7-day window — no back-to-back weeks.** A prior event's issuances stay counted for 7 days; space events **≥7 days apart** so they age out of the window and the refill replenishes.
-- Even 12–20 can fail in a heavy-usage week — the bucket is shared and there is **no way to check remaining budget or reserve it in advance**.
+**This is not a capacity limit, and event size is irrelevant.** `nip.io` holds a Let's Encrypt override of 250,000 certificates, far above any cohort; each attendee burns one. The real risk is that the bucket is shared and has been exhausted before — the operator's sibling domain `sslip.io` hit `too many certificates (50000) already issued` in February 2026. There is no way to check the remaining budget or reserve it ahead of an event.
 
-To run larger cohorts (20–60) reliably, move off the shared `nip.io` bucket onto an owned domain + self-hosted magic-DNS resolver + a Let's Encrypt rate-limit override — tracked in [issue #5](https://github.com/aws-samples/sample-agentic-runtime-security-on-aws-with-vault/issues/5).
+**The deploy handles this automatically.** If Let's Encrypt refuses `nip.io` as rate limited, `deploy-workshop.sh` re-issues on `sslip.io` — a separate registered domain with its own separate budget, and the fallback the `nip.io` operator itself recommends. Both suffixes are overridable if you run your own magic-DNS host:
+
+```bash
+TLS_DNS_SUFFIX=my.example.com TLS_DNS_SUFFIX_FALLBACK=alt.example.com bash infrastructure/scripts/deploy-workshop.sh
+```
+
+Changing the suffix on an **already-deployed** environment must reach tier 3. The certificate is issued in tier 2, but the banking-UI Ingress host is built by tier 3 from `.acme-state`. Stop at `--tier 2` and the two disagree: the ALB still routes the old hostname, which the new certificate no longer covers, so banking answers `404` on the new name and fails TLS name validation on the old one. Run the deploy without `--tier` (all tiers), or follow a `--tier 2` run with `--tier 3`. The deploy warns when it detects this.
+
+If both budgets are exhausted the deploy fails loudly at Step 7 and names the override — it does not silently retry the same exhausted domain. Tracked in [issue #5](https://github.com/aws-samples/sample-agentic-runtime-security-on-aws-with-vault/issues/5).
 
 ---
 
@@ -157,6 +155,37 @@ No build step — `reveal-md.json` next to `slides.md` carries the theme + trans
 
 ---
 
+## One-page flyer
+
+A printable one-pager for promoting the workshop — what it is, who it is for, the three agents you build, the two ways to run it, and a QR code to the published Workshop Studio catalog entry.
+
+```bash
+# Regenerate assets/flyer/workshop-flyer.html — open or print it from a browser.
+bash assets/flyer/build-flyer.sh
+
+# ...and a print-ready PDF alongside it, for sending to a printer or attaching.
+bash assets/flyer/build-flyer.sh --pdf
+
+# ...and an Outlook-safe rich-HTML version, for pasting into an email.
+bash assets/flyer/build-flyer.sh --email
+```
+
+Requires `qrencode` (`brew install qrencode`); `--pdf` also needs Google Chrome or Chromium, which the script finds on its own. Everything else runs on a stock `python3` with no `pip install` and no `npm install`.
+
+Edit `assets/flyer/flyer.template.html` for any copy, colour or layout change, then re-run. Nothing in the output is hand-edited — the logos, the QR code and the URL are all generated:
+
+- **Logos.** Neither shipped mark works on the flyer's dark ground. `assets/aws-logo.png` is a dark navy wordmark, and `assets/hashicorp_logo.png` is a black hexagon on a *solid white field with no transparency at all* — it renders as a white box. The build recolours the AWS wordmark to white while leaving the orange smile alone, and keys the HashiCorp field out by luminance so the mark comes through white with its anti-aliased edges intact. Both are the official reversed variants.
+- **QR code.** Rebuilt from `qrencode`'s module grid into a single SVG path (its native output is ~52 KB of individual `<rect>` elements) and inlined, so the flyer makes no external image requests and prints crisp. Point it somewhere else with `WORKSHOP_URL=<url> bash assets/flyer/build-flyer.sh`.
+
+- **PDF.** `--pdf` prints `workshop-flyer.pdf` through headless Chrome — one Letter page, dark ground intact, Inter and JetBrains Mono embedded, and the text still selectable. The template carries a print stylesheet that does two things the screen layout does not need: it compacts spacing so the content fits a single page, and it prints the headline in flat ink, because Chrome's print pipeline ignores `background-clip: text` and paints the gradient as a solid box over the glyphs. The page carries a 16mm margin all round and the sheet keeps a small gutter inside it, because the AWS mark has ink in its first pixel column and gets shaved flush against the trim. No body copy goes below 12px (9pt at print scale). Printing from the browser's own dialog gives the same result, but only with **Background graphics** ticked.
+- **The build fails loud.** `--pdf` asserts the result is exactly one page and, where `zbarimg` and `pdftoppm` are installed, that the QR still decodes to `WORKSHOP_URL` at 100 dpi — well under what a phone camera gets off a printed sheet. A longer `WORKSHOP_URL` wraps the footer link and can push the layout over; the guard catches that instead of handing back a silent two-pager.
+- **Email.** `--email` writes `email-flyer.html` from its own source, `assets/flyer/email.template.html` — a separate file, because the print flyer cannot be reused. Outlook on Windows lays out mail with the **Word** engine, which ignores CSS grid, flex, float, gradients and `background-clip`, and drops `background-color` on block elements while still honouring the `bgcolor` *attribute*. So the email version is nested tables with inline styles only, every coloured cell carrying both `bgcolor` and `background`, the headline gradient approximated by colouring each word, and the logos and QR embedded as base64 **PNG** (Word renders no SVG at all). Rounded corners are kept: the Word engine drops `border-radius` and renders the square box it would render anyway, while new Outlook, OWA, Apple Mail and Gmail round properly. To use it: open `assets/flyer/email-flyer.html` in a browser, Select All, Copy, paste into the message — the clipboard carries the table backgrounds and the embedded images with it. The build asserts what silently breaks: at least ten `bgcolor` attributes, no banned property in the body, no rounded cell on a `border-collapse:collapse` table (the radius would be dropped), exactly three embedded images, and — where `zbarimg` is installed — that the QR decodes to `WORKSHOP_URL`.
+- **Fonts.** Inter and JetBrains Mono ship in `assets/flyer/fonts/` and are inlined as `@font-face` data URIs, so the flyer renders identically with no network at all — which is also what makes the PDF embed the real faces instead of substituting a system sans. Both are SIL Open Font License 1.1; the upstream license texts travel with them as `Inter-LICENSE.txt` and `JetBrainsMono-LICENSE.txt` in that same directory.
+
+The built `workshop-flyer.html` and `email-flyer.html` are committed alongside their sources: it is self-contained and it is the file you actually open. `workshop-flyer.pdf` is **not** committed (`*.pdf` is gitignored repo-wide) — run `--pdf` when you need it.
+
+---
+
 ## Admin-only test + diagnostic scripts
 
 The workshop content never shows attendees these. Use them to isolate problems, sanity-check a fresh deploy, or re-run a single layer after a change. All live under `infrastructure/scripts/`.
@@ -222,7 +251,7 @@ UC3 requires the free **IBM Verify** app installed on a phone (App Store / Googl
 
 ## Issues + feedback
 
-File issues at <https://github.ibm.com/Oscar-Medina/agentic-runtime-security-aws/issues>. Workshop-tester role guide: [`TESTING.md`](TESTING.md).
+File issues at <https://github.com/aws-samples/sample-agentic-runtime-security-on-aws-with-vault/issues>. Testing playbook: [`TESTING-PLAYBOOK.md`](TESTING-PLAYBOOK.md).
 
 ## License
 

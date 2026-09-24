@@ -7,11 +7,13 @@ Run one script to confirm the entire platform layer is healthy before proceeding
 
 ## Step 1 — Run the verification script
 
+**Why:** This is the last gate before the use cases. It re-checks Vault, IVIA and the trust between them in one pass, so a problem surfaces here rather than halfway through Use Case 2.
+
 ```bash
 bash infrastructure/scripts/test-vault-verify.sh
 ```
 
-Expected — all 13 checks `PASS`:
+Expected — all 14 checks `PASS`:
 
 ```
   ✓ PASS Vault pods running (3 of 3)
@@ -26,16 +28,26 @@ Expected — all 13 checks `PASS`:
   ✓ PASS Secrets engines mounted: database/ + aws/ (platform-standard license present)
   ✓ PASS Agent Registry responds — registration 'uc1-agent' resolvable by display-name
   ✓ PASS OAuth resource server profile 'ivia' responds (feature active + profile applied)
-  ✓ PASS jwt/ auth mount is ABSENT — retired IVIA jwt backend removed (decision (e))
+  ✓ PASS jwt/ auth mount is ABSENT — the OAuth access token IS the Vault token; no auth method in the path
+  ✓ PASS Issuer coherence: Vault validates against the same issuer iviaop stamps (https://wrp.<deploy-id>.<alb-ip-dashed>.nip.io)
 
- ✓ 13 check(s) passed
+ ✓ 14 check(s) passed
 ===============================================================================
 ```
 
-The last five checks are the native-Vault surface this workshop is built on: an Enterprise
-build, the secrets engines, the **Agent Registry**, the **OAuth resource server** profile, and
-a positive assertion that the retired `jwt` auth backend is **gone**. That last one is a check
-that something does *not* exist — if a `jwt/` mount ever reappears, this fails.
+The last six checks are the native-Vault surface this workshop is built on: an Enterprise
+build, the secrets engines, the **Agent Registry**, the **OAuth resource server** profile, a
+positive assertion that **no `jwt/` auth mount exists**, and **issuer coherence**. The `jwt/`
+one is a check that something does *not* exist — if a `jwt/` mount ever appears, this fails.
+
+Issuer coherence is the one that catches a split you cannot otherwise see. Vault validates a
+token's `iss` claim against its own `issuer_id`, and the OIDC provider stamps whatever issuer
+it advertises — both built from `infrastructure/.acme-state`. If the TLS host names move and
+the deploy stops at tier 2, Vault's end has moved and IVIA's has not, every other check on this
+page still passes, and every token is rejected at Use Case 2. This check compares the two ends
+directly. Before tier 3 has ever run, IVIA still advertises the tier-2 placeholder
+`https://issuer-patched-at-root.invalid` — that reports as *not yet applicable* and passes,
+because it is expected, not a fault.
 
 If any check fails, the script prints a `Fix:` hint inline. Address the issue and re-run.
 
@@ -54,5 +66,6 @@ If any check fails, the script prints a `Fix:` hint inline. Address the issue an
 | Secrets engines mounted | `kubectl exec vault-0 -- vault secrets list` | `database/` and `aws/` both present |
 | Agent Registry responds | `vault read agent-registry/registration/display-name/uc1-agent` | registration resolves by display-name |
 | OAuth resource server profile `ivia` | `vault read sys/config/oauth-resource-server/ivia` | profile responds (feature active + applied) |
-| `jwt/` auth mount is ABSENT | `kubectl exec vault-0 -- vault auth list` | **no** `jwt/` row — the retired backend stays removed |
+| `jwt/` auth mount is ABSENT | `kubectl exec vault-0 -- vault auth list` | **no** `jwt/` row — no Vault auth method in the token path |
+| Issuer coherence | `vault read sys/config/oauth-resource-server/ivia` vs the `issuer` from IVIA's OIDC discovery | the two issuers are identical — or IVIA still advertises the pre-tier-3 `.invalid` placeholder, which passes as *not yet applicable*. Two real issuers that disagree fail. |
 ::::

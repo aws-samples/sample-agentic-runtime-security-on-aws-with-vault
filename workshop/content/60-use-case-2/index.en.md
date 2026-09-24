@@ -3,13 +3,13 @@ title: 'Use Case 2 — OAuth Personalized Read-only'
 weight: 60
 ---
 
-## Overview
+## Adds Objective 3 · Actions tied to user intent
 
 Use Case 2 builds directly on Use Case 1 by adding **user identity** to the credential flow. In Use Case 1 the agent acts as a workload — it has no knowledge of who sent the query, and all users receive the same data. In Use Case 2 the banking app authenticates the user through IBM Verify Identity Access (IVIA) using the OAuth Authorization Code + PKCE flow, and that user identity propagates all the way to the database through short-lived, per-user-scoped Vault credentials. The agent now knows *who* is asking, and the database enforces data isolation at the row level.
 
 This use case adds **Objective 3 — actions tied to user intent** on top of the workload identity and JIT credential foundations established in Use Case 1.
 
-## Objectives Covered
+### Objectives Covered
 
 | Objective | ID | How Use Case 2 Demonstrates It |
 |---|---|---|
@@ -20,7 +20,7 @@ This use case adds **Objective 3 — actions tied to user intent** on top of the
 | Enforcement at the point of use | ENFC-03 | Kubernetes NetworkPolicy restricts MCP Server egress to Vault, RDS, and DNS only — external HTTP calls are blocked at the network layer |
 | Audit trail ties credential issuance to user identity | OBJ-5 | The Vault audit log records both the OAuth resource server authorization (with the user's `sub` claim) and the subsequent database/creds issuance — providing a correlated audit trail from user identity to data access |
 
-## Services Deployed
+### Services Deployed
 
 | Service | Runtime | Port | Role |
 |---|---|---|---|
@@ -30,7 +30,7 @@ This use case adds **Objective 3 — actions tied to user intent** on top of the
 
 All three pods run in the `banking-app` namespace. Separate ALB Ingress exposes the Banking UI externally. Agent and MCP Server are ClusterIP-only — no external exposure.
 
-## What You Will Learn
+### What You Will Learn
 
 - OAuth Authorization Code + PKCE flow: `code_verifier`, `code_challenge`, S256 hashing
 - How IVIA acts as the identity provider and issues JWTs with user `sub`, `aud`, and `azp` claims
@@ -41,7 +41,7 @@ All three pods run in the `banking-app` namespace. Separate ALB Ingress exposes 
 - How the MCP Server revokes each database credential itself, using its own Kubernetes-auth Vault token, the moment the query it was issued for returns — and how that revoke removes the Postgres role immediately rather than at lease expiry
 - How the Vault audit log links a `sub` claim to a `database/creds` issuance — OBJ-5 audit correlation
 
-## Prerequisites
+### Prerequisites
 
 You must have completed the **Deploy Foundation** module before starting here. Specifically:
 

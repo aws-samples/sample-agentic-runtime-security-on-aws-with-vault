@@ -6,11 +6,10 @@ weight: 335
 The OIDC seam is where an IVIA-issued JWT becomes a Vault-vended dynamic credential. `deploy-workshop.sh` already wired Vault's **OAuth resource server** profile (`ivia`) to trust IVIA — confirm the wiring is correct before running use cases.
 
 :::alert{header="There is no jwt auth backend — and that is the point" type="info"}
-Vault Enterprise consumes the IVIA-issued OAuth JWT **directly**: the token is presented in the
-`X-Vault-Token` header and validated against the OAuth resource server profile. Earlier
-iterations of this workshop used a hand-rolled `jwt` auth backend with a `POST auth/jwt/login`
-round-trip; that backend has been **removed**. If you see no `jwt/` row in Step 1, the deploy is
-correct — its absence is asserted by `test-vault-verify.sh`.
+Vault Enterprise consumes the IVIA-issued OAuth access token **directly**: the token is presented
+in the `X-Vault-Token` header and validated against the OAuth resource server profile. There is no
+login round-trip and no second Vault token in the path. If you see no `jwt/` row in Step 1, the
+deploy is correct — its absence is asserted by `test-vault-verify.sh`.
 :::
 
 ## The OIDC Seam at Runtime
@@ -73,13 +72,15 @@ sequenceDiagram
 
 The `sub` claim from the JWT flows through Vault into the Postgres session variable that activates Row-Level Security — each user sees only their own data, enforced at the database layer.
 
-Load the root token before running the checks below:
+**Why:** Every check on this page reads Vault as an administrator. This loads that token into your shell.
 
 ```bash
 export VAULT_ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)
 ```
 
 ## Step 1 — Confirm Vault auth methods
+
+**Why:** You are checking for something that should be missing. No `jwt/` row means the IVIA token is being used as the Vault token directly, with no login step in between.
 
 ```bash
 kubectl exec -n vault vault-0 -- \
@@ -96,6 +97,8 @@ token/         token         auth_token_...              token based credentials
 ```
 
 ## Step 2 — Confirm secrets engines
+
+**Why:** These are the engines that vend the credentials the use cases consume — database, AWS, and the Agent Registry that gives each agent a named identity.
 
 ```bash
 kubectl exec -n vault vault-0 -- \
@@ -117,14 +120,14 @@ sys/               system            system_...                 system endpoints
 
 ## Step 3 — Confirm the OAuth resource server trusts IVIA
 
-Vault Enterprise validates the IVIA-issued OAuth JWT directly through its **OAuth resource server** profile (`ivia`) — there is no `jwt` auth backend to configure. Read the profile:
+**Why:** This is the trust link itself. Vault only accepts a token if it was signed by the issuer named here, and only for the agents listed in `audiences`.
 
 ```bash
 kubectl exec -n vault vault-0 -- \
   sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read sys/config/oauth-resource-server/ivia" | grep -E 'issuer_id|enabled|audiences'
 ```
 
-Expected — `enabled` is `true`; `issuer_id` matches the `iss` claim IVIA stamps on its tokens (the public WRP host = the nip.io FQDN from `infrastructure/.acme-state`); `audiences` lists the registered agent actors:
+Expected — `enabled` is `true`; `issuer_id` matches the `iss` claim IVIA stamps on its tokens (the public WRP host = the workshop FQDN from `infrastructure/.acme-state`); `audiences` lists the registered agent actors:
 
 ```
 audiences    [uc3-actor agent-uc2]
@@ -135,6 +138,8 @@ issuer_id    https://<NIP_FQDN_WRP from infrastructure/.acme-state>
 Vault validates IVIA-issued JWTs against the IVIA JWKS (the signing CA is pinned in the profile's `jwks_ca_pem`). `issuer_id` matches the `iss` claim IVIA stamps on its tokens (the WRP host attendees navigate to in their browser — `NIP_FQDN_WRP` in `infrastructure/.acme-state`). The exact value is per-deploy and is not captured live in this doc; resolve it locally with `grep NIP_FQDN_WRP infrastructure/.acme-state`.
 
 ## Step 4 — Confirm database connection
+
+**Why:** This is the connection Vault uses to create short-lived database logins. `allowed_roles` is the full set of credentials it is permitted to vend.
 
 ```bash
 kubectl exec -n vault vault-0 -- \
@@ -149,6 +154,8 @@ allowed_roles         [uc1-readonly uc2-personal-readonly uc3-refund-writer uc3-
 ```
 
 ## Step 5 — Confirm IVIA OIDC discovery (cluster-internal)
+
+**Why:** Vault reads this document to learn where to fetch IVIA's signing keys. The issuer it advertises must match Step 3 exactly, or every token is rejected.
 
 ```bash
 kubectl run oidc-check --image=curlimages/curl --rm -i --restart=Never --quiet -n verify-access -- curl -sk https://iviaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration </dev/null | jq .

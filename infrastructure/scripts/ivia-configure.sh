@@ -34,7 +34,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # rc alone, line 344) reported PASS with IVIA entirely absent. The trailing
 # "No checks ran" banner was the visible symptom. COMMON_CHECKS_SUMMARY=0 is the
 # opt-out common-checks.sh already documents for exactly this case.
-COMMON_CHECKS_SUMMARY=0
+#
+# Exported, matching test-foundation.sh. common-checks.sh reads it at line 210,
+# but this script sources that file behind a `[ -f ... ] &&` guard, so a static
+# check cannot follow the source and sees only an assignment with no reader.
+# Exporting states the cross-file use instead of silencing the warning about it.
+export COMMON_CHECKS_SUMMARY=0
 # shellcheck disable=SC1091
 [ -f "${SCRIPT_DIR}/common-checks.sh" ] && . "${SCRIPT_DIR}/common-checks.sh"
 

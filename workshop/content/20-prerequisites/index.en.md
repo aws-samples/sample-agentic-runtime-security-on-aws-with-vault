@@ -3,6 +3,23 @@ title: 'Prerequisites'
 weight: 20
 ---
 
+## Choose your path
+
+![Your path through the workshop — a line map. The line starts at Prerequisites, then Choice 1, where your AWS account comes from, splits it in two: At an Event, where Tier 1 is already deployed for you, or Self-paced AWS Account, where you deploy all three tiers. Both rejoin for Obtain IVIA Licenses and Run Pre-flight Checks, where Choice 2 picks where you run the commands — AWS CloudShell, or your own terminal or IDE; either account can use either one. Choice 1 splits the line again at Deploy — At an Event or Deploy — Self-paced, and the two merge for good at Configure kubectl. From there one line runs through Verify Deployment, Use Case 1 (non-personalized read-only), Use Case 2 (OAuth personalized read-only), Use Case 3 (privileged action with CIBA) and Cleanup.](/static/images/choose-your-path.png)
+
+Two choices decide which pages you follow. Find yours on the diagram before you start.
+
+**Choice 1 — where your AWS account comes from.** It picks your first page and your deploy page:
+
+- An AWS-led event gave you an account — start at [At an Event](21-at-an-event/).
+- You are using your own AWS account — start at [Self-paced AWS Account](21-aws-account/).
+
+**Choice 2 — where you run the commands.** Both paths reach [Obtain IVIA Licenses](22-ivia-licensing/) and [Run Pre-flight Checks](23-pre-flight-checks/), and Step 1 of the pre-flight page asks you to pick AWS CloudShell or your own terminal. Either account works with either one.
+
+From **Configure kubectl** onward every page is the same for everyone — Verify Deployment, then Use Case 1, Use Case 2 and Use Case 3, then Cleanup.
+
+## Before you start
+
 Before deploying any infrastructure, set up your environment using the workshop's automation scripts. Work through the sub-modules in the left navigation in order.
 
 ## Mobile prerequisite — IBM Verify app

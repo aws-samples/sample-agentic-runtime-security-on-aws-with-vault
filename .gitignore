@@ -32,7 +32,9 @@ terraform.rc
 Thumbs.db
 
 # Claude
-.claude/
+# Claude Code local state stays out; shared skills are checked in.
+.claude/*
+!.claude/skills/
 
 
 # Debug logs
@@ -61,9 +63,3 @@ node_modules/
 slides-site/
 workshop/tmp/
 
-# Instruqt distribution
-# config.yml is a GENERATED artifact (see Decision 7 in
-# .planning/phases/10-instruqt-port/10-01-PLAN.md). Tracked source is
-# config.yml.tmpl + instruqt/scripts/render-config.sh; the rendered
-# config.yml carries region literals and MUST NOT be committed.
-instruqt/track/config.yml

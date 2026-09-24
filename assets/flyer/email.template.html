@@ -1,0 +1,163 @@
+<div style="background:#0d1117;padding:26px 0;font-family:'Segoe UI',Inter,-apple-system,Helvetica,Arial,sans-serif;">
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="700" bgcolor="#0d1117" style="width:700px;max-width:700px;margin:0 auto;background:#0d1117;border-collapse:collapse;">
+
+<tr><td style="padding:0 30px 18px 30px;">
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;">
+    <tr>
+      <td valign="middle" style="padding:0;">
+        <img src="data:image/png;base64,__AWS_LOGO__" height="29" alt="Amazon Web Services" style="height:29px;border:0;display:inline-block;vertical-align:middle;">
+        <span style="display:inline-block;width:1px;height:22px;background:#30363d;vertical-align:middle;margin:0 14px;">&nbsp;</span>
+        <img src="data:image/png;base64,__HASHICORP_LOGO__" height="31" alt="HashiCorp" style="height:31px;border:0;display:inline-block;vertical-align:middle;">
+      </td>
+      <td valign="middle" align="right" style="padding:0;">
+        <span style="font:500 11px Consolas,'Courier New',monospace;letter-spacing:.08em;text-transform:uppercase;color:#fdba74;border:1px solid #6b4c30;background:#241b12;padding:5px 10px;border-radius:4px;">Level 300 &#183; Advanced</span>
+        <span style="font:500 11px Consolas,'Courier New',monospace;letter-spacing:.08em;text-transform:uppercase;color:#c9d1d9;border:1px solid #30363d;background:#161b22;padding:5px 10px;border-radius:4px;">~3 hours</span>
+      </td>
+    </tr>
+  </table>
+</td></tr>
+
+<tr><td style="padding:0 30px 12px 30px;">
+  <div style="font:800 39px/1.08 'Segoe UI',Inter,Arial,sans-serif;letter-spacing:-1.2px;"><span style="color:#9B72F2;">Agentic</span> <span style="color:#BE77CE;">Runtime</span> <span style="color:#E87CA8;">Security</span> <span style="color:#EE9389;">on</span> <span style="color:#F2A96B;">AWS</span></div>
+</td></tr>
+
+<tr><td style="padding:0 30px 16px 30px;">
+  <div style="font:400 16px/1.5 'Segoe UI',Inter,Arial,sans-serif;color:#c9d1d9;">AI agents broke the assumptions security tooling has relied on for two decades. An agent is not a user, and not a workload in the classic sense &#8212; it acts on its own behalf one request and on a person's behalf the next. In this workshop you <span style="color:#e6edf3;font-weight:600;">deploy a working implementation</span> of five control objectives for agentic systems on EKS, using IBM Verify Identity Access and <span style="color:#e6edf3;font-weight:600;">HashiCorp Vault Enterprise 2.0.3 and its native AI agent support</span>: every agent has a verifiable identity, no standing privileges, actions are tied to user intent, enforcement happens at the point of use, and audit evidence correlates across all three trust planes.</div>
+</td></tr>
+
+<tr><td style="padding:0 30px 18px 30px;">
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;"><tr>
+    <td width="33%" bgcolor="#9B72F2" height="2" style="background:#9B72F2;height:2px;line-height:2px;font-size:0;">&nbsp;</td>
+    <td width="34%" bgcolor="#E87CA8" height="2" style="background:#E87CA8;height:2px;line-height:2px;font-size:0;">&nbsp;</td>
+    <td width="33%" bgcolor="#F2A96B" height="2" style="background:#F2A96B;height:2px;line-height:2px;font-size:0;">&nbsp;</td>
+  </tr></table>
+</td></tr>
+
+<tr><td style="padding:0 30px 8px 30px;">
+  <div style="font:400 11px Consolas,'Courier New',monospace;letter-spacing:.14em;text-transform:uppercase;color:#8b949e;">Vault's native AI agent support &#8212; released, and configured by you here</div>
+</td></tr>
+<tr><td style="padding:0 30px 18px 30px;">
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:separate;border-spacing:10px;margin:-10px;">
+    <tr>
+      <td width="50%" bgcolor="#161b22" valign="top" style="background:#161b22;border:1px solid #30363d;border-top:2px solid #a855f7;padding:11px 13px;border-radius:8px;">
+        <div style="font:700 10.5px Consolas,'Courier New',monospace;letter-spacing:.06em;color:#a855f7;padding-bottom:4px;">Agent Registry</div>
+        <div style="font:400 12.5px/1.45 'Segoe UI',Inter,Arial,sans-serif;color:#c9d1d9;">Each agent is a first-class identity, distinct from human users and from traditional non-human identities.</div>
+      </td>
+      <td width="50%" bgcolor="#161b22" valign="top" style="background:#161b22;border:1px solid #30363d;border-top:2px solid #a855f7;padding:11px 13px;border-radius:8px;">
+        <div style="font:700 10.5px Consolas,'Courier New',monospace;letter-spacing:.06em;color:#a855f7;padding-bottom:4px;">Agent ceiling policies</div>
+        <div style="font:400 12.5px/1.45 'Segoe UI',Inter,Arial,sans-serif;color:#c9d1d9;">The maximum an agent may <span style="color:#e6edf3;font-weight:600;">ever</span> hold. A ceiling restricts and never grants &#8212; effective permission is the human's baseline &#8745; the agent's ceiling.</div>
+      </td>
+    </tr>
+    <tr>
+      <td width="50%" bgcolor="#161b22" valign="top" style="background:#161b22;border:1px solid #30363d;border-top:2px solid #a855f7;padding:11px 13px;border-radius:8px;">
+        <div style="font:700 10.5px Consolas,'Courier New',monospace;letter-spacing:.06em;color:#a855f7;padding-bottom:4px;">OAuth resource server</div>
+        <div style="font:400 12.5px/1.45 'Segoe UI',Inter,Arial,sans-serif;color:#c9d1d9;">The issued OAuth token authorizes Vault directly. No login round-trip, no intermediate Vault token, no auth method in that path at all.</div>
+      </td>
+      <td width="50%" bgcolor="#161b22" valign="top" style="background:#161b22;border:1px solid #30363d;border-top:2px solid #a855f7;padding:11px 13px;border-radius:8px;">
+        <div style="font:700 10.5px Consolas,'Courier New',monospace;letter-spacing:.06em;color:#a855f7;padding-bottom:4px;">Per-request RAR</div>
+        <div style="font:400 12.5px/1.45 'Segoe UI',Inter,Arial,sans-serif;color:#c9d1d9;">Authorization details of <span style="font-family:Consolas,'Courier New',monospace;font-size:11px;color:#2dd4bf;background:#10312e;padding:1px 4px;white-space:nowrap;border-radius:3px;">type: vault:path_access</span> narrow a token to the exact path and capability of a single request. Vault is the decision point.</div>
+      </td>
+    </tr>
+  </table>
+</td></tr>
+
+<tr><td style="padding:0 30px 8px 30px;">
+  <div style="font:400 11px Consolas,'Courier New',monospace;letter-spacing:.14em;text-transform:uppercase;color:#8b949e;">The agentic threat model spans three planes at once</div>
+</td></tr>
+<tr><td style="padding:0 30px 18px 30px;">
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:separate;border-spacing:1px;background:#30363d;border:1px solid #30363d;border-radius:8px;">
+    <tr>
+      <td width="33%" bgcolor="#161b22" valign="top" style="background:#161b22;padding:13px 15px;border-radius:7px 0 0 7px;">
+        <div style="font:400 10px Consolas,'Courier New',monospace;letter-spacing:.1em;text-transform:uppercase;color:#60a5fa;padding-bottom:3px;">User identity</div>
+        <div style="font:500 13.5px 'Segoe UI',Inter,Arial,sans-serif;color:#e6edf3;">Who is asking?</div>
+      </td>
+      <td width="34%" bgcolor="#161b22" valign="top" style="background:#161b22;padding:13px 15px;">
+        <div style="font:400 10px Consolas,'Courier New',monospace;letter-spacing:.1em;text-transform:uppercase;color:#2dd4bf;padding-bottom:3px;">Workload identity</div>
+        <div style="font:500 13.5px 'Segoe UI',Inter,Arial,sans-serif;color:#e6edf3;">Which agent process is acting?</div>
+      </td>
+      <td width="33%" bgcolor="#161b22" valign="top" style="background:#161b22;padding:13px 15px;border-radius:0 7px 7px 0;">
+        <div style="font:400 10px Consolas,'Courier New',monospace;letter-spacing:.1em;text-transform:uppercase;color:#fdba74;padding-bottom:3px;">Data plane</div>
+        <div style="font:500 13.5px 'Segoe UI',Inter,Arial,sans-serif;color:#e6edf3;">What credential does it present?</div>
+      </td>
+    </tr>
+  </table>
+</td></tr>
+
+<tr><td style="padding:0 30px 8px 30px;">
+  <div style="font:400 11px Consolas,'Courier New',monospace;letter-spacing:.14em;text-transform:uppercase;color:#8b949e;">What you build &#8212; three agents, each layering on the last</div>
+</td></tr>
+<tr><td style="padding:0 30px 18px 30px;">
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:separate;border-spacing:0 7px;">
+    <tr><td bgcolor="#161b22" style="background:#161b22;border:1px solid #30363d;border-left:3px solid #2dd4bf;padding:10px 14px;border-radius:8px;">
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;"><tr>
+        <td width="26" valign="top" style="font:700 15px Consolas,'Courier New',monospace;color:#2dd4bf;padding-right:12px;">1</td>
+        <td valign="top">
+          <div style="font:600 14.5px 'Segoe UI',Inter,Arial,sans-serif;color:#e6edf3;">Non-personalized read-only agent</div>
+          <div style="font:400 13px/1.45 'Segoe UI',Inter,Arial,sans-serif;color:#8b949e;">Workload identity and just-in-time database credentials. No standing grants.</div>
+        </td>
+      </tr></table>
+    </td></tr>
+    <tr><td bgcolor="#161b22" style="background:#161b22;border:1px solid #30363d;border-left:3px solid #60a5fa;padding:10px 14px;border-radius:8px;">
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;"><tr>
+        <td width="26" valign="top" style="font:700 15px Consolas,'Courier New',monospace;color:#60a5fa;padding-right:12px;">2</td>
+        <td valign="top">
+          <div style="font:600 14.5px 'Segoe UI',Inter,Arial,sans-serif;color:#e6edf3;">OAuth personalized read-only agent</div>
+          <div style="font:400 13px/1.45 'Segoe UI',Inter,Arial,sans-serif;color:#8b949e;">User intent carried into the request via Authorization Code + PKCE.</div>
+        </td>
+      </tr></table>
+    </td></tr>
+    <tr><td bgcolor="#161b22" style="background:#161b22;border:1px solid #30363d;border-left:3px solid #a855f7;padding:10px 14px;border-radius:8px;">
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;"><tr>
+        <td width="26" valign="top" style="font:700 15px Consolas,'Courier New',monospace;color:#a855f7;padding-right:12px;">3</td>
+        <td valign="top">
+          <div style="font:600 14.5px 'Segoe UI',Inter,Arial,sans-serif;color:#e6edf3;">Privileged action with CIBA</div>
+          <div style="font:400 13px/1.45 'Segoe UI',Inter,Arial,sans-serif;color:#8b949e;">Out-of-band approval for a real money movement, then one query correlating identity, workload and database evidence for that single action.</div>
+        </td>
+      </tr></table>
+    </td></tr>
+  </table>
+</td></tr>
+
+<tr><td style="padding:0 30px 8px 30px;">
+  <div style="font:400 11px Consolas,'Courier New',monospace;letter-spacing:.14em;text-transform:uppercase;color:#8b949e;">Two ways to run it</div>
+</td></tr>
+<tr><td style="padding:0 30px 18px 30px;">
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:separate;border-spacing:12px;margin:-12px;">
+    <tr>
+      <td width="50%" bgcolor="#1c2330" valign="top" style="background:#1c2330;border:1px solid #30363d;padding:14px 16px;border-radius:10px;">
+        <div style="font:400 10px Consolas,'Courier New',monospace;letter-spacing:.1em;text-transform:uppercase;color:#4ade80;padding-bottom:6px;">&#9679;&nbsp; At an event</div>
+        <div style="font:600 15.5px 'Segoe UI',Inter,Arial,sans-serif;color:#e6edf3;padding-bottom:5px;">Pre-provisioned AWS accounts</div>
+        <div style="font:400 13px/1.45 'Segoe UI',Inter,Arial,sans-serif;color:#c9d1d9;padding-bottom:9px;">Each attendee gets an account with the cluster, database and container images already built. You start at the identity and secrets layer and spend the time on the agents.</div>
+        <div style="font:400 11px Consolas,'Courier New',monospace;color:#8b949e;border-top:1px solid #30363d;padding-top:7px;">Bring: a laptop. Nothing to set up.</div>
+      </td>
+      <td width="50%" bgcolor="#1c2330" valign="top" style="background:#1c2330;border:1px solid #30363d;padding:14px 16px;border-radius:10px;">
+        <div style="font:400 10px Consolas,'Courier New',monospace;letter-spacing:.1em;text-transform:uppercase;color:#a855f7;padding-bottom:6px;">&#9679;&nbsp; Self-paced</div>
+        <div style="font:600 15.5px 'Segoe UI',Inter,Arial,sans-serif;color:#e6edf3;padding-bottom:5px;">Your own AWS account</div>
+        <div style="font:400 13px/1.45 'Segoe UI',Inter,Arial,sans-serif;color:#c9d1d9;padding-bottom:9px;">The same content, start to finish. You run the foundation build yourself first, then follow the identical path through all three agents.</div>
+        <div style="font:400 11px Consolas,'Courier New',monospace;color:#8b949e;border-top:1px solid #30363d;padding-top:7px;">Requires: your own AWS account.</div>
+      </td>
+    </tr>
+  </table>
+</td></tr>
+
+<tr><td style="padding:0 30px;">
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" bgcolor="#161b22" style="background:#161b22;border:1px solid #30363d;border-collapse:separate;border-radius:10px;">
+    <tr>
+      <td valign="middle" width="140" style="padding:16px 0 16px 18px;">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff" style="background:#ffffff;border-collapse:separate;border-radius:6px;"><tr>
+          <td style="padding:9px;line-height:0;font-size:0;">
+            <img src="data:image/png;base64,__QR_PNG__" width="104" height="104" alt="Workshop URL QR code" style="width:104px;height:104px;display:block;border:0;">
+          </td>
+        </tr></table>
+      </td>
+      <td valign="middle" style="padding:16px 18px;">
+        <div style="font:400 10px Consolas,'Courier New',monospace;letter-spacing:.12em;text-transform:uppercase;color:#8b949e;padding-bottom:5px;">Start the workshop</div>
+        <div style="font:400 13.5px/1.45 'Segoe UI',Inter,Arial,sans-serif;color:#c9d1d9;padding-bottom:6px;">Built for security architects, platform and identity engineers putting AI agents into production.</div>
+        <a href="__WORKSHOP_URL__" style="font:400 11px Consolas,'Courier New',monospace;color:#60a5fa;text-decoration:none;word-break:break-all;">__WORKSHOP_URL_DISPLAY__</a>
+      </td>
+    </tr>
+  </table>
+</td></tr>
+
+</table>
+</div>

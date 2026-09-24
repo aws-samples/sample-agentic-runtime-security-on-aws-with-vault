@@ -1,0 +1,123 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2060 700" width="2060" height="700" style="background:#0d1117; font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;">
+  <rect width="2060" height="700" fill="#0d1117"/>
+
+  <text x="1030" y="46" text-anchor="middle" font-size="26" font-weight="600" fill="#e6edf3">Your path through the workshop</text>
+  <text x="1030" y="76" text-anchor="middle" font-size="15" fill="#8b949e">Two choices decide which pages you follow — after Configure kubectl everyone runs the same three Use Cases</text>
+
+  <!-- legend -->
+  <line x1="680" y1="102" x2="716" y2="102" stroke="#3b82f6" stroke-width="6" stroke-linecap="round"/>
+  <text x="724" y="107" font-size="13" fill="#60a5fa">At an Event</text>
+  <line x1="834" y1="102" x2="870" y2="102" stroke="#14b8a6" stroke-width="6" stroke-linecap="round"/>
+  <text x="878" y="107" font-size="13" fill="#2dd4bf">Self-paced</text>
+  <line x1="980" y1="102" x2="1016" y2="102" stroke="#8b949e" stroke-width="6" stroke-linecap="round"/>
+  <text x="1024" y="107" font-size="13" fill="#8b949e">both paths</text>
+  <line x1="1132" y1="102" x2="1168" y2="102" stroke="#22c55e" stroke-width="6" stroke-linecap="round"/>
+  <text x="1176" y="107" font-size="13" fill="#4ade80">everyone, from Configure kubectl on</text>
+
+  <!-- ===== track ===== -->
+  <g fill="none" stroke-width="7" stroke-linecap="round">
+    <!-- shared trunk, start -->
+    <path d="M 60,300 H 290" stroke="#8b949e"/>
+
+    <!-- fork 1 -->
+    <path d="M 290,300 C 335,300 335,200 380,200 H 560" stroke="#3b82f6"/>
+    <path d="M 290,300 C 335,300 335,400 380,400 H 560" stroke="#14b8a6"/>
+    <path d="M 560,200 C 605,200 605,300 650,300" stroke="#3b82f6"/>
+    <path d="M 560,400 C 605,400 605,300 650,300" stroke="#14b8a6"/>
+
+    <!-- shared trunk, middle -->
+    <path d="M 650,300 H 1030" stroke="#8b949e"/>
+
+    <!-- fork 2 -->
+    <path d="M 1030,300 C 1075,300 1075,200 1120,200 H 1300" stroke="#3b82f6"/>
+    <path d="M 1030,300 C 1075,300 1075,400 1120,400 H 1300" stroke="#14b8a6"/>
+    <path d="M 1300,200 C 1345,200 1345,300 1390,300" stroke="#3b82f6"/>
+    <path d="M 1300,400 C 1345,400 1345,300 1390,300" stroke="#14b8a6"/>
+
+    <!-- merged trunk -->
+    <path d="M 1390,300 H 1995" stroke="#22c55e"/>
+  </g>
+
+  <!-- ===== stations ===== -->
+  <!-- Prerequisites -->
+  <circle cx="140" cy="300" r="11" fill="#0d1117" stroke="#8b949e" stroke-width="5"/>
+  <text x="140" y="268" text-anchor="middle" font-size="15" font-weight="600" fill="#e6edf3">Prerequisites</text>
+  <text x="140" y="342" text-anchor="middle" font-size="13" fill="#8b949e">you are here</text>
+
+  <!-- At an Event -->
+  <circle cx="470" cy="200" r="11" fill="#0d1117" stroke="#3b82f6" stroke-width="5"/>
+  <text x="470" y="150" text-anchor="middle" font-size="15" font-weight="600" fill="#60a5fa">At an Event</text>
+  <text x="470" y="170" text-anchor="middle" font-size="13" fill="#8b949e">Tier 1 already deployed for you</text>
+
+  <!-- Self-paced -->
+  <circle cx="470" cy="400" r="11" fill="#0d1117" stroke="#14b8a6" stroke-width="5"/>
+  <text x="470" y="440" text-anchor="middle" font-size="15" font-weight="600" fill="#2dd4bf">Self-paced AWS Account</text>
+  <text x="470" y="460" text-anchor="middle" font-size="13" fill="#8b949e">you deploy all three tiers</text>
+
+  <!-- Obtain IVIA Licenses -->
+  <circle cx="720" cy="300" r="11" fill="#0d1117" stroke="#8b949e" stroke-width="5"/>
+  <text x="720" y="268" text-anchor="middle" font-size="15" font-weight="600" fill="#e6edf3">Obtain IVIA Licenses</text>
+
+  <!-- Run Pre-flight Checks -->
+  <circle cx="910" cy="300" r="13" fill="#0d1117" stroke="#f59e0b" stroke-width="5"/>
+  <text x="910" y="268" text-anchor="middle" font-size="15" font-weight="600" fill="#e6edf3">Run Pre-flight Checks</text>
+  <text x="910" y="382" text-anchor="middle" font-size="13" fill="#fdba74">CloudShell, or your own terminal or IDE</text>
+
+  <!-- Deploy — At an Event -->
+  <circle cx="1210" cy="200" r="11" fill="#0d1117" stroke="#3b82f6" stroke-width="5"/>
+  <text x="1210" y="150" text-anchor="middle" font-size="15" font-weight="600" fill="#60a5fa">Deploy — At an Event</text>
+  <text x="1210" y="170" text-anchor="middle" font-size="13" fill="#8b949e">bootstrap, pull Tier-1 state, Tiers 2 and 3</text>
+
+  <!-- Deploy — Self-paced -->
+  <circle cx="1210" cy="400" r="11" fill="#0d1117" stroke="#14b8a6" stroke-width="5"/>
+  <text x="1210" y="440" text-anchor="middle" font-size="15" font-weight="600" fill="#2dd4bf">Deploy — Self-paced</text>
+  <text x="1210" y="460" text-anchor="middle" font-size="13" fill="#8b949e">bootstrap, then Tiers 1, 2 and 3</text>
+
+  <!-- merged stations -->
+  <circle cx="1450" cy="300" r="15" fill="#0d1117" stroke="#22c55e" stroke-width="6"/>
+  <circle cx="1450" cy="300" r="5" fill="#4ade80"/>
+  <text x="1450" y="266" text-anchor="middle" font-size="15" font-weight="600" fill="#4ade80">Configure kubectl</text>
+
+  <circle cx="1560" cy="300" r="11" fill="#0d1117" stroke="#22c55e" stroke-width="5"/>
+  <text x="1560" y="342" text-anchor="middle" font-size="15" font-weight="600" fill="#e6edf3">Verify Deployment</text>
+
+  <circle cx="1670" cy="300" r="11" fill="#0d1117" stroke="#22c55e" stroke-width="5"/>
+  <text x="1670" y="248" text-anchor="middle" font-size="15" font-weight="600" fill="#e6edf3">Use Case 1</text>
+  <text x="1670" y="268" text-anchor="middle" font-size="13" fill="#8b949e">non-personalized read-only</text>
+
+  <circle cx="1780" cy="300" r="11" fill="#0d1117" stroke="#22c55e" stroke-width="5"/>
+  <text x="1780" y="342" text-anchor="middle" font-size="15" font-weight="600" fill="#e6edf3">Use Case 2</text>
+  <text x="1780" y="362" text-anchor="middle" font-size="13" fill="#8b949e">OAuth personalized read-only</text>
+
+  <circle cx="1890" cy="300" r="11" fill="#0d1117" stroke="#22c55e" stroke-width="5"/>
+  <text x="1890" y="248" text-anchor="middle" font-size="15" font-weight="600" fill="#e6edf3">Use Case 3</text>
+  <text x="1890" y="268" text-anchor="middle" font-size="13" fill="#8b949e">privileged action with CIBA</text>
+
+  <circle cx="1995" cy="300" r="11" fill="#0d1117" stroke="#22c55e" stroke-width="5"/>
+  <text x="1995" y="342" text-anchor="middle" font-size="15" font-weight="600" fill="#e6edf3">Cleanup</text>
+
+  <!-- ===== choice badges on the line ===== -->
+  <circle cx="290" cy="300" r="14" fill="#f59e0b" stroke="#0d1117" stroke-width="3"/>
+  <text x="290" y="306" text-anchor="middle" font-size="15" font-weight="700" fill="#0d1117">1</text>
+  <circle cx="1030" cy="300" r="14" fill="#f59e0b" stroke="#0d1117" stroke-width="3"/>
+  <text x="1030" y="306" text-anchor="middle" font-size="15" font-weight="700" fill="#0d1117">1</text>
+  <circle cx="910" cy="348" r="14" fill="#f59e0b" stroke="#0d1117" stroke-width="3"/>
+  <text x="910" y="354" text-anchor="middle" font-size="15" font-weight="700" fill="#0d1117">2</text>
+
+  <!-- ===== the two choices, explained ===== -->
+  <rect x="60" y="520" width="950" height="130" rx="10" fill="#161b22" stroke="#f59e0b" stroke-width="1.5"/>
+  <circle cx="100" cy="556" r="15" fill="#f59e0b"/>
+  <text x="100" y="562" text-anchor="middle" font-size="16" font-weight="700" fill="#0d1117">1</text>
+  <text x="130" y="562" font-size="17" font-weight="600" fill="#e6edf3">Where your AWS account comes from</text>
+  <text x="130" y="590" font-size="13" fill="#8b949e">At an Event — an AWS-led event gave you an account, and CodeBuild has already deployed Tier 1.</text>
+  <text x="130" y="612" font-size="13" fill="#8b949e">Self-paced — your own AWS account, and you deploy Tier 1, Tier 2 and Tier 3 yourself.</text>
+  <text x="130" y="634" font-size="13" fill="#fdba74">Picks your Prerequisites page and, later, your Deploy page.</text>
+
+  <rect x="1050" y="520" width="950" height="130" rx="10" fill="#161b22" stroke="#f59e0b" stroke-width="1.5"/>
+  <circle cx="1090" cy="556" r="15" fill="#f59e0b"/>
+  <text x="1090" y="562" text-anchor="middle" font-size="16" font-weight="700" fill="#0d1117">2</text>
+  <text x="1120" y="562" font-size="17" font-weight="600" fill="#e6edf3">Where you run the commands</text>
+  <text x="1120" y="590" font-size="13" fill="#8b949e">AWS CloudShell — browser terminal in the console; nothing to install, credentials already there.</text>
+  <text x="1120" y="612" font-size="13" fill="#8b949e">Your own terminal or IDE — macOS or Linux; the pre-flight script installs every CLI tool.</text>
+  <text x="1120" y="634" font-size="13" fill="#fdba74">Chosen on Run Pre-flight Checks, Step 1. Either account can use either one.</text>
+</svg>

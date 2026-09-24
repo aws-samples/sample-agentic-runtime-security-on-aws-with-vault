@@ -1,0 +1,476 @@
+#!/usr/bin/env bash
+#===============================================================================
+# infrastructure/scripts/test-acme-fallback.sh
+#
+# Offline test for the Let's Encrypt TLS-suffix fallback (issue #5).
+#
+# The workshop's TLS host names are built on nip.io, a magic-DNS domain shared
+# with the whole internet. Let's Encrypt budgets certificates per registered
+# domain, so an exhausted nip.io budget fails EVERY attendee's tier-2 deploy at
+# once. deploy-workshop.sh answers that by retrying on sslip.io — a different
+# registered domain with its own separate budget.
+#
+# That branch only ever runs on a day Let's Encrypt is refusing nip.io, which
+# cannot be provoked on demand and must never be provoked deliberately (it
+# would spend the shared budget the workshop depends on). This test drives it
+# instead against a stubbed kubectl: no cluster, no AWS, no ACME traffic.
+#
+# It does NOT copy the code under test. It extracts the REAL
+# _acme_issue_certificate and the REAL caller out of deploy-workshop.sh at
+# runtime, by anchor, and fails loudly if it cannot find them — a copy silently
+# goes stale and then certifies code that is no longer shipped.
+#
+# Usage: bash infrastructure/scripts/test-acme-fallback.sh
+#===============================================================================
+# The stubs and fixtures below are invoked INDIRECTLY — by the code extracted
+# out of deploy-workshop.sh and sourced at runtime. ShellCheck cannot see that
+# call graph, so it reports live stubs as dead (SC2329) and live fixtures as
+# unused (SC2034); SC1091 is the generated files it is asked to follow.
+# shellcheck disable=SC2329,SC2034,SC1091
+set -uo pipefail
+
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Overridable so the suite can be pointed at an older copy of the deploy script
+# to prove a regression assertion actually fails without the fix in place.
+DEPLOY_SCRIPT="${DEPLOY_SCRIPT:-${SCRIPT_DIR}/deploy-workshop.sh}"
+
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
+PASSED=0; FAILED=0
+WORK="$(mktemp -d)"; trap 'rm -rf "${WORK}"' EXIT
+
+fatal() { echo -e "${RED}FATAL:${NC} $*" >&2; exit 2; }
+assert() {
+    local what="$1" expected="$2" actual="$3"
+    if [[ "${expected}" == "${actual}" ]]; then
+        echo -e "    ${GREEN}✓${NC} ${what}"; PASSED=$(( PASSED + 1 ))
+    else
+        echo -e "    ${RED}✗${NC} ${what}"
+        echo -e "        expected: ${expected}"
+        echo -e "        actual:   ${actual}"
+        FAILED=$(( FAILED + 1 ))
+    fi
+}
+
+#-- 1. Extract the code under test, live -------------------------------------
+[ -f "${DEPLOY_SCRIPT}" ] || fatal "deploy-workshop.sh not found at ${DEPLOY_SCRIPT}"
+
+# The function: from its definition line to the first column-0 closing brace.
+awk '/^_acme_issue_certificate\(\) \{/{f=1} f{print} f&&/^\}/{exit}' \
+    "${DEPLOY_SCRIPT}" > "${WORK}/helper.sh"
+grep -q '^_acme_issue_certificate() {' "${WORK}/helper.sh" \
+    || fatal "could not extract _acme_issue_certificate() from deploy-workshop.sh (was it renamed?)"
+grep -q '^}' "${WORK}/helper.sh" \
+    || fatal "extracted _acme_issue_certificate() is not closed — extraction is wrong"
+
+# The caller: the fallback block, anchored on its own comments rather than line
+# numbers so it survives edits above it.
+{
+    echo '_acme_caller() {'
+    awk '/# \(5\) Issue the Certificate\./{f=1} /# A suffix change rewrites \.acme-state/{f=0} f{print}' \
+        "${DEPLOY_SCRIPT}"
+    echo '    return 0'
+    echo '}'
+} > "${WORK}/caller.sh"
+# Literal match against the extracted source — must NOT expand.
+# shellcheck disable=SC2016
+grep -q '_acme_issue_certificate "${TLS_DNS_SUFFIX_FALLBACK}"' "${WORK}/caller.sh" \
+    || fatal "could not extract the fallback caller from deploy-workshop.sh (anchors moved?)"
+# The START anchor is proven by the grep above. The STOP anchor is not: if it is
+# renamed, awk never clears the flag and swallows the whole tail of the deploy
+# script into the function body — which then sources and executes. Prove the
+# stop anchor is still there, and prove the extract stopped where it should by
+# asserting it did not drag in the script's top-level tier dispatch.
+grep -q '# A suffix change rewrites \.acme-state' "${DEPLOY_SCRIPT}" \
+    || fatal "the caller STOP anchor is gone from deploy-workshop.sh — the extraction would run to EOF"
+grep -q '_run_if_tier' "${WORK}/caller.sh" \
+    && fatal "the extracted caller ran past its STOP anchor into deploy-workshop.sh's tier dispatch"
+
+#-- 2. Stub the outside world ------------------------------------------------
+print_info() { echo "      INFO $*"; LAST_INFO="${LAST_INFO}${*}\n"; }
+print_warn() { echo "      WARN $*"; LAST_WARN="$*"; }
+print_fail() { echo "      FAIL $1"; LAST_FAIL="${2:-}"; }
+
+# Virtual clock: `sleep` advances it, so the function's real 900s ceiling is
+# reached in milliseconds instead of a quarter of an hour.
+NOW=1000000000
+sleep() { NOW=$(( NOW + ${1:-15} )); }
+date() { if [[ "${1:-}" == "+%s" ]]; then echo "${NOW}"; else command date "$@"; fi; }
+
+APPLIED="${WORK}/applied"; POLLS="${WORK}/polls"; ORDERS="${WORK}/orders"
+
+RL='Failed to create Order: 429 urn:ietf:params:acme:error:rateLimited: too many certificates (50000) already issued for'
+
+# The cluster, modelled as a file of Orders ("<name>|<first dnsName>|<reason>").
+# cert-manager creates one per Certificate spec and NEVER deletes an errored
+# one, which is the whole point of scenario 5.
+kubectl() {
+    local args="$*"
+
+    if [[ "${args}" == *"apply -f -"* ]]; then
+        local yaml fq n
+        yaml=$(cat)
+        # A rejected apply must be reported as such. Without this the harness
+        # can never exercise the PIPESTATUS[1] guard, and a script that ignores
+        # kubectl's exit code looks identical to one that checks it.
+        if [[ "${SCENARIO}" == "apply_rejected" ]]; then
+            echo 'error: unable to recognize "STDIN": no matches for kind "Certificate"' >&2
+            return 1
+        fi
+        fq=$(grep -oE '^[[:space:]]+- wrp\..*' <<<"${yaml}" | sed 's/^[[:space:]]*- //')
+        echo "${fq}" >> "${APPLIED}"
+        n=$(grep -c . "${APPLIED}")
+        case "${SCENARIO}" in
+            primary_ratelimited)
+                [[ "${fq}" == *.nip.io ]] \
+                    && echo "order-${n}|${fq}|${RL} \"nip.io\" in the last 168h0m0s" >> "${ORDERS}" ;;
+            both_ratelimited|same_suffix_no_fallback)
+                echo "order-${n}|${fq}|${RL} its registered domain in the last 168h0m0s" >> "${ORDERS}" ;;
+            dns_failure_not_ratelimited)
+                echo "order-${n}|${fq}|Failed to create Order: acme: authorization error: 403 urn:ietf:params:acme:error:dns: DNS problem: NXDOMAIN looking up A for ${fq}" >> "${ORDERS}" ;;
+        esac
+        return 0
+    fi
+
+    if [[ "${args}" == *"delete orders"* ]]; then
+        local name
+        name=$(tr ' ' '\n' <<<"${args}" | grep -E '^order-' | head -1)
+        if [[ -n "${name}" ]]; then
+            grep -v "^${name}|" "${ORDERS}" > "${ORDERS}.tmp" 2>/dev/null || true
+            mv -f "${ORDERS}.tmp" "${ORDERS}"
+        fi
+        return 0
+    fi
+
+    if [[ "${args}" == *"get orders"* ]]; then
+        # Two different jsonpaths: names (for the pre-wait sweep) and
+        # "<dnsName>|<reason>" rows (for the rate-limit verdict).
+        if [[ "${args}" == *"metadata.name"* && "${args}" == *"spec.dnsNames"* ]]; then
+            # name|dnsName|reason — the rate-limit verdict scan
+            cat "${ORDERS}" 2>/dev/null || true
+        elif [[ "${args}" == *"metadata.name"* ]]; then
+            cut -d'|' -f1 "${ORDERS}" 2>/dev/null || true
+        else
+            cut -d'|' -f2- "${ORDERS}" 2>/dev/null || true
+        fi
+        return 0
+    fi
+
+    # MUST be tested before "get certificate" — that string is a prefix of this
+    # one, so the order of these branches is load-bearing.
+    if [[ "${args}" == *"get certificaterequests"* ]]; then
+        # The CertificateRequest rate-limit signal. Modelled as "nothing to
+        # report" for every scenario: the Order-based signal is what the
+        # scenarios drive, and this branch exists so the extra query neither
+        # counts as a readiness poll nor invents a second verdict.
+        return 0
+    fi
+
+    if [[ "${args}" == *"get certificate"* ]]; then
+        local n wrp bank gen obs ready
+        n=$(( $(cat "${POLLS}" 2>/dev/null || echo 0) + 1 )); echo "${n}" > "${POLLS}"
+        wrp=$(tail -1 "${APPLIED}")
+        bank="banking.${wrp#wrp.}"
+        # A REAL API server returns the spec that was last applied. It does NOT
+        # keep serving the previous dnsNames after an apply changed them, so a
+        # stub that does is testing a state Kubernetes cannot produce. What
+        # actually lags is cert-manager's RECONCILE: .metadata.generation bumps
+        # on the apply, while the leftover Ready condition still carries the
+        # observedGeneration it was computed for.
+        gen=$(grep -c . "${APPLIED}")
+        ready=False; obs="${gen}"
+        case "${SCENARIO}" in
+            clean_issue) ready=True ;;
+            primary_ratelimited)
+                [[ "${wrp}" == *sslip.io && ${n} -ge 3 ]] && ready=True ;;
+            stale_order_previous_run)
+                [[ ${n} -ge 3 ]] && ready=True ;;
+            ready_but_for_the_old_host)
+                # The PREVIOUS certificate is still marked Ready. Its condition
+                # is stale: observedGeneration trails the generation this
+                # apply created, until cert-manager catches up at poll 3.
+                ready=True
+                [[ ${n} -lt 3 ]] && obs=$(( gen - 1 )) ;;
+            apply_rejected)
+                # The apply was refused, so the object on the cluster is still
+                # the PREVIOUS one — fully reconciled and Ready. This is the
+                # trap: a gate that only reads Ready sails straight through.
+                ready=True ;;
+        esac
+        # Answer the jsonpath that was actually asked for, so an older script
+        # that requests fewer fields is judged on its own logic, not on this
+        # stub handing it something it never asked for.
+        if [[ "${args}" == *"metadata.generation"* ]]; then
+            echo "${gen}|${ready}|${obs}|${wrp} ${bank}"
+        elif [[ "${args}" == *"spec.dnsNames"* ]]; then
+            echo "${ready}|${wrp} ${bank}"
+        else
+            echo "${ready}"
+        fi
+        return 0
+    fi
+    return 0
+}
+
+source "${WORK}/helper.sh"
+source "${WORK}/caller.sh"
+
+run_scenario() {
+    SCENARIO="$1"
+    TLS_DNS_SUFFIX="${2:-nip.io}"; TLS_DNS_SUFFIX_FALLBACK="${3:-sslip.io}"
+    # Mirrors the top-level decision in deploy-workshop.sh: a fallback to the
+    # same registered domain is not a second chance, so it is turned off.
+    TLS_DNS_SUFFIX_FALLBACK_ENABLED=true
+    [[ "${TLS_DNS_SUFFIX}" == "${TLS_DNS_SUFFIX_FALLBACK}" ]] && TLS_DNS_SUFFIX_FALLBACK_ENABLED=false
+    DEPLOY_ID="abc123"; ALB_IP_DASHED="44-205-184-217"
+    NIP_FQDN_WRP=""; NIP_FQDN_BANKING=""; LAST_WARN=""; LAST_FAIL=""; LAST_INFO=""
+    # The caller decides this before issuance runs; the fallback must clear it.
+    _acme_suffix_current=true
+    NOW=1000000000
+    : > "${APPLIED}"; : > "${POLLS}"; : > "${ORDERS}"
+    # Scenario 5 starts on a cluster an EARLIER deploy already got refused on.
+    if [[ "${SCENARIO}" == "stale_order_previous_run" ]]; then
+        echo "order-stale|wrp.old999.44-205-184-217.nip.io|${RL} \"nip.io\" in the last 168h0m0s" > "${ORDERS}"
+    fi
+    # Scenario 8 runs against a cluster that ALREADY carries a Ready
+    # certificate from an earlier deploy. The apply of the new one is refused,
+    # so that older object is what every subsequent read returns.
+    if [[ "${SCENARIO}" == "apply_rejected" ]]; then
+        echo "wrp.old999.44-205-184-217.nip.io" > "${APPLIED}"
+    fi
+    _acme_caller >/dev/null 2>&1
+    RC=$?
+    CERTS="$(tr '\n' ' ' < "${APPLIED}" | sed 's/ $//')"
+    NCERTS="$(grep -c . "${APPLIED}")"
+    NPOLLS="$(cat "${POLLS}" 2>/dev/null || echo 0)"
+    NSTALE="$(grep -c 'old999' "${ORDERS}" 2>/dev/null || true)"
+}
+
+echo -e "${BLUE}=== ACME TLS-suffix fallback (issue #5) — offline behaviour test ===${NC}"
+echo -e "    code under test extracted live from deploy-workshop.sh"
+echo
+
+echo -e "${YELLOW}1. Let's Encrypt accepts nip.io — no fallback${NC}"
+run_scenario clean_issue
+assert "returns success"                       "0"                                      "${RC}"
+assert "host stays on nip.io"                  "wrp.abc123.44-205-184-217.nip.io"       "${NIP_FQDN_WRP}"
+assert "banking SAN matches the same suffix"   "banking.abc123.44-205-184-217.nip.io"   "${NIP_FQDN_BANKING}"
+assert "issues exactly one certificate"        "1"                                      "${NCERTS}"
+echo
+
+echo -e "${YELLOW}2. nip.io budget exhausted — falls back to sslip.io${NC}"
+run_scenario primary_ratelimited
+assert "returns success"                       "0"                                      "${RC}"
+assert "host moved to the fallback suffix"     "wrp.abc123.44-205-184-217.sslip.io"     "${NIP_FQDN_WRP}"
+assert "banking SAN moved with it"             "banking.abc123.44-205-184-217.sslip.io" "${NIP_FQDN_BANKING}"
+assert "tried nip.io first, then sslip.io"     "wrp.abc123.44-205-184-217.nip.io wrp.abc123.44-205-184-217.sslip.io" "${CERTS}"
+assert "warns that nip.io was refused"         "yes"  "$(grep -q 'refused nip.io as rate limited' <<<"${LAST_WARN}" && echo yes || echo no)"
+# The hosts in .acme-state just changed, and tier 3 builds the banking-UI
+# Ingress from that file. If this flag stays true the tier-2 "carry the change
+# into tier 3" warning can never fire in the one case the fallback creates.
+assert "flags the suffix as changed for tier 2" "false"                                 "${_acme_suffix_current}"
+echo
+
+echo -e "${YELLOW}3. Both budgets exhausted — fails with a usable instruction${NC}"
+run_scenario both_ratelimited
+assert "returns failure"                       "1"                                      "${RC}"
+assert "tried both suffixes before giving up"  "2"                                      "${NCERTS}"
+assert "names both exhausted suffixes"         "yes"  "$(grep -q 'refused BOTH nip.io and sslip.io' <<<"${LAST_FAIL}" && echo yes || echo no)"
+assert "tells the operator what kind of suffix works" "yes" "$(grep -q 'dashed-IPv4 magic-DNS provider' <<<"${LAST_FAIL}" && echo yes || echo no)"
+echo
+
+echo -e "${YELLOW}4. Failure that is NOT a rate limit — fallback must not fire${NC}"
+echo -e "    (nip.io resolving NXDOMAIN: a second magic-DNS suffix would not help,"
+echo -e "     and burning it would waste the one budget still intact)"
+run_scenario dns_failure_not_ratelimited
+assert "returns failure"                       "1"                                      "${RC}"
+assert "does NOT try the fallback suffix"      "1"                                      "${NCERTS}"
+assert "stays on the primary suffix"           "wrp.abc123.44-205-184-217.nip.io"       "${NIP_FQDN_WRP}"
+assert "emits no rate-limit warning"           "yes"  "$(grep -q 'rate limited' <<<"${LAST_WARN}" && echo no || echo yes)"
+echo
+
+echo -e "${YELLOW}5. A PREVIOUS deploy was refused on this cluster — judge this run on its own${NC}"
+echo -e "    (cert-manager never deletes an errored Order. Left in place, the first"
+echo -e "     refusal on a cluster is reported forever: every later run returns"
+echo -e "     'rate limited' on its first poll without Let's Encrypt being asked.)"
+run_scenario stale_order_previous_run
+assert "returns success"                       "0"                                      "${RC}"
+assert "stays on nip.io — LE refused nothing"  "wrp.abc123.44-205-184-217.nip.io"       "${NIP_FQDN_WRP}"
+assert "does NOT burn the fallback budget"     "1"                                      "${NCERTS}"
+assert "emits no rate-limit warning"           "yes"  "$(grep -q 'rate limited' <<<"${LAST_WARN}" && echo no || echo yes)"
+assert "kept the earlier run's Order (no new LE order spent)" "1"                    "${NSTALE}"
+assert "ignored it rather than blaming this attempt" "yes" "$(grep -q 'ignoring 1 terminal ACME Order' <<<"${LAST_INFO}" && echo yes || echo no)"
+echo
+
+echo -e "${YELLOW}6. Ready=True left over from the PREVIOUS certificate — must not satisfy the gate${NC}"
+echo -e "    (The apply moves .spec.dnsNames to the new hosts immediately, so"
+echo -e "     comparing the spec to what we want proves nothing — we wrote it."
+echo -e "     The object still carries Ready=True from the certificate it had"
+echo -e "     BEFORE, and only .status.conditions[Ready].observedGeneration"
+echo -e "     distinguishes the two. Accepting the stale condition writes"
+echo -e "     .acme-state with FQDNs no certificate covers, and ACM imports a"
+echo -e "     certificate whose SANs do not match what the ALB will serve.)"
+run_scenario ready_but_for_the_old_host
+assert "returns success"                       "0"                                      "${RC}"
+assert "did NOT accept the stale Ready condition" "yes" "$([[ ${NPOLLS} -ge 3 ]] && echo yes || echo no)"
+assert "host is the one we asked for"          "wrp.abc123.44-205-184-217.nip.io"       "${NIP_FQDN_WRP}"
+echo
+
+echo -e "${YELLOW}7. Primary and fallback are the same suffix — run, but do not retry${NC}"
+echo -e "    (An attendee whose nip.io budget is gone runs TLS_DNS_SUFFIX=sslip.io —"
+echo -e "     the suffix the fallback message just named — and the default fallback"
+echo -e "     is sslip.io too. That must DEPLOY, not be refused. If Let's Encrypt"
+echo -e "     then refuses it, a retry on the same registered domain is a second"
+echo -e "     15-minute wait on the budget that just said no.)"
+run_scenario same_suffix_no_fallback sslip.io sslip.io
+assert "returns failure"                       "1"                                      "${RC}"
+assert "did NOT retry the same suffix"         "1"                                      "${NCERTS}"
+assert "stayed on the requested suffix"        "wrp.abc123.44-205-184-217.sslip.io"     "${NIP_FQDN_WRP}"
+assert "says no fallback was available"        "yes"  "$(grep -q 'no fallback is available' <<<"${LAST_FAIL}" && echo yes || echo no)"
+assert "tells the operator to pick a different suffix" "yes" "$(grep -q 'DIFFERENT dashed-IPv4' <<<"${LAST_FAIL}" && echo yes || echo no)"
+echo
+
+echo -e "${YELLOW}8. kubectl refuses the apply — must fail, not inherit the old certificate${NC}"
+echo -e "    (If the apply is not checked, the wait loop runs against the"
+echo -e "     PREVIOUS object — fully reconciled and Ready — so the gate passes,"
+echo -e "     .acme-state records hosts this deploy never issued for, and ACM"
+echo -e "     imports the wrong certificate. It must fail immediately instead.)"
+run_scenario apply_rejected
+assert "returns failure"                       "1"                                      "${RC}"
+assert "did not wait on the old object"        "yes"  "$([[ ${NPOLLS} -eq 0 ]] && echo yes || echo no)"
+assert "says the apply itself failed"          "yes"  "$(grep -q 'could not apply the cert-manager Certificate' <<<"${LAST_FAIL}" && echo yes || echo no)"
+echo
+
+echo -e "${YELLOW}9. Tier 3 is deployed on a different TLS host — must FAIL, not warn${NC}"
+echo -e "    (The hosts encode the ALB's IP. A re-issue that picks a different"
+echo -e "     address renames them with the DNS suffix unchanged, so the old"
+echo -e "     suffix-change guard could never notice. Vault's issuer_id moves"
+echo -e "     while iviaop and the banking Ingress keep the old name and every"
+echo -e "     token is rejected, with all 13 tier-2 gates still green. Issue #52.)"
+
+# Extract the gate from its own comment anchors, same technique as the caller.
+{
+    echo '_acme_tier3_gate() {'
+    awk '/# Gate on the VALUE tier 3 actually deployed/{f=1} /# \(6\) Bootstrap ACM import/{f=0} f{print}' \
+        "${DEPLOY_SCRIPT}"
+    echo '    return 0'
+    echo '}'
+} > "${WORK}/gate.sh"
+grep -q 'effective_banking_host' "${WORK}/gate.sh" \
+    || fatal "could not extract the tier-3 coherence gate from deploy-workshop.sh (anchors moved?)"
+grep -q '# (6) Bootstrap ACM import' "${DEPLOY_SCRIPT}" \
+    || fatal "the gate STOP anchor is gone from deploy-workshop.sh — the extraction would run to EOF"
+grep -q 'base64 --decode' "${WORK}/gate.sh" \
+    && fatal "the extracted gate ran past its STOP anchor into the ACM import block"
+# shellcheck source=/dev/null
+source "${WORK}/gate.sh"
+
+WORKLOADS_DIR="${WORK}/workloads"
+TF_OUT=""
+terraform() { [[ -n "${TF_OUT}" ]] && echo "${TF_OUT}"; [[ -n "${TF_OUT}" ]]; }
+
+run_gate() {
+    TF_OUT="$1"; TIER="$2"; NIP_FQDN_BANKING="$3"
+    LAST_FAIL=""
+    _acme_tier3_gate; GATE_RC=$?
+}
+
+run_gate "" "2" "banking.abc123.44-205-184-217.nip.io"
+assert "tier 3 never applied — nothing to compare, proceeds" "0" "${GATE_RC}"
+
+run_gate "k8s-workshopacme-61ec0da744-1969185907.us-east-1.elb.amazonaws.com" "2" "banking.abc123.44-205-184-217.nip.io"
+assert "tier 3 on its pre-ACME ALB fallback — not a split, proceeds" "0" "${GATE_RC}"
+
+run_gate "banking.abc123.44-205-184-217.nip.io" "2" "banking.abc123.44-205-184-217.nip.io"
+assert "tier 3 on the SAME host — proceeds"                  "0" "${GATE_RC}"
+
+run_gate "banking.abc123.54-85-112-25.nip.io" "2" "banking.abc123.44-205-184-217.nip.io"
+assert "tier 3 on a DIFFERENT host — FAILS the run"          "1" "${GATE_RC}"
+assert "names the host tier 3 deployed with"  "yes" "$(grep -q 'banking.abc123.54-85-112-25.nip.io' <<<"${LAST_FAIL}" && echo yes || echo no)"
+assert "names the host this run issued"       "yes" "$(grep -q 'banking.abc123.44-205-184-217.nip.io' <<<"${LAST_FAIL}" && echo yes || echo no)"
+assert "tells the operator to re-apply tier 3" "yes" "$(grep -q 'bash .* --tier 3' <<<"${LAST_FAIL}" && echo yes || echo no)"
+
+# Re-runnability: a full run applies tier 3 later in the SAME invocation and
+# reconciles both hosts itself. Failing here would abort before it got the
+# chance, and deploy-workshop.sh must stay safe to re-run end to end.
+run_gate "banking.abc123.54-85-112-25.nip.io" "" "banking.abc123.44-205-184-217.nip.io"
+assert "full run with the same mismatch — does NOT abort"    "0" "${GATE_RC}"
+
+run_gate "banking.abc123.54-85-112-25.nip.io" "3" "banking.abc123.44-205-184-217.nip.io"
+assert "--tier 3 run is the fix itself — does NOT abort"     "0" "${GATE_RC}"
+echo
+
+echo -e "${YELLOW}10. The ALB address pick must not wander between runs${NC}"
+echo -e "    (A multi-AZ ALB publishes 2-3 addresses and round-robins their"
+echo -e "     order; the dig fallback in _resolve_host_ips is unsorted. With"
+echo -e "     head -1, 20 consecutive lookups against one unchanged ALB"
+echo -e "     returned 3 different addresses — and the address is what the"
+echo -e "     TLS hostname is built from. Issue #52.)"
+
+{
+    echo '_acme_pick_alb_ip() {'
+    awk '/^    ALB_LIVE_IPS=\$\(_resolve_host_ips "\$WRP_ALB"\)$/{f=1} /^    if \[\[ -z "\$ALB_IP" \]\]; then$/{f=0} f{print}' \
+        "${DEPLOY_SCRIPT}"
+    echo '    return 0'
+    echo '}'
+} > "${WORK}/pick.sh"
+grep -q 'ALB_SORTED_IPS' "${WORK}/pick.sh" \
+    || fatal "could not extract the ALB-IP pick from deploy-workshop.sh (anchors moved?)"
+grep -q 'DEPLOY_ID' "${WORK}/pick.sh" \
+    && fatal "the extracted pick ran past its STOP anchor into the DEPLOY_ID block"
+# shellcheck source=/dev/null
+source "${WORK}/pick.sh"
+
+# Round-robin the answer order on every call, exactly as the live ALB does.
+# The counter lives in a FILE, not a variable: the pick calls this from a
+# command substitution, so a shell variable would be incremented in a subshell
+# and reset to the same value on every call — the stub would then hand back one
+# fixed order and could never catch an unsorted pick.
+ROTFILE="${WORK}/rotation"
+echo 0 > "${ROTFILE}"
+_resolve_host_ips() {
+    local rot; rot=$(( ( $(cat "${ROTFILE}") + 1 ) % 3 )); echo "${rot}" > "${ROTFILE}"
+    case ${rot} in
+        0) printf '%s\n' 54.85.112.25 34.206.144.111 44.205.184.217 ;;
+        1) printf '%s\n' 34.206.144.111 44.205.184.217 54.85.112.25 ;;
+        2) printf '%s\n' 44.205.184.217 54.85.112.25 34.206.144.111 ;;
+    esac
+}
+run_pick() {
+    local reset="$1" cached="$2" n="${3:-9}" seen=""
+    echo 0 > "${ROTFILE}"
+    for _ in $(seq 1 "${n}"); do
+        _acme_hosts_reset="${reset}"; _acme_cached_alb_ip="${cached}"
+        WRP_ALB="alb.example"; ALB_IP=""
+        _acme_pick_alb_ip
+        grep -qx "${ALB_IP}" <<<"${seen}" || seen="${seen}${ALB_IP}"$'\n'
+    done
+    PICKS=$(grep -c . <<<"${seen}"); PICK="${seen%%$'\n'*}"
+}
+
+run_pick false "54.85.112.25"
+assert "cached address still live — reused every run"  "1"              "${PICKS}"
+assert "and it is the cached one"                      "54.85.112.25"   "${PICK}"
+
+run_pick false ""
+assert "no cache (first deploy) — one address, always" "1"              "${PICKS}"
+assert "and it is the numerically lowest"              "34.206.144.111" "${PICK}"
+
+run_pick false "18.1.2.3"
+assert "cached address no longer live — falls to sorted" "1"            "${PICKS}"
+assert "and does NOT resurrect the dead address"       "34.206.144.111" "${PICK}"
+
+# The drift guard deletes .acme-state precisely because the cached address
+# stopped routing. Reusing it here would defeat that guard entirely.
+run_pick true "54.85.112.25"
+assert "drift reset — refuses to re-pin the cached address" "34.206.144.111" "${PICK}"
+echo
+
+echo "============================================================"
+if [[ ${FAILED} -eq 0 ]]; then
+    echo -e "${GREEN}✓ ${PASSED} check(s) passed${NC}"
+    exit 0
+else
+    echo -e "${RED}✗ ${FAILED} check(s) failed${NC}, ${PASSED} passed"
+    exit 1
+fi

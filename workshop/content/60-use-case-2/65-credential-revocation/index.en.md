@@ -3,7 +3,7 @@ title: 'Credential Revocation'
 weight: 65
 ---
 
-## Overview
+## Objective 2 · No standing privileges
 
 In this module you observe the full credential lifecycle for a Use Case 2 session: a Postgres credential is issued, used to confirm its existence, then explicitly revoked, and you verify three things in succession — (a) the Postgres role is gone, (b) Vault's active-leases list no longer contains your lease, (c) both the issuance and the revocation appear in the audit log keyed by `lease_id`.
 
@@ -11,13 +11,17 @@ In this module you observe the full credential lifecycle for a Use Case 2 sessio
 
 Load the Vault root token once at the start of the page — several admin-only paths (`database/creds/...`, `sys/leases/...`) are unreachable from the `uc2-personal` policy and require the root token for inspection:
 
+**Why:** Several paths on this page are deliberately unreachable from the agent's own policy. You read them as the operator — which is precisely why the agent cannot.
+
 ```bash
 export VAULT_ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)
 ```
 
-## Step 1 — Issue a fresh credential and capture the lease_id
+### Step 1 — Issue a fresh credential and capture the lease_id
 
 This block reads a credential, prints the `lease_id` and Postgres `username`, and exports them into your shell so subsequent steps pick them up automatically — no copy-paste required:
+
+**Why:** Mint one credential by hand and keep its lease id. Everything that follows tracks that single id through Postgres, through Vault, and into the audit log.
 
 ```bash
 CREDS_JSON=$(kubectl exec -n vault vault-0 -- \
@@ -39,9 +43,11 @@ PG_USER=v-root-uc2-pers-IwaMUs8kxzRLvjsvSjwO-1780000048
 
 You now hold the credential's full `lease_id` and the ephemeral Postgres role name. Keep this shell session for the rest of the page — the exports are how `LEASE_ID` and `PG_USER` flow into later commands.
 
-## Step 2 — Confirm the Postgres role exists
+### Step 2 — Confirm the Postgres role exists
 
 The Vault dynamic secrets engine just created `${PG_USER}` as a real Postgres role. Pull the RDS master credentials from AWS Secrets Manager and run a transient `postgres:16-alpine` pod to confirm:
+
+**Why:** A Vault credential is not an entry in a vault somewhere — it is a real Postgres role that now exists. Confirm it is there before revoking, or its disappearance proves nothing.
 
 ```bash
 RDS_HOST=$(kubectl get configmap banking-mcp-config -n banking-app -o jsonpath='{.data.RDS_ADDRESS}')
@@ -75,9 +81,11 @@ secret/db-master created
 pod "pg-role-before" deleted
 ```
 
-## Step 3 — Revoke the lease (the production code path)
+### Step 3 — Revoke the lease (the production code path)
 
 Call the same Vault API a production session-end handler would call:
+
+**Why:** This is the call the MCP server makes on its own the moment a query returns. Here you make it by hand so you can watch what it does.
 
 ```bash
 kubectl exec -n vault vault-0 -- \
@@ -92,9 +100,11 @@ All revocation operations queued successfully!
 
 Vault has queued the revocation. Internally Vault now runs the `revocation_statements` configured on the `uc2-personal-readonly` role against Postgres — the symmetric `REVOKE`s that undo every `GRANT` from the role's `creation_statements`, followed by `DROP ROLE IF EXISTS`. This happens within milliseconds.
 
-## Step 4 — Confirm the Postgres role is gone
+### Step 4 — Confirm the Postgres role is gone
 
 Re-run the role check. The lease's ephemeral Postgres role should be gone:
+
+**Why:** The same query as before the revoke. The role is gone from Postgres, not merely marked expired inside Vault.
 
 ```bash
 kubectl delete pod pg-role-after -n banking-app --ignore-not-found --now >/dev/null 2>&1
@@ -119,9 +129,11 @@ secret "db-master" deleted
 
 Zero rows. The ephemeral role has been dropped. Any open Postgres connection that was using this credential is now broken at its next query — `password authentication failed`. **This is the credential-revocation enforcement payoff: the moment the lease is revoked, the database access it granted is physically impossible.** No grace period, no rollback path, no orphan role left behind.
 
-## Step 5 — Confirm your lease is no longer in Vault's active-leases list
+### Step 5 — Confirm your lease is no longer in Vault's active-leases list
 
 The lease-list lookup is the operator's view of "what credentials are currently issued and still considered live by Vault." Run it and grep for your specific lease suffix — it should NOT be present:
+
+**Why:** Postgres agrees the role is gone. Now check Vault's own list of live credentials agrees too — the two can drift, and an operator needs both to say so.
 
 ```bash
 LEASE_SUFFIX=${LEASE_ID##*/}
@@ -146,6 +158,8 @@ The pipeline uses `grep -F` to look for your lease suffix in the listing. If it 
 
 To see the underlying Vault output that the pipeline above is filtering, run the inner command without the grep:
 
+**Why:** The same list without the filter, so you can see what the check above was reading rather than trust its verdict.
+
 ```bash
 kubectl exec -n vault vault-0 -- \
   sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' \
@@ -160,7 +174,7 @@ Two possible outputs:
 Either way, your specific revoked lease is absent — that's the point Step 5's grep check above confirms unambiguously.
 :::
 
-## Step 6 — Find the issuance event in the audit log (Athena)
+### Step 6 — Find the issuance event in the audit log (Athena)
 
 The Vault audit device streams every API request and response into S3 via Firehose. Cross-reference the lease you just revoked with the lifecycle events recorded for it.
 
@@ -169,6 +183,8 @@ Firehose buffers audit records for up to 60 seconds before writing them to S3. I
 :::
 
 Define a small helper to submit a query, wait for completion, and pretty-print the result as an aligned table (empty fields render as `-`):
+
+**Why:** Athena is asynchronous — start, poll, fetch. This helper wraps that so the rest of the page reads as one command per question. The `workshop` workgroup already has a result location, so there is no bucket to resolve.
 
 ```bash
 # The Glue catalog + Athena 'workshop' workgroup were provisioned in YOUR deploy
@@ -197,6 +213,8 @@ athena_query() {
 ```
 
 Find the most recent issuance events for `uc2-personal-readonly`. Under the native OAuth resource server model there are no hand-mapped `user_sub` / `role` claim-mappings. Vault's audit device records the delegated OAuth token by its unique **JTI** in `auth.display_name`, and the **Agent Registry** identity it resolved from that token in `auth.metadata['actor_entity_name']` (the `substr(timestamp, 1, 19)` trims nanoseconds for readable display — second precision is plenty for audit correlation):
+
+**Why:** Two identities on one authorization decision: the person the credential was issued for, and the agent that asked. That pairing is what on-behalf-of means, and it is recorded whether or not anyone goes looking.
 
 ```bash
 athena_query "SELECT
@@ -228,6 +246,8 @@ Two row patterns appear:
 
 Note the `human_entity` column on those rows. It is Vault's own identity entity for the **person**, recorded on the same authorization decision as the agent — two identities on one request, which is what on-behalf-of means. Ask Vault whose it is:
 
+**Why:** The entity id above is Vault's own record of the human. Resolve it to a name so the audit row reads as a person rather than a hash.
+
 ```bash
 kubectl exec -n vault vault-0 -- \
   sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read -format=json identity/entity/id/<human_entity from above>" \
@@ -241,9 +261,11 @@ kubectl exec -n vault vault-0 -- \
 }
 ```
 
-## Step 7 — Find the revocation event for the lease you revoked
+### Step 7 — Find the revocation event for the lease you revoked
 
 The revocation event lives at the path `sys/leases/revoke/<lease_id>`. Query for the specific lease you captured in Step 1:
+
+**Why:** Issuance was half the story. Find the revocation of that exact lease and the credential's whole life is on the record — minted, used, handed back.
 
 ```bash
 athena_query "SELECT
@@ -278,7 +300,7 @@ obtained `lease_id` X at 23:17; the MCP server handed X back seconds later" — 
 attribution for a single session, from the Vault plane alone, with no timestamp guessing
 involved.
 
-## Step 8 — Watch the MCP server hand a credential back on its own
+### Step 8 — Watch the MCP server hand a credential back on its own
 
 Steps 1 through 7 revoked a credential *you* issued, as root, from your terminal. That proves the API works. This step proves the workshop's actual claim: that no operator is involved, and every credential the application obtains is returned the moment the query it was issued for finishes.
 
@@ -287,6 +309,8 @@ Steps 1 through 7 revoked a credential *you* issued, as root, from your terminal
 > What are my account balances?
 
 **Read the MCP server's log.** Two lines tell the whole story — the server authenticating to Vault as itself, and the lease it just used going back:
+
+**Why:** Everything so far you did by hand. This is the server doing it unprompted: authenticating as itself, then returning the lease it just used.
 
 ```bash
 kubectl logs -n banking-app -l app=banking-mcp-server --tail=20 \
@@ -303,6 +327,8 @@ vault_lease_revoked lease_id=database/creds/uc2-personal-readonly/vMLGghj7dj6JbX
 `role=uc2` is the Kubernetes auth role bound to `uc2-mcp-server-sa` — the pod's own ServiceAccount, not the user's OAuth token. Your `lease_id` suffix will differ.
 
 **Confirm Vault agrees.** Take the suffix from your own `vault_lease_revoked` line and check it is not in the active-leases list:
+
+**Why:** Take the suffix out of the server's own log line and check Vault agrees it is gone. The log is the claim; the lease list is the confirmation.
 
 ```bash
 LEASE_SUFFIX=<the suffix from your log line>
@@ -324,6 +350,8 @@ PASS: lease vMLGghj7dj6JbXuwlQC7kH8j is no longer in the active-leases list
 Other suffixes will still be listed — those belong to credentials issued by root (your Step 1, the earlier pages, `verify-uc2.sh`), which nothing revokes automatically. That contrast is the point: the ones the application issued are already gone.
 
 **Confirm the audit log names the workload, not you.** Same query as Step 7 without the lease filter, so both kinds of revocation appear side by side:
+
+**Why:** Both kinds of revocation side by side. Yours is signed by the operator; the server's is signed by the workload — which is what you want to see in a real incident review.
 
 ```bash
 athena_query "SELECT
@@ -434,7 +462,7 @@ Step 8 below is where you watch all of this happen against your own cluster.
 
 ---
 
-### What Would Have Failed
+#### What Would Have Failed
 
 **Without explicit revocation (TTL-only design):** A credential issued at `T+0` would remain valid for up to 15 minutes after a user closes their browser tab. If the credential were leaked (clipboard, log line, memory dump), the attacker would have a 15-minute window of valid access regardless of whether the legitimate session is still alive. Explicit revocation closes the window in milliseconds — leakage windows shrink from minutes to "the time between the leak and the session-end signal".
 
