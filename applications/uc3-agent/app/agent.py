@@ -33,10 +33,11 @@ from datetime import datetime, timezone
 import httpx
 import psycopg2
 import psycopg2.extras
-from strands import Agent, tool
+from strands import Agent, ToolContext, tool
 from strands.models import BedrockModel
 from strands.session import FileSessionManager
 
+from . import activity
 from . import ciba_store
 from . import mmfa
 from .auth import _AUTHENTICATED_SUB
@@ -125,7 +126,27 @@ def _check_account_owner(
                 "tool": tool_name,
             },
         )
+        # The owner's identity is logged above and never reported to the browser.
+        activity.narrate(
+            f"Account owner check refused: {account_id} does not belong to the signed-in user. "
+            + _OWNER_CHECK_REFUSED_CONSEQUENCE.get(tool_name, ""),
+            request_id,
+        )
         raise RefundAuthorizationError("refund_authz_denied")
+
+    activity.narrate(
+        f"Account owner check passed: {account_id} belongs to the signed-in user "
+        "(checked with a short-lived read-only database credential from Vault).",
+        request_id,
+    )
+
+
+# What did NOT happen when the owner check refuses, per tool — both tools run the
+# check before anything else touches IVIA, Vault's write path or the database.
+_OWNER_CHECK_REFUSED_CONSEQUENCE = {
+    "initiate_refund": "No approval was requested.",
+    "complete_refund": "Nothing was written.",
+}
 
 # IVIA configuration from env vars
 IVIA_BASE_URL = os.getenv("IVIA_BASE_URL", "https://iviaop.verify-access.svc.cluster.local:8436")
@@ -301,6 +322,13 @@ def _poll_ciba(auth_req_id: str, request_id: str) -> str:
                         "token_type": data.get("token_type", "unknown"),
                     },
                 )
+                activity.hitl(
+                    "approved",
+                    "Approved: the user approved on their phone, and IBM Verify Identity Access "
+                    "returned the CIBA access token.",
+                    request_id,
+                    details={"auth_req_id": auth_req_id, "poll_attempts": attempt},
+                )
                 return access_token
 
         # authorization_pending — keep polling
@@ -322,10 +350,28 @@ def _poll_ciba(auth_req_id: str, request_id: str) -> str:
                 time.sleep(CIBA_POLL_INTERVAL_SECONDS * 2)
                 continue
             elif error == "access_denied":
+                activity.hitl(
+                    "denied",
+                    "Denied: the user declined the approval. No token was exchanged and "
+                    "nothing was written.",
+                    request_id,
+                    details={"auth_req_id": auth_req_id},
+                )
                 raise RuntimeError(
                     f"CIBA access denied by user (request_id={request_id})"
                 )
             else:
+                if error == "expired_token":
+                    # CIBA token error "expired_token": the auth_req_id has expired.
+                    # Same exception as any other unexpected error; reported to the
+                    # browser as the approval timing out.
+                    activity.hitl(
+                        "timeout",
+                        "Timed out: IBM Verify Identity Access reports the approval request "
+                        "expired. No token was exchanged and nothing was written.",
+                        request_id,
+                        details={"auth_req_id": auth_req_id},
+                    )
                 raise RuntimeError(
                     f"CIBA poll unexpected error: {error_data} (request_id={request_id})"
                 )
@@ -334,6 +380,13 @@ def _poll_ciba(auth_req_id: str, request_id: str) -> str:
             f"CIBA poll HTTP {resp.status_code}: {resp.text} (request_id={request_id})"
         )
 
+    activity.hitl(
+        "timeout",
+        f"Timed out: no approval arrived within {CIBA_TIMEOUT_SECONDS} s. No token was "
+        "exchanged and nothing was written.",
+        request_id,
+        details={"auth_req_id": auth_req_id, "poll_attempts": attempt},
+    )
     raise TimeoutError(
         f"CIBA consent not received within {CIBA_TIMEOUT_SECONDS}s "
         f"(auth_req_id={auth_req_id}, request_id={request_id})"
@@ -425,6 +478,36 @@ def _token_exchange(ciba_token: str, request_id: str) -> str:
     return delegated_jwt
 
 
+def _describe_token_exchange(claims: dict) -> str:
+    """One Agent Log line for the RFC 8693 exchange, from decoded claims only.
+
+    Names only what the delegated token actually carries; a claim that is
+    missing is left out rather than guessed.
+    """
+    parts = []
+    if claims.get("sub"):
+        parts.append(f"subject {claims['sub']}")
+    # IVIA's pretoken rule stamps both act and may_act; name may_act only when it
+    # says something act does not.
+    act, may_act = claims.get("act"), claims.get("may_act")
+    act_sub = act.get("sub") if isinstance(act, dict) else None
+    may_act_sub = may_act.get("sub") if isinstance(may_act, dict) else None
+    if act_sub:
+        parts.append(f"acting party (act.sub) {act_sub}")
+    if may_act_sub and may_act_sub != act_sub:
+        parts.append(f"may_act.sub {may_act_sub}")
+    if claims.get("scope"):
+        parts.append(f"scope {claims['scope']}")
+    detail_types = [d["type"] for d in claims.get("authorization_details") or [] if d.get("type")]
+    if detail_types:
+        parts.append("authorization_details " + " + ".join(detail_types))
+    if isinstance(claims.get("exp"), (int, float)):
+        expires = datetime.fromtimestamp(claims["exp"], tz=timezone.utc)
+        parts.append(f"expires {expires.strftime('%H:%M:%S')} UTC")
+    line = "Token exchanged (RFC 8693): IBM Verify Identity Access issued a delegated token"
+    return f"{line}: {', '.join(parts)}." if parts else f"{line}."
+
+
 # ---------------------------------------------------------------------------
 # Strands tools
 # ---------------------------------------------------------------------------
@@ -498,12 +581,13 @@ def list_transactions() -> list:
     return results
 
 
-@tool
+@tool(context=True)
 def initiate_refund(
     account_id: str,
     transaction_id: str,
     amount: float,
     currency: str,
+    tool_context: ToolContext,
 ) -> dict:
     """Initiate a CIBA consent request for a privileged refund (step 1 of 2).
 
@@ -529,6 +613,11 @@ def initiate_refund(
         Dict with auth_req_id, request_id, and consent status.
     """
     request_id = str(uuid.uuid4())
+    # tool_context is injected by Strands and is not a model input. It ties this
+    # tool call to the refund's request_id, so every event it reports from here on
+    # carries the SAME id as the CIBA binding_message, Vault's X-Correlation-Id,
+    # the pgaudit statement comment and banking.refunds.request_id.
+    activity.bind_request(tool_context, request_id)
     authenticated_sub = _AUTHENTICATED_SUB.get()
     _check_account_owner(
         account_id, authenticated_sub, request_id, "initiate_refund"
@@ -560,6 +649,12 @@ def initiate_refund(
 
     ciba = _initiate_ciba(login_hint, authorization_details, request_id)
     auth_req_id = ciba["auth_req_id"]
+    activity.narrate(
+        "Backchannel sign-in request (CIBA) sent to IBM Verify Identity Access. It carries "
+        f"the refund terms as authorization details (RFC 9396): {amount} {currency} to "
+        f"{account_id} for transaction {transaction_id}.",
+        request_id,
+    )
 
     rar_desc = f"refund_approval ${amount} {currency} for transaction {transaction_id}"
 
@@ -597,6 +692,23 @@ def initiate_refund(
         },
     )
 
+    # The push itself is a generic IBM Verify approval; the refund terms travel
+    # on the CIBA request above and are bound to auth_req_id in ciba_store.
+    activity.hitl(
+        "required",
+        "Approval push sent to the user's IBM Verify app. Waiting for the user to approve "
+        "before anything is written.",
+        request_id,
+        details={
+            "amount": amount,
+            "currency": currency,
+            "account_id": account_id,
+            "transaction_id": transaction_id,
+            "auth_req_id": auth_req_id,
+            "channel": "mobile_push",
+        },
+    )
+
     return {
         "status": "consent_required",
         "auth_req_id": auth_req_id,
@@ -611,8 +723,8 @@ def initiate_refund(
     }
 
 
-@tool
-def complete_refund(auth_req_id: str, request_id: str) -> dict:
+@tool(context=True)
+def complete_refund(auth_req_id: str, request_id: str, tool_context: ToolContext) -> dict:
     """Complete a refund after CIBA consent is granted (step 2 of 2).
 
     Identity is sourced from the verified id_token's `sub` claim (ContextVar).
@@ -648,12 +760,15 @@ def complete_refund(auth_req_id: str, request_id: str) -> dict:
     # The approved terms, recovered from the approval this auth_req_id names.
     # Fail closed: no record means this process never fired that push (or it has
     # aged out of the store), and there is no safe value to fall back on.
+    # The three refusals below report no requestId: until all three checks pass,
+    # the request_id argument is unverified model input.
     terms = ciba_store.get_terms(auth_req_id)
     if terms is None:
         logger.warning(
             "complete_refund_no_approval_record",
             extra={"request_id": request_id, "auth_req_id": auth_req_id},
         )
+        activity.narrate("Refused: there is no approval on record for this request. Nothing was written.")
         raise RefundAuthorizationError("refund_approval_not_found")
 
     # request_id identifies the flow for audit correlation; it must name the SAME
@@ -667,6 +782,9 @@ def complete_refund(auth_req_id: str, request_id: str) -> dict:
                 "approved_request_id": terms.get("request_id"),
             },
         )
+        activity.narrate(
+            "Refused: the request ID does not match the approval it names. Nothing was written."
+        )
         raise RefundAuthorizationError("refund_request_id_mismatch")
 
     # An approval belongs to the human who granted it — a different authenticated
@@ -676,7 +794,14 @@ def complete_refund(auth_req_id: str, request_id: str) -> dict:
             "complete_refund_approver_mismatch",
             extra={"request_id": request_id, "auth_req_id": auth_req_id},
         )
+        activity.narrate(
+            "Refused: this approval belongs to a different user. Nothing was written."
+        )
         raise RefundAuthorizationError("refund_approver_mismatch")
+
+    # request_id is now proven to be the approval's own id (terms were written by
+    # initiate_refund): from here on every event carries it.
+    activity.bind_request(tool_context, request_id)
 
     account_id = terms["account_id"]
     transaction_id = terms["transaction_id"]
@@ -698,9 +823,31 @@ def complete_refund(auth_req_id: str, request_id: str) -> dict:
         },
     )
 
+    activity.narrate(
+        "Checking IBM Verify Identity Access for the user's approval "
+        f"(every {CIBA_POLL_INTERVAL_SECONDS} s, for up to {CIBA_TIMEOUT_SECONDS} s).",
+        request_id,
+    )
     ciba_token = _poll_ciba(auth_req_id, request_id)
     delegated_jwt = _token_exchange(ciba_token, request_id)
+    # Decoded, non-secret claims only — the token itself never leaves this function.
+    delegated_claims = activity.delegated_token_claims(delegated_jwt)
+    activity.narrate(_describe_token_exchange(delegated_claims), request_id)
+
     write_creds = _vault_client.get_refund_credentials(delegated_jwt, request_id)
+    writer_lease = {
+        "vault_path": "database/creds/uc3-refund-writer",
+        "lease_id": write_creds.get("lease_id"),
+        "ttl_seconds": write_creds.get("lease_duration"),
+        # The same identifier vault_client logs: this lease was issued to the
+        # delegated token presented as X-Vault-Token, not to the agent's own role.
+        "auth_method": "oauth_resource_server_x_vault_token",
+    }
+    activity.narrate(
+        "Vault issued a uc3-refund-writer database credential to the delegated token: "
+        f"lease {writer_lease['lease_id']}, time-to-live {writer_lease['ttl_seconds']} s.",
+        request_id,
+    )
 
     refund_id = str(uuid.uuid4())
     approved_by = authenticated_sub
@@ -773,7 +920,19 @@ def complete_refund(auth_req_id: str, request_id: str) -> dict:
             "refund_already_redeemed",
             extra={"request_id": request_id, "auth_req_id": auth_req_id},
         )
+        activity.narrate(
+            "Refused: this approval was already redeemed. The database rejected a second "
+            "refund with the same request ID.",
+            request_id,
+        )
         raise RefundAuthorizationError("refund_already_redeemed") from None
+
+    activity.narrate(
+        f"Refund written: INSERT into banking.refunds (refund {refund_id}, {amount} {currency} "
+        f"to {account_id}) with the uc3-refund-writer credential. The statement carries "
+        f"uc3_request_id={request_id} for pgaudit.",
+        request_id,
+    )
 
     # OBJ-5 Branch B: emit the ivia_decisions ANCHOR record for the three-plane
     # audit_correlation VIEW. The VIEW INNER-JOINs on ivia_decisions, so without
@@ -834,11 +993,28 @@ def complete_refund(auth_req_id: str, request_id: str) -> dict:
             "ivia_decision_anchor_emitted",
             extra={"request_id": request_id, "log_group": log_group},
         )
+        activity.narrate(
+            f"Audit anchor written to CloudWatch Logs ({log_group}) for request {request_id}.",
+            request_id,
+        )
     except Exception as exc:  # noqa: BLE001 — best-effort audit emission
         logger.warning(
             "ivia_decision_anchor_emit_failed",
             extra={"request_id": request_id, "error": str(exc)},
         )
+        activity.narrate(
+            "The audit anchor could not be written to CloudWatch Logs. The refund itself is "
+            "recorded in banking.refunds.",
+            request_id,
+        )
+
+    activity.audit_seed(
+        request_id=request_id,
+        vault_role=_vault_client.role,
+        db_role="uc3-refund-writer",
+        leases=[writer_lease],
+        claims=delegated_claims,
+    )
 
     logger.info(
         "process_refund_success",
@@ -1002,6 +1178,9 @@ def build_uc3_agent(vault_client=None, session_id: str = "default") -> Agent:
         tools=[list_transactions, initiate_refund, complete_refund, check_refund_status],
         system_prompt=system_prompt,
         session_manager=session_manager,
+        # Reports every tool call's start and finish to this request's activity
+        # stream (see activity.py); the tools add the steps inside each call.
+        hooks=[activity.ToolActivityHooks()],
     )
 
     logger.info(

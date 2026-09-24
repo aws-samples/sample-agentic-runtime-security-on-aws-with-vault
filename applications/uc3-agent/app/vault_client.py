@@ -55,6 +55,11 @@ class UC3VaultClient:
         self._role = vault_role
         self._client = hvac.Client(url=vault_addr)
 
+    @property
+    def role(self) -> str:
+        """The Vault Kubernetes auth role this agent logs in as (VAULT_ROLE)."""
+        return self._role
+
     def login(self) -> None:
         """Authenticate using the Kubernetes Service Account JWT (OBJ-1).
 
