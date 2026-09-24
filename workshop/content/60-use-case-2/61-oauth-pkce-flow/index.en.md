@@ -175,7 +175,7 @@ Credentials never reach the Banking UI — they are entered on the WebSEAL login
 
 ### Step 4 — Confirm personalized dashboard data
 
-After login, the dashboard shows Oscar's accounts and transactions. Observe:
+After login you land on the dashboard, the **Banking Agent** chat. Click the **Show me my account balances** suggestion under the chat. Observe:
 
 - The balance figures are specific to Oscar — RLS is filtering the `banking.accounts` table by `sub = 'oscar'`.
 - The agent responds to natural-language queries about Oscar's financial data.
@@ -188,10 +188,10 @@ To act as a different user, open a **new Incognito / Private browser window** an
 - **Password:** `WorkshopUser1!`
 
 :::alert{type="info" header="Why a second window here?"}
-**Logout** fully signs you out: the Banking UI `/logout` handler clears its session cookies and then redirects to IVIA's `/pkmslogout`, which terminates the WebSEAL single sign-on session as well — so clicking Logout and signing back in as Jaime in the *same* window works and lands you on a fresh credential prompt. We open a **separate Incognito / Private window** here only so your Oscar session stays live in the first window and you can compare the two personas side-by-side.
+**Log out** (bottom of the left navigation) fully signs you out: the Banking UI `/logout` handler clears its session cookies and then redirects to IVIA's `/pkmslogout`, which terminates the WebSEAL single sign-on session as well — so clicking **Log out** and signing back in as Jaime in the *same* window works and lands you on a fresh credential prompt. We open a **separate Incognito / Private window** here only so your Oscar session stays live in the first window and you can compare the two personas side-by-side.
 :::
 
-The dashboard now shows Jaime's accounts and transactions — not Oscar's. The `sub` claim changed, activating a different RLS filter in PostgreSQL.
+Click **Show me my account balances** again. The agent now answers with Jaime's accounts — not Oscar's. The `sub` claim changed, activating a different RLS filter in PostgreSQL.
 
 ### Step 6 — Confirm the tool contract has nowhere to put an identity
 
