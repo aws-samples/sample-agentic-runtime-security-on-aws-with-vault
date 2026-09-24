@@ -5,6 +5,7 @@
 	import 'carbon-components-svelte/css/all.css';
 	import '../app.css';
 
+	import { tick } from 'svelte';
 	import { page } from '$app/state';
 	import { getPersona } from '$lib/personas';
 	import type { LayoutData } from './$types';
@@ -40,25 +41,75 @@
 	const NARROW = '(max-width: 960px)';
 
 	let menuOpen = $state(false);
+	let menuButton: HTMLButtonElement | undefined = $state();
+	let nav: HTMLElement | undefined = $state();
 
-	function closeMenu() {
+	// Opening moves focus to the drawer's first link. It runs after the DOM update, when the
+	// drawer is no longer visibility: hidden and can take focus.
+	async function openMenu() {
+		menuOpen = true;
+		await tick();
+		drawerFocusables()[0]?.focus();
+	}
+
+	// Escape, the scrim and the menu button return focus to the menu button. Following a
+	// link does not: the page is navigating away.
+	function closeMenu({ returnFocus = true } = {}) {
+		if (!menuOpen) return;
 		menuOpen = false;
+		if (returnFocus) menuButton?.focus();
 	}
 
 	function toggleMenu() {
-		menuOpen = !menuOpen;
+		if (menuOpen) closeMenu();
+		else openMenu();
 	}
 
 	// Leaving the narrow layout (a rotated tablet, a widened window) closes the drawer.
 	$effect(() => {
 		const query = window.matchMedia(NARROW);
 		const onChange = () => {
-			if (!query.matches) closeMenu();
+			if (!query.matches) closeMenu({ returnFocus: false });
 		};
 		query.addEventListener('change', onChange);
 		return () => query.removeEventListener('change', onChange);
 	});
+
+	// What a keyboard user can reach in the drawer. The desktop brand link stays in the DOM
+	// but is display: none here, and an element with no layout box has no client rects.
+	function drawerFocusables(): HTMLElement[] {
+		if (!nav) return [];
+		return [...nav.querySelectorAll<HTMLElement>('a[href], button:not([disabled])')].filter(
+			(el) => el.getClientRects().length > 0
+		);
+	}
+
+	// While the drawer is open: Escape closes it, and Tab / Shift+Tab wrap inside it.
+	function onWindowKeydown(e: KeyboardEvent) {
+		if (!menuOpen) return;
+		if (e.key === 'Escape') {
+			e.preventDefault();
+			closeMenu();
+			return;
+		}
+		if (e.key !== 'Tab') return;
+		const items = drawerFocusables();
+		if (items.length === 0) return;
+		const first = items[0];
+		const last = items[items.length - 1];
+		const active = document.activeElement;
+		const inside = nav?.contains(active) ?? false;
+		if (e.shiftKey && (active === first || !inside)) {
+			e.preventDefault();
+			last.focus();
+		} else if (!e.shiftKey && (active === last || !inside)) {
+			e.preventDefault();
+			first.focus();
+		}
+	}
 </script>
+
+<svelte:window onkeydown={onWindowKeydown} />
 
 <a class="skip-link" href="#main-content">Skip to main content</a>
 
@@ -66,6 +117,7 @@
 	<!-- Top bar, shown only on screens 960px and narrower. -->
 	<header class="bar">
 		<button
+			bind:this={menuButton}
 			type="button"
 			class="menu-button"
 			aria-expanded={menuOpen}
@@ -91,13 +143,13 @@
 	</header>
 
 	{#if menuOpen}
-		<!-- Pointer users close the drawer on the scrim; keyboard users have the menu button. -->
+		<!-- Pointer users close the drawer on the scrim; keyboard users have Escape. -->
 		<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-		<div class="scrim" aria-hidden="true" onclick={closeMenu}></div>
+		<div class="scrim" aria-hidden="true" onclick={() => closeMenu()}></div>
 	{/if}
 
 	<!-- The left navigation on wide screens; the drawer on narrow ones. -->
-	<nav id="main-nav" class="shell-nav" aria-label="Main">
+	<nav id="main-nav" class="shell-nav" aria-label="Main" bind:this={nav}>
 		{#if signedIn}
 			<a class="brand" href="/dashboard" data-sveltekit-reload>
 				<span class="brand-mark" aria-hidden="true">OVI</span>
@@ -124,7 +176,7 @@
 						href={link.href}
 						aria-current={isCurrent(link.href) ? 'page' : undefined}
 						data-sveltekit-reload
-						onclick={closeMenu}
+						onclick={() => closeMenu({ returnFocus: false })}
 					>
 						{link.label}
 					</a>
@@ -147,7 +199,7 @@
 				<!-- GET /logout clears the session cookies and ends the IVIA WebSEAL session.
 				     data-sveltekit-reload makes this a full navigation that SvelteKit never
 				     preloads, so hovering the link cannot sign anyone out. -->
-				<a class="me-action" href="/logout" data-sveltekit-reload onclick={closeMenu}>Log out</a>
+				<a class="me-action" href="/logout" data-sveltekit-reload onclick={() => closeMenu({ returnFocus: false })}>Log out</a>
 			{:else}
 				<div class="me-row">
 					<span class="me-avatar me-avatar-anon" aria-hidden="true">—</span>
@@ -157,12 +209,13 @@
 					</div>
 				</div>
 				<p class="me-note">Use Case 1 needs no sign-in</p>
-				<a class="me-action" href="/" data-sveltekit-reload onclick={closeMenu}>Sign in</a>
+				<a class="me-action" href="/" data-sveltekit-reload onclick={() => closeMenu({ returnFocus: false })}>Sign in</a>
 			{/if}
 		</div>
 	</nav>
 
-	<main id="main-content" class="shell-main" tabindex="-1">
+	<!-- While the drawer is open the page behind it is inert: it takes no focus and is not read. -->
+	<main id="main-content" class="shell-main" tabindex="-1" inert={menuOpen}>
 		{@render children()}
 	</main>
 </div>
