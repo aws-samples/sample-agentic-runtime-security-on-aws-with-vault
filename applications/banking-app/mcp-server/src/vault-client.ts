@@ -20,7 +20,8 @@
  *                     workload action, not something the caller delegates, so it
  *                     deliberately does NOT reuse the user's OAuth JWT — that
  *                     would mean widening the user/agent envelope to include
- *                     lease revocation.
+ *                     lease revocation. It returns that login with the revoke
+ *                     outcome, so the turn can show the token it presented.
  *
  * There is NO Vault login round-trip on the CREDENTIAL path and NO intermediate
  * Vault token there — the user OAuth JWT IS the credential. A jti claim is required (schema-validated by the
@@ -43,22 +44,43 @@ const VAULT_ADDR = process.env.VAULT_ADDR ?? 'http://vault.vault.svc.cluster.loc
 const VAULT_K8S_ROLE = process.env.VAULT_K8S_ROLE ?? 'uc2';
 const SA_TOKEN_PATH = '/var/run/secrets/kubernetes.io/serviceaccount/token';
 
-// Cached service token from the Kubernetes login. Re-obtained when it is missing
-// or within the renewal margin of expiry; a 403 also forces a fresh login, so an
-// early revocation on Vault's side cannot wedge the server into a dead token.
-let serviceToken: string | null = null;
+/**
+ * The MCP server's own Vault login, as the Kubernetes auth login returned it.
+ *
+ * `token` is a live Vault token. It leaves this module only in RevokeOutcome, so
+ * tools.ts can hand it to the agent for the turn's own event stream (the
+ * workshop shows every credential in full). It is never logged.
+ */
+export interface ServiceLogin {
+  /** auth.client_token — the Vault token revokeLease presents. */
+  token: string;
+  /** The Kubernetes auth role it logged in as. */
+  role: string;
+  /** auth.policies from the login response. */
+  policies: string[];
+  /** auth.lease_duration from the login response. */
+  ttlSeconds: number;
+  /** When this server received the login response (ISO 8601, UTC). */
+  issuedAt: string;
+}
+
+// Cached service login from the Kubernetes auth method. Re-obtained when it is
+// missing or within the renewal margin of expiry; a 403 also forces a fresh
+// login, so an early revocation on Vault's side cannot wedge the server into a
+// dead token.
+let serviceLogin: ServiceLogin | null = null;
 let serviceTokenExpiresAt = 0;
 const RENEW_MARGIN_MS = 60_000;
 
 /**
  * Log in to Vault with this pod's Kubernetes ServiceAccount token and cache the
- * resulting service token.
+ * resulting service login.
  *
  * This is the MCP server's OWN identity — distinct from the user OAuth JWT that
  * authorises the credential fetch. Vault resolves it to the uc2-personal policy,
  * whose only capability is revoking leases.
  */
-async function vaultK8sLogin(): Promise<string> {
+async function vaultK8sLogin(): Promise<ServiceLogin> {
   const saToken = (await readFile(SA_TOKEN_PATH, 'utf8')).trim();
 
   const res = await fetch(`${VAULT_ADDR}/v1/auth/kubernetes/login`, {
@@ -73,26 +95,36 @@ async function vaultK8sLogin(): Promise<string> {
   }
 
   const data = (await res.json()) as {
-    auth?: { client_token?: string; lease_duration?: number };
+    auth?: { client_token?: string; lease_duration?: number; policies?: unknown };
   };
+  const receivedAt = Date.now();
   const token = data?.auth?.client_token;
   if (!token) {
     throw new Error('Vault kubernetes login returned no auth.client_token');
   }
 
-  serviceToken = token;
-  serviceTokenExpiresAt = Date.now() + (data.auth?.lease_duration ?? 0) * 1000;
-  console.log(
-    `vault_k8s_auth_success role=${VAULT_K8S_ROLE} ttl_seconds=${data.auth?.lease_duration ?? 0}`
-  );
-  return token;
+  const ttlSeconds = data.auth?.lease_duration ?? 0;
+  const policies = Array.isArray(data.auth?.policies)
+    ? data.auth.policies.filter((p): p is string => typeof p === 'string')
+    : [];
+  serviceLogin = {
+    token,
+    role: VAULT_K8S_ROLE,
+    policies,
+    ttlSeconds,
+    issuedAt: new Date(receivedAt).toISOString(),
+  };
+  serviceTokenExpiresAt = receivedAt + ttlSeconds * 1000;
+  console.log(`vault_k8s_auth_success role=${VAULT_K8S_ROLE} ttl_seconds=${ttlSeconds}`);
+  return serviceLogin;
 }
 
-async function getServiceToken(forceRefresh = false): Promise<string> {
-  if (forceRefresh || !serviceToken || Date.now() > serviceTokenExpiresAt - RENEW_MARGIN_MS) {
-    return vaultK8sLogin();
+/** The cached service login, or a new one; `fresh` says whether this call logged in. */
+async function getServiceLogin(forceRefresh = false): Promise<{ login: ServiceLogin; fresh: boolean }> {
+  if (forceRefresh || !serviceLogin || Date.now() > serviceTokenExpiresAt - RENEW_MARGIN_MS) {
+    return { login: await vaultK8sLogin(), fresh: true };
   }
-  return serviceToken;
+  return { login: serviceLogin, fresh: false };
 }
 
 export interface DbCredentials {
@@ -218,6 +250,16 @@ export async function lookupCallerPolicies(oauthJwt: string): Promise<CallerPoli
   }
 }
 
+/** What revokeLease did: the outcome, and the MCP server's own login it presented. */
+export interface RevokeOutcome {
+  /** true only when Vault confirmed the revoke. */
+  revoked: boolean;
+  /** The login whose token the last revoke attempt presented; null when no login was obtained. */
+  serviceLogin: ServiceLogin | null;
+  /** true when that login was made during this call (none cached, near expiry, or the cached one got a 403). */
+  freshLogin: boolean;
+}
+
 /**
  * Revoke a dynamic database credential the moment the work it was issued for is
  * done, rather than leaving it live until its TTL expires.
@@ -235,11 +277,12 @@ export async function lookupCallerPolicies(oauthJwt: string): Promise<CallerPoli
  * with a broken response.
  *
  * @param leaseId - lease_id returned alongside the credentials by getDbCreds
- * @returns true only when Vault confirmed the revoke; tools.ts reports this to
- *          the agent as lease_revoked
+ * @returns whether Vault confirmed the revoke (tools.ts reports it to the agent
+ *          as lease_revoked), and the service login whose token the revoke
+ *          presented
  */
-export async function revokeLease(leaseId: string): Promise<boolean> {
-  if (!leaseId || leaseId === 'unknown') return false;
+export async function revokeLease(leaseId: string): Promise<RevokeOutcome> {
+  if (!leaseId || leaseId === 'unknown') return { revoked: false, serviceLogin: null, freshLogin: false };
 
   const attempt = async (token: string) =>
     fetch(`${VAULT_ADDR}/v1/sys/leases/revoke`, {
@@ -248,22 +291,31 @@ export async function revokeLease(leaseId: string): Promise<boolean> {
       body: JSON.stringify({ lease_id: leaseId }),
     });
 
+  let used: { login: ServiceLogin; fresh: boolean } | null = null;
+  const outcome = (revoked: boolean): RevokeOutcome => ({
+    revoked,
+    serviceLogin: used?.login ?? null,
+    freshLogin: used?.fresh ?? false,
+  });
+
   try {
-    let res = await attempt(await getServiceToken());
+    used = await getServiceLogin();
+    let res = await attempt(used.login.token);
     // A 403 means the cached token is gone or was revoked out from under us —
     // log in again once before giving up.
     if (res.status === 403) {
-      res = await attempt(await getServiceToken(true));
+      used = await getServiceLogin(true);
+      res = await attempt(used.login.token);
     }
     if (!res.ok) {
       const body = await res.text();
       console.error(`vault_lease_revoke_failed lease_id=${leaseId} status=${res.status} body=${body}`);
-      return false;
+      return outcome(false);
     }
     console.log(`vault_lease_revoked lease_id=${leaseId}`);
-    return true;
+    return outcome(true);
   } catch (err) {
     console.error(`vault_lease_revoke_error lease_id=${leaseId} error=${String(err)}`);
-    return false;
+    return outcome(false);
   }
 }

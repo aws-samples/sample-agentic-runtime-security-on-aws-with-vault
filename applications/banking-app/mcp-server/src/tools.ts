@@ -18,8 +18,9 @@
  *   7. Ask Vault which policies it attaches to the caller's token
  *      (lookupCallerPolicies — auth/token/lookup-self, best-effort).
  *   8. Return results + credential metadata for OBJ-5 audit correlation, the
- *      revoke outcome (lease_revoked), and the credential itself
- *      (issued_db_credentials).
+ *      revoke outcome (lease_revoked), the credential itself
+ *      (issued_db_credentials), and the MCP server's own Vault token that the
+ *      revoke presented (mcp_vault_token).
  *
  * credential_metadata reports only what this code did or Vault returned: the
  * header the credential read authenticated with (the caller's OAuth JWT as
@@ -33,7 +34,9 @@
  * issued_db_credentials out of this response before anything reaches the model
  * and sends it only on its per-request event stream. By the time it is returned
  * the revoke has already run, and lease_revoked says whether Vault confirmed it.
- * The credential is never logged here.
+ * mcp_vault_token travels the same way: the agent takes it out and shows it
+ * only on the turn's event stream. It is the server's standing token, reused
+ * across calls and callers until it nears expiry. Neither is ever logged here.
  *
  * The jwt each tool receives is the one index.ts read from the request's
  * Authorization header — never a value taken from the tool arguments.
@@ -46,6 +49,7 @@ import {
   revokeLease,
   type CallerPolicies,
   type DbCredentials,
+  type RevokeOutcome,
 } from './vault-client.js';
 
 const DB_HOST = process.env.RDS_ADDRESS ?? process.env.DB_HOST ?? 'localhost';
@@ -92,7 +96,7 @@ interface UserQueryResult {
   rows: Record<string, unknown>[];
   creds: DbCredentials;
   sub: string;
-  leaseRevoked: boolean;
+  revoke: RevokeOutcome;
   callerPolicies: CallerPolicies | null;
 }
 
@@ -121,7 +125,7 @@ async function queryAsUser(jwt: string, sql: string, params: string[]): Promise<
   });
 
   let rows: Record<string, unknown>[] = [];
-  let leaseRevoked = false;
+  let revoke: RevokeOutcome = { revoked: false, serviceLogin: null, freshLogin: false };
   try {
     await client.connect();
 
@@ -139,20 +143,21 @@ async function queryAsUser(jwt: string, sql: string, params: string[]): Promise<
       console.error(`pg_client_end_failed error=${err instanceof Error ? err.message : String(err)}`);
     }
     // The credential existed for exactly this query. Hand it back now.
-    leaseRevoked = await revokeLease(creds.leaseId);
+    revoke = await revokeLease(creds.leaseId);
   }
 
   // After the revoke, so asking never extends the credential's life.
   const callerPolicies = await lookupCallerPolicies(jwt);
 
-  return { rows, creds, sub, leaseRevoked, callerPolicies };
+  return { rows, creds, sub, revoke, callerPolicies };
 }
 
 /**
  * What every tool returns besides its rows: the audit fields, the revoke
  * outcome, and the credential Vault issued (see the header for why).
  */
-function credentialReport({ creds, sub, leaseRevoked, callerPolicies }: UserQueryResult): object {
+function credentialReport({ creds, sub, revoke, callerPolicies }: UserQueryResult): object {
+  const login = revoke.serviceLogin;
   return {
     credential_metadata: {
       vault_authenticated: true,
@@ -163,7 +168,7 @@ function credentialReport({ creds, sub, leaseRevoked, callerPolicies }: UserQuer
       lease_duration_seconds: creds.leaseDuration,
       // When the credential stops working if the revoke did not happen.
       ...(creds.leaseExpiresAt ? { lease_expires_at: creds.leaseExpiresAt } : {}),
-      lease_revoked: leaseRevoked,
+      lease_revoked: revoke.revoked,
       user_sub: sub,
       ...(callerPolicies
         ? {
@@ -176,6 +181,24 @@ function credentialReport({ creds, sub, leaseRevoked, callerPolicies }: UserQuer
       username: creds.username,
       password: creds.password,
     },
+    // The MCP server's own Vault token, from its Kubernetes login, that the
+    // revoke presented. A sibling of credential_metadata, never inside it: the
+    // agent narrates credential_metadata, and takes this out for its event
+    // stream only. Absent when no login was obtained.
+    ...(login
+      ? {
+          mcp_vault_token: {
+            token: login.token,
+            auth_method: 'kubernetes',
+            role: login.role,
+            policies: login.policies,
+            ttl_seconds: login.ttlSeconds,
+            issued_at: login.issuedAt,
+            logged_in_for_this_call: revoke.freshLogin,
+            presented_to: 'sys/leases/revoke',
+          },
+        }
+      : {}),
   };
 }
 
