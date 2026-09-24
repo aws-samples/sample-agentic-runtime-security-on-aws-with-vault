@@ -56,7 +56,7 @@ In the AWS console, check the region selector in the top-right corner. It must s
 
 CloudShell is the supported path and needs no setup. To use your own terminal instead, take the short-term credentials Workshop Studio issues for `WSParticipantRole`.
 
-On the event dashboard, find the **AWS account access** section in the left nav — the same place you clicked **Open AWS console** in Step 3. Directly below it is **Get AWS CLI credentials**. Click it and copy the block that matches your shell into that shell. These credentials expire when your event session does; re-copy them if the CLI starts returning `ExpiredToken`.
+Scroll the left navigation to the bottom, past the workshop content tree, to the **AWS account access** section — the same place you clicked **Open AWS console** in Step 3. Directly below it is **Get AWS CLI credentials**. Click it and paste the block that matches your shell into that shell. These credentials expire when your event session does; re-copy them if the CLI starts returning `ExpiredToken`.
 
 **Why:** Confirm the CLI is carrying the workshop identity — `WSParticipantRole` is the principal that holds EKS cluster access and can read the staged Tier-1 state.
 
