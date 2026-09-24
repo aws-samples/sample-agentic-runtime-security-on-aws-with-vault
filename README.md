@@ -34,7 +34,7 @@ bash infrastructure/scripts/workshop-e2e.sh --interactive --skip-teardown
 bash infrastructure/scripts/verify-uc1.sh
 bash infrastructure/scripts/verify-uc2.sh
 bash infrastructure/scripts/verify-uc3.sh
-bash infrastructure/scripts/verify-uc3.sh --bypass    # negative tests (forged JWT, missing may_act)
+bash infrastructure/scripts/verify-uc3.sh --bypass    # attack suite (Checks 14-21): forged signature, wrong RAR path, wrong agent, exchange-client allowlist, agent's own login
 
 # 5. Tear down everything (no orphans)
 bash infrastructure/scripts/teardown.sh
@@ -200,7 +200,7 @@ The workshop content never shows attendees these. Use them to isolate problems, 
 | `test-bedrock-kb.sh` | If UC1 `/query` is empty | KB exists, AOSS collection ready, S3 corpus has objects, ingestion job succeeded. Pair with `sync-bedrock-kb.sh` to re-ingest. |
 | `test-vault-verify.sh` | After Vault unseal / re-init | Vault auth methods + secrets engines + policies present. |
 | `verify-uc1.sh` / `verify-uc2.sh` / `verify-uc3.sh` | Per use case | See the table below. |
-| `verify-uc3.sh --bypass` | Adversarial check | Forged HS256 JWT and a real IVIA token with the wrong `act.sub` / a mismatched `vault:path_access` RAR are both rejected by Vault — proves the agent-registry alias + per-request RAR actually gate access. |
+| `verify-uc3.sh --bypass` | Adversarial check | Checks 14–21. Mints a real delegated token through a real approval and proves Vault allows it on the refund-writer path, then that Vault denies an HS256 forgery with identical claims, the same token on a path its `vault:path_access` RAR does not name, and a UC2 agent's token for the same human; that the token exchange `uc3-actor` may request is refused to `agent-uc2`; and that the agent's own Kubernetes login gets no refund-writer credentials without an approval (Check 21, which a plain `verify-uc3.sh` run also makes). A validly signed wrong-actor token (Check 19) is optional and supplied through `UC3_WRONG_ACTOR_TOKEN`. |
 | `verify-uc3.sh --no-phone` | Admin with no IBM Verify app | Drives the whole UC3 refund live — enrols a throwaway virtual authenticator over the same OAuth + SCIM endpoints the IBM Verify app uses, signs the real user-presence challenge, asserts the refund row in RDS, then prints the three-plane Athena correlation for the refund it just produced. Nothing is stubbed: IVIA resolves the transaction on its own evidence and approval stays bound to the exact transaction the agent fired. Refuses to run if a real phone is enrolled, and never leaves a device behind. |
 | `show-audit-correlation.sh` | After a UC3 refund | Runs the three-plane Athena correlation query for a given `request_id` and prints the single forensic row. |
 | `sync-bedrock-kb.sh` | After corpus changes | Re-ingests the KB so retrieval matches the current corpus. |
@@ -230,7 +230,7 @@ State lives locally in `infrastructure/terraform.tfstate`. No HCP, no Terraform 
 |---|---|---|---|
 | **UC1** — Non-personalized read-only | Vault Kubernetes auth → JIT Postgres + Bedrock STS. No standing creds. | 15m | `verify-uc1.sh` (9 checks) |
 | **UC2** — OAuth personalized read-only | Authorization Code + PKCE via IVIA → per-user JIT creds → Postgres RLS. ENFC-02 (no INSERT) + ENFC-03 (NetworkPolicy egress block). | 15m | `verify-uc2.sh` (14 checks) |
-| **UC3** — CIBA privileged write | Mobile-push approval via **IBM Verify app** on the admin's phone → RFC 8693 token exchange (`act.sub=uc3-actor`) + RFC 9396 RAR (`type: vault:path_access`) enforced natively by Vault's OAuth resource server (agent-ceiling ∩ per-request RAR) → three-plane Athena audit correlation by `request_id`. | 5m | `verify-uc3.sh` (15 checks) + `--bypass` (2 negative tests) |
+| **UC3** — CIBA privileged write | Mobile-push approval via **IBM Verify app** on the admin's phone → RFC 8693 token exchange (`act.sub=uc3-actor`) + RFC 9396 RAR (`type: vault:path_access`) enforced natively by Vault's OAuth resource server (agent-ceiling ∩ per-request RAR) → three-plane Athena audit correlation by `request_id`. | 5m | `verify-uc3.sh` (21 checks: A–F, 1–14, 21) + `--bypass` (8 checks: 14–21) |
 
 UC3 requires the free **IBM Verify** app installed on a phone (App Store / Google Play) **before** running the refund flow — used for the mobile-push approval. Enrollment URL is printed by `terraform -chdir=infrastructure output -raw wrp_public_fqdn` plus the path documented at `workshop/content/70-use-case-3/70-enroll-device/`.
 
