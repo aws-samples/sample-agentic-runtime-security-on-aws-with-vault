@@ -114,7 +114,7 @@ The PostgreSQL secrets engine `connection_url` uses the RDS master password fetc
 | Vault role | Postgres grants | TTL | Use case |
 |---|---|---|---|
 | `uc1-readonly` | SELECT on all tables | 15 min / max 30 min | Use Case 1 — read-only data query agent |
-| `uc2-personal` | SELECT on all tables | 15 min / max 30 min | Use Case 2 — personal data access agent |
+| `uc2-personal-readonly` | SELECT on the banking schema | 15 min / max 30 min | Use Case 2 — personal data access agent |
 | `uc3-refund-writer` | SELECT + INSERT + UPDATE | 5 min / max 10 min | Use Case 3 — refund processing agent (tightest scope); reachable only with an approved refund's delegated token |
 | `uc3-readonly` | SELECT on the banking schema (RLS applies) | 15 min / max 30 min | Use Case 3 — the agent's own lookups (transactions, refund status) under the `uc3` role |
 
