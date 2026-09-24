@@ -32,7 +32,9 @@ terraform.rc
 Thumbs.db
 
 # Claude
-.claude/
+# Claude Code local state stays out; shared skills are checked in.
+.claude/*
+!.claude/skills/
 
 
 # Debug logs
