@@ -31,8 +31,9 @@
  * createActivityFilter() is a TransformStream. It parses Server-Sent Events
  * incrementally: frames split across network chunks are reassembled, each
  * complete frame is sanitised and re-emitted at once, and the body as a whole
- * is never buffered. Pending text is capped (MAX_EVENT_CHARS) so a frame that
- * never ends cannot grow memory without bound.
+ * is never buffered. Pending text is capped (MAX_EVENT_CHARS for an event's
+ * data, MAX_LINE_CHARS for one unfinished line) so a frame that never ends
+ * cannot grow memory without bound.
  *
  * What it does NOT catch: a secret written as free text inside a string, such
  * as "the password is hunter2". Keys are scrubbed by name and strings by token
@@ -53,8 +54,15 @@ import {
 // Limits
 // ---------------------------------------------------------------------------
 
-/** Largest single event (its data, or one pending line) the parser will hold. */
+/** Largest event data the parser accepts: the `data` of all of one event's lines together. */
 const MAX_EVENT_CHARS = 1024 * 1024;
+/**
+ * Longest line the parser holds while waiting for its line break: a data value
+ * of MAX_EVENT_CHARS, plus its `data: ` field prefix, plus a CR held back in
+ * case it is the first half of a CRLF. Measured against the whole line, so a
+ * frame that is within MAX_EVENT_CHARS passes however the network splits it.
+ */
+const MAX_LINE_CHARS = MAX_EVENT_CHARS + 'data: '.length + 1;
 /** Deepest payload nesting kept. Anything deeper is dropped, not passed through. */
 const MAX_PAYLOAD_DEPTH = 32;
 /** Longest identifier (requestId, toolCallId, tool name, role) accepted. */
@@ -506,7 +514,7 @@ export function createActivityFilter(label: string): TransformStream<Uint8Array,
 			start = match.index + match[0].length;
 		}
 		pending = pending.slice(start);
-		if (pending.length > MAX_EVENT_CHARS) {
+		if (pending.length > MAX_LINE_CHARS) {
 			pending = '';
 			discardingLine = true;
 			overflow();
