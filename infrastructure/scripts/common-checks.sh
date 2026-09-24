@@ -271,7 +271,7 @@ _validate_podman() {
 _validate_docker() {
     if ! docker info >/dev/null 2>&1; then
         print_fail "docker is installed but the daemon is not running" \
-            "Start Docker Desktop (macOS/Windows) or the docker service (Linux: \`sudo systemctl start docker\`), then re-run. The image build needs a running daemon."
+            "Start Docker Desktop (macOS) or the docker service (Linux: \`sudo systemctl start docker\`), then re-run. The image build needs a running daemon."
         return 1
     fi
     if ! docker buildx version >/dev/null 2>&1; then

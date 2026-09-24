@@ -13,7 +13,7 @@ Four combinations. They diverge in three places and rejoin at **Configure kubect
 |                  | **CloudShell** | **Your own terminal / IDE** |
 |---|---|---|
 | **At an event**  | The default. Console session credentials, nothing to configure. | Supported; you supply your own credentials. |
-| **Self-paced**   | Supported. | The default. macOS or Linux; on Windows use WSL2. |
+| **Self-paced**   | Supported. | The default. macOS or Linux only. |
 
 **Where the paths split:**
 

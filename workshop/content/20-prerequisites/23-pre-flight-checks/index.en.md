@@ -39,7 +39,7 @@ Tools installed outside `$HOME` are gone after an idle disconnect. If your sessi
 
 ::::tab{label="Local terminal or IDE" id="local"}
 
-Use your own terminal on macOS or Linux. On Windows, use **WSL2** — the scripts are bash and expect a Linux shell.
+Use your own terminal on macOS or Linux. The scripts are bash and expect a Linux shell.
 
 The pre-flight script in Step 2 installs every CLI tool for you, through Homebrew, apt or yum depending on your system.
 
@@ -153,7 +153,7 @@ At an AWS-led event none of this applies: CodeBuild built and pushed the images 
 
 Installing a runtime is not enough — the engine must be **running** before you deploy, or the pre-flight check fails with "installed but not running". Set up **one** of:
 
-- **Docker** — install Docker Desktop (macOS/Windows) or Docker Engine (Linux), then **start it** and confirm `docker info` succeeds.
+- **Docker** — install Docker Desktop (macOS) or Docker Engine (Linux), then **start it** and confirm `docker info` succeeds.
 - **Podman** — `brew install podman` (macOS) then `podman machine init && podman machine start`; on Linux install Podman 4.0+ from [podman.io](https://podman.io/docs/installation). Confirm `podman info` succeeds.
 
 When both are installed, the scripts prefer Podman; force one with `WORKSHOP_CONTAINER_CLI=docker` (or `=podman`).

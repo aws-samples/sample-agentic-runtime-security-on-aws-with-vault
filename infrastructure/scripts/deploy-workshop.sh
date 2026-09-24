@@ -232,9 +232,9 @@ TFVARS="${INFRA_DIR}/terraform.tfvars"
 TFVARS_EXAMPLE="${INFRA_DIR}/terraform.tfvars.example"
 
 # Resolve a hostname to its IPv4 address(es) without depending on `dig`.
-# AWS CloudShell (and stock WSL2) do not ship `dig`/bind-utils, which silently
-# broke Step 7 ALB resolution. Try resolvers in order of availability:
-#   getent hosts (glibc — CloudShell/Linux/WSL2), then dig (macOS/if installed),
+# AWS CloudShell does not ship `dig`/bind-utils, which silently broke Step 7
+# ALB resolution. Try resolvers in order of availability:
+#   getent hosts (glibc — CloudShell/Linux), then dig (macOS/if installed),
 #   then python3 socket (ultimate fallback). Prints one IP per line.
 _resolve_host_ips() {
     local host="$1" out=""

@@ -423,7 +423,7 @@ EOF"
             ;;
         *)
             print_fail "Unsupported OS: $OS" \
-                "macOS and Linux only — Windows users use WSL2."
+                "macOS and Linux only."
             ;;
     esac
 else
