@@ -85,7 +85,7 @@ A compromised agent pod with its service account JWT intact could initiate a CIB
 3. Confirm the response contains only Jaime's transaction records (amounts, merchants, account references).
 4. Open a **fresh Incognito / Private window**, sign in as **oscar**, and repeat the same query — confirm you see only Oscar's records and zero of Jaime's.
 
-:::alert{type="info" header="Switch personas with Incognito, not Logout"}
+:::alert{type="info" header="One window per persona"}
 **Log out** clears the banking app's cookies and ends your IVIA session through `/pkmslogout`. Still use a separate Incognito / Private window per persona, so each keeps its own session side by side.
 :::
 
