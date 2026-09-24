@@ -24,6 +24,7 @@ agent's own workload identity).
 
 import logging
 import os
+import time
 from datetime import datetime, timedelta, timezone
 
 import boto3
@@ -31,7 +32,15 @@ import hvac
 from botocore.credentials import RefreshableCredentials
 from botocore.session import get_session as _get_botocore_session
 
+from . import activity
+
 logger = logging.getLogger(__name__)
+
+# What each Vault aws/sts role's keys are used for, in the credential label.
+_STS_PURPOSE = {
+    "bedrock-reader": "the model calls to Amazon Bedrock",
+    "uc3-logs-writer": "the audit anchor in CloudWatch Logs",
+}
 
 
 class UC3VaultClient:
@@ -54,6 +63,10 @@ class UC3VaultClient:
         self._addr = vault_addr
         self._role = vault_role
         self._client = hvac.Client(url=vault_addr)
+        # When the current Vault token was issued and its TTL, for the UI's
+        # credential view (report_vault_token).
+        self._login_at: float | None = None
+        self._login_ttl: int | None = None
 
     @property
     def role(self) -> str:
@@ -66,6 +79,10 @@ class UC3VaultClient:
         Presents the projected SA token to Vault Kubernetes auth method.
         Role "uc3" is bound to the uc3-agent service account; policy grants
         read-only DB creds + aws/sts/bedrock-reader + kv reads.
+
+        A login during a chat request (re-login after the token expired) shows
+        the service-account JWT and the new Vault token on that request's
+        activity stream; the one at pod startup has no request to show them on.
         """
         with open(self.SA_JWT_PATH, "r") as fh:
             jwt = fh.read().strip()
@@ -75,6 +92,8 @@ class UC3VaultClient:
             jwt=jwt,
         )
         ttl = response.get("auth", {}).get("lease_duration", "unknown")
+        self._login_at = time.time()
+        self._login_ttl = ttl if isinstance(ttl, int) else None
         logger.info(
             "uc3_vault_k8s_auth_success",
             extra={
@@ -82,6 +101,31 @@ class UC3VaultClient:
                 "token_ttl_seconds": ttl,
                 "auth_method": "kubernetes",
             },
+        )
+        sa_claims = activity.decode_jwt_payload(jwt) or {}
+        activity.credential(
+            "k8s_sa_token",
+            "The uc3 agent's Kubernetes service-account token, presented to Vault to log in",
+            "Kubernetes",
+            value=jwt,
+            expires_at=int(sa_claims["exp"] * 1000) if isinstance(sa_claims.get("exp"), (int, float)) else None,
+        )
+        self.report_vault_token()
+
+    def report_vault_token(self) -> None:
+        """Show the agent's current Vault token (from its Kubernetes login) on
+        the current request's activity stream. Sent once per request."""
+        token = self._client.token
+        if not token:
+            return
+        activity.credential(
+            "vault_token",
+            f"The uc3 agent's Vault token from its Kubernetes login (role {self._role})",
+            "Vault",
+            value=token,
+            vault_path="auth/kubernetes/login",
+            ttl_seconds=self._login_ttl,
+            expires_at=activity.expires_at_ms(self._login_ttl, self._login_at) if self._login_at else None,
         )
 
     def get_readonly_credentials(self) -> dict:
@@ -108,6 +152,16 @@ class UC3VaultClient:
                 "lease_duration": response.get("lease_duration", "unknown"),
                 "username": data.get("username", "n/a"),
             },
+        )
+        activity.credential(
+            "db_credentials",
+            f"Read-only database credentials Vault issued to the agent's own Vault token ({vault_db_path})",
+            "Vault",
+            fields={"username": data["username"], "password": data["password"]},
+            vault_path=vault_db_path,
+            lease_id=response.get("lease_id"),
+            ttl_seconds=response.get("lease_duration"),
+            expires_at=activity.expires_at_ms(response.get("lease_duration")),
         )
         return {
             "username": data["username"],
@@ -177,6 +231,18 @@ class UC3VaultClient:
                 "delegation": "rfc8693_may_act",
             },
         )
+        activity.credential(
+            "db_credentials",
+            "Refund-writer database credentials Vault issued to the delegated token "
+            f"({vault_db_path})",
+            "Vault",
+            fields={"username": data["username"], "password": data["password"]},
+            vault_path=vault_db_path,
+            lease_id=db_response.get("lease_id"),
+            ttl_seconds=db_response.get("lease_duration"),
+            expires_at=activity.expires_at_ms(db_response.get("lease_duration")),
+            request_id=request_id,
+        )
         return {
             "username": data["username"],
             "password": data["password"],
@@ -227,6 +293,22 @@ class UC3VaultClient:
                     "lease_seconds": lease_seconds,
                     "region": region,
                 },
+            )
+            # Every lease botocore asks for (the first, and each refresh) is shown
+            # on the activity stream of the request that caused it.
+            activity.credential(
+                "aws_sts_credentials",
+                f"AWS STS keys Vault issued for {_STS_PURPOSE.get(vault_aws_role, vault_aws_role)} ({vault_path})",
+                "AWS STS (via Vault)",
+                fields={
+                    "access_key_id": data["access_key"],
+                    "secret_access_key": data["secret_key"],
+                    "session_token": data["security_token"],
+                },
+                vault_path=vault_path,
+                lease_id=response.get("lease_id"),
+                ttl_seconds=lease_seconds,
+                expires_at=int(expiry.timestamp() * 1000),
             )
             return {
                 "access_key": data["access_key"],
