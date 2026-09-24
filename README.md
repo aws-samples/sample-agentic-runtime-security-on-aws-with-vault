@@ -230,7 +230,7 @@ State lives locally in `infrastructure/terraform.tfstate`. No HCP, no Terraform 
 |---|---|---|---|
 | **UC1** — Non-personalized read-only | Vault Kubernetes auth → JIT Postgres + Bedrock STS. No standing creds. | 15m | `verify-uc1.sh` (9 checks) |
 | **UC2** — OAuth personalized read-only | Authorization Code + PKCE via IVIA → per-user JIT creds → Postgres RLS. ENFC-02 (no INSERT) + ENFC-03 (NetworkPolicy egress block). | 15m | `verify-uc2.sh` (14 checks) |
-| **UC3** — CIBA privileged write | Mobile-push approval via **IBM Verify app** on the admin's phone → RFC 8693 token exchange (`act.sub=uc3-actor`) + RFC 9396 RAR (`type: vault:path_access`) enforced natively by Vault's OAuth resource server (agent-ceiling ∩ per-request RAR) → three-plane Athena audit correlation by `request_id`. | 5m | `verify-uc3.sh` (21 checks: A–F, 1–14, 21) + `--bypass` (8 checks: 14–21) |
+| **UC3** — CIBA privileged write | Mobile-push approval via **IBM Verify app** on the admin's phone → RFC 8693 token exchange (`act.sub=uc3-actor`) + RFC 9396 RAR (`type: vault:path_access`) enforced natively by Vault's OAuth resource server (agent-ceiling ∩ per-request RAR) → three-plane Athena audit correlation by `request_id`. | 5m | `verify-uc3.sh` (21 checks: A–F, 1–14, 21) + `--bypass` (Checks 14–21) |
 
 UC3 requires the free **IBM Verify** app installed on a phone (App Store / Google Play) **before** running the refund flow — used for the mobile-push approval. Enrollment URL is printed by `terraform -chdir=infrastructure output -raw wrp_public_fqdn` plus the path documented at `workshop/content/70-use-case-3/70-enroll-device/`.
 
