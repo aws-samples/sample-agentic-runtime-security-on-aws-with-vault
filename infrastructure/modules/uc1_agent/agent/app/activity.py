@@ -21,13 +21,21 @@ never leave the worker blocked on a full queue.
 Outside a streamed request (the JSON path, startup, a kubectl-exec'd script)
 nothing is bound and emit() does nothing.
 
-Never put a credential into an event: no Vault token, no JWT, no database
-password, no AWS key. Credentials are described by path, lease id and TTL only.
+Credentials
+-----------
+The workshop shows every credential issued during a turn in full: the
+service-account JWT the agent signs in to Vault with, its Vault token, the AWS
+keys and database login Vault issues. They travel ONLY as `agent:credential`
+events on this queue (credential() below). Never in narration text, never in a
+log line (pod logs are shipped off-cluster), never in a tool's return value
+(that goes to Bedrock, and the model can repeat it).
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
 import time
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -88,6 +96,52 @@ def narrate(text: str, *, output: bool = False) -> None:
     event: dict[str, Any] = {"type": "agent:narration", "glyph": OUTPUT if output else STEP, "text": text}
     if output:
         event["accent"] = "tool_output"
+    emit(event)
+
+
+def jwt_claims(token: str) -> dict[str, Any] | None:
+    """The payload of a compact JWT, decoded but NOT verified; None if it is not one."""
+    try:
+        payload = token.split(".")[1]
+        claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+    except (IndexError, ValueError):
+        return None
+    return claims if isinstance(claims, dict) else None
+
+
+def credential(
+    kind: str,
+    label: str,
+    issuer: str,
+    *,
+    value: str | None = None,
+    fields: dict[str, Any] | None = None,
+    claims: dict[str, Any] | None = None,
+    vault_path: str | None = None,
+    lease_id: str | None = None,
+    ttl_seconds: int | None = None,
+    expires_at: int | None = None,
+) -> None:
+    """Send one issued credential, in full, as an `agent:credential` event.
+
+    `value` for a single token, `fields` for a multi-part credential — never
+    both. Only the fields that exist for the credential are sent.
+    """
+    if _TURN.get() is None:
+        return
+    event: dict[str, Any] = {"type": "agent:credential", "kind": kind, "label": label, "issuer": issuer}
+    if value is not None:
+        event["value"] = value
+    elif fields is not None:
+        event["fields"] = fields
+    optional = {
+        "claims": claims,
+        "vaultPath": vault_path,
+        "leaseId": lease_id,
+        "ttlSeconds": ttl_seconds,
+        "expiresAt": expires_at,
+    }
+    event.update({key: val for key, val in optional.items() if val is not None})
     emit(event)
 
 

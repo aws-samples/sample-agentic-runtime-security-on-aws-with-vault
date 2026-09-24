@@ -9,6 +9,7 @@ credential has a finite TTL and is auditable in the Vault audit log stream.
 
 import logging
 import os
+import time
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 
@@ -46,6 +47,13 @@ class VaultClient:
         self.identity: dict = {}
         # Called with self.identity after every successful login.
         self._on_login = on_login
+        # The service-account JWT the last login presented, and when that login
+        # happened and for how long Vault granted it. Kept in memory only so a
+        # streamed request can show the agent's identity proof; see
+        # login_details(). Never logged.
+        self._login_jwt: str | None = None
+        self._login_at: float | None = None
+        self._login_ttl: int | None = None
 
     def login(self) -> None:
         """Authenticate using the Kubernetes Service Account JWT (OBJ-1).
@@ -68,6 +76,9 @@ class VaultClient:
             key: metadata.get(key)
             for key in ("role", "service_account_name", "service_account_namespace")
         }
+        self._login_jwt = jwt
+        self._login_at = time.time()
+        self._login_ttl = ttl if isinstance(ttl, int) else None
         logger.info(
             "vault_auth_success",
             extra={
@@ -78,6 +89,24 @@ class VaultClient:
         )
         if self._on_login is not None:
             self._on_login(dict(self.identity))
+
+    def login_details(self) -> dict | None:
+        """The credentials of the current login, for a streamed request's events only.
+
+        Returns {"sa_jwt", "vault_token", "ttl_seconds", "issued_at"} — the
+        service-account JWT the login presented, the Vault token it returned,
+        the TTL Vault granted and the login time (epoch seconds) — or None
+        before the first login. The caller must send these only through the
+        per-request event queue: never to a log, never into a tool result.
+        """
+        if self._login_jwt is None or not self.client.token:
+            return None
+        return {
+            "sa_jwt": self._login_jwt,
+            "vault_token": self.client.token,
+            "ttl_seconds": self._login_ttl,
+            "issued_at": self._login_at,
+        }
 
     def ensure_authenticated(self) -> bool:
         """Re-login if the pod's Vault token has expired.
@@ -151,10 +180,13 @@ class VaultClient:
         Args:
             kb_region: AWS region where the Bedrock Knowledge Base resides.
             on_issued: Called each time Vault issues credentials for this
-                session, with {"vault_path", "ttl_seconds"} only — never the
-                keys. The knowledge-base tool passes it to narrate the
-                issuance; the model session built at startup does not, so a
-                model-credential refresh is never reported as a KB credential.
+                session, with {"vault_path", "lease_id", "ttl_seconds",
+                "access_key_id", "secret_access_key", "session_token"}. The
+                knowledge-base tool passes it to show the issuance in its
+                streamed events; the model session built at startup does not,
+                so a model-credential refresh is never reported as a KB
+                credential. The keys must go only to the per-request event
+                queue — never to a log or a tool result.
         """
         vault_path = "aws/sts/bedrock-reader"
 
@@ -174,7 +206,16 @@ class VaultClient:
                 },
             )
             if on_issued is not None:
-                on_issued({"vault_path": vault_path, "ttl_seconds": lease_seconds})
+                on_issued(
+                    {
+                        "vault_path": vault_path,
+                        "lease_id": response.get("lease_id"),
+                        "ttl_seconds": lease_seconds,
+                        "access_key_id": data["access_key"],
+                        "secret_access_key": data["secret_key"],
+                        "session_token": data["security_token"],
+                    }
+                )
             return {
                 "access_key": data["access_key"],
                 "secret_key": data["secret_key"],

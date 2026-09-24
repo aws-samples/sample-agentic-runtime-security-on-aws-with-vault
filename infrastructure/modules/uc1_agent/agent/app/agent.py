@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import threading
+import time
 from contextvars import ContextVar
 from typing import Any
 
@@ -62,6 +63,17 @@ def _record_issuance(vault_path: str, creds: dict) -> None:
         f"Vault issued a short-lived database credential for this question "
         f"({vault_path}, lease {lease['lease_id']}, {lease['ttl_seconds']}s)."
     )
+    # The login itself, in full, for the streamed request only (queue, never a log).
+    activity.credential(
+        "db_credentials",
+        "Short-lived database login Vault issued for this question",
+        "Vault",
+        fields={"username": creds["username"], "password": creds["password"]},
+        vault_path=vault_path,
+        lease_id=creds["lease_id"],
+        ttl_seconds=creds["lease_duration"],
+        expires_at=int((time.time() + creds["lease_duration"]) * 1000),
+    )
     sink = _ISSUED_CREDENTIALS.get()
     if sink is None:
         return
@@ -77,17 +89,72 @@ def _describe_identity(identity: dict) -> str:
     return f"my Kubernetes service account (Vault role {role})"
 
 
+def _show_login_credentials(reused: bool) -> None:
+    """Send the agent's own login credentials in full: the service-account JWT it
+    presented to Vault and the Vault token it got back. Streamed requests only."""
+    if activity.current() is None:
+        return
+    login = _vault.login_details()
+    if login is None:
+        return
+    account = _vault.identity.get("service_account_name") or "my service account"
+    role = _vault.identity.get("role") or os.getenv("VAULT_ROLE", "uc1-agent")
+    claims = activity.jwt_claims(login["sa_jwt"])
+    activity.credential(
+        "k8s_sa_token",
+        (
+            f"The Kubernetes service-account token ({account}) my current Vault login was made with — "
+            "reused this turn, not presented again"
+            if reused
+            else f"My Kubernetes service-account token ({account}), presented to Vault to sign in"
+        ),
+        "Kubernetes",
+        value=login["sa_jwt"],
+        claims=claims,
+        expires_at=int(claims["exp"] * 1000) if claims and isinstance(claims.get("exp"), (int, float)) else None,
+    )
+    ttl = login["ttl_seconds"]
+    activity.credential(
+        "vault_token",
+        (
+            f"My Vault token from an earlier Kubernetes login (role {role}) — reused this turn"
+            if reused
+            else f"My Vault token from this Kubernetes login (role {role})"
+        ),
+        "Vault",
+        value=login["vault_token"],
+        ttl_seconds=ttl,
+        expires_at=int((login["issued_at"] + ttl) * 1000) if ttl is not None and login["issued_at"] else None,
+    )
+
+
 def _narrate_vault_login(identity: dict) -> None:
     """Called by VaultClient after every successful login; silent outside a streamed request."""
     activity.narrate(
         f"No user is signed in. I authenticate to Vault as myself, using {_describe_identity(identity)}."
     )
+    _show_login_credentials(reused=False)
 
 
 def _narrate_kb_credentials(issued: dict) -> None:
     activity.narrate(
         "Vault issued short-lived AWS credentials for reading the knowledge base "
         f"({issued['vault_path']}, {issued['ttl_seconds']}s)."
+    )
+    # The keys themselves, in full, for the streamed request only (queue, never a log).
+    activity.credential(
+        "aws_sts_credentials",
+        "Short-lived AWS keys Vault issued for reading the knowledge base",
+        "AWS STS (via Vault)",
+        fields={
+            "access_key_id": issued["access_key_id"],
+            "secret_access_key": issued["secret_access_key"],
+            "session_token": issued["session_token"],
+        },
+        vault_path=issued["vault_path"],
+        lease_id=issued.get("lease_id"),
+        ttl_seconds=issued["ttl_seconds"],
+        expires_at=int((time.time() + issued["ttl_seconds"]) * 1000),
     )
 
 
@@ -380,6 +447,7 @@ def run_uc1_turn(query: str, cancel_signal: threading.Event | None = None) -> Ag
                 "No user is signed in. I am already authenticated to Vault as myself, using "
                 f"{_describe_identity(_vault.identity)}, so I reuse that login."
             )
+            _show_login_credentials(reused=True)
     except Exception as exc:  # noqa: BLE001 — each tool checks the login again itself
         logger.warning("turn_vault_check_failed", exc_info=True)
         activity.narrate(f"I could not confirm my Vault login ({type(exc).__name__}); each tool will try again.")
