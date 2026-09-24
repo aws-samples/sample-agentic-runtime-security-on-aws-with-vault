@@ -251,7 +251,7 @@ UC3 requires the free **IBM Verify** app installed on a phone (App Store / Googl
 
 ## Issues + feedback
 
-File issues at <https://github.ibm.com/Oscar-Medina/agentic-runtime-security-aws/issues>. Workshop-tester role guide: [`TESTING.md`](TESTING.md).
+File issues at <https://github.com/aws-samples/sample-agentic-runtime-security-on-aws-with-vault/issues>. Testing playbook: [`TESTING-PLAYBOOK.md`](TESTING-PLAYBOOK.md).
 
 ## License
 
