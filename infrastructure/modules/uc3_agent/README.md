@@ -6,7 +6,7 @@ Terraform module that deploys the **UC3 CIBA-privileged action agent** into the 
 
 | # | Resource | Name | Purpose |
 |---|----------|------|---------|
-| 1 | `kubernetes_service_account` | `uc3-privileged-actor-sa` | Vault k8s auth subject — agent mounts projected SA JWT and exchanges it for a short-TTL `uc3-refund-writer` token |
+| 1 | `kubernetes_service_account` | `uc3-privileged-actor-sa` | Vault k8s auth subject — the agent logs in with its projected SA JWT (role `uc3`, policy `uc3-agent`: read-only DB creds, Bedrock and CloudWatch Logs STS). This login cannot reach `uc3-refund-writer` |
 | 2 | `kubernetes_config_map` | `uc3-agent-config` | Runtime env vars (Vault, IVIA, DB, Bedrock) |
 | 3 | `kubernetes_deployment` | `uc3-agent` | Single-replica FastAPI agent on port 8080 |
 | 4 | `kubernetes_service` | `uc3-agent-svc` | ClusterIP 8080 → 8080 — no ALB/Ingress |
@@ -21,7 +21,7 @@ Terraform module that deploys the **UC3 CIBA-privileged action agent** into the 
 ## Security design
 
 - **OBJ-1 Workload identity**: `uc3-privileged-actor-sa` is the Vault Kubernetes auth role subject. No static credentials.
-- **OBJ-2 No standing privileges**: The agent fetches a short-TTL `uc3-refund-writer` Vault token per privileged action; the token expires after the TTL configured in `vault_config`.
+- **OBJ-2 No standing privileges**: The agent's own login (role `uc3`) carries only the `uc3-agent` policy, which has no refund-writer path. For each approved refund the agent presents that refund's delegated token and receives a fresh short-TTL `uc3-refund-writer` database credential, which expires after the TTL configured in `vault_config`. `verify-uc3.sh --bypass` Check 21 asserts that the `uc3` login is denied the refund writer.
 - **OBJ-3 User intent enforcement**: Vault's native OAuth resource server resolves the agent from the token's `act.sub` against the Agent Registry (applying the `uc3-agent-ceiling`) and enforces the per-request `vault:path_access` RAR before issuing DB credentials — the `may_act` claim IVIA also stamps is ignored by native OBO.
 - **OBJ-5 Audit correlation**: the CIBA `request_id` (the approval's `binding_message`) is threaded into the DB write as a `uc3_request_id` SQL comment that pgaudit captures verbatim; the `audit_correlation` Athena VIEW joins IVIA↔pgaudit on `request_id` and bridges the Vault audit plane by credential path + time-proximity (native Vault audit logs neither `request_id` nor the human sub).
 - **No Ingress / ALB**: The UC3 agent is reached in-cluster from `banking-agent-svc` or via `kubectl port-forward` for workshop demos.
