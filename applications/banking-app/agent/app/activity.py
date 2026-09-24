@@ -275,12 +275,14 @@ class TurnActivity:
             started = self._tool_started_at.pop(tool_call_id, None)
         return None if started is None else round((time.monotonic() - started) * 1000)
 
-    def record_lease(self, db_role: Any, lease_id: Any, ttl_seconds: Any) -> None:
+    def record_lease(self, db_role: Any, lease_id: Any, ttl_seconds: Any, vault_path: Any = None) -> None:
         with self._lock:
             if self.db_role is None and isinstance(db_role, str):
                 self.db_role = db_role
             if isinstance(lease_id, str) and lease_id and lease_id != "unknown":
                 lease: dict[str, Any] = {"lease_id": lease_id}
+                if isinstance(vault_path, str) and vault_path:
+                    lease["vault_path"] = vault_path
                 if isinstance(ttl_seconds, (int, float)):
                     lease["ttl_seconds"] = ttl_seconds
                 self.leases.append(lease)
@@ -391,7 +393,7 @@ def report_credential_metadata(tool_name: str, meta: Any, issued: Any = None) ->
     lease_id = reported.get("lease_id")
     ttl = reported.get("lease_duration_seconds")
     revoked = reported.get("lease_revoked")
-    turn.record_lease(db_role, lease_id, ttl)
+    turn.record_lease(db_role, lease_id, ttl, vault_path)
 
     # Tools can run concurrently, so every line names the tool it belongs to.
     turn.narrate(
