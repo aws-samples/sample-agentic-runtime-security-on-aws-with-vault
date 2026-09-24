@@ -2,10 +2,17 @@
  * activity-filter.ts — the one gate every agent event passes through on its way
  * to the browser.
  *
- * The agents run inside the cluster and hold real credentials: the user's
- * access token, Vault tokens, database passwords. Whatever an agent streams —
- * including text a model was tricked into writing — this filter decides what a
- * browser may see. It fails closed: anything it does not recognise is dropped.
+ * What the browser sees
+ * ---------------------
+ * The workshop shows, as it happens, what each use case does in the background,
+ * so every credential issued during a turn reaches the browser IN FULL: sign-in
+ * tokens, the refund tokens, Vault tokens, the Kubernetes service-account JWT,
+ * database and AWS credentials. Values are never changed by this filter.
+ * Configuration secrets are different: an OAuth client secret, a SCIM, admin or
+ * LDAP password, Vault's root token and its unseal or recovery keys must never
+ * reach a browser. They are removed by KEY NAME (isConfigSecretKey below).
+ *
+ * It fails closed: anything it does not recognise is dropped.
  *
  * Two layers
  * ----------
@@ -14,17 +21,14 @@
  *    Unknown event types are dropped. Unknown fields are dropped. A frame
  *    missing a required field, or carrying one of the wrong type, is dropped.
  *
- * 2. Payload (deep scrub). Fields that carry arbitrary data — tool `args` and
- *    `result`, HITL `details`, audit `leases` and `claims` — are walked
- *    recursively:
- *      - a key named like a secret is removed (SECRET_KEY_SUBSTRINGS,
- *        SECRET_KEY_NAMES), however deep it sits;
+ * 2. Payload keys. Fields that carry arbitrary data — tool `args` and `result`,
+ *    HITL `details`, audit `leases` and `claims` — are walked recursively:
+ *      - a key that names a configuration secret is removed, however deep it
+ *        sits, together with its value;
  *      - __proto__, constructor and prototype keys are removed (PROTOTYPE_KEYS);
- *      - correlation keys (CORRELATION_KEYS) are always kept, so the audit
- *        story survives, but their values are still scrubbed;
- *      - every string, in the payload AND in the envelope, has raw tokens
- *        replaced by REDACTED_TOKEN: JWTs (also when embedded in a longer
- *        string) and Vault tokens.
+ *      - nesting deeper than MAX_PAYLOAD_DEPTH is removed.
+ *    The same rules apply to a JSON body that is not a stream (scrubJson) and to
+ *    a JSON error body (scrubErrorText).
  *
  * Streaming
  * ---------
@@ -35,16 +39,15 @@
  * data, MAX_LINE_CHARS for one unfinished line) so a frame that never ends
  * cannot grow memory without bound.
  *
- * What it does NOT catch: a secret written as free text inside a string, such
- * as "the password is hunter2". Keys are scrubbed by name and strings by token
- * shape; prose is not interpreted.
+ * What it does NOT catch: a configuration secret written as free text, such as
+ * narration that says "the client secret is ..." or an error body that is not
+ * JSON. Keys are matched by name; text is not interpreted. Keeping those values
+ * out of what an agent writes is the agent's job; this filter is the second line.
  */
 
 import {
 	NARRATION_GLYPHS,
-	REDACTED_TOKEN,
 	TOOL_CALL_STATUSES,
-	type JsonObject,
 	type JsonValue,
 	type StreamEvent,
 	type StreamEventType
@@ -73,42 +76,29 @@ const MAX_ID_CHARS = 256;
 // ---------------------------------------------------------------------------
 
 /**
- * A key is secret-named when, lowercased with every non-alphanumeric removed
- * (so client_secret, clientSecret and Client-Secret all read "clientsecret"),
- * it CONTAINS one of these. Covers password, client_secret, secret_id,
- * access_token, refresh_token, id_token, client_token, session_token,
- * private_key, api_key, x-api-key and the like.
+ * True when a key names a configuration secret. The key is lowercased with
+ * every non-alphanumeric removed first, so client_secret, clientSecret and
+ * IVIA_CLIENT_SECRET all contain "clientsecret". The rules cover the names this
+ * repository gives those secrets:
+ *   - OAuth client secrets: client_secret, clientSecret, IVIA_CLIENT_SECRET,
+ *     IVIA_ACTOR_CLIENT_SECRET, ivia_mmfa_push_client_secret;
+ *   - SCIM, admin and LDAP passwords: IVIA_SCIM_PASSWORD, ivia_scim_bind_pwd,
+ *     admin_password, admin_pass, ADMIN_PWD, LDAP_ADMIN_PASSWORD,
+ *     openldap_admin_pwd;
+ *   - Vault root and unseal material: root_token, VAULT_ROOT_TOKEN,
+ *     RECOVERY_KEYS, recovery_keys_b64, the CLI's unseal_keys_b64, and the
+ *     keys_base64 of Vault's sys/init reply.
+ * Issued credentials are NOT matched: password, username, secret_access_key,
+ * session_token, access_token and the like pass.
  */
-const SECRET_KEY_SUBSTRINGS = ['password', 'passwd', 'passphrase', 'secret', 'token', 'privatekey', 'apikey'] as const;
-
-/**
- * HTTP header names that carry credentials. Matched EXACTLY after the same
- * normalisation, so `authorization_details` (the refund terms a person
- * approves) is not caught by `authorization`.
- */
-const SECRET_KEY_NAMES: ReadonlySet<string> = new Set(['authorization', 'proxyauthorization', 'cookie', 'setcookie']);
-
-/**
- * Correlation keys the audit story depends on. Always kept, even if a secret
- * rule would match, and their values are still scrubbed.
- */
-const CORRELATION_KEYS: ReadonlySet<string> = new Set([
-	'lease_id',
-	'lease_duration_seconds',
-	'ttl_seconds',
-	'vault_path',
-	'vault_role',
-	'db_role',
-	'user_sub',
-	'sub',
-	'scope',
-	'jti',
-	'request_id',
-	'iss',
-	'aud',
-	'exp',
-	'act'
-]);
+function isConfigSecretKey(key: string): boolean {
+	const k = key.toLowerCase().replace(/[^a-z0-9]/g, '');
+	if (k.includes('clientsecret')) return true;
+	if ((k.includes('admin') || k.includes('scim') || k.includes('ldap')) && (k.includes('pass') || k.includes('pwd'))) {
+		return true;
+	}
+	return k.includes('roottoken') || k.includes('unsealkey') || k.includes('recoverykey') || k === 'keysbase64';
+}
 
 /**
  * Keys that change an object's prototype when browser code merges a payload
@@ -116,63 +106,8 @@ const CORRELATION_KEYS: ReadonlySet<string> = new Set([
  */
 const PROTOTYPE_KEYS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype']);
 
-function isSecretKey(key: string): boolean {
-	const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, '');
-	if (SECRET_KEY_NAMES.has(normalized)) return true;
-	return SECRET_KEY_SUBSTRINGS.some((term) => normalized.includes(term));
-}
-
 // ---------------------------------------------------------------------------
-// String rules: raw tokens
-// ---------------------------------------------------------------------------
-
-/**
- * A run of characters a compact JWT is made of: base64url plus the dots
- * between its parts. Tokens are found run by run instead of with one regex over
- * the whole string, because a pattern like `eyJ[\w-]*\.[\w-]*\.[\w-]*`
- * backtracks quadratically on hostile input and would stall the server.
- */
-const TOKEN_CHAR_RUN = /[A-Za-z0-9_.-]+/g;
-
-/**
- * Vault tokens, as HashiCorp documents them for Vault 1.10 and later: a type
- * prefix (hvs. service, hvb. batch, hvr. recovery) followed by 24 or more
- * random characters. https://developer.hashicorp.com/vault/docs/concepts/tokens#token-prefixes
- */
-const VAULT_TOKEN = /hv[sbr]\.[A-Za-z0-9_-]{24,}/g;
-
-/**
- * Within one run, a JWT starts at "eyJ" (base64url for `{"`, the opening of
- * its JSON header) and has at least two more dot-separated parts: three for a
- * signed JWT, five for an encrypted one. Everything from "eyJ" to the end of
- * the run is replaced, so a token glued onto other characters is still caught.
- */
-function redactRun(run: string, stats: FilterStats): string {
-	let out = run;
-	const start = out.indexOf('eyJ');
-	if (start !== -1) {
-		const dots = out.slice(start).split('.').length - 1;
-		if (dots >= 2) {
-			out = out.slice(0, start) + REDACTED_TOKEN;
-			stats.tokensRedacted++;
-		}
-	}
-	if (out.includes('hv')) {
-		out = out.replace(VAULT_TOKEN, () => {
-			stats.tokensRedacted++;
-			return REDACTED_TOKEN;
-		});
-	}
-	return out;
-}
-
-function scrubString(value: string, stats: FilterStats): string {
-	if (!value.includes('eyJ') && !value.includes('hv')) return value;
-	return value.replace(TOKEN_CHAR_RUN, (run) => redactRun(run, stats));
-}
-
-// ---------------------------------------------------------------------------
-// Payload deep scrub
+// Payload walk
 // ---------------------------------------------------------------------------
 
 function isJsonObject(value: unknown): value is Record<string, unknown> {
@@ -180,13 +115,14 @@ function isJsonObject(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Returns a scrubbed copy of `value`, or undefined when nothing of it may pass.
- * The input is only ever read; a new structure is built from what survives.
+ * Returns a copy of `value` without configuration-secret keys, prototype keys
+ * or over-deep nesting, or undefined when nothing of it may pass. Strings,
+ * numbers and booleans are copied unchanged. The input is only ever read; a new
+ * structure is built from what survives.
  */
 function scrubValue(value: unknown, depth: number, stats: FilterStats): JsonValue | undefined {
-	if (typeof value === 'string') return scrubString(value, stats);
+	if (typeof value === 'string' || typeof value === 'boolean' || value === null) return value;
 	if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
-	if (typeof value === 'boolean' || value === null) return value;
 	if (depth >= MAX_PAYLOAD_DEPTH) {
 		stats.deepValuesDropped++;
 		return undefined;
@@ -203,15 +139,12 @@ function scrubValue(value: unknown, depth: number, stats: FilterStats): JsonValu
 		const entries: [string, JsonValue][] = [];
 		for (const [key, item] of Object.entries(value)) {
 			if (PROTOTYPE_KEYS.has(key)) {
-				stats.keysRemoved++;
+				stats.prototypeKeysRemoved++;
 				continue;
 			}
-			if (!CORRELATION_KEYS.has(key)) {
-				// A key can itself be a token; a key that needed redacting is dropped.
-				if (isSecretKey(key) || scrubString(key, stats) !== key) {
-					stats.keysRemoved++;
-					continue;
-				}
+			if (isConfigSecretKey(key)) {
+				stats.configKeysRemoved++;
+				continue;
 			}
 			const scrubbed = scrubValue(item, depth + 1, stats);
 			if (scrubbed !== undefined) entries.push([key, scrubbed]);
@@ -222,25 +155,26 @@ function scrubValue(value: unknown, depth: number, stats: FilterStats): JsonValu
 }
 
 /**
- * Deep-scrubs a JSON body that is not a stream, e.g. the Use Case 1 agent's
- * `{ answer, sources, credential_metadata }` reply. Same rules as payload data.
+ * Applies the payload key rules to a JSON body that is not a stream, e.g. the
+ * Use Case 1 agent's `{ answer, sources, credential_metadata }` reply.
  */
 export function scrubJson(value: unknown): JsonValue | undefined {
 	return scrubValue(value, 0, newStats());
 }
 
 /**
- * Scrubs an agent's error body before it is shown to the user. A JSON body
- * gets the payload rules; anything else gets the string rules.
+ * Prepares an agent's error body for the user. A JSON body loses its
+ * configuration-secret keys; any other body is returned as it is.
  */
 export function scrubErrorText(text: string): string {
-	const stats = newStats();
+	let parsed: unknown;
 	try {
-		const scrubbed = scrubValue(JSON.parse(text), 0, stats);
-		return scrubbed === undefined ? '' : JSON.stringify(scrubbed);
+		parsed = JSON.parse(text);
 	} catch {
-		return scrubString(text, stats);
+		return text;
 	}
+	const scrubbed = scrubValue(parsed, 0, newStats());
+	return scrubbed === undefined ? '' : JSON.stringify(scrubbed);
 }
 
 // ---------------------------------------------------------------------------
@@ -251,11 +185,11 @@ type FieldSpec =
 	| { kind: 'string'; maxLength?: number }
 	| { kind: 'enum'; values: readonly string[] }
 	| { kind: 'number'; min?: number }
-	/** Any JSON value, deep-scrubbed. */
+	/** Any JSON value, walked with the payload key rules. */
 	| { kind: 'json' }
-	/** A JSON object, deep-scrubbed. */
+	/** A JSON object, walked with the payload key rules. */
 	| { kind: 'object' }
-	/** An array of JSON objects, deep-scrubbed; non-object items are dropped. */
+	/** An array of JSON objects, walked with the payload key rules; non-object items are dropped. */
 	| { kind: 'objectArray' };
 
 type FieldRule = FieldSpec & { required: boolean };
@@ -338,8 +272,7 @@ function sanitizeField(value: unknown, rule: FieldRule, stats: FilterStats): Jso
 	switch (rule.kind) {
 		case 'string':
 			if (typeof value !== 'string') return undefined;
-			if (rule.maxLength !== undefined && value.length > rule.maxLength) return undefined;
-			return scrubString(value, stats);
+			return rule.maxLength !== undefined && value.length > rule.maxLength ? undefined : value;
 		case 'enum':
 			return typeof value === 'string' && rule.values.includes(value) ? value : undefined;
 		case 'number':
@@ -395,8 +328,8 @@ interface FilterStats {
 	unknownType: number;
 	oversize: number;
 	unterminated: number;
-	keysRemoved: number;
-	tokensRedacted: number;
+	configKeysRemoved: number;
+	prototypeKeysRemoved: number;
 	deepValuesDropped: number;
 }
 
@@ -408,8 +341,8 @@ function newStats(): FilterStats {
 		unknownType: 0,
 		oversize: 0,
 		unterminated: 0,
-		keysRemoved: 0,
-		tokensRedacted: 0,
+		configKeysRemoved: 0,
+		prototypeKeysRemoved: 0,
 		deepValuesDropped: 0
 	};
 }
@@ -534,13 +467,15 @@ export function createActivityFilter(label: string): TransformStream<Uint8Array,
 			// Per the SSE spec an event with no closing blank line is discarded.
 			if (pending !== '' || dataLines.length > 0) stats.unterminated++;
 			const dropped = stats.malformed + stats.invalid + stats.unknownType + stats.oversize + stats.unterminated;
-			if (dropped > 0 || stats.keysRemoved > 0 || stats.tokensRedacted > 0 || stats.deepValuesDropped > 0) {
+			const removed = stats.configKeysRemoved + stats.prototypeKeysRemoved + stats.deepValuesDropped;
+			if (dropped > 0 || removed > 0) {
 				// Counts only: an agent's content, even a dropped type's name, is never logged.
 				console.warn(
 					`[activity-filter] ${label}: forwarded=${stats.forwarded} dropped=${dropped}` +
 						` (malformed=${stats.malformed} invalid=${stats.invalid} unknown_type=${stats.unknownType}` +
 						` oversize=${stats.oversize} unterminated=${stats.unterminated})` +
-						` keys_removed=${stats.keysRemoved} tokens_redacted=${stats.tokensRedacted}` +
+						` config_secret_keys_removed=${stats.configKeysRemoved}` +
+						` prototype_keys_removed=${stats.prototypeKeysRemoved}` +
 						` deep_values_dropped=${stats.deepValuesDropped}`
 				);
 			}

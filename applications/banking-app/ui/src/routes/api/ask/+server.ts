@@ -9,8 +9,8 @@
  *
  * The browser POSTs { query } here; this server-side handler (running in the
  * banking-ui pod) forwards it to the uc1-agent-svc in the uc1 namespace and
- * returns the agent's answer, scrubbed by $lib/server/activity-filter: an SSE
- * reply is streamed through the filter, a JSON reply is deep-scrubbed.
+ * returns the agent's answer through $lib/server/activity-filter: an SSE reply
+ * is streamed through the filter, a JSON reply loses its configuration-secret keys.
  * Cross-namespace egress on port 80 is permitted by the banking-ui-egress
  * NetworkPolicy.
  */
@@ -65,7 +65,7 @@ export const POST: RequestHandler = async ({ request }) => {
 	}
 
 	// Otherwise uc1-agent returns JSON { answer, sources, credential_metadata }.
-	// It is deep-scrubbed with the same rules before it reaches the browser.
+	// The filter's payload key rules apply to it before it reaches the browser.
 	let data: unknown;
 	try {
 		data = await agentRes.json();

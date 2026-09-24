@@ -19,10 +19,13 @@
  *   - an event type not listed here is dropped;
  *   - a field not listed on its type is dropped;
  *   - a frame that is not valid JSON, or that is missing a required field, is dropped;
- *   - every string has raw tokens (JWTs, Vault tokens) replaced by REDACTED_TOKEN;
- *   - payload fields (tool `args`/`result`, HITL `details`, audit `leases`/`claims`)
- *     are deep-scrubbed: any key named like a secret (password, secret, token,
- *     private key, api key, ...) is removed, however deeply it is nested.
+ *   - in payload fields (tool `args`/`result`, HITL `details`, audit `leases`/`claims`)
+ *     any key that names a configuration secret (an OAuth client secret, a SCIM,
+ *     admin or LDAP password, Vault's root token or unseal/recovery keys) is
+ *     removed with its value, however deeply it is nested.
+ * Values are never rewritten. Credentials issued during a turn (tokens, Vault
+ * tokens, database and AWS credentials) reach the browser in full, by design:
+ * the workshop shows what each use case does as it happens.
  *
  * Example frames, as the browser receives them:
  *
@@ -34,14 +37,11 @@
  * This module holds types and constants only, so browser code can import it.
  */
 
-/** Any value JSON can carry. Payload fields are typed as this after scrubbing. */
+/** Any value JSON can carry. Payload fields are typed as this. */
 export type JsonValue = string | number | boolean | null | JsonValue[] | JsonObject;
 export interface JsonObject {
 	[key: string]: JsonValue;
 }
-
-/** What a raw token (JWT or Vault token) is replaced with before it reaches the browser. */
-export const REDACTED_TOKEN = '[token redacted]';
 
 /** `agent:narration` glyphs: ▶ marks an agent step, ⚡ marks tool output. */
 export const NARRATION_GLYPHS = ['▶', '⚡'] as const;
@@ -87,9 +87,9 @@ export interface ToolCallEvent extends EventEnvelope {
 	toolCallId: string;
 	name: string;
 	status: ToolCallStatus;
-	/** The tool's arguments, deep-scrubbed. */
+	/** The tool's arguments, without configuration-secret keys. */
 	args?: JsonValue;
-	/** The tool's result, deep-scrubbed. */
+	/** The tool's result, without configuration-secret keys. */
 	result?: JsonValue;
 	/** Wall-clock time the call took, in milliseconds. */
 	durationMs?: number;
@@ -101,7 +101,7 @@ interface HitlFields extends EventEnvelope {
 	toolCallId?: string;
 	/** Plain-English line for the log, e.g. "Approval pushed to the user's IBM Verify app". */
 	text?: string;
-	/** What is being approved (e.g. amount, currency, transaction), deep-scrubbed. */
+	/** What is being approved (e.g. amount, currency, transaction), without configuration-secret keys. */
 	details?: JsonObject;
 }
 
@@ -149,13 +149,13 @@ export interface AgentAuditSeedEvent extends EventEnvelope {
 	/** Database role the issued credentials belong to. */
 	dbRole?: string;
 	/**
-	 * Every credential Vault issued for this turn, deep-scrubbed, e.g.
-	 * `{ lease_id, vault_path, ttl_seconds }`. Never the credential itself.
+	 * The lease of every credential Vault issued for this turn, e.g.
+	 * `{ lease_id, vault_path, ttl_seconds }`, without configuration-secret keys.
 	 */
 	leases?: JsonObject[];
 	/**
 	 * Decoded claims of the token the agent acted with (sub, scope, jti, iss,
-	 * aud, exp, act), deep-scrubbed. Never the token itself.
+	 * aud, exp, act), without configuration-secret keys.
 	 */
 	claims?: JsonObject;
 }
