@@ -52,6 +52,8 @@
 #   19. (optional) TRUE wrong-actor → DENY (UC3_WRONG_ACTOR_TOKEN). Production IVIA
 #       only signs act.sub=uc3-actor, so a validly-signed wrong-actor token is
 #       operator-supplied; ABSENT = documented SKIP (WARN), not required for green.
+#   20. Token-exchange client allowlist: an identical RFC 8693 request is refused as
+#       agent-uc2 (unauthorized_client) while uc3-actor gets past the client gate.
 #   Checks 15-18 self-mint (no manual token); a mint failure is a HARD FAIL.
 #   UC3_DELEGATED_TOKEN (if set) overrides the minted token for the Part B live gate.
 #
@@ -160,6 +162,8 @@ no manual browser capture needed:
   18. Cross-UC ceiling isolation → DENY: agent-uc2 token (act.sub=agent-uc2) denied UC3 refund
   19. (optional) TRUE wrong-actor → DENY (UC3_WRONG_ACTOR_TOKEN) — production IVIA
       only signs act.sub=uc3-actor, so this is operator-supplied; absent = SKIP (WARN)
+  20. Token-exchange client allowlist — an identical RFC 8693 request is refused as
+      agent-uc2 (unauthorized_client) while uc3-actor gets past the client gate
       A self-mint failure is a HARD FAIL (skip = not-proven != pass), never silent.
       The mint drives a REAL approval (virtual authenticator) rather than a plain
       login: minting a delegated token WITHOUT an approval is the very bypass the
@@ -607,6 +611,7 @@ if [ "${BYPASS_MODE}" = true ]; then
     #   17. Per-request RAR → DENY (valid token to a path OUTSIDE its RAR).
     #   18. Cross-UC ceiling isolation → DENY (agent-uc2 token denied UC3 refund).
     #   19. (optional) TRUE wrong-actor → DENY (operator-supplied; absent = SKIP).
+    #   20. Token-exchange client allowlist (agent-uc2 refused, uc3-actor admitted).
     # A self-mint failure is a HARD FAIL (skip = not-proven != pass).
     #===========================================================================
 
