@@ -212,11 +212,14 @@
 </div>
 
 <style>
+	/* Carbon's body type sets 0.16px tracking; the design sets chat text in the font's normal
+	   letter spacing. Text that sets its own tracking (the uppercase pills) keeps it. */
 	.workspace {
 		display: flex;
 		height: 100vh;
 		height: 100dvh;
 		min-height: 0;
+		letter-spacing: normal;
 	}
 
 	.chat {
@@ -364,6 +367,14 @@
 		outline-offset: -2px;
 	}
 
+	/* Carbon components in the conversation (the error notification, the consent card's
+	   buttons) set 0.16px on their own text, so they do not inherit the rule above. */
+	.chat-messages :global(.bx--inline-notification__title),
+	.chat-messages :global(.bx--inline-notification__subtitle),
+	.chat-messages :global(.bx--btn) {
+		letter-spacing: normal;
+	}
+
 	/* ---- Suggestions -------------------------------------------------------------- */
 	.chat-suggestions {
 		display: flex;
@@ -434,7 +445,7 @@
 		background: var(--ovi-surface-bg);
 		color: var(--ovi-text-primary);
 		font: 15.5px/22px var(--ovi-font-sans);
-		letter-spacing: 0;
+		letter-spacing: normal;
 		resize: none;
 	}
 
