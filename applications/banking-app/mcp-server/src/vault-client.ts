@@ -21,7 +21,8 @@
  *                     deliberately does NOT reuse the user's OAuth JWT — that
  *                     would mean widening the user/agent envelope to include
  *                     lease revocation. It returns that login with the revoke
- *                     outcome, so the turn can show the token it presented.
+ *                     outcome, so the turn can show the Vault token it presented
+ *                     and the ServiceAccount token the login presented.
  *
  * There is NO Vault login round-trip on the CREDENTIAL path and NO intermediate
  * Vault token there — the user OAuth JWT IS the credential. A jti claim is required (schema-validated by the
@@ -45,15 +46,21 @@ const VAULT_K8S_ROLE = process.env.VAULT_K8S_ROLE ?? 'uc2';
 const SA_TOKEN_PATH = '/var/run/secrets/kubernetes.io/serviceaccount/token';
 
 /**
- * The MCP server's own Vault login, as the Kubernetes auth login returned it.
+ * The MCP server's own Vault login, as the Kubernetes auth login returned it,
+ * and the ServiceAccount token it presented to get it.
  *
- * `token` is a live Vault token. It leaves this module only in RevokeOutcome, so
- * tools.ts can hand it to the agent for the turn's own event stream (the
- * workshop shows every credential in full). It is never logged.
+ * `token` is a live Vault token and `serviceAccountJwt` a live Kubernetes
+ * ServiceAccount token. They leave this module only in RevokeOutcome, so
+ * tools.ts can hand them to the agent for the turn's own event stream (the
+ * workshop shows every credential in full). Neither is ever logged.
  */
 export interface ServiceLogin {
   /** auth.client_token — the Vault token revokeLease presents. */
   token: string;
+  /** The projected ServiceAccount token this login presented to auth/kubernetes/login. */
+  serviceAccountJwt: string;
+  /** "<namespace>/<name>" of that ServiceAccount, as Vault reported it in auth.metadata; null when not reported. */
+  serviceAccount: string | null;
   /** The Kubernetes auth role it logged in as. */
   role: string;
   /** auth.policies from the login response. */
@@ -100,7 +107,12 @@ async function vaultK8sLogin(): Promise<ServiceLogin> {
   }
 
   const data = (await res.json()) as {
-    auth?: { client_token?: string; lease_duration?: number; policies?: unknown };
+    auth?: {
+      client_token?: string;
+      lease_duration?: number;
+      policies?: unknown;
+      metadata?: { service_account_name?: unknown; service_account_namespace?: unknown };
+    };
   };
   const receivedAt = Date.now();
   const token = data?.auth?.client_token;
@@ -112,8 +124,17 @@ async function vaultK8sLogin(): Promise<ServiceLogin> {
   const policies = Array.isArray(data.auth?.policies)
     ? data.auth.policies.filter((p): p is string => typeof p === 'string')
     : [];
+  const saName = data.auth?.metadata?.service_account_name;
+  const saNamespace = data.auth?.metadata?.service_account_namespace;
   serviceLogin = {
     token,
+    serviceAccountJwt: saToken,
+    serviceAccount:
+      typeof saName === 'string' && saName
+        ? typeof saNamespace === 'string' && saNamespace
+          ? `${saNamespace}/${saName}`
+          : saName
+        : null,
     role: VAULT_K8S_ROLE,
     policies,
     ttlSeconds,

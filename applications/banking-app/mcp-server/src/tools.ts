@@ -19,8 +19,9 @@
  *      (lookupCallerPolicies — auth/token/lookup-self, best-effort).
  *   8. Return results + credential metadata for OBJ-5 audit correlation, the
  *      revoke outcome (lease_revoked), the credential itself
- *      (issued_db_credentials), and the MCP server's own Vault token that the
- *      revoke presented (mcp_vault_token).
+ *      (issued_db_credentials), the MCP server's own Vault token that the
+ *      revoke presented (mcp_vault_token), and the Kubernetes ServiceAccount
+ *      token the server's Vault login presented (mcp_service_account_token).
  *
  * credential_metadata reports only what this code did or Vault returned: the
  * header the credential read authenticated with (the caller's OAuth JWT as
@@ -34,9 +35,10 @@
  * issued_db_credentials out of this response before anything reaches the model
  * and sends it only on its per-request event stream. By the time it is returned
  * the revoke has already run, and lease_revoked says whether Vault confirmed it.
- * mcp_vault_token travels the same way: the agent takes it out and shows it
- * only on the turn's event stream. It is the server's standing token, reused
- * across calls and callers until it nears expiry. Neither is ever logged here.
+ * mcp_vault_token and mcp_service_account_token travel the same way: the agent
+ * takes them out and shows them only on the turn's event stream. They are the
+ * server's standing credentials, reused across calls and callers until the
+ * Vault token nears expiry. None of these is ever logged here.
  *
  * The jwt each tool receives is the one index.ts read from the request's
  * Authorization header — never a value taken from the tool arguments.
@@ -196,6 +198,16 @@ function credentialReport({ creds, sub, revoke, callerPolicies }: UserQueryResul
             issued_at: login.issuedAt,
             logged_in_for_this_call: revoke.freshLogin,
             presented_to: 'sys/leases/revoke',
+          },
+          // The Kubernetes ServiceAccount token that login presented to Vault.
+          // Same handling as mcp_vault_token: a sibling, taken out by the agent
+          // for its event stream only.
+          mcp_service_account_token: {
+            jwt: login.serviceAccountJwt,
+            service_account: login.serviceAccount,
+            role: login.role,
+            logged_in_for_this_call: revoke.freshLogin,
+            presented_to: 'auth/kubernetes/login',
           },
         }
       : {}),
