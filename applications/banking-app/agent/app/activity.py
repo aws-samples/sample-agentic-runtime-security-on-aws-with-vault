@@ -20,12 +20,19 @@ to_thread and run_async — and push onto the SERVER loop captured at request
 start, via loop.call_soon_threadsafe. The queue is unbounded, so a client that
 disconnects never blocks the worker; the worker always finishes.
 
-Secrets
--------
-The UI's activity filter is the second line of defence, not the first. Every
-event built here is scrubbed with the same rules before it is queued: keys named
-like a secret are removed, and JWTs and Vault tokens in any string are replaced.
-The caller's token appears only as its decoded non-secret claims.
+Credentials
+-----------
+The workshop shows every credential issued during a turn IN FULL (Bear,
+2026-09-24): the caller's access token as the MCP server presents it to Vault,
+and the database credential Vault issues for each tool call. Those go out ONLY
+as `agent:credential` events, built field by field in TurnActivity.credential()
+and sent only on this per-request queue — never in a tool's return value (which
+reaches the model) and never in a log line.
+
+Every OTHER event is scrubbed with the UI filter's rules before it is queued:
+keys named like a secret are removed, and JWTs and Vault tokens in any string are
+replaced. So narration, tool calls and the audit seed never carry a credential;
+the one place a credential appears is the event whose job is to show it.
 """
 
 from __future__ import annotations
@@ -134,19 +141,23 @@ def scrub(value: Any) -> Any:
     return scrub_text(str(value))
 
 
-def decode_claims(jwt: str) -> dict[str, Any]:
-    """The non-secret claims of the caller's token, for display only.
+def decode_payload(jwt: str) -> dict[str, Any]:
+    """The whole decoded payload of a JWT, for display only.
 
     The signature is NOT verified here: Vault verifies the token when the MCP
-    server presents it. These claims only label the turn; they authorize nothing.
+    server presents it. What this returns labels the turn; it authorizes nothing.
     """
     try:
         payload = jwt.split(".")[1]
         data = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
     except (IndexError, ValueError):
         return {}
-    if not isinstance(data, dict):
-        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def decode_claims(jwt: str) -> dict[str, Any]:
+    """The non-secret claims of the caller's token that label the turn (unverified)."""
+    data = decode_payload(jwt)
     return {key: data[key] for key in ("sub", "scope", "iss", "aud", "exp") if key in data}
 
 
@@ -165,6 +176,7 @@ class TurnActivity:
         self._queue: asyncio.Queue[Any] = asyncio.Queue()  # unbounded: the worker never blocks
         self._lock = threading.Lock()
         self._model_calls = 0
+        self._access_token_reported = False
         self._tool_started_at: dict[str, float] = {}
         self.request_id = request_id
         self.claims = claims
@@ -184,6 +196,51 @@ class TurnActivity:
         if accent:
             event["accent"] = accent
         self.emit(event)
+
+    def credential(
+        self,
+        *,
+        kind: str,
+        label: str,
+        issuer: str,
+        value: str | None = None,
+        fields: dict[str, str] | None = None,
+        claims: dict[str, Any] | None = None,
+        vault_path: str | None = None,
+        lease_id: str | None = None,
+        ttl_seconds: int | float | None = None,
+        expires_at: int | None = None,
+    ) -> None:
+        """Queue an agent:credential event carrying a credential IN FULL.
+
+        Built from these named fields only, and deliberately NOT scrubbed: showing
+        the credential is the event's purpose. Only credentials issued during the
+        turn come through here — never a client secret or other configuration.
+        """
+        event: dict[str, Any] = {"type": "agent:credential", "kind": kind, "label": label, "issuer": issuer}
+        if value is not None:
+            event["value"] = value
+        elif fields is not None:
+            event["fields"] = dict(fields)
+        optional = {
+            "claims": claims,
+            "vaultPath": vault_path,
+            "leaseId": lease_id,
+            "ttlSeconds": ttl_seconds,
+            "expiresAt": expires_at,
+        }
+        event.update({key: item for key, item in optional.items() if item is not None})
+        event["requestId"] = self.request_id
+        event["ts"] = int(time.time() * 1000)
+        self._push(event)
+
+    def first_access_token_report(self) -> bool:
+        """True exactly once per turn: the access token is shown the first time it is presented."""
+        with self._lock:
+            if self._access_token_reported:
+                return False
+            self._access_token_reported = True
+            return True
 
     def close(self) -> None:
         """Mark the agent worker finished. Called from the worker's finally."""
@@ -275,14 +332,21 @@ def current() -> TurnActivity | None:
 _CREDENTIAL_METADATA_KEYS = (
     "vault_authenticated",
     "db_role",
+    "vault_path",
     "lease_id",
     "lease_duration_seconds",
+    "lease_revoked",
     "user_sub",
 )
 
 
-def report_mcp_call(tool_name: str, mcp_url: str) -> None:
-    """Narrate the MCP call a tool is about to make."""
+def report_mcp_call(tool_name: str, mcp_url: str, jwt: str) -> None:
+    """Narrate the MCP call a tool is about to make, and show the token it presents.
+
+    The MCP server presents exactly the token it receives on the Authorization
+    header to Vault as X-Vault-Token (mcp-server/src/index.ts, vault-client.ts),
+    so `jwt` here is the credential Vault sees. It is shown once per turn.
+    """
     turn = current()
     if turn is None:
         return
@@ -294,15 +358,27 @@ def report_mcp_call(tool_name: str, mcp_url: str) -> None:
         f"Calling {tool_name} on the MCP server ({host}), presenting the caller's access token{whose} "
         "on the Authorization header."
     )
+    if jwt and turn.first_access_token_report():
+        claims = decode_payload(jwt)
+        exp = claims.get("exp")
+        turn.credential(
+            kind="access_token",
+            label=f"The caller's access token{whose}, which the MCP server presents to Vault as X-Vault-Token",
+            issuer="IBM Verify Identity Access",
+            value=jwt,
+            claims=claims or None,
+            expires_at=int(exp * 1000) if isinstance(exp, (int, float)) else None,
+        )
 
 
-def report_credential_metadata(tool_name: str, meta: Any) -> None:
-    """Narrate the credential the MCP server says Vault issued for this call.
+def report_credential_metadata(tool_name: str, meta: Any, issued: Any = None) -> None:
+    """Narrate — and show — the credential the MCP server says Vault issued for this call.
 
-    Everything here is what the MCP server REPORTED in credential_metadata; the
-    agent never sees Vault or the credential itself. The lease is revoked inside
-    the MCP server, which does not report the outcome, so the revoke is narrated
-    as not observed.
+    `meta` is the MCP server's credential_metadata; `issued` is its
+    issued_db_credentials ({username, password}), which the tool has already
+    taken out of the response so the model never sees it. An MCP server older
+    than lease_revoked / issued_db_credentials still works: the credential is
+    then not shown and the revoke is narrated as not observed.
     """
     turn = current()
     if turn is None or not isinstance(meta, dict) or not meta:
@@ -311,8 +387,10 @@ def report_credential_metadata(tool_name: str, meta: Any) -> None:
     if not reported:
         return
     db_role = reported.get("db_role")
+    vault_path = reported.get("vault_path")
     lease_id = reported.get("lease_id")
     ttl = reported.get("lease_duration_seconds")
+    revoked = reported.get("lease_revoked")
     turn.record_lease(db_role, lease_id, ttl)
 
     turn.narrate(
@@ -321,8 +399,8 @@ def report_credential_metadata(tool_name: str, meta: Any) -> None:
         accent="tool_output",
     )
 
-    # "lease duration", not "valid for": the MCP server has already revoked the
-    # lease by the time it returns, so nothing here may imply it is still live.
+    # "lease duration", not "valid for": the MCP server has already tried to
+    # revoke the lease by the time it returns, so nothing may imply it is live.
     parts = []
     if db_role:
         parts.append(f"database role {db_role}")
@@ -330,17 +408,57 @@ def report_credential_metadata(tool_name: str, meta: Any) -> None:
         parts.append(f"lease duration {ttl}s")
     if lease_id:
         parts.append(f"lease {lease_id}")
+    shown = (
+        isinstance(issued, dict)
+        and isinstance(issued.get("username"), str)
+        and isinstance(issued.get("password"), str)
+    )
     if parts:
+        tail = (
+            " It handed the credential back for display only; the model never sees it."
+            if shown
+            else " The agent never receives the credential."
+        )
         turn.narrate(
             f"The MCP server reports Vault issued it a database credential for {tool_name} — "
             + ", ".join(parts)
-            + ". The agent never receives the credential."
+            + "."
+            + tail
         )
+
+    if shown:
+        if revoked is True:
+            state = "revoked before the MCP server replied"
+        elif revoked is False:
+            state = "Vault did not confirm its revoke"
+        else:
+            state = "revoke not observed in this flow"
+        turn.credential(
+            kind="db_credentials",
+            label=f"Database credential Vault issued for {tool_name}"
+            + (f" (role {db_role})" if db_role else "")
+            + f", {state}",
+            issuer="Vault",
+            fields={"username": issued["username"], "password": issued["password"]},
+            vault_path=vault_path if isinstance(vault_path, str) else None,
+            lease_id=lease_id if isinstance(lease_id, str) else None,
+            ttl_seconds=ttl if isinstance(ttl, (int, float)) else None,
+        )
+
     if lease_id and lease_id != "unknown":
-        turn.narrate(
-            f"Credential revoked: not observed in this flow. The MCP server revokes lease {lease_id} itself "
-            "and does not report the outcome to the agent."
-        )
+        if revoked is True:
+            turn.narrate(f"The MCP server reports Vault revoked lease {lease_id} before it replied.")
+        elif revoked is False:
+            ttl_text = f" after {ttl}s" if isinstance(ttl, (int, float)) else ""
+            turn.narrate(
+                f"The MCP server reports Vault did not confirm revoking lease {lease_id}; "
+                f"the credential expires on its own{ttl_text}."
+            )
+        else:
+            turn.narrate(
+                f"Credential revoked: not observed in this flow. The MCP server revokes lease {lease_id} itself "
+                "and does not report the outcome to the agent."
+            )
 
 
 # ---------------------------------------------------------------------------

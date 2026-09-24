@@ -44,7 +44,7 @@ def _call_mcp_tool(tool_name: str, jwt: str, **kwargs: object) -> dict:
     constrained nothing. The tools no longer accept a jwt argument at all, so
     there is no ignored field left for a caller to believe is honoured.
     """
-    activity.report_mcp_call(tool_name, MCP_URL)
+    activity.report_mcp_call(tool_name, MCP_URL, jwt)
 
     payload = {
         "jsonrpc": "2.0",
@@ -107,9 +107,12 @@ def get_accounts() -> list[dict]:
 
     if content_blocks and content_blocks[0].get("type") == "text":
         parsed = json.loads(content_blocks[0]["text"])
+        # The issued DB credential goes to the turn's event stream ONLY. It is
+        # taken out here so it can never reach the model or a log line.
+        issued = parsed.pop("issued_db_credentials", None)
         accounts = parsed.get("accounts", [])
         meta = parsed.get("credential_metadata", {})
-        activity.report_credential_metadata("get_accounts", meta)
+        activity.report_credential_metadata("get_accounts", meta, issued)
         logger.info(
             "get_accounts_success",
             extra={
@@ -156,9 +159,12 @@ def get_transactions(account_id: str = "") -> list[dict]:
 
     if content_blocks and content_blocks[0].get("type") == "text":
         parsed = json.loads(content_blocks[0]["text"])
+        # The issued DB credential goes to the turn's event stream ONLY. It is
+        # taken out here so it can never reach the model or a log line.
+        issued = parsed.pop("issued_db_credentials", None)
         transactions = parsed.get("transactions", [])
         meta = parsed.get("credential_metadata", {})
-        activity.report_credential_metadata("get_transactions", meta)
+        activity.report_credential_metadata("get_transactions", meta, issued)
         logger.info(
             "get_transactions_success",
             extra={
