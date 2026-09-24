@@ -40,7 +40,7 @@ Check your inbox for the 6-digit passcode and enter it:
 
 After signing in you land on the event page. Click **Join event**, then **Open AWS console**:
 
-![Workshop Studio event page — Join event button, then Open AWS console](/static/images/ws-open-console.png)
+![Workshop Studio event dashboard — the AWS account access section of the left nav, with Open AWS console and Get AWS CLI credentials](/static/images/ws-open-console.png)
 
 This opens a federated AWS console session under the **`WSParticipantRole`** identity — your workshop account for the event.
 
@@ -54,7 +54,9 @@ In the AWS console, check the region selector in the top-right corner. It must s
 
 ### Step 5 — If you prefer your own terminal
 
-CloudShell is the supported path and needs no setup. To use your own terminal instead, take the short-term credentials Workshop Studio issues for `WSParticipantRole`: on the event page, open the **AWS CLI credentials** panel (next to **Open AWS console**) and follow the option it shows for your shell. They expire when the event session does.
+CloudShell is the supported path and needs no setup. To use your own terminal instead, take the short-term credentials Workshop Studio issues for `WSParticipantRole`.
+
+On the event dashboard, find the **AWS account access** section in the left nav — the same place you clicked **Open AWS console** in Step 3. Directly below it is **Get AWS CLI credentials**. Click it and copy the block that matches your shell into that shell. These credentials expire when your event session does; re-copy them if the CLI starts returning `ExpiredToken`.
 
 **Why:** Confirm the CLI is carrying the workshop identity — `WSParticipantRole` is the principal that holds EKS cluster access and can read the staged Tier-1 state.
 
