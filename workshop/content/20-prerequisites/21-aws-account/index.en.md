@@ -7,21 +7,6 @@ weight: 21
 If you received a Workshop Studio invite link or a 12-digit event code from an instructor, your AWS account is already provisioned and Tier-1 infrastructure is already running. Go to [At an Event](../21-at-an-event/) instead. The steps on this page apply only to self-paced attendees running the workshop in their own AWS account.
 ::::
 
-## Tooling Prerequisites
-
-Install the following tools before running any workshop scripts. The workshop's `check-prerequisites.sh` script verifies each one and installs missing tools automatically (Homebrew on macOS, apt on Linux).
-
-| Tool | Minimum version | Notes |
-|------|----------------|-------|
-| AWS CLI | v2 | `aws --version` |
-| Terraform | 1.10+ | `terraform -version` — 1.10 is required for the workshop's deploy scripts |
-| kubectl | 1.34+ | `kubectl version --client` |
-| Helm | 3.12+ | `helm version` |
-| Docker or Podman | Any recent | Required for the default self-paced deploy (builds the images into your account ECR). Only the optional no-build GHCR path (advanced; documented in the repo README) skips it. |
-| jq | 1.6+ | `jq --version` |
-
-The checker lives inside the workshop repo, so you clone first and run it in **Step 2** below.
-
 ## Deployer IAM Permissions
 
 Your AWS CLI identity needs permissions to create all Tier-1 resources: EKS cluster, VPC, RDS, Bedrock KB, IAM roles, KMS keys, CloudWatch log groups, Firehose delivery streams, Athena workgroup, and AOSS collection. The `bootstrap.sh` script stamps your current identity as `admin_principal_arn` in `infrastructure/terraform.tfvars`.
@@ -92,19 +77,11 @@ If the output starts with `arn:aws:sts::` (assumed role), note the underlying IA
 
 If it fails with `Unable to locate credentials`, nothing above took effect — re-run the configuration route that matches your account.
 
-## Step 2: Clone the Repository and Run the Pre-flight Checker
+## Step 2: Run the Pre-flight Checks
 
-**Why:** Everything below runs from inside the repo. This clone is safe to re-run — if the repo is already there it just moves you into it.
+[Run Pre-flight Checks](../23-pre-flight-checks/) clones the workshop repo and runs `check-prerequisites.sh`, which installs every CLI tool and checks the things that silently break a deploy two hours later — Bedrock model access, service quotas, IAM permissions. It authenticates as the identity you configured in Step 1, so do that first.
 
-```bash
-cd ~ && { [ -d sample-agentic-runtime-security-on-aws-with-vault ] || git clone https://github.com/aws-samples/sample-agentic-runtime-security-on-aws-with-vault.git; } && cd sample-agentic-runtime-security-on-aws-with-vault && pwd
-```
-
-**Why:** One command installs and verifies every CLI tool in the table above, then checks the things that silently break a deploy two hours later — Bedrock model access, service quotas, IAM permissions. It authenticates as the identity you set up in Step 1.
-
-```bash
-bash infrastructure/scripts/check-prerequisites.sh
-```
+Come back here for Step 3 once it reports green.
 
 ## Step 3: Verify Bedrock Model Access
 
