@@ -1,7 +1,7 @@
 import { json, type RequestHandler } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 import { scrubErrorText } from '$lib/server/activity-filter';
-import { AgentCall, streamAgentEvents } from '$lib/server/agent-proxy';
+import { AgentCall, agentFailed, streamAgentEvents } from '$lib/server/agent-proxy';
 
 const AGENT_URL = env.AGENT_URL ?? 'http://banking-agent-svc:3002';
 
@@ -23,7 +23,8 @@ export const POST: RequestHandler = async ({ request, cookies, platform }) => {
 		return json({ error: 'Invalid JSON body' }, { status: 400 });
 	}
 
-	// Closes the agent call when the browser leaves. See $lib/server/agent-proxy.
+	// Closes the agent call when the browser leaves or the agent goes quiet.
+	// See $lib/server/agent-proxy.
 	const call = new AgentCall(request, platform);
 	let agentRes: Response;
 	try {
@@ -38,18 +39,20 @@ export const POST: RequestHandler = async ({ request, cookies, platform }) => {
 		});
 	} catch (err) {
 		call.end();
-		return json(
-			{ error: `Cannot reach the Use Case 2 agent: ${err instanceof Error ? err.message : String(err)}` },
-			{ status: 502 }
+		return agentFailed(
+			call,
+			'Use Case 2',
+			`Cannot reach the Use Case 2 agent: ${err instanceof Error ? err.message : String(err)}`
 		);
 	}
 
 	if (!agentRes.ok) {
-		// The agent can close the connection part-way through its error body.
-		const errorBody = await call
-			.readText(agentRes)
-			.catch(() => '(the agent closed the connection before its error body arrived)');
-		const text = scrubErrorText(errorBody);
+		// The agent can close the connection, or go quiet, part-way through its error body.
+		const errorBody = await call.readText(agentRes).catch(() => null);
+		if (errorBody === null && call.stopped === 'agent_idle') {
+			return agentFailed(call, 'Use Case 2', '');
+		}
+		const text = scrubErrorText(errorBody ?? '(the agent closed the connection before its error body arrived)');
 		return json({ error: `Agent error [${agentRes.status}]: ${text}` }, { status: agentRes.status });
 	}
 
@@ -60,5 +63,5 @@ export const POST: RequestHandler = async ({ request, cookies, platform }) => {
 
 	// Every event the agent streams passes through the activity filter: the
 	// browser never receives the agent's bytes directly. See $lib/server/activity-filter.
-	return streamAgentEvents(call, agentRes.body, 'api/chat');
+	return streamAgentEvents(call, agentRes.body, 'api/chat', 'Use Case 2');
 };

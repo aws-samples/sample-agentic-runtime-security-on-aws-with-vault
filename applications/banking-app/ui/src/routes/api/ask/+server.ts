@@ -17,7 +17,7 @@
 import { json, type RequestHandler } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 import { scrubErrorText, scrubJson } from '$lib/server/activity-filter';
-import { AgentCall, streamAgentEvents } from '$lib/server/agent-proxy';
+import { AgentCall, agentFailed, streamAgentEvents } from '$lib/server/agent-proxy';
 
 const UC1_AGENT_URL = env.UC1_AGENT_URL ?? 'http://uc1-agent-svc.uc1.svc.cluster.local';
 
@@ -34,7 +34,8 @@ export const POST: RequestHandler = async ({ request, platform }) => {
 		return json({ error: 'query is required' }, { status: 400 });
 	}
 
-	// Closes the agent call when the browser leaves. See $lib/server/agent-proxy.
+	// Closes the agent call when the browser leaves or the agent goes quiet.
+	// See $lib/server/agent-proxy.
 	const call = new AgentCall(request, platform);
 	let agentRes: Response;
 	try {
@@ -46,18 +47,20 @@ export const POST: RequestHandler = async ({ request, platform }) => {
 		});
 	} catch (err) {
 		call.end();
-		return json(
-			{ error: `Cannot reach Use Case 1 agent: ${err instanceof Error ? err.message : String(err)}` },
-			{ status: 502 }
+		return agentFailed(
+			call,
+			'Use Case 1',
+			`Cannot reach Use Case 1 agent: ${err instanceof Error ? err.message : String(err)}`
 		);
 	}
 
 	if (!agentRes.ok) {
-		// The agent can close the connection part-way through its error body.
-		const errorBody = await call
-			.readText(agentRes)
-			.catch(() => '(the agent closed the connection before its error body arrived)');
-		const text = scrubErrorText(errorBody);
+		// The agent can close the connection, or go quiet, part-way through its error body.
+		const errorBody = await call.readText(agentRes).catch(() => null);
+		if (errorBody === null && call.stopped === 'agent_idle') {
+			return agentFailed(call, 'Use Case 1', '');
+		}
+		const text = scrubErrorText(errorBody ?? '(the agent closed the connection before its error body arrived)');
 		return json({ error: `Agent error [${agentRes.status}]: ${text}` }, { status: agentRes.status });
 	}
 
@@ -69,7 +72,7 @@ export const POST: RequestHandler = async ({ request, platform }) => {
 			call.end();
 			return json({ error: 'Agent returned no response body' }, { status: 502 });
 		}
-		return streamAgentEvents(call, agentRes.body, 'api/ask');
+		return streamAgentEvents(call, agentRes.body, 'api/ask', 'Use Case 1');
 	}
 
 	// Otherwise uc1-agent returns JSON { answer, sources, credential_metadata }.
@@ -78,7 +81,7 @@ export const POST: RequestHandler = async ({ request, platform }) => {
 	try {
 		data = JSON.parse(await call.readText(agentRes));
 	} catch {
-		return json({ error: 'Use Case 1 agent returned a body that is not JSON' }, { status: 502 });
+		return agentFailed(call, 'Use Case 1', 'Use Case 1 agent returned a body that is not JSON');
 	}
 	return new Response(JSON.stringify(scrubJson(data) ?? null), {
 		headers: { 'Content-Type': 'application/json' }
