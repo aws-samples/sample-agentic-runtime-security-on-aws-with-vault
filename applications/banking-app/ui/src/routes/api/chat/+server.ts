@@ -40,7 +40,9 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
 	}
 
 	if (!agentRes.ok) {
-		const text = scrubErrorText(await agentRes.text());
+		// The agent can close the connection part-way through its error body.
+		const errorBody = await agentRes.text().catch(() => '(the agent closed the connection before its error body arrived)');
+		const text = scrubErrorText(errorBody);
 		return new Response(JSON.stringify({ error: `Agent error [${agentRes.status}]: ${text}` }), {
 			status: agentRes.status,
 		});
