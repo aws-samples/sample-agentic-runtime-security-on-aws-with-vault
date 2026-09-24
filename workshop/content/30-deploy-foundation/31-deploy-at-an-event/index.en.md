@@ -14,7 +14,7 @@ Follow **[Deploy — Self-paced](../31-deploy-self-paced/)** — you bootstrap a
 Clone the workshop repo:
 
 ```bash
-git clone https://github.com/aws-samples/sample-agentic-runtime-security-on-aws-with-vault.git && cd sample-agentic-runtime-security-on-aws-with-vault
+cd ~ && { [ -d sample-agentic-runtime-security-on-aws-with-vault ] || git clone https://github.com/aws-samples/sample-agentic-runtime-security-on-aws-with-vault.git; } && cd sample-agentic-runtime-security-on-aws-with-vault && pwd
 ```
 
 #### Step 2 — Bootstrap

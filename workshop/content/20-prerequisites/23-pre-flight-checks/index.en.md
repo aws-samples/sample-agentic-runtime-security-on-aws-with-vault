@@ -39,7 +39,7 @@ Tools installed outside `$HOME` are gone after an idle disconnect. If your sessi
 
 ::::tab{label="Local terminal or IDE" id="local"}
 
-Use your own terminal on macOS or Linux. On Windows, use **WSL2** — the scripts are bash and expect a Linux shell.
+Use your own terminal on macOS or Linux. The scripts are bash and expect a Linux shell.
 
 The pre-flight script in Step 2 installs every CLI tool for you, through Homebrew, apt or yum depending on your system.
 
@@ -50,7 +50,13 @@ If you are self-paced, you also need Docker or Podman running before you deploy 
 
 :::::
 
-## Step 2 — Run the pre-flight script
+## Step 2 — Clone the repo and run the pre-flight script
+
+**Why:** The pre-flight script lives in the workshop repo, so the repo has to be on disk before you can run it. This clone is safe to re-run — if the repo is already there it just moves you into it.
+
+```bash
+cd ~ && { [ -d sample-agentic-runtime-security-on-aws-with-vault ] || git clone https://github.com/aws-samples/sample-agentic-runtime-security-on-aws-with-vault.git; } && cd sample-agentic-runtime-security-on-aws-with-vault && pwd
+```
 
 **Why:** One command installs every CLI tool, then checks the things that silently break a deploy two hours later — Bedrock model access, service quotas, IAM permissions. It continues past individual failures and ends with one summary carrying a copy-paste fix for each.
 
@@ -62,8 +68,10 @@ The workshop expects kubectl 1.34.x, helm 3.12+, terraform 1.10+, vault 1.20.4+,
 
 Flags:
 
+- `--image-source=ghcr` — use pre-built public images instead of building your own, which removes the Docker/Podman requirement entirely. The default is `ecr`: build the five Use Case images locally and push them to your account's registry, which needs a running container runtime.
 - `--interactive` — prompt before each install and each check section
 - `--dry-run` — print the install plan without executing
+- `--skip-tools` — skip the install and version sections, keeping the credential, Bedrock, quota and IAM checks
 - `--skip-iam-sim` — skip the IAM permission simulation (see the note below)
 - `--skip-quotas` — skip the service-quota probe when the account blocks the `servicequotas` API
 - `--help` — usage
@@ -147,7 +155,7 @@ At an AWS-led event none of this applies: CodeBuild built and pushed the images 
 
 Installing a runtime is not enough — the engine must be **running** before you deploy, or the pre-flight check fails with "installed but not running". Set up **one** of:
 
-- **Docker** — install Docker Desktop (macOS/Windows) or Docker Engine (Linux), then **start it** and confirm `docker info` succeeds.
+- **Docker** — install Docker Desktop (macOS) or Docker Engine (Linux), then **start it** and confirm `docker info` succeeds.
 - **Podman** — `brew install podman` (macOS) then `podman machine init && podman machine start`; on Linux install Podman 4.0+ from [podman.io](https://podman.io/docs/installation). Confirm `podman info` succeeds.
 
 When both are installed, the scripts prefer Podman; force one with `WORKSHOP_CONTAINER_CLI=docker` (or `=podman`).
