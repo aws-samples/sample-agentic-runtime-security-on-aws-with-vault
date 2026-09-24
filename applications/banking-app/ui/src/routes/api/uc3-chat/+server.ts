@@ -10,16 +10,29 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
 		return new Response(JSON.stringify({ error: 'Not authenticated' }), { status: 401 });
 	}
 
-	const body = await request.json();
+	let body: unknown;
+	try {
+		body = await request.json();
+	} catch {
+		return new Response(JSON.stringify({ error: 'Invalid JSON body' }), { status: 400 });
+	}
 
-	const agentRes = await fetch(`${UC3_AGENT_URL}/chat`, {
-		method: 'POST',
-		headers: {
-			'Content-Type': 'application/json',
-			Authorization: `Bearer ${idToken}`,
-		},
-		body: JSON.stringify(body),
-	});
+	let agentRes: Response;
+	try {
+		agentRes = await fetch(`${UC3_AGENT_URL}/chat`, {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				Authorization: `Bearer ${idToken}`,
+			},
+			body: JSON.stringify(body),
+		});
+	} catch (err) {
+		return new Response(
+			JSON.stringify({ error: `Cannot reach the Use Case 3 agent: ${err instanceof Error ? err.message : String(err)}` }),
+			{ status: 502 }
+		);
+	}
 
 	if (!agentRes.ok) {
 		const text = scrubErrorText(await agentRes.text());
