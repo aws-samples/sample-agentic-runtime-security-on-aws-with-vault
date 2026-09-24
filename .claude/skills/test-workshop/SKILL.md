@@ -7,9 +7,20 @@ description: 'Run a full clean-slate test of this workshop end to end, following
 
 Read `TESTING-PLAYBOOK.md` at the repo root **before doing anything else**, and follow it. It is the only description of how this workshop is tested: the invariants, the start-of-run order, the phases, the Use Case 3 command inventory, and the behaviours that look like failures and are not. Do not restate it here and do not work from memory of it — read the file, because it changes.
 
-This skill exists to do one thing the playbook cannot: settle **which cell of the 2×2 is being run** before the run starts.
+This skill exists to do two things the playbook cannot: settle **which mode** and **which cell of the 2×2** are being run, before the run starts.
 
-## Step 1 — settle the cell
+## Step 1 — settle the mode
+
+The playbook's *Two modes* table decides it. Do not ask before checking:
+
+- Is an environment standing? `kubectl config current-context` and `kubectl get nodes`.
+- What changed since the last validated run? Its commit is on the dashboard at `runs/<runId>.commit`; diff `workshop/content/` and `infrastructure/scripts/` against it.
+
+If nothing is standing, or the diff touches Terraform, Helm values, images, or deploy/teardown script **behaviour**, it is a **full cycle** — say so and do not offer the shorter one. If the environment is up and the diff is pages and message strings only, say which pages changed and offer the **content pass**, with the full cycle as the other option.
+
+Never tear down a standing, validated environment without Bear saying to.
+
+## Step 2 — settle the cell
 
 Two independent choices. Take whichever Bear already gave in his message or in `$ARGUMENTS`, and ask **only** for what is still missing — never re-ask something he already said.
 
@@ -22,7 +33,7 @@ Ask with `AskUserQuestion` — one question per missing choice, both in the same
 
 If he names only an audience (the historical trigger was just "self-paced" or "at-event"), ask only the environment.
 
-## Step 2 — confirm the base before anything runs
+## Step 3 — confirm the base before anything runs
 
 State in one line, and stop if any of it is wrong:
 
@@ -33,9 +44,9 @@ State in one line, and stop if any of it is wrong:
 
 A test of the wrong branch, or of a dirty tree, measures nothing.
 
-## Step 3 — run the playbook
+## Step 4 — run the playbook
 
-Start of run, in the playbook's order: hand over the `tail -f` first, publish and seed the dashboard second, Phase 0 third. Then Phase 0 through Phase 3 for the cell chosen in Step 1.
+Start of run, in the playbook's order: hand over the `tail -f` first, publish and seed the dashboard second, Phase 0 third. Then, for a full cycle, Phase 0 through Phase 3 for the cell chosen in Step 2 — or, for a content pass, the changed pages only.
 
 Report every step as *Reporting every step* specifies, and write the dashboard after each one.
 
@@ -45,3 +56,4 @@ Report every step as *Reporting every step* specifies, and write the dashboard a
 - **Never mark a page done on evidence not in this run's log.** An older run's log does not count.
 - **Never fix anything mid-run on the self-paced path** — that path is measured, not repaired. A break is a finding.
 - **Never close, merge, or open a PR** on the strength of the run. A green run means ready for Bear to test, and nothing more.
+- **Never run Phase 0 against a standing, validated environment** because the playbook opens with it. Settle the mode first.

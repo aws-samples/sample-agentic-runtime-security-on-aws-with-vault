@@ -106,6 +106,49 @@ The tail shows raw output; it does not say where in the plan the run is. Both ar
 
 ---
 
+## Two modes — pick before Phase 0
+
+| Mode | When | What runs |
+|---|---|---|
+| **Full cycle** | Anything below the pages changed — Terraform, Helm values, module inputs, deploy/teardown script *logic*, image builds — or no environment is standing, or the last validated run is unknown. | Phase 0 → Phase 3, everything below. |
+| **Content pass** | The environment is up and already validated, and the diff since it touches **only** `workshop/content/**` prose and commands, or message strings in scripts. | Only the changed pages, against the running environment. No teardown, no deploy. |
+
+When in doubt it is a full cycle. A content pass that should have been a full cycle reports green on infrastructure nobody tested.
+
+---
+
+## Content pass — the changed pages only
+
+**Prove the environment first.** All four must hold, or this is a full cycle:
+
+```bash
+kubectl config current-context &&   kubectl get nodes &&   kubectl get pods -A --field-selector=status.phase!=Running,status.phase!=Succeeded &&   aws sts get-caller-identity
+```
+
+The context is `workshop`, `ars-workshop` or an `arn:aws:eks:*` ARN — never a `gke_*` one; nodes are `Ready`; nothing unexpected is non-Running; the identity is the one that owns the deploy.
+
+**Establish the baseline.** The last validated run's commit is on the dashboard, in `runs/<runId>.commit`. Read it; do not guess one.
+
+```bash
+git diff --stat <baseline-commit>...HEAD -- workshop/content/ infrastructure/scripts/
+```
+
+**Classify every changed file before running anything.** If any of these appear, stop and run the full cycle instead:
+
+- `*.tf`, `*.tfvars`, anything under `infrastructure/modules/` or `infrastructure/vault-config/`
+- Helm values, Kubernetes manifests, Dockerfiles, anything that changes an image
+- **Behaviour** in a deploy or teardown script — a new flag, a changed gate, a reordered step. A changed `print_fail` *message* is content; a changed condition is not.
+
+**Then run the changed pages.** For each one, in the workshop's own page order, with the same reporting and the same dashboard write as any other step: execute its commands verbatim, including the ones that did not change, because a page is tested as a page and not as a diff. A page whose only change is prose still gets read end to end in the browser against the rendered preview.
+
+The dashboard's phases for a content pass are the changed pages themselves, one row each — the data model takes any phase list.
+
+**Every invariant above still applies**, including that a break on the self-paced path is a finding rather than something fixed mid-run.
+
+**Say what was not covered.** A content pass proves the changed pages and nothing else. The report names the mode, so nobody reads it as a clean-slate result.
+
+---
+
 ## Phase 0 — clean slate (both audiences, always)
 
 ```bash
@@ -218,4 +261,6 @@ Check these before filing:
 
 **Per page:** every command on it run against live AWS, the real output seen, both the golden path and the obvious edge case tried — and the cell you covered stated (audience × environment, and which tab on a tabbed page).
 
-**Per cycle:** every page's commands executed with the expected output, defects fixed and re-run, then a plain-English report — what works, what does not, what needs a decision. Nothing merges or closes on it.
+**Per full cycle:** every page's commands executed with the expected output, defects fixed and re-run, then a plain-English report — what works, what does not, what needs a decision. Nothing merges or closes on it.
+
+**Per content pass:** every changed page run end to end, the baseline commit named, and the report saying plainly that infrastructure was not re-tested.
