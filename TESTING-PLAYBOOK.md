@@ -50,12 +50,59 @@ Everything from `30-deploy-foundation/32-configure-kubectl` — **Configure kube
 1. **Run the page verbatim.** Never author a script or a convenience wrapper. The only exception is a clearly-labelled ad-hoc diagnostic while actively troubleshooting a failure.
 2. **Verify the cluster context before any `kubectl`, `helm`, or Kubernetes-provider `terraform` call.** This repo is AWS: the context is `workshop` or an `arn:aws:eks:*` ARN. Never a `gke_*` context.
 3. **Keep full, untruncated output.** A trimmed log is not evidence. Redact before anything leaves the terminal: AWS account IDs, ARNs, access keys, JWTs and bearer tokens, private IPs, and the **Vault root token** — several pages print it to stdout by design.
-4. **Stream every command to one tail-able log** — `infrastructure/scripts/logs/walkthrough-<ts>.log` via `tee -a`, created at cycle start, with its `tail -f` printed once. Long steps additionally run in the background.
-5. **Say which step is running, for every step**, before it runs: page title and section as the page spells it, its position in the phase (*page 3 of 6*), the command lines as bullets, what it proves, and what is queued behind it.
-6. **Never mark a page done on evidence you have not just seen.** The commands must be in *this* run's log. A log from an earlier run does not count. Re-running a passing page costs minutes; a false green costs the workshop.
-7. **The self-paced run is measured, not repaired — no fixes mid-run.** Self-paced is the proof that someone on a laptop gets through with nothing but the pages. Patch a script or hand-run a command the page does not contain and you stop measuring that. A break is a **finding**: logged, filed, reported. Fixes happen after the run ends.
-8. **Everywhere else, a defect gets fixed, not worked around** — fix the page or the script, one atomic commit, then re-run that page. Never "pre-existing", never a cheat path.
-9. **Nothing merges or closes on a green test run.** A passing run means *ready to verify*, nothing more.
+4. **Stream every command to one tail-able log**, and hand over its `tail -f` before anything runs — see *Start of run* below. Output nobody can watch does not count as evidence.
+5. **Keep the dashboard true, writing after every step** — see *Start of run* and *Reporting every step* below. A stale board reads as no progress and is worse than no board.
+6. **Say which step is running, for every step**, before it runs — see *Reporting every step* below.
+7. **Never mark a page done on evidence you have not just seen.** The commands must be in *this* run's log. A log from an earlier run does not count. Re-running a passing page costs minutes; a false green costs the workshop.
+8. **The self-paced run is measured, not repaired — no fixes mid-run.** Self-paced is the proof that someone on a laptop gets through with nothing but the pages. Patch a script or hand-run a command the page does not contain and you stop measuring that. A break is a **finding**: logged, filed, reported. Fixes happen after the run ends.
+9. **Everywhere else, a defect gets fixed, not worked around** — fix the page or the script, one atomic commit, then re-run that page. Never "pre-existing", never a cheat path.
+10. **Nothing merges or closes on a green test run.** A passing run means *ready to verify*, nothing more.
+
+---
+
+## Start of run — three things, in this order, before Phase 0
+
+**1. Open the walkthrough log and hand over its `tail -f` immediately.** This is the first thing said in a run, before Phase 0 and before any command:
+
+```bash
+mkdir -p infrastructure/scripts/logs && echo "infrastructure/scripts/logs/walkthrough-$(date +%s).log"
+```
+
+Every command from then on streams to that one file with `tee -a`, and its `tail -f <full path>` goes in chat **once, at the top**, never at the end and never on request. Long steps additionally run in the background. A run whose output cannot be watched live is not a test.
+
+**2. Publish the status dashboard, before Phase 0.** One durable artifact, reused every run — never a new one, or the tab already open stops updating:
+
+> https://claude.ai/artifact/1oFRtqkiutNzyehCprwiuE
+
+Read it first, then republish onto what comes back. Keep the title `Clean-Slate Provisioning Run` and the 🧪 favicon stable — the tab is found by its icon. The page is a static shell published with `capabilities: {db: {}}` that renders from the artifact's own database via `onSnapshot`: a `write_db` updates the open tab instantly with no republish. **Structure is data, not markup** — a new workshop page is one more document, never a page edit. Republish the HTML only to change the design.
+
+Seed the run, then write state as it changes:
+
+| Document | Carries |
+|---|---|
+| `config/current` | `{runId}` — the pointer the page reads first |
+| `runs/<runId>` | `label, startedAt, updatedAt, branch, commit, cluster, region, identity, currentPhase, questionTitle, question, logPath` |
+| `runs/<runId>/phases/<id>` | `order, track` (`phase0`/`A`/`B`), `trackLabel` (first phase of a track only), `code, name, does, cmd, state` (`queued`/`running`/`done`/`failed`), `proof` (array of `{label, value}`), and `trackNoteTitle`/`trackNote` for a track's known-limitation callout |
+| `runs/<runId>/findings/<id>` | `order, tone` (`good`/`warn`/`info`), `title, body, proof` |
+
+Moving a phase is one `write_db` `update` on its phase document, with `currentPhase` and `updatedAt` on the run in the same batch.
+
+**3. Then Phase 0.**
+
+---
+
+## Reporting every step
+
+**Before a step runs**, in chat — not only at phase boundaries:
+
+- **Page title / section**, spelled as the page spells it, plus its position in the phase (*page 3 of 6*).
+- **The command lines that step will run, as bullets** — the actual commands, before they run, so they can be stopped if wrong. Never a prose summary of them.
+- **What it proves**, in one plain line.
+- **What is queued behind it.**
+
+**After a step runs**: its full untruncated output, and one `write_db` to the dashboard — immediately, not batched, not at the phase boundary. A phase of six pages gets six writes, each carrying that page's own proof. A long-running step gets one write at `running` and another when it lands.
+
+The tail shows raw output; it does not say where in the plan the run is. Both are required, and neither substitutes for the other.
 
 ---
 
