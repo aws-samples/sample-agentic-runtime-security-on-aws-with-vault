@@ -1,5 +1,6 @@
 import type { RequestHandler } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
+import { filteredEventStream, scrubErrorText } from '$lib/server/activity-filter';
 
 const AGENT_URL = env.AGENT_URL ?? 'http://banking-agent-svc:3002';
 
@@ -26,18 +27,17 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
 	});
 
 	if (!agentRes.ok) {
-		const text = await agentRes.text();
+		const text = scrubErrorText(await agentRes.text());
 		return new Response(JSON.stringify({ error: `Agent error [${agentRes.status}]: ${text}` }), {
 			status: agentRes.status,
 		});
 	}
 
-	return new Response(agentRes.body, {
-		headers: {
-			'Content-Type': 'text/event-stream',
-			'Cache-Control': 'no-cache',
-			Connection: 'keep-alive',
-			'X-Accel-Buffering': 'no',
-		},
-	});
+	if (!agentRes.body) {
+		return new Response(JSON.stringify({ error: 'Agent returned no response body' }), { status: 502 });
+	}
+
+	// Every event the agent streams passes through the activity filter: the
+	// browser never receives the agent's bytes directly. See $lib/server/activity-filter.
+	return filteredEventStream(agentRes.body, 'api/chat');
 };
