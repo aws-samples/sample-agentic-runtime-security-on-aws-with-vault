@@ -184,6 +184,10 @@ class UC3VaultClient:
             # threads it forward here to populate db_credential_ttl in the
             # three-plane audit_correlation VIEW (proof of OBJ-2: no standing creds).
             "lease_duration": db_response.get("lease_duration"),
+            # The lease identifier (database/creds/uc3-refund-writer/<id>) — an
+            # identifier, not the credential. The refund flow reports it to the
+            # browser so the Audit Trace can name the exact lease Vault issued.
+            "lease_id": db_response.get("lease_id"),
         }
 
     def _build_refreshing_session(self, vault_aws_role: str, log_event: str) -> boto3.Session:
