@@ -21,7 +21,7 @@ Open the printed URL, incognito window, sign in `jaime` / `WorkshopUser1!`.
 
 **Why:** You are talking to an agent that can read your transactions but cannot move money on its own. Watch where it stops.
 
-Click the red **I need a refund** button in the chat suggestions bar. When the agent asks which transaction, reply with the transaction number from your recent transactions list, then confirm.
+Click the red **I need a refund for a recent transaction** suggestion under the chat. When the agent asks which transaction, reply with the transaction number from your recent transactions list, then confirm.
 
 ### 3. Approve on your phone
 
