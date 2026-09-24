@@ -343,7 +343,11 @@
 	}
 
 	/* ---- Conversation ------------------------------------------------------------- */
+	/* position: relative makes the log the containing block of the screen-reader-only
+	   labels (.visually-hidden is absolutely positioned). Without it they are laid out
+	   against the page, not the log, so a long conversation stretches the whole page. */
 	.chat-messages {
+		position: relative;
 		flex: 1;
 		min-height: 0;
 		overflow-y: auto;
