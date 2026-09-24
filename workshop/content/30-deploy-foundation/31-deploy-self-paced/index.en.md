@@ -17,7 +17,7 @@ By default `deploy-workshop.sh` **builds the five Use Case images from source an
 
 #### Step 1 — Bootstrap (one-time)
 
-Seeds the three `terraform.tfvars` files from their templates, stamps the Tier-1 admin ARN from your account, and runs `terraform init` in all three roots. Idempotent.
+**Why:** This writes the config files all three tiers read and stamps your own AWS identity into them. It deploys nothing, and it is safe to re-run.
 
 ```bash
 bash infrastructure/scripts/bootstrap.sh
@@ -26,6 +26,8 @@ bash infrastructure/scripts/bootstrap.sh
 #### Step 2 — Deploy Tier 1 (core infrastructure)
 
 VPC, EKS cluster, managed add-ons (cert-manager, external-dns, AWS Load Balancer Controller), RDS PostgreSQL with pgaudit, Bedrock KB, IAM, and the audit substrate. In the default `ecr` mode it also provisions the five ECR repositories and **builds and pushes the Use Case images to them** (this is where the container runtime is used). **No application pods yet.**
+
+**Why:** This is the foundation everything else sits on — the cluster, the database, the Knowledge Base and the audit substrate. Nothing runs on it yet.
 
 ```bash
 bash infrastructure/scripts/deploy-workshop.sh --tier 1
@@ -39,7 +41,7 @@ On your **first run** the script prompts for three values it cannot store in the
 
 The script writes them into the gitignored `terraform.tfvars` files, so subsequent tiers and re-runs reuse them silently.
 
-The two IBM secrets can also be supplied via environment variables instead of the prompts — useful for non-interactive or scripted runs. When set, the preflight uses them and skips the prompt:
+**Why:** Exporting the two IBM secrets lets the deploy run unattended. Skip this block if you would rather paste each value at the prompt.
 
 ```bash
 export ICR_ENTITLEMENT_KEY="<entitlement key>"
@@ -58,6 +60,8 @@ Tier 2 requires a **Vault Enterprise license** — Vault runs in Enterprise mode
 
 On **AWS CloudShell** there is no `cp` source to copy from — upload the file instead: **Actions -> Upload file**, targeting `~/Downloads` (run `mkdir -p ~/Downloads` first). See [Running from AWS CloudShell](../../20-prerequisites/23-pre-flight-checks/#step-1-choose-where-you-will-run-the-workshop).
 
+**Why:** This builds the identity layer the whole workshop rests on — Vault for credentials and IVIA for sign-in — and obtains the browser-trusted certificate they are served on. The license has to be in place first, because it is read from a file rather than prompted.
+
 ```bash
 # save your Vault Enterprise license to the default path...
 cp /path/to/vault-ent.hclic ~/Downloads/vault-ent.hclic
@@ -75,6 +79,8 @@ bash infrastructure/scripts/deploy-workshop.sh --tier 2
 
 Applies the Use Case 1, 2, and 3 agent pods, which pull the images you built and pushed to your account ECR in Tier 1. The step also runs the shared-ALB assertion + IVIA redirect reconcile, verifies the OpenLDAP `oscar` user, seeds the banking database, and ingests the Bedrock KB corpus.
 
+**Why:** This deploys the three agents and the banking app the use cases exercise, then seeds the database and the Knowledge Base they read from.
+
 ```bash
 bash infrastructure/scripts/deploy-workshop.sh --tier 3
 ```
@@ -91,7 +97,7 @@ When all three tiers report success, continue with **[Configure kubectl](../32-c
 
 Every step is idempotent — re-running a tier converges what's missing and skips what's already done. If a step fails the script hard-stops on it and prints a `Fix:` hint; fix the cause and re-run the same `--tier N` command.
 
-When the cluster, images, and Vault init are already done, the slow stages can be skipped on a Tier-1 re-run (`--skip-build` avoids rebuilding the images already in your ECR):
+**Why:** When the cluster, images and Vault init are already done, these flags skip the slow stages and converge only what is missing. `--skip-build` reuses the images already in your ECR.
 
 ```bash
 bash infrastructure/scripts/deploy-workshop.sh --tier 1 --skip-infra --skip-build --skip-vault-init

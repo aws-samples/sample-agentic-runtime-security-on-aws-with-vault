@@ -11,7 +11,7 @@ Follow **[Deploy — Self-paced](../31-deploy-self-paced/)** — you bootstrap a
 
 #### Step 1 — Clone the repository
 
-Clone the workshop repo:
+**Why:** Every command on this page and the ones that follow runs from inside this repository. The `[ -d ... ]` guard makes it safe to re-run if you already cloned it.
 
 ```bash
 cd ~ && { [ -d sample-agentic-runtime-security-on-aws-with-vault ] || git clone https://github.com/aws-samples/sample-agentic-runtime-security-on-aws-with-vault.git; } && cd sample-agentic-runtime-security-on-aws-with-vault && pwd
@@ -23,13 +23,17 @@ cd ~ && { [ -d sample-agentic-runtime-security-on-aws-with-vault ] || git clone 
 
 `--image-source ecr` points the workload images at **your own account's ECR** — the CodeBuild that provisioned Tier 1 already built and pushed the Use Case images there, so bootstrap stamps the `<account>.dkr.ecr.<region>...` URIs (your account + region, resolved automatically) into the Tier-3 config. No public image pulls at runtime.
 
+**Why:** This writes the config files the next two tiers read. It deploys nothing, so it is quick and safe to re-run.
+
 ```bash
 bash infrastructure/scripts/bootstrap.sh --skip-prereq-gate --image-source ecr
 ```
 
 #### Step 3 — Pull the Tier-1 state and config
 
-The CodeBuild build staged the Tier-1 Terraform **state** and its **`terraform.tfvars`** (which already carries the event's Let's Encrypt email) to an S3 bucket. Discover the bucket name from the CloudFormation stack output and pull both to the paths Tier 2 and Tier 3 read:
+The CodeBuild build staged the Tier-1 Terraform **state** and its **`terraform.tfvars`** (which already carries the event's Let's Encrypt email) to an S3 bucket.
+
+**Why:** Tier 2 and Tier 3 read the Tier-1 state to find the cluster, VPC and database that were built for you. Without this pull they have nothing to build on and fail immediately.
 
 ```bash
 STATE_BUCKET=$(aws cloudformation describe-stacks --query "Stacks[].Outputs[?OutputKey=='StateBucketName'].OutputValue|[]|[0]" --output text) && aws s3 cp "s3://${STATE_BUCKET}/tier1/terraform.tfstate" infrastructure/terraform.tfstate && aws s3 cp "s3://${STATE_BUCKET}/tier1/terraform.tfvars" infrastructure/terraform.tfvars && test -s infrastructure/terraform.tfstate && echo "State + config pulled OK" || echo "ERROR: pull failed"
@@ -40,7 +44,7 @@ The state file must be at exactly `infrastructure/terraform.tfstate` relative to
 ::::
 
 ::::alert{header="If the CloudFormation query returns empty" type="info"}
-If `STATE_BUCKET` resolves to empty (for example, if the stack outputs aren't visible yet), list buckets and locate the state bucket by name, then rerun both `aws s3 cp` commands with that bucket name:
+If `STATE_BUCKET` resolves to empty (for example, if the stack outputs aren't visible yet), find the bucket by name and rerun both `aws s3 cp` commands with it:
 
 ```bash
 aws s3 ls | grep -i bootstrap-statebucket
@@ -54,7 +58,9 @@ The **first** time you run `deploy-workshop.sh`, a preflight check prompts for t
 - **IBM Container Registry entitlement key** — from [Obtain IVIA Licenses](../../20-prerequisites/22-ivia-licensing/).
 - **IBM Verify MMFA push client secret** — required by Use Case 3.
 
-Your event organizer provides these two values. Paste them at the prompts, **or** export them before running for a hands-off deploy — the preflight uses the environment variables when set and skips the prompts:
+Your event organizer provides these two values.
+
+**Why:** Exporting them up front lets the deploy run unattended. Skip this block if you would rather paste each value at the prompt.
 
 ```bash
 export ICR_ENTITLEMENT_KEY="<value from your organizer>"
@@ -67,6 +73,8 @@ Tier 2 also needs a **Vault Enterprise license** — Vault runs in Enterprise mo
 
 On **AWS CloudShell** there is no `cp` source to copy from — upload the file instead: **Actions -> Upload file**, targeting `~/Downloads` (run `mkdir -p ~/Downloads` first). See [Running from AWS CloudShell](../../20-prerequisites/23-pre-flight-checks/#step-1-choose-where-you-will-run-the-workshop).
 
+**Why:** The license is read from a file, not a prompt, so it has to be in place before you start. Use whichever of these two lines matches where you saved it.
+
 ```bash
 # organizer-provided Vault Enterprise license — save to the default path...
 cp /path/to/vault-ent.hclic ~/Downloads/vault-ent.hclic
@@ -75,6 +83,8 @@ export VAULT_ENTERPRISE_LICENSE_PATH=/path/to/vault-ent.hclic
 ```
 
 It does **not** ask for a Let's Encrypt email — that was set when CodeBuild provisioned Tier 1, and you pulled it in Step 3.
+
+**Why:** This builds the identity layer the whole workshop rests on — Vault for credentials and IVIA for sign-in — and obtains the browser-trusted certificate they are served on.
 
 ```bash
 bash infrastructure/scripts/deploy-workshop.sh --tier 2
@@ -85,6 +95,8 @@ bash infrastructure/scripts/deploy-workshop.sh --tier 2
 ::::
 
 #### Step 5 — Deploy Tier 3 (Use Case workloads)
+
+**Why:** This deploys the three agents and the banking app the use cases exercise, then seeds the database and the Knowledge Base they read from.
 
 ```bash
 bash infrastructure/scripts/deploy-workshop.sh --tier 3

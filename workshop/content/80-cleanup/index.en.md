@@ -7,7 +7,7 @@ Run the teardown script to destroy all workshop resources and verify no chargeab
 
 ## 1. Run the teardown script
 
-From the repo root, run:
+**Why:** This is the single command that removes everything the workshop created. Run it from the repo root; everything below is detail on what it destroys and how to confirm it worked.
 
 ```bash
 bash infrastructure/scripts/teardown.sh
@@ -43,7 +43,7 @@ The script exits non-zero if verification finds residuals; review the output for
 | `--post-destroy-only` | Skip `terraform destroy`; run sweep + verify only (useful if state is already gone) |
 | `--aws-only` | K8s drain + AWS sweep only (skip Terraform) |
 
-To preview the full sweep without making changes:
+**Why:** A dry run prints every resource the sweep would delete and deletes nothing. Use it to read the full list before you commit to the destroy.
 
 ```bash
 bash infrastructure/scripts/teardown.sh --dry-run
@@ -51,7 +51,7 @@ bash infrastructure/scripts/teardown.sh --dry-run
 
 ## 3. Spot-check after teardown
 
-The script runs a built-in audit, but you can run these spot-checks manually to confirm nothing chargeable remains.
+**Why:** The script audits itself, so these are optional. Run them to confirm with your own eyes that the four big resources — cluster, database, buckets and roles — are gone.
 
 **EKS cluster gone:**
 ```bash

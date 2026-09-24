@@ -3,7 +3,7 @@ title: 'Verify Infrastructure'
 weight: 331
 ---
 
-Run the foundation verification script to confirm all modules deployed correctly. It checks EKS cluster status + nodes + addons, RDS status + pgaudit + encryption, Bedrock KB + data sources + retrieval, audit log groups with KMS, and the region contract.
+**Why:** A tier can report success and still leave something half-built. This proves the cluster, database, Knowledge Base and audit trail are all actually working before any use case depends on them.
 
 ```bash
 bash infrastructure/scripts/test-foundation.sh

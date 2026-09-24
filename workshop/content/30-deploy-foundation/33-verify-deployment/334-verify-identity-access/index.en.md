@@ -21,6 +21,8 @@ IBM Verify Identity Access (IVIA) runs as a self-contained seven-pod stack in th
 
 ## Step 1 — Confirm all pods are Running
 
+**Why:** IVIA is the workshop's sign-in and consent authority. All seven pods have to be up, and the autoconf job that configured them has to have finished.
+
 ```bash
 kubectl get pods -n verify-access
 ```
@@ -39,7 +41,7 @@ postgresql-<hash>              1/1     Running     0          12m
 ivia-autoconf-<hash>           0/1     Completed   0          10m
 ```
 
-If the autoconf job is still running, wait for it to complete (typically 4–6 minutes):
+**Why:** Autoconf configures IVIA end to end and takes 4–6 minutes. Run this only if it has not finished yet — it blocks until it does.
 
 ```bash
 kubectl wait --for=condition=complete job \
@@ -67,13 +69,15 @@ terraform -chdir=infrastructure apply
 
 ## Step 2 — Confirm the WRP ALB Ingress
 
+**Why:** This is the load balancer browsers reach IVIA through. One certificate covers both it and the banking app, because they share an IngressGroup.
+
 ```bash
 kubectl get ingress -n verify-access
 ```
 
 Expected — one ALB Ingress with an `ADDRESS` like `k8s-workshopacme-<hash>.<region>.elb.amazonaws.com`. The shared `workshop-acme` IngressGroup fronts both this WRP Ingress and the banking-UI Ingress, so one Let's Encrypt cert covers both workshop FQDNs.
 
-The hostname the browser trusts is the **workshop FQDN** the cert was issued for — read it from `.acme-state`, not the raw ALB hostname:
+**Why:** The certificate was issued for the workshop FQDN, not the raw ALB hostname. This reads that name out and puts it in `$WRP_HOST` for the next two steps.
 
 ```bash
 source infrastructure/.acme-state && WRP_HOST="$NIP_FQDN_WRP" && echo "WRP host: $WRP_HOST"
@@ -89,7 +93,7 @@ The browser and mobile app validate against the workshop FQDN (`NIP_FQDN_WRP`), 
 
 Browser flows reach the OIDC Provider through the WRP `/isvaop` junction:
 
-Note there is no `-k` here. The alert above claims the workshop FQDN carries a browser-trusted Let's Encrypt certificate — skipping verification would leave that claim untested, so this command verifies the chain. If it succeeds, the certificate really is trusted:
+**Why:** This asks IVIA who it says it is, over the same path a browser takes. There is deliberately no `-k`, so a success also proves the certificate is genuinely trusted.
 
 ```bash
 curl -s "https://$WRP_HOST/isvaop/oauth2/.well-known/openid-configuration" | jq .issuer
@@ -105,7 +109,7 @@ A `curl: (60) SSL certificate problem` here means Step 7's ACME issuance did not
 
 ## Step 4 — Confirm internal OIDC discovery
 
-Vault and agent workloads reach the OIDC Provider via its ClusterIP service. Verify from inside the cluster (the `--quiet` flag keeps `kubectl run`'s pod-lifecycle messages out of the `jq` pipe):
+**Why:** Vault and the agents reach IVIA from inside the cluster, not through the load balancer. This checks they are told the same issuer a browser is — if the two disagreed, token validation would fail later.
 
 ```bash
 kubectl run oidc-check --image=curlimages/curl --rm -i --restart=Never --quiet -n verify-access -- curl -sk https://iviaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration </dev/null | jq .issuer

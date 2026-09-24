@@ -7,6 +7,8 @@ Run one script to confirm the entire platform layer is healthy before proceeding
 
 ## Step 1 — Run the verification script
 
+**Why:** This is the last gate before the use cases. It re-checks Vault, IVIA and the trust between them in one pass, so a problem surfaces here rather than halfway through Use Case 2.
+
 ```bash
 bash infrastructure/scripts/test-vault-verify.sh
 ```

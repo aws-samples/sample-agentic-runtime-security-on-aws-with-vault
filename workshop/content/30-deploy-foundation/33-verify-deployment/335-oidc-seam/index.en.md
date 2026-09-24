@@ -72,13 +72,15 @@ sequenceDiagram
 
 The `sub` claim from the JWT flows through Vault into the Postgres session variable that activates Row-Level Security — each user sees only their own data, enforced at the database layer.
 
-Load the root token before running the checks below:
+**Why:** Every check on this page reads Vault as an administrator. This loads that token into your shell.
 
 ```bash
 export VAULT_ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)
 ```
 
 ## Step 1 — Confirm Vault auth methods
+
+**Why:** You are checking for something that should be missing. No `jwt/` row means the IVIA token is being used as the Vault token directly, with no login step in between.
 
 ```bash
 kubectl exec -n vault vault-0 -- \
@@ -95,6 +97,8 @@ token/         token         auth_token_...              token based credentials
 ```
 
 ## Step 2 — Confirm secrets engines
+
+**Why:** These are the engines that vend the credentials the use cases consume — database, AWS, and the Agent Registry that gives each agent a named identity.
 
 ```bash
 kubectl exec -n vault vault-0 -- \
@@ -116,7 +120,7 @@ sys/               system            system_...                 system endpoints
 
 ## Step 3 — Confirm the OAuth resource server trusts IVIA
 
-Vault Enterprise validates the IVIA-issued OAuth JWT directly through its **OAuth resource server** profile (`ivia`) — there is no `jwt` auth backend to configure. Read the profile:
+**Why:** This is the trust link itself. Vault only accepts a token if it was signed by the issuer named here, and only for the agents listed in `audiences`.
 
 ```bash
 kubectl exec -n vault vault-0 -- \
@@ -135,6 +139,8 @@ Vault validates IVIA-issued JWTs against the IVIA JWKS (the signing CA is pinned
 
 ## Step 4 — Confirm database connection
 
+**Why:** This is the connection Vault uses to create short-lived database logins. `allowed_roles` is the full set of credentials it is permitted to vend.
+
 ```bash
 kubectl exec -n vault vault-0 -- \
   sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read database/config/workshop-pg"
@@ -148,6 +154,8 @@ allowed_roles         [uc1-readonly uc2-personal-readonly uc3-refund-writer uc3-
 ```
 
 ## Step 5 — Confirm IVIA OIDC discovery (cluster-internal)
+
+**Why:** Vault reads this document to learn where to fetch IVIA's signing keys. The issuer it advertises must match Step 3 exactly, or every token is rejected.
 
 ```bash
 kubectl run oidc-check --image=curlimages/curl --rm -i --restart=Never --quiet -n verify-access -- curl -sk https://iviaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration </dev/null | jq .

@@ -21,15 +21,13 @@ infrastructure/modules/verify_access/base_layer/ISAM-Trial-HashiCorp.cer
 
 Terraform reads this file during `verify_access` module apply, and the IVIA autoconf job imports it automatically — no manual LMI interaction and no attendee action are required. You do **not** request, download, or place this file; cloning the repository is all you need.
 
-:::alert{header="Trial certificate expiry" type="info"}
-The bundled certificate is a time-limited trial, and the deploy tooling validates it is still in date, so you normally don't need to think about it. If you want to confirm the window yourself, read the `Not After` date directly from the bundled file:
+**Why:** The bundled certificate is a time-limited trial, and the deploy already validates it is in date. Run this only if you want to read the expiry window yourself.
 
 ```bash
 openssl x509 -in infrastructure/modules/verify_access/base_layer/ISAM-Trial-HashiCorp.cer -noout -dates
 ```
 
-If the bundled certificate has expired (or expires before your workshop date), it is refreshed by the workshop maintainer — at an event, notify your organizer; for a self-paced run from a public release, check for an updated version of the repository. You do not replace it yourself.
-:::
+If it has expired, or expires before your workshop date, the workshop maintainer refreshes it — at an event, notify your organizer; for a self-paced run, check for an updated version of the repository. You do not replace it yourself.
 
 ## Vault Enterprise license (you supply this)
 
