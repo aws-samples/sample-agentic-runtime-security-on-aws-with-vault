@@ -237,7 +237,7 @@
 			<div class="approval" role="group" aria-labelledby="consent-title">
 				<span class="approval-icon" aria-hidden="true"><Locked size={16} /></span>
 				<div class="approval-body">
-					<p id="consent-title" class="approval-title">CIBA Consent Required (RFC 9126)</p>
+					<p id="consent-title" class="approval-title">CIBA Consent Required (OpenID Connect CIBA)</p>
 					<p>The agent is requesting approval for a privileged action:</p>
 					<p class="approval-details mono">{pendingConsent.details}</p>
 					<p class="approval-meta">Request ID: <span class="mono">{pendingConsent.request_id}</span></p>
