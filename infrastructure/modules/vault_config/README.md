@@ -15,7 +15,7 @@ Terraform module that provisions all Vault configuration required by the three a
 | Policy: uc1-readonly | — | CONF-01, CONF-03 |
 | Policy: uc2-personal | — | CONF-02, CONF-03, CONF-04 |
 | Policy: uc2-agent (the banking agent's own Kubernetes login: Bedrock STS, `lookup-self`, and read on its own registration) | `aws/sts/bedrock-reader`, `agent-registry/registration/display-name/agent-uc2` | CONF-04, VNAI-03 |
-| Policy: uc3-refund-writer | — | CONF-02, CONF-03, CONF-04 |
+| Policy: uc3-agent (the UC3 agent acting as itself — no refund-writer path) | — | CONF-01, CONF-03, CONF-04 |
 | K8s role: uc1 | `kubernetes/role/uc1` | CONF-01 |
 | K8s role: uc2 | `kubernetes/role/uc2` | CONF-01 |
 | K8s role: uc3 | `kubernetes/role/uc3` | CONF-01 |
@@ -97,6 +97,7 @@ registry. No other policy in this module grants any path under
 | **UC1** | ONE | k8s `uc1-readonly` floor bound to the `uc1` role. The `uc1-ceiling` is INERT — k8s tokens carry no `act.sub`, so the ceiling never self-applies. |
 | **UC2** | THREE | human baseline (`uc2-human-baseline`, resolved from `sub`) ∩ agent ceiling (`uc2-agent-ceiling`, resolved from `act.sub`) ∩ per-request `vault:path_access` RAR (optional for UC2). |
 | **UC3** | THREE | human baseline (`uc3-human-baseline`, `sub=jaime`) ∩ agent ceiling (`uc3-agent-ceiling`, `act.sub=uc3-actor`) ∩ per-request `vault:path_access` RAR (**mandatory**). |
+| **UC3 agent as itself** | ONE | k8s `uc3-agent` policy bound to the `uc3` role (the pod's own login, held for its lifetime): `database/creds/uc3-readonly`, `aws/sts/bedrock-reader`, `aws/sts/uc3-logs-writer`, own-token lookup and lease renewal. It has **no** `database/creds/uc3-refund-writer`: the refund writer is reachable only through the three-layer UC3 row above. `verify-uc3.sh --bypass` Check 21 logs in as this role and asserts the denial. |
 
 The ceiling is **restrict-only** — it can only shrink the human baseline, never grant
 beyond it (a path in the ceiling but absent from the baseline is still denied). The
@@ -114,7 +115,8 @@ The PostgreSQL secrets engine `connection_url` uses the RDS master password fetc
 |---|---|---|---|
 | `uc1-readonly` | SELECT on all tables | 15 min / max 30 min | Use Case 1 — read-only data query agent |
 | `uc2-personal` | SELECT on all tables | 15 min / max 30 min | Use Case 2 — personal data access agent |
-| `uc3-refund-writer` | SELECT + INSERT + UPDATE | 5 min / max 10 min | Use Case 3 — refund processing agent (tightest scope) |
+| `uc3-refund-writer` | SELECT + INSERT + UPDATE | 5 min / max 10 min | Use Case 3 — refund processing agent (tightest scope); reachable only with an approved refund's delegated token |
+| `uc3-readonly` | SELECT on the banking schema (RLS applies) | 15 min / max 30 min | Use Case 3 — the agent's own lookups (transactions, refund status) under the `uc3` role |
 
 Creation statements include `VALID UNTIL '{{expiration}}'` so Postgres enforces the TTL independently of Vault lease expiry. Revocation statements drop the ephemeral role entirely (no residual access).
 
