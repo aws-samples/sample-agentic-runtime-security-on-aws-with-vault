@@ -31,6 +31,7 @@
  *
  *     data: {"type":"agent:narration","glyph":"▶","text":"Exchanging the user's token with Vault","requestId":"req-7f3a"}
  *     data: {"type":"tool_call","toolCallId":"t1","name":"get_accounts","status":"success","result":{"lease_id":"database/creds/...","ttl_seconds":300},"durationMs":412}
+ *     data: {"type":"agent:credential","kind":"vault_token","label":"The agent's Vault token","issuer":"Vault","value":"hvs.<the full token>","ttlSeconds":300}
  *     data: {"type":"agent:text_delta","text":"Your checking balance is ..."}
  *     data: {"type":"agent:done","requestId":"req-7f3a"}
  *
@@ -49,6 +50,24 @@ export type NarrationGlyph = (typeof NARRATION_GLYPHS)[number];
 
 export const TOOL_CALL_STATUSES = ['in_progress', 'success', 'error'] as const;
 export type ToolCallStatus = (typeof TOOL_CALL_STATUSES)[number];
+
+/** Every kind of credential a turn can issue and `agent:credential` can show. */
+export const CREDENTIAL_KINDS = [
+	'access_token',
+	'id_token',
+	'refresh_token',
+	'ciba_token',
+	'delegated_token',
+	'k8s_sa_token',
+	'vault_token',
+	'db_credentials',
+	'aws_sts_credentials'
+] as const;
+export type CredentialKind = (typeof CREDENTIAL_KINDS)[number];
+
+/** Who issued a credential. */
+export const CREDENTIAL_ISSUERS = ['IBM Verify Identity Access', 'Vault', 'Kubernetes', 'AWS STS (via Vault)'] as const;
+export type CredentialIssuer = (typeof CREDENTIAL_ISSUERS)[number];
 
 /** Fields any current (non-legacy) event may carry. */
 export interface EventEnvelope {
@@ -160,6 +179,42 @@ export interface AgentAuditSeedEvent extends EventEnvelope {
 	claims?: JsonObject;
 }
 
+/**
+ * One credential issued during this turn, shown IN FULL as it is issued: a
+ * user's sign-in or refund token, a Vault token, the Kubernetes service-account
+ * JWT an agent logs in to Vault with, database credentials or AWS STS keys.
+ *
+ * Exactly one of `value` (a single token) or `fields` (the parts of a
+ * multi-part credential) is present. A frame with both, or with neither, is
+ * dropped. Every other optional field is present only when it exists for that
+ * credential.
+ */
+export interface AgentCredentialEvent extends EventEnvelope {
+	type: 'agent:credential';
+	kind: CredentialKind;
+	/** Plain English, e.g. "Oscar's delegated token from the RFC 8693 exchange". */
+	label: string;
+	issuer: CredentialIssuer;
+	/** The full token, for a single-value credential. */
+	value?: string;
+	/**
+	 * The full parts of a multi-part credential: `{ username, password }` for
+	 * db_credentials, `{ access_key_id, secret_access_key, session_token }` for
+	 * aws_sts_credentials. Every value is a string.
+	 */
+	fields?: Record<string, string>;
+	/** The decoded payload of `value` when it is a JWT. Decoded, NOT verified. */
+	claims?: JsonObject;
+	/** The Vault path the credential was read from, e.g. "database/creds/uc1-readonly". */
+	vaultPath?: string;
+	/** The Vault lease the credential belongs to. */
+	leaseId?: string;
+	/** How long the credential lives, in seconds, as its issuer reported it. */
+	ttlSeconds?: number;
+	/** When the credential expires: milliseconds since the Unix epoch (UTC). */
+	expiresAt?: number;
+}
+
 export type AgentEvent =
 	| AgentThinkingEvent
 	| AgentNarrationEvent
@@ -171,7 +226,8 @@ export type AgentEvent =
 	| AgentTextDeltaEvent
 	| AgentDoneEvent
 	| AgentErrorEvent
-	| AgentAuditSeedEvent;
+	| AgentAuditSeedEvent
+	| AgentCredentialEvent;
 
 // ---------------------------------------------------------------------------
 // Legacy events — what the agents emit today. They reach the browser exactly

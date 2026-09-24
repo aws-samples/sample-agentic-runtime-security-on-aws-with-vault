@@ -22,7 +22,8 @@
  *    missing a required field, or carrying one of the wrong type, is dropped.
  *
  * 2. Payload keys. Fields that carry arbitrary data — tool `args` and `result`,
- *    HITL `details`, audit `leases` and `claims` — are walked recursively:
+ *    HITL `details`, audit `leases` and `claims`, a credential's `claims` and
+ *    `fields` — are walked recursively:
  *      - a key that names a configuration secret is removed, however deep it
  *        sits, together with its value;
  *      - __proto__, constructor and prototype keys are removed (PROTOTYPE_KEYS);
@@ -46,6 +47,8 @@
  */
 
 import {
+	CREDENTIAL_ISSUERS,
+	CREDENTIAL_KINDS,
 	NARRATION_GLYPHS,
 	TOOL_CALL_STATUSES,
 	type JsonValue,
@@ -190,7 +193,13 @@ type FieldSpec =
 	/** A JSON object, walked with the payload key rules. */
 	| { kind: 'object' }
 	/** An array of JSON objects, walked with the payload key rules; non-object items are dropped. */
-	| { kind: 'objectArray' };
+	| { kind: 'objectArray' }
+	/**
+	 * A flat object whose values are all strings, e.g. a credential's `fields`.
+	 * Configuration-secret and prototype keys are removed; any other value that
+	 * is not a string fails the rule, and so does an object left empty.
+	 */
+	| { kind: 'stringMap' };
 
 type FieldRule = FieldSpec & { required: boolean };
 
@@ -251,6 +260,20 @@ const SCHEMAS: Schemas = {
 		leases: { kind: 'objectArray', required: false },
 		claims: { kind: 'object', required: false }
 	},
+	// Issued credentials pass in full. `value` and `fields` are exclusive: see EXACTLY_ONE_OF.
+	'agent:credential': {
+		...ENVELOPE,
+		kind: { kind: 'enum', values: CREDENTIAL_KINDS, required: true },
+		label: { kind: 'string', required: true },
+		issuer: { kind: 'enum', values: CREDENTIAL_ISSUERS, required: true },
+		value: { kind: 'string', required: false },
+		fields: { kind: 'stringMap', required: false },
+		claims: { kind: 'object', required: false },
+		vaultPath: { kind: 'string', maxLength: MAX_ID_CHARS, required: false },
+		leaseId: { kind: 'string', maxLength: MAX_ID_CHARS, required: false },
+		ttlSeconds: { kind: 'number', min: 0, required: false },
+		expiresAt: { kind: 'number', min: 0, required: false }
+	},
 
 	// Legacy events: exactly type, role and content, as today's dashboard reads them.
 	tool_planning: { role: LEGACY_ROLE, content: { kind: 'string', required: true } },
@@ -284,8 +307,34 @@ function sanitizeField(value: unknown, rule: FieldRule, stats: FilterStats): Jso
 			return isJsonObject(value) ? scrubValue(value, 0, stats) : undefined;
 		case 'objectArray':
 			return Array.isArray(value) ? scrubValue(value.filter(isJsonObject), 0, stats) : undefined;
+		case 'stringMap': {
+			if (!isJsonObject(value)) return undefined;
+			const entries: [string, string][] = [];
+			for (const [key, item] of Object.entries(value)) {
+				if (PROTOTYPE_KEYS.has(key)) {
+					stats.prototypeKeysRemoved++;
+					continue;
+				}
+				if (isConfigSecretKey(key)) {
+					stats.configKeysRemoved++;
+					continue;
+				}
+				if (typeof item !== 'string') return undefined;
+				entries.push([key, item]);
+			}
+			return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+		}
 	}
 }
+
+/**
+ * Event types whose frame must carry exactly one of two fields, and keep it
+ * after sanitising. A frame with both, with neither, or whose one field fails
+ * its rule is dropped.
+ */
+const EXACTLY_ONE_OF: ReadonlyMap<string, readonly [string, string]> = new Map([
+	['agent:credential', ['value', 'fields'] as const]
+]);
 
 /**
  * Builds the event the browser may see from one parsed frame, or returns null
@@ -302,6 +351,11 @@ function sanitizeEvent(parsed: unknown, stats: FilterStats): StreamEvent | null 
 		stats.unknownType++;
 		return null;
 	}
+	const exclusive = EXACTLY_ONE_OF.get(parsed.type);
+	if (exclusive && Object.hasOwn(parsed, exclusive[0]) === Object.hasOwn(parsed, exclusive[1])) {
+		stats.invalid++;
+		return null;
+	}
 	const event: Record<string, JsonValue> = { type: parsed.type };
 	for (const [field, rule] of rules) {
 		const value = Object.hasOwn(parsed, field) ? sanitizeField(parsed[field], rule, stats) : undefined;
@@ -313,6 +367,10 @@ function sanitizeEvent(parsed: unknown, stats: FilterStats): StreamEvent | null 
 			continue;
 		}
 		event[field] = value;
+	}
+	if (exclusive && !Object.hasOwn(event, exclusive[0]) && !Object.hasOwn(event, exclusive[1])) {
+		stats.invalid++;
+		return null;
 	}
 	return event as unknown as StreamEvent;
 }
