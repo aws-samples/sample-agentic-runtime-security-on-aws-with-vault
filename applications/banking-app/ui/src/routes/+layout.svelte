@@ -58,16 +58,6 @@
 			</div>
 		{/if}
 
-		<!-- No search feature exists yet: the field is shown, labelled and disabled. -->
-		<form class="nav-search" role="search" onsubmit={(e) => e.preventDefault()}>
-			<label class="visually-hidden" for="nav-search-input">Search accounts or transactions</label>
-			<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-				<circle cx="7" cy="7" r="5"></circle>
-				<path d="M11 11l3.5 3.5"></path>
-			</svg>
-			<input id="nav-search-input" type="search" placeholder="Search accounts or transactions" disabled />
-		</form>
-
 		<ul class="nav-links">
 			{#each links as link (link.href)}
 				<li>
@@ -193,50 +183,12 @@
 		color: var(--ovi-nav-text);
 	}
 
-	.nav-search {
-		margin: 20px 24px 10px;
-		height: 44px;
-		box-sizing: border-box;
-		display: flex;
-		align-items: center;
-		gap: 10px;
-		padding: 0 16px;
-		border-radius: var(--ovi-radius-pill);
-		background: var(--ovi-surface-bg);
-		border: 1px solid var(--ovi-hairline-strong);
-		color: var(--ovi-text-helper);
-	}
-
-	.nav-search svg {
-		flex-shrink: 0;
-	}
-
-	.nav-search input {
-		flex: 1;
-		min-width: 0;
-		border: 0;
-		padding: 0;
-		background: transparent;
-		font: 15px var(--ovi-font-sans);
-		color: var(--ovi-text-primary);
-		text-overflow: ellipsis;
-	}
-
-	.nav-search input::placeholder {
-		color: var(--ovi-text-helper);
-		opacity: 1;
-	}
-
-	.nav-search input:disabled {
-		cursor: not-allowed;
-	}
-
 	.nav-links {
 		display: flex;
 		flex-direction: column;
 		gap: 2px;
 		margin: 0;
-		padding: 6px 24px;
+		padding: 16px 24px 6px;
 		list-style: none;
 	}
 
