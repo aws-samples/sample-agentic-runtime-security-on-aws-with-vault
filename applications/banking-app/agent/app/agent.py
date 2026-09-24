@@ -28,6 +28,8 @@ import httpx
 from strands import Agent, tool
 from strands.models import BedrockModel
 
+from . import activity
+
 logger = logging.getLogger(__name__)
 
 MCP_URL = os.getenv("MCP_URL", "http://banking-mcp.banking-app.svc.cluster.local:3001")
@@ -42,6 +44,8 @@ def _call_mcp_tool(tool_name: str, jwt: str, **kwargs: object) -> dict:
     constrained nothing. The tools no longer accept a jwt argument at all, so
     there is no ignored field left for a caller to believe is honoured.
     """
+    activity.report_mcp_call(tool_name, MCP_URL)
+
     payload = {
         "jsonrpc": "2.0",
         "id": 1,
@@ -105,6 +109,7 @@ def get_accounts() -> list[dict]:
         parsed = json.loads(content_blocks[0]["text"])
         accounts = parsed.get("accounts", [])
         meta = parsed.get("credential_metadata", {})
+        activity.report_credential_metadata("get_accounts", meta)
         logger.info(
             "get_accounts_success",
             extra={
@@ -153,6 +158,7 @@ def get_transactions(account_id: str = "") -> list[dict]:
         parsed = json.loads(content_blocks[0]["text"])
         transactions = parsed.get("transactions", [])
         meta = parsed.get("credential_metadata", {})
+        activity.report_credential_metadata("get_transactions", meta)
         logger.info(
             "get_transactions_success",
             extra={
@@ -243,10 +249,13 @@ def build_uc2_agent(model: BedrockModel) -> Agent:
         "politely explain that UC2 is read-only and refer to UC3 for write operations."
     )
 
+    # ActivityHooks reports each tool call and follow-up model call into the
+    # current turn's event queue (activity._TURN_ACTIVITY), never into a shared one.
     agent = Agent(
         model=model,
         tools=[get_accounts, get_transactions],
         system_prompt=system_prompt,
+        hooks=[activity.ActivityHooks()],
     )
 
     logger.info(
