@@ -329,6 +329,16 @@ def _poll_ciba(auth_req_id: str, request_id: str) -> str:
                     request_id,
                     details={"auth_req_id": auth_req_id, "poll_attempts": attempt},
                 )
+                activity.credential(
+                    "ciba_token",
+                    f"{_sub_for_label()}'s CIBA token, issued by IBM Verify Identity Access "
+                    "after the phone approval",
+                    "IBM Verify Identity Access",
+                    value=access_token,
+                    ttl_seconds=data.get("expires_in"),
+                    expires_at=activity.expires_at_ms(data.get("expires_in")),
+                    request_id=request_id,
+                )
                 return access_token
 
         # authorization_pending — keep polling
@@ -476,6 +486,14 @@ def _token_exchange(ciba_token: str, request_id: str) -> str:
         },
     )
     return delegated_jwt
+
+
+def _sub_for_label() -> str:
+    """The signed-in user's sub, for a credential's plain-English label."""
+    try:
+        return _AUTHENTICATED_SUB.get()
+    except LookupError:
+        return "The user"
 
 
 def _describe_token_exchange(claims: dict) -> str:
@@ -830,9 +848,21 @@ def complete_refund(auth_req_id: str, request_id: str, tool_context: ToolContext
     )
     ciba_token = _poll_ciba(auth_req_id, request_id)
     delegated_jwt = _token_exchange(ciba_token, request_id)
-    # Decoded, non-secret claims only — the token itself never leaves this function.
+    # The narration and the audit seed carry decoded, non-secret claims only; the
+    # token itself is shown once, as a credential event, and is never part of
+    # this tool's return value.
     delegated_claims = activity.delegated_token_claims(delegated_jwt)
     activity.narrate(_describe_token_exchange(delegated_claims), request_id)
+    activity.credential(
+        "delegated_token",
+        f"{_sub_for_label()}'s delegated token from the RFC 8693 exchange",
+        "IBM Verify Identity Access",
+        value=delegated_jwt,
+        expires_at=int(delegated_claims["exp"] * 1000)
+        if isinstance(delegated_claims.get("exp"), (int, float))
+        else None,
+        request_id=request_id,
+    )
 
     write_creds = _vault_client.get_refund_credentials(delegated_jwt, request_id)
     writer_lease = {
@@ -1180,7 +1210,7 @@ def build_uc3_agent(vault_client=None, session_id: str = "default") -> Agent:
         session_manager=session_manager,
         # Reports every tool call's start and finish to this request's activity
         # stream (see activity.py); the tools add the steps inside each call.
-        hooks=[activity.ToolActivityHooks()],
+        hooks=[activity.ToolActivityHooks(refund_tools=frozenset({"initiate_refund", "complete_refund"}))],
     )
 
     logger.info(

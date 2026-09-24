@@ -160,32 +160,53 @@ async def chat(request: Request, body: ChatRequest):
     if _vault_client is None:
         raise HTTPException(status_code=503, detail="UC3 agent not initialized")
 
-    if not _vault_client.is_authenticated():
-        try:
-            _vault_client.login()
-            logger.info("uc3_vault_k8s_reauth_success")
-        except Exception as exc:
-            raise HTTPException(status_code=503, detail=f"Vault re-auth failed: {exc}")
-
-    # Identity boundary — extract + verify the IVIA id_token BEFORE building
-    # the agent. 401 responses are kept generic to avoid info leak about which
-    # claim failed; the structured log in auth.py carries the failure reason.
-    auth_header = request.headers.get("Authorization", "")
-    if not auth_header.lower().startswith("bearer "):
-        raise HTTPException(
-            status_code=401,
-            detail="Authorization: Bearer <id_token> header required",
-        )
-    id_token = auth_header[7:].strip()
-    if not id_token:
-        raise HTTPException(status_code=401, detail="Empty id_token in Authorization header")
-
+    # This request's activity sink. It is bound while the request is prepared,
+    # so the credentials this turn uses before the agent starts (a Vault
+    # re-login, the caller's id_token, the Bedrock STS keys issued by
+    # build_uc3_agent) are queued for the stream; nothing is sent unless the
+    # request gets as far as streaming.
+    sink = activity.EventSink(asyncio.get_running_loop())
+    prep_sink_token = activity.bind_sink(sink)
     try:
-        verified_sub = verify_id_token(id_token)
-    except AuthenticationError as exc:
-        raise HTTPException(status_code=401, detail="id_token verification failed") from exc
+        if not _vault_client.is_authenticated():
+            try:
+                _vault_client.login()
+                logger.info("uc3_vault_k8s_reauth_success")
+            except Exception as exc:
+                raise HTTPException(status_code=503, detail=f"Vault re-auth failed: {exc}")
 
-    agent = build_uc3_agent(vault_client=_vault_client, session_id=body.sessionId)
+        # Identity boundary — extract + verify the IVIA id_token BEFORE building
+        # the agent. 401 responses are kept generic to avoid info leak about which
+        # claim failed; the structured log in auth.py carries the failure reason.
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.lower().startswith("bearer "):
+            raise HTTPException(
+                status_code=401,
+                detail="Authorization: Bearer <id_token> header required",
+            )
+        id_token = auth_header[7:].strip()
+        if not id_token:
+            raise HTTPException(status_code=401, detail="Empty id_token in Authorization header")
+
+        try:
+            verified_sub = verify_id_token(id_token)
+        except AuthenticationError as exc:
+            raise HTTPException(status_code=401, detail="id_token verification failed") from exc
+
+        # Shown only once verified: the caller's own sign-in token.
+        id_claims = activity.decode_jwt_payload(id_token) or {}
+        activity.credential(
+            "id_token",
+            f"{verified_sub}'s id_token from sign-in, sent by the banking UI as this request's bearer",
+            "IBM Verify Identity Access",
+            value=id_token,
+            expires_at=int(id_claims["exp"] * 1000) if isinstance(id_claims.get("exp"), (int, float)) else None,
+        )
+        _vault_client.report_vault_token()
+
+        agent = build_uc3_agent(vault_client=_vault_client, session_id=body.sessionId)
+    finally:
+        activity.reset_sink(prep_sink_token)
     message = body.message
 
     async def generate():
@@ -196,7 +217,6 @@ async def chat(request: Request, body: ChatRequest):
         # inherit these values. Reset in finally, in reverse order, so neither
         # ContextVar stays bound when the request task is reused for another
         # caller on the same uvicorn worker (defense in depth).
-        sink = activity.EventSink(asyncio.get_running_loop())
         sink_token = activity.bind_sink(sink)
         ctx_token = _AUTHENTICATED_SUB.set(verified_sub)
         try:
@@ -209,7 +229,7 @@ async def chat(request: Request, body: ChatRequest):
             task = asyncio.ensure_future(asyncio.to_thread(agent, message))
 
             def _on_agent_done(done: asyncio.Future) -> None:
-                sink.queue.put_nowait(activity.END)
+                sink.finish()
                 exc = None if done.cancelled() else done.exception()
                 if exc is not None and sink.closed:
                     # The browser left before the answer; the error is only logged.
