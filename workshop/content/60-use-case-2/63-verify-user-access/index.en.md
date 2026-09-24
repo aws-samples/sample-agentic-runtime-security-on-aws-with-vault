@@ -66,7 +66,7 @@ pod "pg-client-oscar" deleted
 Open a **new Incognito / Private browser window**, go to the Banking UI URL, and sign in as `jaime` (password `WorkshopUser1!`). In the chat, ask "What are my account balances?" (or "show my accounts"). You should see Jaime's accounts only — no rows from Oscar's data.
 
 :::alert{type="info" header="Why a second window here?"}
-**Log out** (bottom of the left navigation) fully signs you out: the Banking UI clears its session cookies and redirects to IVIA's `/pkmslogout`, which ends the WebSEAL single sign-on session too — so logging out and back in as Jaime in the *same* window gives you a clean credential prompt. We open a **separate Incognito / Private window** here only so your Oscar session stays live in the first window for a side-by-side comparison.
+**Log out** (bottom of the navigation) fully signs you out: the Banking UI clears its session cookies and redirects to IVIA's `/pkmslogout`, which ends the WebSEAL single sign-on session too — so logging out and back in as Jaime in the *same* window gives you a clean credential prompt. We open a **separate Incognito / Private window** here only so your Oscar session stays live in the first window for a side-by-side comparison.
 :::
 
 Run the same manual query with `app.current_user_sub = 'jaime'` (you can reuse the same Vault-vended credential — RLS isolation is driven entirely by the session variable, not by the Postgres user):
