@@ -37,6 +37,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from . import activity
 from . import ciba_store
 from . import mmfa
 from .agent import build_uc3_agent
@@ -188,17 +189,44 @@ async def chat(request: Request, body: ChatRequest):
     message = body.message
 
     async def generate():
-        # Bind the verified sub for the entire SSE stream lifetime. The set
-        # MUST happen before the to_thread(agent, message) call below —
-        # to_thread uses contextvars.copy_context() so the worker thread (and the Strands
-        # tool callbacks running in it) inherit this value. Reset in finally
-        # so the ContextVar is unbound before the request task is reused for
-        # another caller on the same uvicorn worker (defense in depth).
+        # Bind the verified sub AND this request's activity sink for the entire
+        # SSE stream lifetime. Both sets MUST happen before the agent task is
+        # created below — the task and to_thread copy the current context, so
+        # the worker thread (and the Strands tools and hooks running under it)
+        # inherit these values. Reset in finally, in reverse order, so neither
+        # ContextVar stays bound when the request task is reused for another
+        # caller on the same uvicorn worker (defense in depth).
+        sink = activity.EventSink(asyncio.get_running_loop())
+        sink_token = activity.bind_sink(sink)
         ctx_token = _AUTHENTICATED_SUB.set(verified_sub)
         try:
             yield f"data: {json.dumps({'role': 'ai', 'content': 'Processing your request...', 'type': 'tool_planning'})}\n\n"
+
+            # The agent runs in a worker thread while this generator streams the
+            # steps it reports. END is queued by the task's done-callback, which
+            # runs after every event the worker pushed (all pushes go through
+            # call_soon_threadsafe ahead of the task's own completion).
+            task = asyncio.ensure_future(asyncio.to_thread(agent, message))
+
+            def _on_agent_done(done: asyncio.Future) -> None:
+                sink.queue.put_nowait(activity.END)
+                exc = None if done.cancelled() else done.exception()
+                if exc is not None and sink.closed:
+                    # The browser left before the answer; the error is only logged.
+                    logger.error("uc3_agent_error_after_disconnect: %s | user_message: %s", str(exc), message)
+
+            task.add_done_callback(_on_agent_done)
+
+            while True:
+                event = await sink.queue.get()
+                if event is activity.END:
+                    break
+                yield f"data: {json.dumps(event, default=str)}\n\n"
+
             try:
-                response = await asyncio.to_thread(agent, message)
+                # Already finished (END has arrived); shield so a disconnect
+                # here can never cancel the worker's task.
+                response = await asyncio.shield(task)
                 content = re.sub(r'<thinking>.*?</thinking>\s*', '', str(response), flags=re.DOTALL)
 
                 yield f"data: {json.dumps({'role': 'ai', 'content': content, 'type': 'delta'})}\n\n"
@@ -209,7 +237,11 @@ async def chat(request: Request, body: ChatRequest):
                 yield f"data: {json.dumps({'type': 'error', 'content': str(exc)})}\n\n"
                 yield f"data: {json.dumps({'type': 'end'})}\n\n"
         finally:
+            # A disconnected browser leaves the worker running to completion;
+            # its later events are dropped instead of queued for nobody.
+            sink.close()
             _AUTHENTICATED_SUB.reset(ctx_token)
+            activity.reset_sink(sink_token)
 
     return StreamingResponse(
         generate(),
