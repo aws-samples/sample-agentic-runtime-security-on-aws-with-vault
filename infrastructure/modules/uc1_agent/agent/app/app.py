@@ -12,6 +12,7 @@ lease in the Vault audit log (OBJ-5). A question the model answers from the
 Knowledge Base alone issues no database credential, and the list is then empty.
 """
 
+import asyncio
 import logging
 import logging.config
 import os
@@ -23,9 +24,8 @@ import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from strands import Agent
 
-from .agent import build_uc1_agent, _vault, _ISSUED_CREDENTIALS
+from .agent import build_uc1_agent, init_uc1_model, _vault, _ISSUED_CREDENTIALS
 
 # ---------------------------------------------------------------------------
 # Structured JSON logging — matches Vault audit log timestamp format.
@@ -37,16 +37,18 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Application lifespan — build agent once at startup.
+# Application lifespan — sign in to Vault and build the model once at startup.
+# Each /query builds its own Agent around that model (see build_uc1_agent).
 # ---------------------------------------------------------------------------
-_agent: Agent | None = None
+_ready = False
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _agent
+    global _ready
     logger.info('"uc1_agent_startup_begin"')
-    _agent = build_uc1_agent()
+    init_uc1_model()
+    _ready = True
     logger.info('"uc1_agent_startup_complete"')
     yield
     logger.info('"uc1_agent_shutdown"')
@@ -101,6 +103,11 @@ class QueryResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
+
+def _answer(query: str):
+    """Build this request's Agent and run it. Blocking — call via asyncio.to_thread."""
+    return build_uc1_agent()(query)
 
 
 @app.get("/")
@@ -166,7 +173,7 @@ async def query(request: QueryRequest) -> QueryResponse:
     Returns:
         QueryResponse with answer text, KB source passages, and credential metadata.
     """
-    if _agent is None:
+    if not _ready:
         raise HTTPException(status_code=503, detail="Agent not initialized")
 
     vault_role = os.getenv("VAULT_ROLE", "uc1-agent")
@@ -178,9 +185,13 @@ async def query(request: QueryRequest) -> QueryResponse:
     # Bind a fresh per-request sink BEFORE invoking the agent: query_database
     # appends the lease of every JIT credential it issues. Reset in the finally
     # so the binding never outlives the request on a reused uvicorn task.
+    # asyncio.to_thread copies this context into the worker thread, so the
+    # tools append to THIS request's list.
     ctx_token = _ISSUED_CREDENTIALS.set([])
     try:
-        result = _agent(request.query)
+        # Off the event loop: a blocking call here held every other request —
+        # including /health — until this answer was finished.
+        result = await asyncio.to_thread(_answer, request.query)
         # Strip any <thinking>...</thinking> chain-of-thought the model emits so it
         # never leaks into the answer (mirrors uc3-agent + banking-app agent).
         answer = re.sub(r'<thinking>.*?</thinking>\s*', '', str(result), flags=re.DOTALL)
@@ -204,7 +215,7 @@ async def query(request: QueryRequest) -> QueryResponse:
         answer=answer,
         sources=sources,
         credential_metadata=CredentialMetadata(
-            vault_authenticated=_vault.is_authenticated(),
+            vault_authenticated=await asyncio.to_thread(_vault.is_authenticated),
             vault_role=vault_role,
             leases=leases,
         ),

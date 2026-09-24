@@ -61,7 +61,7 @@ def _record_issuance(vault_path: str, creds: dict) -> None:
 
 
 # Module-level VaultClient: authenticated once at startup.
-# login() is called in build_uc1_agent() which is invoked during FastAPI startup.
+# login() is called in init_uc1_model(), which runs during FastAPI startup.
 _vault: VaultClient = _build_default_client()
 
 
@@ -162,36 +162,61 @@ def retrieve_from_knowledge_base(query: str) -> list[str]:
     return results
 
 
-def build_uc1_agent() -> Agent:
-    """Construct and return the UC1 Strands Agent.
+# The Bedrock model, built once at startup by init_uc1_model() and shared by
+# every request's Agent. Sharing it is safe: BedrockModel.stream keeps its
+# queue and worker thread local to each call, and the boto3 client it wraps is
+# backed by thread-safe RefreshableCredentials.
+_model: BedrockModel | None = None
 
-    Performs one-time Vault Kubernetes auth (OBJ-1) then wires the agent with:
-      - BedrockModel using Amazon Nova Pro via CRIS profile (us.amazon.nova-pro-v1:0)
-      - A boto3 session for the Bedrock control plane (primary region, from REGION env var)
-      - Two tools: query_database + retrieve_from_knowledge_base
 
-    The bedrock_session passed to BedrockModel is for model invocations only;
-    each tool call independently fetches its own ephemeral credentials from Vault.
+def init_uc1_model() -> None:
+    """Sign in to Vault once and build the shared Bedrock model (pod startup).
 
-    Returns:
-        Configured strands.Agent ready to handle queries.
+    Performs one-time Vault Kubernetes auth (OBJ-1) and builds a BedrockModel
+    using Amazon Nova Pro via CRIS profile (us.amazon.nova-pro-v1:0), backed by
+    a Vault-issued STS session for the model invocation plane (primary region,
+    from the REGION env var). That session is for model invocations only; each
+    tool call independently fetches its own ephemeral credentials from Vault.
     """
-    global _vault
+    global _model
 
     # Authenticate once at startup; token is cached for the pod's lifetime.
     _vault.login()
 
     region = os.getenv("REGION", "")
-    kb_region = os.getenv("KB_REGION", "")
     model_id = os.getenv("BEDROCK_MODEL_ID", "us.amazon.nova-pro-v1:0")
 
     # Obtain an STS session for the model invocation plane (primary region).
     bedrock_session = _vault.get_bedrock_session(kb_region=region)
 
-    bedrock_model = BedrockModel(
+    _model = BedrockModel(
         model_id=model_id,
         boto_session=bedrock_session,
     )
+    logger.info(
+        "uc1_model_ready",
+        extra={"model_id": model_id, "region": region, "kb_region": os.getenv("KB_REGION", "")},
+    )
+
+
+def build_uc1_agent() -> Agent:
+    """Construct a fresh UC1 Strands Agent for ONE request.
+
+    A new Agent per request, never one shared Agent, because Strands 1.57.0:
+      - raises ConcurrencyException when a second request invokes an Agent that
+        is still answering the first (Agent.__init__ defaults
+        concurrent_invocation_mode to THROW; stream_async refuses the lock), and
+      - appends every turn to agent.messages, so a shared Agent sends each
+        visitor's question to the model together with the previous visitors'
+        questions, tool output and answers.
+    The Agent is cheap to build; the Vault login and the Bedrock model are
+    shared (see init_uc1_model).
+
+    Returns:
+        Configured strands.Agent with query_database + retrieve_from_knowledge_base.
+    """
+    if _model is None:
+        raise RuntimeError("init_uc1_model() has not run")
 
     system_prompt = (
         "You are a workshop demonstration agent for the Agentic Runtime Security on AWS workshop. "
@@ -206,19 +231,8 @@ def build_uc1_agent() -> Agent:
         "Never request, store, or disclose user-identifying information — this use case is intentionally non-personalized."
     )
 
-    agent = Agent(
-        model=bedrock_model,
+    return Agent(
+        model=_model,
         tools=[query_database, retrieve_from_knowledge_base],
         system_prompt=system_prompt,
     )
-
-    logger.info(
-        "uc1_agent_built",
-        extra={
-            "model_id": model_id,
-            "region": region,
-            "kb_region": kb_region,
-            "tools": ["query_database", "retrieve_from_knowledge_base"],
-        },
-    )
-    return agent
