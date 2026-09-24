@@ -32,8 +32,10 @@ reaches the model) and never in a log line.
 The agent's OWN credentials are shown the same way (report_model_credentials):
 the Kubernetes service-account JWT and Vault token of its login, and the
 Bedrock keys Vault issued under that login, which sign the turn's model calls.
-Unlike the caller's token and database credential, these are standing: every
-turn that runs while they are current shows the same values.
+So is the MCP server's own Vault token, which it revokes each lease with
+(report_mcp_vault_token). Unlike the caller's token and database credential,
+these are standing: every turn that runs while they are current shows the
+same values.
 
 Every OTHER event is scrubbed with the UI filter's rules before it is queued:
 keys named like a secret are removed, and JWTs and Vault tokens in any string are
@@ -672,6 +674,48 @@ def report_model_credentials(issued: Any) -> None:
             ttl_seconds=ttl if isinstance(ttl, (int, float)) else None,
             expires_at=_expires_ms(issued_at, ttl),
         )
+
+
+# ---------------------------------------------------------------------------
+# The MCP server's own Vault token
+# ---------------------------------------------------------------------------
+
+
+def report_mcp_vault_token(tool_name: str, login: Any) -> None:
+    """Show, in full, the MCP server's own Vault token that revoked this call's lease.
+
+    `login` is the MCP server's mcp_vault_token (tools.ts), which the tool has
+    already taken out of the response so the model never sees it. The token is
+    the server's, from its Kubernetes login (role uc2) — not the caller's. It is
+    standing: the server reuses it across calls and callers until it nears
+    expiry, so each distinct token is shown once per turn. An MCP server that
+    does not report it leaves this silent.
+    """
+    turn = current()
+    if turn is None or not isinstance(login, dict):
+        return
+    token = login.get("token")
+    if not isinstance(token, str) or not token or not turn.first_showing("mcp_vault_token", token):
+        return
+    role = login.get("role") or "unknown"
+    policies = _policy_names(login.get("policies")) or "not reported"
+    ttl = login.get("ttl_seconds")
+    issued_at = _iso_epoch(login.get("issued_at"))
+    fresh = login.get("logged_in_for_this_call") is True
+    when = f"made during this {tool_name} call" if fresh else f"made {_at(issued_at)} and reused"
+    turn.narrate(
+        f"The MCP server presented its own Vault token to revoke the {tool_name} lease — not the caller's token. "
+        f"It comes from the server's Kubernetes login (role {role}, policies {policies}), {when}."
+    )
+    turn.credential(
+        kind="vault_token",
+        label=f"The MCP server's own Vault token (Kubernetes login, role {role}, policies {policies}, {when}), "
+        f"presented to revoke the {tool_name} lease",
+        issuer="Vault",
+        value=token,
+        ttl_seconds=ttl if isinstance(ttl, (int, float)) else None,
+        expires_at=_expires_ms(issued_at, ttl),
+    )
 
 
 # ---------------------------------------------------------------------------

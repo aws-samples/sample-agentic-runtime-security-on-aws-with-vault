@@ -107,12 +107,15 @@ def get_accounts() -> list[dict]:
 
     if content_blocks and content_blocks[0].get("type") == "text":
         parsed = json.loads(content_blocks[0]["text"])
-        # The issued DB credential goes to the turn's event stream ONLY. It is
-        # taken out here so it can never reach the model or a log line.
+        # The issued DB credential and the MCP server's own Vault token go to the
+        # turn's event stream ONLY. They are taken out here so they can never
+        # reach the model or a log line.
         issued = parsed.pop("issued_db_credentials", None)
+        mcp_token = parsed.pop("mcp_vault_token", None)
         accounts = parsed.get("accounts", [])
         meta = parsed.get("credential_metadata", {})
         activity.report_credential_metadata("get_accounts", meta, issued)
+        activity.report_mcp_vault_token("get_accounts", mcp_token)
         logger.info(
             "get_accounts_success",
             extra={
@@ -159,12 +162,15 @@ def get_transactions(account_id: str = "") -> list[dict]:
 
     if content_blocks and content_blocks[0].get("type") == "text":
         parsed = json.loads(content_blocks[0]["text"])
-        # The issued DB credential goes to the turn's event stream ONLY. It is
-        # taken out here so it can never reach the model or a log line.
+        # The issued DB credential and the MCP server's own Vault token go to the
+        # turn's event stream ONLY. They are taken out here so they can never
+        # reach the model or a log line.
         issued = parsed.pop("issued_db_credentials", None)
+        mcp_token = parsed.pop("mcp_vault_token", None)
         transactions = parsed.get("transactions", [])
         meta = parsed.get("credential_metadata", {})
         activity.report_credential_metadata("get_transactions", meta, issued)
+        activity.report_mcp_vault_token("get_transactions", mcp_token)
         logger.info(
             "get_transactions_success",
             extra={
