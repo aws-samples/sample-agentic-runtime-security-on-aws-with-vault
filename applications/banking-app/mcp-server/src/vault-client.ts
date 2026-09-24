@@ -71,6 +71,11 @@ export interface ServiceLogin {
 let serviceLogin: ServiceLogin | null = null;
 let serviceTokenExpiresAt = 0;
 const RENEW_MARGIN_MS = 60_000;
+// A login already on its way to Vault. Concurrent callers wait for it instead of
+// starting their own, so a cold two-tool turn makes ONE login, not one per tool
+// (each extra login is a live token nobody uses until it expires). Cleared once
+// it settles, success or failure, so a failed login never blocks the next try.
+let loginInFlight: Promise<ServiceLogin> | null = null;
 
 /**
  * Log in to Vault with this pod's Kubernetes ServiceAccount token and cache the
@@ -119,10 +124,26 @@ async function vaultK8sLogin(): Promise<ServiceLogin> {
   return serviceLogin;
 }
 
-/** The cached service login, or a new one; `fresh` says whether this call logged in. */
+/**
+ * The cached service login, or a new one; `fresh` says whether the login was
+ * made while this call waited (by this call, or by a concurrent one it joined).
+ *
+ * A login already in flight is always joined — also on `forceRefresh`, since a
+ * login that started after the cached token was last used is already the fresh
+ * token a 403 retry needs.
+ */
 async function getServiceLogin(forceRefresh = false): Promise<{ login: ServiceLogin; fresh: boolean }> {
+  if (loginInFlight) {
+    return { login: await loginInFlight, fresh: true };
+  }
   if (forceRefresh || !serviceLogin || Date.now() > serviceTokenExpiresAt - RENEW_MARGIN_MS) {
-    return { login: await vaultK8sLogin(), fresh: true };
+    const pending = vaultK8sLogin();
+    loginInFlight = pending;
+    try {
+      return { login: await pending, fresh: true };
+    } finally {
+      if (loginInFlight === pending) loginInFlight = null;
+    }
   }
   return { login: serviceLogin, fresh: false };
 }
