@@ -37,7 +37,7 @@ Everything from `30-deploy-foundation/32-configure-kubectl` — **Configure kube
 2. Sync your fork's `main` with upstream before each session.
 3. Clone it where you will run the workshop — the pre-flight page does this for you, and the block is idempotent.
 
-**Region.** The workshop ships single-region: `workshop/contentspec.yaml` declares `accessibleRegions` and `deployableRegions` as `us-east-1` only, with `maxAccessibleRegions: 1`. Knowledge Base components (AOSS, Bedrock KB, the S3 corpus) are `us-east-1` regardless, because the Nova 2 embedding model is only there. Record the region you actually deployed into on every finding.
+**Region — everything is `us-east-1`.** `workshop/contentspec.yaml` declares `accessibleRegions` and `deployableRegions` as `us-east-1` only, with `maxAccessibleRegions: 1`, and `infrastructure/terraform.tfvars` sets both `region` and `kb_region` to it. The Nova 2 embedding model the Knowledge Base needs exists only there. There is no second region to get wrong.
 
 **Tools.** The pre-flight script installs them all — there are no manual install steps. It expects `kubectl` 1.34.x, `helm` 3.12+, `terraform` 1.10+, `vault` 1.20.4+, `aws` CLI v2, `jq`, and `yq`. CloudShell ships `aws`, `git`, `jq`, `kubectl` and a running Docker daemon; the script installs the rest.
 
