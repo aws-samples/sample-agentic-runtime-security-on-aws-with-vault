@@ -29,9 +29,11 @@ import secrets
 import time
 import uuid
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 
 import httpx
 import psycopg2
+import psycopg2.extensions
 import psycopg2.extras
 from strands import Agent, ToolContext, tool
 from strands.models import BedrockModel
@@ -62,6 +64,37 @@ class RefundAuthorizationError(Exception):
     """
 
 
+class RefundRefusedError(Exception):
+    """Raised when the refund terms do not fit the real charge (issue #73).
+
+    initiate_refund raises it before any approval is requested: the transaction
+    is not a charge on the signed-in user's account, it is not on the account
+    named, it is not a debit, or the amount is not more than zero and at most
+    what is still refundable. complete_refund raises it when, inside the write
+    transaction, the approved amount no longer fits what is still refundable.
+
+    The message is a plain-English reason the model can relay to the user as it
+    stands. It names only the signed-in user's own figures.
+    """
+
+
+def _open_readonly_connection():
+    """A connection on a fresh short-lived uc3-readonly credential from Vault."""
+    global _vault_client
+    if _vault_client is None:
+        raise RuntimeError("UC3 vault client not initialized")
+
+    creds = _vault_client.get_readonly_credentials()
+    return psycopg2.connect(
+        host=creds["host"],
+        port=creds["port"],
+        dbname=creds["dbname"],
+        user=creds["username"],
+        password=creds["password"],
+        cursor_factory=psycopg2.extras.RealDictCursor,
+    )
+
+
 def _check_account_owner(
     account_id: str, authenticated_sub: str, request_id: str, tool_name: str
 ) -> None:
@@ -81,34 +114,34 @@ def _check_account_owner(
         RefundAuthorizationError: on mismatch OR missing-account (no info
             leak between the two cases).
     """
-    global _vault_client
-    if _vault_client is None:
-        raise RuntimeError("UC3 vault client not initialized")
-
-    creds = _vault_client.get_readonly_credentials()
-    with psycopg2.connect(
-        host=creds["host"],
-        port=creds["port"],
-        dbname=creds["dbname"],
-        user=creds["username"],
-        password=creds["password"],
-        cursor_factory=psycopg2.extras.RealDictCursor,
-    ) as conn:
+    with _open_readonly_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT set_config('app.current_user_sub', %s, false)",
-                (authenticated_sub,),
-            )
-            cur.execute(
-                """
-                SELECT user_sub
-                FROM banking.accounts
-                WHERE id = %s
-                LIMIT 1
-                """,
-                (account_id,),
-            )
-            row = cur.fetchone()
+            _owner_check(cur, account_id, authenticated_sub, request_id, tool_name)
+
+
+def _owner_check(
+    cur, account_id: str, authenticated_sub: str, request_id: str, tool_name: str
+) -> None:
+    """The account-owner check on an open read-only cursor (see _check_account_owner).
+
+    Sets app.current_user_sub on the connection, so a caller reading more rows
+    on the same cursor afterwards reads them under the signed-in user's RLS
+    scope.
+    """
+    cur.execute(
+        "SELECT set_config('app.current_user_sub', %s, false)",
+        (authenticated_sub,),
+    )
+    cur.execute(
+        """
+        SELECT user_sub
+        FROM banking.accounts
+        WHERE id = %s
+        LIMIT 1
+        """,
+        (account_id,),
+    )
+    row = cur.fetchone()
 
     if row is None or row["user_sub"] != authenticated_sub:
         logger.warning(
@@ -147,6 +180,180 @@ _OWNER_CHECK_REFUSED_CONSEQUENCE = {
     "initiate_refund": "No approval was requested.",
     "complete_refund": "Nothing was written.",
 }
+
+
+# ---------------------------------------------------------------------------
+# Refund terms, checked against the real charge (issue #73)
+#
+# The model proposes a transaction and an amount; nothing it says is trusted as a
+# figure. initiate_refund reads the charge itself and refuses before any approval
+# is requested unless the transaction is a debit on the signed-in user's account,
+# on the account named, and the amount is more than zero and at most the charge
+# minus what is already refunded. The approval then carries the database's
+# merchant, charge and amount. complete_refund re-checks the remaining amount
+# inside its write transaction, serialised per transaction, so two approvals for
+# one charge can never together refund more than the charge.
+#
+# Money is Decimal to the cent throughout; no float is ever compared.
+# ---------------------------------------------------------------------------
+
+_CENT = Decimal("0.01")
+_MAX_AMOUNT = Decimal("9999999999.99")  # the largest DECIMAL(12,2)
+
+
+def _money(value: Decimal) -> str:
+    """A Decimal as a two-decimal string, e.g. Decimal('88.3') -> '88.30'."""
+    return str(value.quantize(_CENT))
+
+
+def _refuse_terms(reason_code: str, reason: str, request_id: str, **log_fields) -> None:
+    """Log, report and raise one initiate_refund refusal. Nothing has been sent yet."""
+    logger.warning(
+        "refund_terms_refused",
+        extra={"request_id": request_id, "reason_code": reason_code, "tool": "initiate_refund", **log_fields},
+    )
+    reason = f"Refund refused: {reason} No approval was requested."
+    activity.narrate(reason, request_id)
+    raise RefundRefusedError(reason)
+
+
+def _requested_amount(amount, request_id: str) -> Decimal:
+    """The model's amount as Decimal cents, or a refusal (not a number, <= 0, sub-cent)."""
+    try:
+        value = Decimal(str(amount))
+    except (InvalidOperation, ValueError, TypeError):
+        value = None
+    if value is None or not value.is_finite():
+        _refuse_terms("amount_not_a_number", f"the amount {amount!r} is not a number.", request_id)
+    if value <= 0:
+        _refuse_terms("amount_not_positive", f"the amount must be more than zero, not {value}.", request_id)
+    # banking.refunds.amount is DECIMAL(12,2); anything larger is no charge's
+    # amount, and quantizing a huge value would raise instead of refusing.
+    if value > _MAX_AMOUNT:
+        _refuse_terms("amount_too_large", f"the amount {value} is larger than any charge can be.", request_id)
+    if value != value.quantize(_CENT):
+        _refuse_terms(
+            "amount_sub_cent", f"the amount {value} has fractions of a cent.", request_id, requested_amount=str(value)
+        )
+    return value.quantize(_CENT)
+
+
+def _check_refund_terms(
+    account_id: str,
+    transaction_id: str,
+    amount,
+    authenticated_sub: str,
+    request_id: str,
+) -> dict:
+    """Check the model's refund against the real charge; return the database's terms.
+
+    Runs the account-owner check and the charge read on ONE short-lived
+    uc3-readonly credential, RLS-scoped to the signed-in user exactly as
+    list_transactions is. Raises RefundAuthorizationError (owner check) or
+    RefundRefusedError (everything else) before anything is sent to IVIA or the
+    phone.
+
+    Returns:
+        {transaction_id, account_id, merchant, charge_amount, already_refunded,
+         refundable, amount, currency} — every figure from the database except
+        `amount`, which is the model's request after it has been checked.
+    """
+    requested = _requested_amount(amount, request_id)
+    try:
+        txn_uuid = uuid.UUID(str(transaction_id))
+    except ValueError:
+        _refuse_terms(
+            "transaction_id_invalid",
+            f"{transaction_id!r} is not a transaction ID.",
+            request_id,
+            transaction_id=str(transaction_id),
+        )
+
+    with _open_readonly_connection() as conn:
+        with conn.cursor() as cur:
+            _owner_check(cur, account_id, authenticated_sub, request_id, "initiate_refund")
+            # RLS already limits both tables to the signed-in user's rows; the
+            # explicit user_sub predicate says the same thing in the query itself.
+            cur.execute(
+                """
+                SELECT t.id::text AS transaction_id,
+                       t.account_id::text AS account_id,
+                       t.transaction_type,
+                       t.amount,
+                       t.merchant,
+                       t.description,
+                       a.currency,
+                       (SELECT COALESCE(sum(r.amount), 0)
+                          FROM banking.refunds r
+                         WHERE r.transaction_id = t.id) AS already_refunded
+                FROM banking.transactions t
+                JOIN banking.accounts a ON a.id = t.account_id
+                WHERE t.id = %s
+                  AND a.user_sub = %s
+                """,
+                (str(txn_uuid), authenticated_sub),
+            )
+            row = cur.fetchone()
+
+    log_fields = {"transaction_id": str(txn_uuid), "account_id": account_id, "requested_amount": _money(requested)}
+    if row is None:
+        # Same answer for "does not exist" and "belongs to someone else".
+        _refuse_terms(
+            "transaction_not_found",
+            f"transaction {txn_uuid} is not a charge on your accounts.",
+            request_id,
+            **log_fields,
+        )
+
+    merchant = row["merchant"] or row["description"] or "unnamed"
+    currency = row["currency"]
+    if uuid.UUID(row["account_id"]) != uuid.UUID(str(account_id)):
+        _refuse_terms(
+            "account_mismatch",
+            f"the {merchant} charge is on account {row['account_id']}, not on {account_id}.",
+            request_id,
+            **log_fields,
+        )
+    if row["transaction_type"] != "debit":
+        _refuse_terms(
+            "not_a_debit",
+            f"the {merchant} transaction is a {row['transaction_type']} of {_money(row['amount'])} {currency}, "
+            "not a charge. Only a debit can be refunded.",
+            request_id,
+            **log_fields,
+        )
+
+    charge = abs(row["amount"])
+    already = row["already_refunded"]
+    refundable = charge - already
+    log_fields.update(charge_amount=_money(charge), already_refunded=_money(already), refundable=_money(refundable))
+    if requested > refundable:
+        if refundable <= 0:
+            reason = f"the {merchant} charge of {_money(charge)} {currency} has already been refunded in full."
+        else:
+            reason = (
+                f"{_money(requested)} {currency} is more than the {_money(refundable)} {currency} still refundable "
+                f"on the {merchant} charge of {_money(charge)} {currency} ({_money(already)} {currency} already refunded)."
+            )
+        _refuse_terms("exceeds_refundable", reason, request_id, **log_fields)
+
+    activity.narrate(
+        f"Refund check passed: the {merchant} charge of {_money(charge)} {currency} on {row['account_id']} is a "
+        f"debit, {_money(already)} {currency} is already refunded, so up to {_money(refundable)} {currency} can be "
+        f"refunded; {_money(requested)} {currency} was requested (read from the database with the same "
+        "read-only credential).",
+        request_id,
+    )
+    return {
+        "transaction_id": row["transaction_id"],
+        "account_id": row["account_id"],
+        "merchant": merchant,
+        "charge_amount": charge,
+        "already_refunded": already,
+        "refundable": refundable,
+        "amount": requested,
+        "currency": currency,
+    }
 
 # IVIA configuration from env vars
 IVIA_BASE_URL = os.getenv("IVIA_BASE_URL", "https://iviaop.verify-access.svc.cluster.local:8436")
@@ -621,11 +828,20 @@ def initiate_refund(
     bound to the approval at this point and read back from the store, never
     re-supplied by the model.
 
+    Nothing the model passes is trusted as a figure (issue #73). Before any
+    approval is requested the transaction is read from the database and the
+    refund is refused, with a plain reason, unless the transaction is a debit on
+    the signed-in user's account, on the account named, and the amount is more
+    than zero and at most the charge minus what is already refunded. The
+    approval then carries the database's merchant, charge, amount and the
+    account's currency.
+
     Args:
         account_id: Account to credit the refund to.
         transaction_id: Original transaction being refunded.
-        amount: Refund amount (positive float).
-        currency: ISO 4217 currency code (e.g. "USD").
+        amount: Refund amount (positive, whole cents).
+        currency: ISO 4217 currency code (e.g. "USD"). The approval uses the
+            account's own currency from the database.
 
     Returns:
         Dict with auth_req_id, request_id, and consent status.
@@ -637,9 +853,18 @@ def initiate_refund(
     # the pgaudit statement comment and banking.refunds.request_id.
     activity.bind_request(tool_context, request_id)
     authenticated_sub = _AUTHENTICATED_SUB.get()
-    _check_account_owner(
-        account_id, authenticated_sub, request_id, "initiate_refund"
+    # The owner check and the charge check, on one read-only credential. Either
+    # refusal raises here, before IVIA or the phone hears anything.
+    checked = _check_refund_terms(
+        account_id, transaction_id, amount, authenticated_sub, request_id
     )
+    # From here on every figure is the database's, never the model's.
+    account_id = checked["account_id"]
+    transaction_id = checked["transaction_id"]
+    merchant = checked["merchant"]
+    charge_text = _money(checked["charge_amount"])
+    amount_text = _money(checked["amount"])
+    currency = checked["currency"]
     # Local — sent on the CIBA wire to IVIA; NOT exposed to LLM.
     login_hint = authenticated_sub
 
@@ -649,7 +874,10 @@ def initiate_refund(
             "request_id": request_id,
             "account_id": account_id,
             "transaction_id": transaction_id,
-            "amount": amount,
+            "merchant": merchant,
+            "charge_amount": charge_text,
+            "already_refunded": _money(checked["already_refunded"]),
+            "amount": amount_text,
             "currency": currency,
         },
     )
@@ -659,9 +887,13 @@ def initiate_refund(
             "type": "refund_approval",
             "transaction_id": transaction_id,
             "account_id": account_id,
-            "amount": amount,
+            # JSON numbers, the shape IVIA has accepted for `amount` since the
+            # flow was built; both come from Decimals already checked to the cent.
+            "amount": float(checked["amount"]),
             "currency": currency,
             "request_id": request_id,
+            "merchant": merchant,
+            "charge_amount": float(checked["charge_amount"]),
         }
     ]
 
@@ -669,12 +901,16 @@ def initiate_refund(
     auth_req_id = ciba["auth_req_id"]
     activity.narrate(
         "Backchannel sign-in request (CIBA) sent to IBM Verify Identity Access. It carries "
-        f"the refund terms as authorization details (RFC 9396): {amount} {currency} to "
-        f"{account_id} for transaction {transaction_id}.",
+        f"the refund terms as authorization details (RFC 9396): {amount_text} {currency} to "
+        f"{account_id} for the {merchant} charge of {charge_text} {currency} "
+        f"(transaction {transaction_id}).",
         request_id,
     )
 
-    rar_desc = f"refund_approval ${amount} {currency} for transaction {transaction_id}"
+    rar_desc = (
+        f"refund_approval {amount_text} {currency} of the {merchant} charge of "
+        f"{charge_text} {currency}, transaction {transaction_id}"
+    )
 
     # Mobile-push consent: fire an MMFA push to the AUTHENTICATED user's IBM Verify
     # device (identity straight from the verified session — never a parameter) and
@@ -685,7 +921,8 @@ def initiate_refund(
     # Bind the terms to the approval (issue #31). These are the values the human
     # is being asked to approve; complete_refund reads them back from here rather
     # than taking them from its own tool arguments, so the model cannot substitute
-    # a different figure once the approval has been granted.
+    # a different figure once the approval has been granted. Every value is the
+    # database's (issue #73); amount and charge_amount are Decimal.
     ciba_store.put_txn(
         auth_req_id,
         authenticated_sub,
@@ -694,7 +931,9 @@ def initiate_refund(
             "request_id": request_id,
             "account_id": account_id,
             "transaction_id": transaction_id,
-            "amount": amount,
+            "merchant": merchant,
+            "charge_amount": checked["charge_amount"],
+            "amount": checked["amount"],
             "currency": currency,
             "approver_sub": authenticated_sub,
         },
@@ -718,8 +957,10 @@ def initiate_refund(
         "before anything is written.",
         request_id,
         details={
-            "amount": amount,
+            "amount": amount_text,
             "currency": currency,
+            "merchant": merchant,
+            "charge_amount": charge_text,
             "account_id": account_id,
             "transaction_id": transaction_id,
             "auth_req_id": auth_req_id,
@@ -733,7 +974,9 @@ def initiate_refund(
         "request_id": request_id,
         "account_id": account_id,
         "transaction_id": transaction_id,
-        "amount": amount,
+        "merchant": merchant,
+        "charge_amount": charge_text,
+        "amount": amount_text,
         "currency": currency,
         "channel": "mobile_push",
         "details": rar_desc,
@@ -823,8 +1066,10 @@ def complete_refund(auth_req_id: str, request_id: str, tool_context: ToolContext
 
     account_id = terms["account_id"]
     transaction_id = terms["transaction_id"]
+    # Decimal, checked to the cent against the charge by initiate_refund.
     amount = terms["amount"]
     currency = terms["currency"]
+    merchant = terms.get("merchant") or "unnamed"
 
     _check_account_owner(
         account_id, authenticated_sub, request_id, "complete_refund"
@@ -905,6 +1150,11 @@ def complete_refund(auth_req_id: str, request_id: str, tool_context: ToolContext
             user=write_creds["username"],
             password=write_creds["password"],
         ) as conn:
+            # The re-check below relies on READ COMMITTED: each statement sees
+            # everything committed before it started, so the SELECT after the lock
+            # sees a refund another approval committed while this one waited.
+            # Pinned here rather than inherited from the server default.
+            conn.isolation_level = psycopg2.extensions.ISOLATION_LEVEL_READ_COMMITTED
             with conn.cursor() as cur:
                 # RLS WITH CHECK gate: banking.refunds is FORCE ROW LEVEL SECURITY and the
                 # refund_insert_own policy verifies account_id belongs to
@@ -916,6 +1166,60 @@ def complete_refund(auth_req_id: str, request_id: str, tool_context: ToolContext
                 cur.execute(
                     "SELECT set_config('app.current_user_sub', %s, true)",
                     (authenticated_sub,),
+                )
+                # Issue #73: two approvals for one charge must never together refund
+                # more than the charge. Serialise every write for this transaction
+                # on a transaction-scoped advisory lock (the writer role may not row-
+                # lock banking.transactions: it has no UPDATE there, and a charge with
+                # no refunds yet has no refunds row to lock). The key is the uuid in
+                # canonical text form, so any spelling of the same id takes the same
+                # lock. Held until COMMIT or ROLLBACK.
+                cur.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s::uuid::text, 0))",
+                    (transaction_id,),
+                )
+                cur.execute(
+                    """
+                    SELECT abs(t.amount) AS charge,
+                           (SELECT COALESCE(sum(r.amount), 0)
+                              FROM banking.refunds r
+                             WHERE r.transaction_id = t.id) AS already_refunded
+                    FROM banking.transactions t
+                    WHERE t.id = %s
+                      AND t.account_id = %s
+                      AND t.transaction_type = 'debit'
+                    """,
+                    (transaction_id, account_id),
+                )
+                charge_row = cur.fetchone()
+                refundable = charge_row[0] - charge_row[1] if charge_row else Decimal("0")
+                if charge_row is None or amount > refundable:
+                    logger.warning(
+                        "refund_terms_refused",
+                        extra={
+                            "request_id": request_id,
+                            "reason_code": "exceeds_refundable_at_write",
+                            "tool": "complete_refund",
+                            "transaction_id": transaction_id,
+                            "account_id": account_id,
+                            "approved_amount": _money(amount),
+                            "refundable": _money(refundable),
+                        },
+                    )
+                    reason = (
+                        f"Refund refused: only {_money(refundable)} {currency} is still refundable on the "
+                        f"{merchant} charge, less than the {_money(amount)} {currency} that was approved. "
+                        "Another refund of this charge was written after this approval was requested. "
+                        "Nothing was written."
+                    )
+                    activity.narrate(reason, request_id)
+                    raise RefundRefusedError(reason)
+                activity.narrate(
+                    f"Refundable amount re-checked inside the write transaction, locked for this "
+                    f"charge: {_money(charge_row[1])} {currency} of the {merchant} charge of "
+                    f"{_money(charge_row[0])} {currency} is already refunded, {_money(refundable)} "
+                    f"{currency} is still refundable; writing {_money(amount)} {currency}.",
+                    request_id,
                 )
                 # OBJ-5 PLANE-A: thread request_id into the pgaudit STATEMENT field via
                 # an inline SQL comment. pgaudit (log='write') captures the full statement
@@ -996,7 +1300,7 @@ def complete_refund(auth_req_id: str, request_id: str, tool_context: ToolContext
                 {
                     "type": "refund_approval",
                     "actions": ["process_refund"],
-                    "amount": str(amount),
+                    "amount": _money(amount),
                     "currency": currency,
                 }
             ],
@@ -1063,7 +1367,9 @@ def complete_refund(auth_req_id: str, request_id: str, tool_context: ToolContext
         "request_id": request_id,
         "account_id": account_id,
         "transaction_id": transaction_id,
-        "amount": amount,
+        "merchant": merchant,
+        # A two-decimal string: the tool result is JSON, and Decimal is not.
+        "amount": _money(amount),
         "currency": currency,
         "approved_by": approved_by,
         "status": "approved",
