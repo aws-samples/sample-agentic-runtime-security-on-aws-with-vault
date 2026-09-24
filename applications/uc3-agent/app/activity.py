@@ -4,8 +4,9 @@ Every step the refund agent takes — each tool call, the account-owner check, t
 CIBA approval request and its outcome, the token exchange, the Vault credential,
 the database write and the audit anchor — is reported to the browser as it
 happens, as one Server-Sent Event per step. The event shapes are the banking UI's
-contract, applications/banking-app/ui/src/lib/agent-events.ts; nothing outside it
-is emitted.
+contract, applications/banking-app/ui/src/lib/agent-events.ts. `agent:credential`
+is the one type not in it yet: the filter task adds it, and until then the UI's
+activity filter drops it.
 
 Isolation
 ---------
@@ -26,17 +27,23 @@ never full and a push never blocks, so a browser that disconnects cannot stall
 the worker: the refund still runs to completion, and pushes after close() are
 dropped.
 
-Secrets
--------
-No event may carry a raw JWT, Vault token, password or other credential. The
-banking UI's activity filter enforces that at the edge; this module enforces the
-same rules at the source, so the agent's own stream is already clean:
+Credentials
+-----------
+Every credential the turn uses is shown IN FULL, in exactly one place: an
+`agent:credential` event built by credential() (Bear's decision, 2026-09-24 —
+the workshop shows in real time what happens behind each use case). The value
+goes only onto this request's queue: never into a tool's return value (that
+reaches Bedrock and the on-disk session history) and never into a log line.
+OAuth client secrets and the SCIM password are configuration, not issued
+credentials, and are never sent.
+
+Every OTHER event is scrubbed at the source with the same rules as the banking
+UI's activity filter, so a tool result or narration line can never carry a
+credential by accident:
   - payload keys named like a secret (password, secret, token, private key,
     api key, credential headers) are removed at any depth, except the
     correlation keys the audit story needs (lease_id, request_id, sub, ...);
   - every string has JWTs and Vault tokens replaced by "[token redacted]".
-Tokens are only ever reported as decoded, non-secret claims
-(delegated_token_claims).
 
 An emit never raises into the tool that called it: reporting a step must not be
 able to break the step.
@@ -44,6 +51,7 @@ able to break the step.
 
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 import math
@@ -174,6 +182,14 @@ class EventSink:
         self._lock = threading.Lock()
         self._request_by_tool_call: dict[str, str] = {}
         self._tool_call_by_request: dict[str, str] = {}
+        # Credentials the turn holds before its refund's request_id exists (the
+        # caller's id_token, the agent's Vault token, the Bedrock STS keys) are
+        # held back and sent, stamped, the moment a refund binds its request_id.
+        # If the turn runs a non-refund tool or ends first, they go unstamped.
+        self._latest_request_id: str | None = None
+        self._holding = True
+        self._held: list[dict] = []
+        self._credentials_sent: set[str] = set()  # sha256 of kind+value, per turn
 
     @property
     def closed(self) -> bool:
@@ -197,6 +213,53 @@ class EventSink:
         with self._lock:
             self._request_by_tool_call[tool_call_id] = request_id
             self._tool_call_by_request[request_id] = tool_call_id
+            self._latest_request_id = request_id
+            self._release_held_locked(request_id)
+
+    def _release_held_locked(self, request_id: str | None) -> None:
+        if not self._holding:
+            return
+        self._holding = False
+        for event in self._held:
+            if request_id:
+                event["requestId"] = request_id
+            event["ts"] = int(time.time() * 1000)
+            self.push(event)
+        self._held = []
+
+    def release_held(self) -> None:
+        """A non-refund tool is running: this turn has no refund in play."""
+        with self._lock:
+            self._release_held_locked(None)
+
+    def offer_credential(self, event: dict, request_id: str | None, digest: str) -> None:
+        """Send a credential event once per turn, stamped with the refund's request_id."""
+        with self._lock:
+            if self._closed or digest in self._credentials_sent:
+                return
+            self._credentials_sent.add(digest)
+            request_id = request_id or self._latest_request_id
+            if request_id:
+                event["requestId"] = request_id
+            elif self._holding:
+                self._held.append(event)
+                return
+            event["ts"] = int(time.time() * 1000)
+            self.push(event)
+
+    def finish(self) -> None:
+        """On the request's loop, after the agent task is done: flush, then END.
+
+        Everything the worker pushed is already queued (call_soon_threadsafe ran
+        ahead of the task's completion); held credentials go unstamped because no
+        refund bound a request_id this turn.
+        """
+        with self._lock:
+            held, self._held, self._holding = self._held, [], False
+        for event in held:
+            event["ts"] = int(time.time() * 1000)
+            self.queue.put_nowait(event)
+        self.queue.put_nowait(END)
 
     def request_id_for(self, tool_call_id: str) -> str | None:
         with self._lock:
@@ -311,6 +374,23 @@ def audit_seed(
     )
 
 
+def decode_jwt_payload(token: str) -> dict | None:
+    """A JWT's payload, decoded but NOT verified (display only), or None.
+
+    None when the value is not a readable three-part JWT — an opaque token is
+    shown without claims rather than guessed at.
+    """
+    try:
+        parts = token.split(".")
+        if len(parts) != 3 or not token.startswith("eyJ"):
+            return None
+        payload_b64 = parts[1] + "=" * (-len(parts[1]) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64))
+    except Exception:  # noqa: BLE001 — unreadable: show nothing rather than guess
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
 def delegated_token_claims(token: str) -> dict:
     """Decode a JWT's payload and keep only the non-secret claims worth showing.
 
@@ -318,13 +398,8 @@ def delegated_token_claims(token: str) -> dict:
     JWKS when the agent presents it. This is display only, and the token itself
     is never returned. Returns {} when the value is not a readable JWT.
     """
-    try:
-        payload_b64 = token.split(".")[1]
-        payload_b64 += "=" * (-len(payload_b64) % 4)
-        payload = json.loads(base64.urlsafe_b64decode(payload_b64))
-    except Exception:  # noqa: BLE001 — unreadable: show nothing rather than guess
-        return {}
-    if not isinstance(payload, dict):
+    payload = decode_jwt_payload(token)
+    if payload is None:
         return {}
     claims = {name: payload[name] for name in _CLAIMS_SHOWN if name in payload}
     details = payload.get("authorization_details")
@@ -333,6 +408,73 @@ def delegated_token_claims(token: str) -> dict:
             {"type": entry["type"]} for entry in details if isinstance(entry, dict) and "type" in entry
         ]
     return _scrub(claims) or {}
+
+
+# ---------------------------------------------------------------------------
+# Issued credentials, shown in full
+# ---------------------------------------------------------------------------
+
+
+def credential(
+    kind: str,
+    label: str,
+    issuer: str,
+    *,
+    value: str | None = None,
+    fields: dict | None = None,
+    vault_path: str | None = None,
+    lease_id: str | None = None,
+    ttl_seconds: int | float | None = None,
+    expires_at: int | None = None,
+    request_id: str | None = None,
+) -> None:
+    """Show one issued credential IN FULL on the current request's stream.
+
+    The workshop's UI shows every credential a turn uses (Bear's decision,
+    2026-09-24). Hard rules this function exists to keep:
+      - the value goes ONLY onto this request's event queue — never into a
+        tool's return value (that reaches Bedrock and the on-disk session
+        history) and never into a log line (pod logs are shipped off-cluster);
+      - configuration secrets (OAuth client secrets, the SCIM password) are
+        never passed here.
+    `value` (a single token) or `fields` (a multi-part credential), never both.
+    A JWT value also carries its decoded, unverified payload as `claims`.
+    Each distinct credential is sent once per turn. Never raises; a failure is
+    logged without the value.
+    """
+    sink = _EVENT_SINK.get()
+    if sink is None or sink.closed:
+        return
+    try:
+        event: dict[str, Any] = {"type": "agent:credential", "kind": kind, "label": label, "issuer": issuer}
+        if value is not None:
+            event["value"] = value
+            claims = decode_jwt_payload(value)
+            if claims is not None:
+                event["claims"] = claims
+        elif fields is not None:
+            event["fields"] = dict(fields)
+        for name, item in (
+            ("vaultPath", vault_path),
+            ("leaseId", lease_id),
+            ("ttlSeconds", ttl_seconds),
+            ("expiresAt", expires_at),
+        ):
+            if item is not None:
+                event[name] = item
+        identity = value if value is not None else json.dumps(fields, sort_keys=True, default=str)
+        digest = hashlib.sha256(f"{kind}\0{identity}".encode()).hexdigest()
+        sink.offer_credential(event, request_id, digest)
+    except Exception as exc:  # noqa: BLE001 — never raise; never log the value
+        logger.warning("uc3_activity_credential_failed", extra={"kind": kind, "error_type": type(exc).__name__})
+
+
+def expires_at_ms(ttl_seconds: Any, issued_at: float | None = None) -> int | None:
+    """Absolute expiry (ms since the epoch) from a TTL in seconds, or None."""
+    try:
+        return int(((issued_at if issued_at is not None else time.time()) + float(ttl_seconds)) * 1000)
+    except (TypeError, ValueError):
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -353,7 +495,15 @@ def _tool_result_payload(result: Any) -> Any:
 
 
 class ToolActivityHooks(HookProvider):
-    """Reports every tool call's start and finish as `tool_call` events."""
+    """Reports every tool call's start and finish as `tool_call` events.
+
+    `refund_tools` names the tools that bind a refund's request_id. When any
+    other tool starts, the turn has no refund in play, so credentials held for
+    a request_id are sent without one.
+    """
+
+    def __init__(self, refund_tools: frozenset[str] = frozenset()) -> None:
+        self._refund_tools = refund_tools
 
     def register_hooks(self, registry: HookRegistry, **kwargs: Any) -> None:
         registry.add_callback(BeforeToolCallEvent, self._before_tool)
@@ -367,6 +517,9 @@ class ToolActivityHooks(HookProvider):
     def _before_tool(self, event: BeforeToolCallEvent) -> None:
         tool_use = event.tool_use
         tool_call_id = str(tool_use.get("toolUseId", ""))
+        sink = _EVENT_SINK.get()
+        if sink is not None and tool_use.get("name") not in self._refund_tools:
+            sink.release_held()
         emit(
             "tool_call",
             toolCallId=tool_call_id,
