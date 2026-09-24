@@ -540,18 +540,3 @@ export function createActivityFilter(label: string): TransformStream<Uint8Array,
 		}
 	});
 }
-
-/**
- * The Response a route returns for an agent's SSE body: the body piped through
- * the activity filter, with headers that stop proxies from buffering it.
- */
-export function filteredEventStream(upstream: ReadableStream<Uint8Array>, label: string): Response {
-	return new Response(upstream.pipeThrough(createActivityFilter(label)), {
-		headers: {
-			'Content-Type': 'text/event-stream',
-			'Cache-Control': 'no-cache',
-			Connection: 'keep-alive',
-			'X-Accel-Buffering': 'no'
-		}
-	});
-}

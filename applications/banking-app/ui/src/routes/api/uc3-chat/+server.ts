@@ -1,10 +1,11 @@
 import { json, type RequestHandler } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
-import { filteredEventStream, scrubErrorText } from '$lib/server/activity-filter';
+import { scrubErrorText } from '$lib/server/activity-filter';
+import { AgentCall, streamAgentEvents } from '$lib/server/agent-proxy';
 
 const UC3_AGENT_URL = env.UC3_AGENT_URL ?? 'http://uc3-agent-svc:8080';
 
-export const POST: RequestHandler = async ({ request, cookies }) => {
+export const POST: RequestHandler = async ({ request, cookies, platform }) => {
 	const idToken = cookies.get('id_token');
 	if (!idToken) {
 		return json({ error: 'Not authenticated' }, { status: 401 });
@@ -17,6 +18,8 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
 		return json({ error: 'Invalid JSON body' }, { status: 400 });
 	}
 
+	// Closes the agent call when the browser leaves. See $lib/server/agent-proxy.
+	const call = new AgentCall(request, platform);
 	let agentRes: Response;
 	try {
 		agentRes = await fetch(`${UC3_AGENT_URL}/chat`, {
@@ -26,8 +29,10 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
 				Authorization: `Bearer ${idToken}`,
 			},
 			body: JSON.stringify(body),
+			signal: call.signal,
 		});
 	} catch (err) {
+		call.end();
 		return json(
 			{ error: `Cannot reach the Use Case 3 agent: ${err instanceof Error ? err.message : String(err)}` },
 			{ status: 502 }
@@ -36,16 +41,19 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
 
 	if (!agentRes.ok) {
 		// The agent can close the connection part-way through its error body.
-		const errorBody = await agentRes.text().catch(() => '(the agent closed the connection before its error body arrived)');
+		const errorBody = await call
+			.readText(agentRes)
+			.catch(() => '(the agent closed the connection before its error body arrived)');
 		const text = scrubErrorText(errorBody);
 		return json({ error: `UC3 agent error [${agentRes.status}]: ${text}` }, { status: agentRes.status });
 	}
 
 	if (!agentRes.body) {
+		call.end();
 		return json({ error: 'UC3 agent returned no response body' }, { status: 502 });
 	}
 
 	// Every event the agent streams passes through the activity filter: the
 	// browser never receives the agent's bytes directly. See $lib/server/activity-filter.
-	return filteredEventStream(agentRes.body, 'api/uc3-chat');
+	return streamAgentEvents(call, agentRes.body, 'api/uc3-chat');
 };

@@ -16,11 +16,12 @@
  */
 import { json, type RequestHandler } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
-import { filteredEventStream, scrubErrorText, scrubJson } from '$lib/server/activity-filter';
+import { scrubErrorText, scrubJson } from '$lib/server/activity-filter';
+import { AgentCall, streamAgentEvents } from '$lib/server/agent-proxy';
 
 const UC1_AGENT_URL = env.UC1_AGENT_URL ?? 'http://uc1-agent-svc.uc1.svc.cluster.local';
 
-export const POST: RequestHandler = async ({ request }) => {
+export const POST: RequestHandler = async ({ request, platform }) => {
 	let query = '';
 	try {
 		const body = await request.json();
@@ -33,14 +34,18 @@ export const POST: RequestHandler = async ({ request }) => {
 		return json({ error: 'query is required' }, { status: 400 });
 	}
 
+	// Closes the agent call when the browser leaves. See $lib/server/agent-proxy.
+	const call = new AgentCall(request, platform);
 	let agentRes: Response;
 	try {
 		agentRes = await fetch(`${UC1_AGENT_URL}/query`, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ query })
+			body: JSON.stringify({ query }),
+			signal: call.signal
 		});
 	} catch (err) {
+		call.end();
 		return json(
 			{ error: `Cannot reach Use Case 1 agent: ${err instanceof Error ? err.message : String(err)}` },
 			{ status: 502 }
@@ -49,7 +54,9 @@ export const POST: RequestHandler = async ({ request }) => {
 
 	if (!agentRes.ok) {
 		// The agent can close the connection part-way through its error body.
-		const errorBody = await agentRes.text().catch(() => '(the agent closed the connection before its error body arrived)');
+		const errorBody = await call
+			.readText(agentRes)
+			.catch(() => '(the agent closed the connection before its error body arrived)');
 		const text = scrubErrorText(errorBody);
 		return json({ error: `Agent error [${agentRes.status}]: ${text}` }, { status: agentRes.status });
 	}
@@ -59,16 +66,17 @@ export const POST: RequestHandler = async ({ request }) => {
 	const contentType = (agentRes.headers.get('content-type') ?? '').toLowerCase();
 	if (contentType.startsWith('text/event-stream')) {
 		if (!agentRes.body) {
+			call.end();
 			return json({ error: 'Agent returned no response body' }, { status: 502 });
 		}
-		return filteredEventStream(agentRes.body, 'api/ask');
+		return streamAgentEvents(call, agentRes.body, 'api/ask');
 	}
 
 	// Otherwise uc1-agent returns JSON { answer, sources, credential_metadata }.
 	// The filter's payload key rules apply to it before it reaches the browser.
 	let data: unknown;
 	try {
-		data = await agentRes.json();
+		data = JSON.parse(await call.readText(agentRes));
 	} catch {
 		return json({ error: 'Use Case 1 agent returned a body that is not JSON' }, { status: 502 });
 	}
