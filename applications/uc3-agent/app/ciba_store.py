@@ -11,11 +11,14 @@ Two stores:
              the SCIM transaction-truth gate).
 
              `terms` is the APPROVED refund — request_id, account_id,
-             transaction_id, amount, currency — recorded at the moment the push is
-             fired, i.e. the terms the human is being asked to approve.
-             complete_refund reads the amount from here rather than from its own
-             tool arguments, so a non-deterministic model cannot substitute a
-             different value after the human has approved (issue #31).
+             transaction_id, merchant, charge_amount, amount, currency — recorded
+             at the moment the push is fired, i.e. the terms the human is being
+             asked to approve. complete_refund reads the amount from here rather
+             than from its own tool arguments, so a non-deterministic model cannot
+             substitute a different value after the human has approved (issue #31).
+             Every value is the database's, checked by initiate_refund against the
+             real charge before anything was sent; amount and charge_amount are
+             Decimal (issue #73).
 
              This is deliberately in-process rather than a database row: the agent
              holds NO standing write credential — the refund-writer credential is
