@@ -68,8 +68,10 @@ The workshop expects kubectl 1.34.x, helm 3.12+, terraform 1.10+, vault 1.20.4+,
 
 Flags:
 
+- `--image-source=ghcr` — use pre-built public images instead of building your own, which removes the Docker/Podman requirement entirely. The default is `ecr`: build the five Use Case images locally and push them to your account's registry, which needs a running container runtime.
 - `--interactive` — prompt before each install and each check section
 - `--dry-run` — print the install plan without executing
+- `--skip-tools` — skip the install and version sections, keeping the credential, Bedrock, quota and IAM checks
 - `--skip-iam-sim` — skip the IAM permission simulation (see the note below)
 - `--skip-quotas` — skip the service-quota probe when the account blocks the `servicequotas` API
 - `--help` — usage
