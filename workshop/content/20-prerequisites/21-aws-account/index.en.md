@@ -104,13 +104,3 @@ The script writes the prompted values into the gitignored `terraform.tfvars` fil
 ## Step 5: Deploy
 
 Go to [Deploy — Self-paced](../../30-deploy-foundation/31-deploy-self-paced/): `bootstrap.sh` → Tier 1 → Tier 2 → Tier 3.
-
-## Cleanup
-
-When you are done with the workshop, remove all AWS resources:
-
-```bash
-bash infrastructure/scripts/teardown.sh
-```
-
-The teardown script destroys all three Terraform roots in reverse dependency order (workloads → services → infrastructure) and removes the IAM role and S3 state bucket created by `bootstrap.sh`.
