@@ -90,7 +90,11 @@ registry. No other policy in this module grants any path under
   registered `sub=jaime`+`act.sub=uc3-actor` → 200; unregistered `sub=bob` → 403), so
   every human persona that drives an OBO use case MUST have an entity + subject alias.
 
-### Enforcement layers (probe-confirmed on the live 2.0.3-ent binary)
+### Enforcement layers
+
+The **UC1**, **UC2** and **UC3** rows were probe-confirmed on the live 2.0.3-ent binary.
+The **UC3 agent as itself** row is **pending live proof**: it is confirmed once
+`verify-uc3.sh` Check 21 passes against a stack deployed with the `uc3-agent` policy.
 
 | Use case | Layers | Composition |
 |---|---|---|
