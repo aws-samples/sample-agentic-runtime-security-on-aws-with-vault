@@ -29,6 +29,12 @@ as `agent:credential` events, built field by field in TurnActivity.credential()
 and sent only on this per-request queue — never in a tool's return value (which
 reaches the model) and never in a log line.
 
+The agent's OWN credentials are shown the same way (report_model_credentials):
+the Kubernetes service-account JWT and Vault token of its login, and the
+Bedrock keys Vault issued under that login, which sign the turn's model calls.
+Unlike the caller's token and database credential, these are standing: every
+turn that runs while they are current shows the same values.
+
 Every OTHER event is scrubbed with the UI filter's rules before it is queued:
 keys named like a secret are removed, and JWTs and Vault tokens in any string are
 replaced. So narration, tool calls and the audit seed never carry a credential;
@@ -40,6 +46,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextvars
+import hashlib
 import json
 import logging
 import re
@@ -183,8 +190,11 @@ class TurnActivity:
         self._queue: asyncio.Queue[Any] = asyncio.Queue()  # unbounded: the worker never blocks
         self._lock = threading.Lock()
         self._model_calls = 0
-        self._access_token_reported = False
+        # Digests of the credentials already shown this turn (first_showing).
+        self._shown: set[str] = set()
         self._tool_started_at: dict[str, float] = {}
+        # Epoch seconds: a credential issued at or after this was issued during the turn.
+        self.started_at = time.time()
         self.request_id = request_id
         self.claims = claims
         self.db_role: str | None = None
@@ -241,12 +251,16 @@ class TurnActivity:
         event["ts"] = int(time.time() * 1000)
         self._push(event)
 
-    def first_access_token_report(self) -> bool:
-        """True exactly once per turn: the access token is shown the first time it is presented."""
+    def first_showing(self, kind: str, value: str) -> bool:
+        """True the first time this credential is shown in this turn, False after.
+
+        Only a digest is kept, so the turn holds no second copy of the value.
+        """
+        digest = hashlib.sha256(f"{kind}\0{value}".encode()).hexdigest()
         with self._lock:
-            if self._access_token_reported:
+            if digest in self._shown:
                 return False
-            self._access_token_reported = True
+            self._shown.add(digest)
             return True
 
     def close(self) -> None:
@@ -378,7 +392,7 @@ def report_mcp_call(tool_name: str, mcp_url: str, jwt: str) -> None:
         f"Calling {tool_name} on the MCP server ({host}), presenting the caller's access token{whose} "
         "on the Authorization header."
     )
-    if jwt and turn.first_access_token_report():
+    if jwt and turn.first_showing("access_token", jwt):
         claims = decode_payload(jwt)
         exp = claims.get("exp")
         turn.credential(
@@ -507,6 +521,126 @@ def report_credential_metadata(tool_name: str, meta: Any, issued: Any = None) ->
             f"The MCP server reports Vault's lookup-self for the caller's token during {tool_name} lists "
             + "; ".join(listed)
             + "."
+        )
+
+
+# ---------------------------------------------------------------------------
+# The agent's own credentials behind the turn's model calls
+# ---------------------------------------------------------------------------
+
+
+def _at(epoch_seconds: Any) -> str:
+    """'at <UTC time>' for an epoch-seconds value, or 'earlier' when there is none."""
+    if not isinstance(epoch_seconds, (int, float)):
+        return "earlier"
+    return "at " + time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch_seconds))
+
+
+def _expires_ms(start: Any, ttl: Any) -> int | None:
+    if isinstance(start, (int, float)) and isinstance(ttl, (int, float)):
+        return int((start + ttl) * 1000)
+    return None
+
+
+def report_model_credentials(issued: Any) -> None:
+    """Show, in full, the agent's own credentials behind this turn's model calls.
+
+    AgentVaultClient calls this each time a set of Bedrock keys signs a request
+    (vault_client._ReportingCredentials). The first time a set signs a request
+    in this turn, the turn is shown the login those keys were issued under — the
+    Kubernetes service-account JWT it presented and the Vault token it got back
+    — and then the keys. Labels say whether each was issued during this turn or
+    earlier and reused. These are the agent's standing credentials, so every turn
+    that runs while they are current shows the same values. Outside a turn
+    (startup, /health) nothing is sent.
+    """
+    turn = current()
+    if turn is None or not isinstance(issued, dict):
+        return
+    key_id = issued.get("access_key_id")
+    if not isinstance(key_id, str) or not key_id or not turn.first_showing("aws_sts_credentials", key_id):
+        return
+
+    login = issued.get("login") if isinstance(issued.get("login"), dict) else {}
+    account = login.get("service_account_name") or "my service account"
+    role = login.get("role") or "unknown"
+    login_at = login.get("issued_at")
+    login_this_turn = isinstance(login_at, (int, float)) and login_at >= turn.started_at
+    issued_at = issued.get("issued_at")
+    keys_this_turn = isinstance(issued_at, (int, float)) and issued_at >= turn.started_at
+    ttl = issued.get("ttl_seconds")
+    vault_path = issued.get("vault_path")
+    lease_id = issued.get("lease_id")
+
+    details = ", ".join(
+        str(part)
+        for part in (
+            vault_path,
+            f"lease {lease_id}" if lease_id else None,
+            f"{ttl}s" if isinstance(ttl, (int, float)) else None,
+        )
+        if part
+    )
+    when = "during this turn" if keys_this_turn else _at(issued_at)
+    turn.narrate(
+        f"My model calls to Bedrock are signed with short-lived AWS keys Vault issued me {when} ({details}), "
+        f"under my own Kubernetes login (role {role}) — not the caller's token."
+    )
+
+    sa_jwt = login.get("sa_jwt")
+    if isinstance(sa_jwt, str) and sa_jwt and turn.first_showing("k8s_sa_token", sa_jwt):
+        claims = decode_payload(sa_jwt)
+        exp = claims.get("exp")
+        turn.credential(
+            kind="k8s_sa_token",
+            label=(
+                f"My Kubernetes service-account token ({account}), presented to Vault to sign in during this turn"
+                if login_this_turn
+                else f"The Kubernetes service-account token ({account}) I presented to Vault to sign in {_at(login_at)}"
+            ),
+            issuer="Kubernetes",
+            value=sa_jwt,
+            claims=claims or None,
+            expires_at=int(exp * 1000) if isinstance(exp, (int, float)) else None,
+        )
+
+    vault_token = login.get("vault_token")
+    if isinstance(vault_token, str) and vault_token and turn.first_showing("vault_token", vault_token):
+        token_ttl = login.get("ttl_seconds")
+        turn.credential(
+            kind="vault_token",
+            label=(
+                f"My Vault token from this turn's Kubernetes login (role {role})"
+                if login_this_turn
+                else f"My Vault token from my Kubernetes login {_at(login_at)} (role {role})"
+            ),
+            issuer="Vault",
+            value=vault_token,
+            ttl_seconds=token_ttl if isinstance(token_ttl, (int, float)) else None,
+            expires_at=_expires_ms(login_at, token_ttl),
+        )
+
+    access = issued.get("secret_access_key"), issued.get("session_token")
+    if all(isinstance(part, str) and part for part in access):
+        turn.credential(
+            kind="aws_sts_credentials",
+            label=(
+                "Short-lived AWS keys Vault issued me for calling Bedrock during this turn — "
+                "they sign this turn's model calls"
+                if keys_this_turn
+                else f"Short-lived AWS keys Vault issued me for calling Bedrock {_at(issued_at)} — "
+                "reused to sign this turn's model calls"
+            ),
+            issuer="AWS STS (via Vault)",
+            fields={
+                "access_key_id": key_id,
+                "secret_access_key": access[0],
+                "session_token": access[1],
+            },
+            vault_path=vault_path if isinstance(vault_path, str) else None,
+            lease_id=lease_id if isinstance(lease_id, str) else None,
+            ttl_seconds=ttl if isinstance(ttl, (int, float)) else None,
+            expires_at=_expires_ms(issued_at, ttl),
         )
 
 

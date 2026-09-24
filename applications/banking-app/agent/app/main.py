@@ -53,8 +53,10 @@ async def lifespan(app: FastAPI):
     """FastAPI lifespan — authenticate agent workload identity at startup."""
     global _model, _vault_client
 
-    # Establish agent workload identity via Vault Kubernetes auth (OBJ-1)
-    _vault_client = build_agent_vault_client()
+    # Establish agent workload identity via Vault Kubernetes auth (OBJ-1).
+    # Each time Vault-issued Bedrock keys sign a model call, the running turn is
+    # shown them and the login they came from (activity.report_model_credentials).
+    _vault_client = build_agent_vault_client(on_keys_used=activity.report_model_credentials)
     try:
         _vault_client.login()
         logger.info("agent_vault_auth_success", extra={"auth_method": "kubernetes"})
