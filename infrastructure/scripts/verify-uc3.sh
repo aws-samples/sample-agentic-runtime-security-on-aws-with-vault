@@ -54,6 +54,11 @@
 #       operator-supplied; ABSENT = documented SKIP (WARN), not required for green.
 #   20. Token-exchange client allowlist: an identical RFC 8693 request is refused as
 #       agent-uc2 (unauthorized_client) while uc3-actor gets past the client gate.
+#   21. No approval, no write: the agent's OWN Kubernetes login (role uc3, a fresh
+#       TokenRequest JWT for uc3-privileged-actor-sa) is DENIED
+#       database/creds/uc3-refund-writer (permission denied) and still ALLOWED
+#       database/creds/uc3-readonly (positive control). The probe token is always
+#       revoked, which revokes its leases. Needs no self-mint.
 #   Checks 15-18 self-mint (no manual token); a mint failure is a HARD FAIL.
 #   UC3_DELEGATED_TOKEN (if set) overrides the minted token for the Part B live gate.
 #
@@ -164,6 +169,9 @@ no manual browser capture needed:
       only signs act.sub=uc3-actor, so this is operator-supplied; absent = SKIP (WARN)
   20. Token-exchange client allowlist — an identical RFC 8693 request is refused as
       agent-uc2 (unauthorized_client) while uc3-actor gets past the client gate
+  21. No approval, no write — the agent's own Kubernetes login (role uc3) is DENIED
+      database/creds/uc3-refund-writer and still ALLOWED database/creds/uc3-readonly
+      (needs no self-mint; the probe token and its leases are always revoked)
       A self-mint failure is a HARD FAIL (skip = not-proven != pass), never silent.
       The mint drives a REAL approval (virtual authenticator) rather than a plain
       login: minting a delegated token WITHOUT an approval is the very bypass the
@@ -375,6 +383,127 @@ assert_native_allow() {
     else
         print_fail "${label}: Vault DENIED a token it must ALLOW" \
             "The native OBO chain did not authorize a valid delegated token. ${remediation} Output: ${out:0:280}"
+    fi
+}
+
+# --- Bypass Check 21 helpers: the agent's OWN Kubernetes login (role uc3) ---
+#
+# The agent holds a Kubernetes-auth Vault token (role uc3) for the life of the
+# pod. That identity must NOT reach the refund-writer credential: a refund write
+# is reachable only with the delegated token an approved CIBA request produces
+# (issue #72). No mint, no approval and no IVIA call is involved here.
+
+# Runs INSIDE the Vault pod. Reads the service-account JWT from stdin (so it is
+# never in any process's argv), logs in with role uc3, reads the two creds paths
+# with the resulting token, and always revokes that token — revoke-self also
+# revokes every lease the token created, so a credential issued here is dropped
+# at once. The Vault token never leaves the pod. A performance standby can answer
+# "412 required index state not present" just after a login, so the lookup and
+# the two reads retry on 412 only. Each result follows a "@@<STEP> <rc>" marker.
+# shellcheck disable=SC2016  # expanded by the pod's sh, not here
+_UC3_ROLE_PROBE_SH='
+read -r J
+r412() {
+    n=0
+    while :; do
+        o=$("$@" 2>&1); c=$?
+        case "$o" in
+            *"Code: 412"*|*"required index state not present"*)
+                n=$((n + 1))
+                if [ "$n" -lt 5 ]; then sleep 1; continue; fi ;;
+        esac
+        break
+    done
+    printf "%s\n" "$o"
+    return "$c"
+}
+T=$(printf "%s" "$J" | vault write -field=token auth/kubernetes/login role=uc3 jwt=- 2>&1); c=$?
+unset J
+echo "@@LOGIN $c"
+if [ "$c" -ne 0 ]; then printf "%s\n" "$T"; exit 0; fi
+VAULT_TOKEN="$T"; export VAULT_TOKEN; unset T
+o=$(r412 vault token lookup -format=json); c=$?; echo "@@LOOKUP $c"; printf "%s\n" "$o"
+o=$(r412 vault read -format=json database/creds/uc3-readonly); c=$?; echo "@@READONLY $c"; printf "%s\n" "$o"
+o=$(r412 vault read -format=json database/creds/uc3-refund-writer); c=$?; echo "@@WRITER $c"; printf "%s\n" "$o"
+o=$(vault token revoke -self 2>&1); c=$?; echo "@@REVOKE $c"; printf "%s\n" "$o"
+'
+
+# _uc3_probe_rc <probe-output> <STEP> / _uc3_probe_body <probe-output> <STEP> —
+# the exit code after a "@@<STEP>" marker, and the lines under it.
+_uc3_probe_rc() { awk -v m="@@$2" '$1 == m { print $2; exit }' <<<"$1"; }
+_uc3_probe_body() { awk -v m="@@$2" '/^@@[A-Z]+ / { p = ($1 == m); next } p' <<<"$1"; }
+
+# check_uc3_role_denied_refund_writer — Bypass Check 21. The agent's own login
+# must be ALLOWED database/creds/uc3-readonly (positive control: the login works
+# and the token is usable) and DENIED database/creds/uc3-refund-writer, with the
+# denial classified by reason. Issued credentials are never printed: only the
+# username is extracted, and the password stays in a local.
+check_uc3_role_denied_refund_writer() {
+    local sa_jwt rc out login_rc policies ro_rc ro_out ro_user w_rc w_out w_user rv_rc rv_out
+
+    print_info "Bypass Check 21: the agent's own Kubernetes login (role uc3, no approval) must be DENIED database/creds/uc3-refund-writer and still ALLOWED database/creds/uc3-readonly"
+
+    # A short-lived TokenRequest JWT for the agent's ServiceAccount — the same
+    # identity the pod presents. Nothing is stored in the cluster.
+    sa_jwt=$(kubectl create token uc3-privileged-actor-sa -n "${BANKING_NAMESPACE}" --duration=10m 2>&1)
+    rc=$?
+    if [ "${rc}" -ne 0 ]; then
+        print_fail "Bypass Check 21: could not mint a service-account token for uc3-privileged-actor-sa — the check was NOT exercised" \
+            "kubectl create token failed: ${sa_jwt:0:280}. Check: kubectl get sa uc3-privileged-actor-sa -n ${BANKING_NAMESPACE}"
+        return
+    fi
+    if [[ "${sa_jwt}" != eyJ* ]]; then
+        print_fail "Bypass Check 21: kubectl create token returned something that is not a JWT — the check was NOT exercised" \
+            "Re-run: kubectl create token uc3-privileged-actor-sa -n ${BANKING_NAMESPACE} --duration=10m"
+        return
+    fi
+
+    out=$(kubectl exec -i -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- sh -c "${_UC3_ROLE_PROBE_SH}" 2>&1 <<<"${sa_jwt}")
+    sa_jwt=""
+
+    login_rc=$(_uc3_probe_rc "${out}" LOGIN)
+    if [ -z "${login_rc}" ]; then
+        print_fail "Bypass Check 21: the probe did not run inside the Vault pod (infra error, NOT evidence either way)" \
+            "kubectl exec into ${VAULT_NAMESPACE}/${VAULT_POD} failed. Output: ${out:0:280}"
+        return
+    fi
+    if [ "${login_rc}" != "0" ]; then
+        local login_err
+        login_err=$(_uc3_probe_body "${out}" LOGIN)
+        print_fail "Bypass Check 21: Vault refused the role uc3 login — the check was NOT exercised" \
+            "Vault said: ${login_err:0:280}. The agent logs in the same way at startup. Check the role binding: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault read auth/kubernetes/role/uc3"
+        return
+    fi
+
+    policies=$(_uc3_probe_body "${out}" LOOKUP | jq -r '.data.policies // [] | join(",")' 2>/dev/null)
+    ro_rc=$(_uc3_probe_rc "${out}" READONLY)
+    ro_out=$(_uc3_probe_body "${out}" READONLY)
+    ro_user=$(jq -r '.data.username // empty' 2>/dev/null <<<"${ro_out}")
+    w_rc=$(_uc3_probe_rc "${out}" WRITER)
+    w_out=$(_uc3_probe_body "${out}" WRITER)
+    w_user=$(jq -r '.data.username // empty' 2>/dev/null <<<"${w_out}")
+    rv_rc=$(_uc3_probe_rc "${out}" REVOKE)
+    rv_out=$(_uc3_probe_body "${out}" REVOKE)
+
+    if [ "${w_rc}" = "0" ] && [ -n "${w_user}" ]; then
+        # The bug, whatever the positive control says: the agent's everyday login
+        # was handed a credential that can INSERT into banking.refunds.
+        print_fail "Bypass Check 21: Vault ISSUED refund-writer credentials to the agent's own Kubernetes login (role uc3, policies=${policies:-unknown}, username=${w_user}) — no approval was involved" \
+            "Role uc3 is bound to a policy that grants read on database/creds/uc3-refund-writer (issue #72). It must carry only uc3-agent (uc3-readonly, aws/sts/bedrock-reader, aws/sts/uc3-logs-writer, lookup-self, lease renew). Reapply vault_config (deploy-workshop.sh Step 8), then check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault read auth/kubernetes/role/uc3"
+    elif [ "${ro_rc}" != "0" ] || [ -z "${ro_user}" ]; then
+        # Positive control first: without it, a denial on the writer path could be
+        # a broken login or a token that can read nothing at all.
+        print_fail "Bypass Check 21: positive control failed — the role uc3 login (policies=${policies:-unknown}) was NOT allowed database/creds/uc3-readonly" \
+            "The agent lists transactions with this credential, and without this leg a denial on the refund-writer path proves nothing. Vault said: ${ro_out:0:280}. Expected role uc3 -> policy uc3-agent: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault policy read uc3-agent"
+    elif grep -qiE 'permission denied' <<<"${w_out}"; then
+        print_pass "Bypass Check 21 PASSED: the agent's own Kubernetes login (role uc3, policies=${policies}) was DENIED database/creds/uc3-refund-writer (permission denied) while still ALLOWED database/creds/uc3-readonly — without an approved refund there is no path to a write credential"
+    else
+        print_fail "Bypass Check 21: the refund-writer read failed, but NOT with permission denied — cannot confirm the policy denied it" \
+            "Expected a 403 permission denied. Got: ${w_out:0:280}"
+    fi
+
+    if [ "${rv_rc}" != "0" ]; then
+        print_warn "Bypass Check 21: could not revoke the probe's Vault token — it and its leases expire at the role's token TTL (1h). Vault said: ${rv_out:0:200}"
     fi
 }
 
@@ -612,6 +741,8 @@ if [ "${BYPASS_MODE}" = true ]; then
     #   18. Cross-UC ceiling isolation → DENY (agent-uc2 token denied UC3 refund).
     #   19. (optional) TRUE wrong-actor → DENY (operator-supplied; absent = SKIP).
     #   20. Token-exchange client allowlist (agent-uc2 refused, uc3-actor admitted).
+    #   21. The agent's own Kubernetes login (role uc3) → DENY uc3-refund-writer,
+    #       ALLOW uc3-readonly (no mint needed).
     # A self-mint failure is a HARD FAIL (skip = not-proven != pass).
     #===========================================================================
 
@@ -906,6 +1037,21 @@ print(jwt.encode(payload, 'forged-secret', algorithm='HS256'))
                 "agent-uc2 must not hold urn:ietf:params:oauth:grant-type:token-exchange. Got: ${_wrong_client_resp:0:300}. Check the grant_types list for agent-uc2 in verify_access/iviaop-config/clients.yml.tftpl — a UC2 client able to exchange tokens could mint UC3 delegated tokens."
         fi
     fi
+
+    echo ""
+
+    #---------------------------------------------------------------------------
+    # Bypass Check 21 — skip the approval entirely: the agent's OWN login
+    #
+    # Checks 14-20 attack the delegated token. This one never asks for one: it
+    # logs in exactly as the agent pod does (Kubernetes auth role uc3, the
+    # uc3-privileged-actor-sa ServiceAccount) and asks Vault for the refund-writer
+    # credential directly. It must be DENIED — the refund write is reachable only
+    # through an approved refund's delegated token — while the same login is still
+    # ALLOWED the read-only credential the agent lists transactions with. Needs no
+    # mint, so it runs even when the self-mint above failed.
+    #---------------------------------------------------------------------------
+    check_uc3_role_denied_refund_writer
 
     # Summary is printed automatically by the common-checks.sh EXIT trap.
     # Keep a terminating exit so bypass mode does not fall through into the
