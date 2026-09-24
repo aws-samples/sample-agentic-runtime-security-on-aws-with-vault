@@ -181,12 +181,13 @@ class VaultClient:
             kb_region: AWS region where the Bedrock Knowledge Base resides.
             on_issued: Called each time Vault issues credentials for this
                 session, with {"vault_path", "lease_id", "ttl_seconds",
-                "access_key_id", "secret_access_key", "session_token"}. The
-                knowledge-base tool passes it to show the issuance in its
-                streamed events; the model session built at startup does not,
-                so a model-credential refresh is never reported as a KB
-                credential. The keys must go only to the per-request event
-                queue — never to a log or a tool result.
+                "access_key_id", "secret_access_key", "session_token"}. It runs
+                on the thread that needed the keys: the knowledge-base tool's
+                call, or the Bedrock model call whose signing triggered a
+                refresh. Each caller passes its own callback, so the stream
+                says which of the two the keys are for. The keys must go only
+                to the per-request event queue — never to a log or a tool
+                result.
         """
         vault_path = "aws/sts/bedrock-reader"
 

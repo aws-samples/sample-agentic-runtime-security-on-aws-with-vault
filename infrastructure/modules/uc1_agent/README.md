@@ -92,7 +92,7 @@ Body: `{"query": "<question>"}`. The `Accept` header picks the reply format.
 | `agent:thinking` | the agent starts reasoning |
 | `agent:narration` | no user is signed in; the agent either signs in to Vault as itself (Kubernetes auth, with the service account and Vault role Vault reports) or reuses its current login |
 | `tool_call` | each tool call, `in_progress` then `success` or `error`, with `args`, `result` and `durationMs`. A `retrieve_from_knowledge_base` result carries `sources`: `document` (S3 URI), `score`, `text`. A `query_database` result carries `row_count` and up to 50 `rows` when the rows are JSON; rows with values JSON cannot hold (dates, decimals) arrive as text in `output` |
-| `agent:narration` | during a tool call: Vault issued short-lived AWS credentials for the Knowledge Base (`aws/sts/bedrock-reader`, TTL), or a database credential (`database/creds/uc1-readonly`, lease id, TTL) |
+| `agent:narration` | during a tool call: Vault issued short-lived AWS credentials for the Knowledge Base (`aws/sts/bedrock-reader`, TTL), or a database credential (`database/creds/uc1-readonly`, lease id, TTL); at any point: Vault issued fresh keys for calling the model |
 | `agent:credential` | each credential the turn used, in full (see below) |
 | `agent:audit_seed` | `requestId`, `vaultRole`, `leases` — the same leases as the JSON reply |
 | `agent:narration` | the `credential_metadata` the JSON reply would carry, then "Writing the answer." |
@@ -108,9 +108,10 @@ Tool, narration and credential events arrive in the order they happen. On failur
 | `k8s_sa_token` | the service-account JWT the agent presented to Vault, with its decoded (unverified) `claims` | each turn whose Vault login check succeeds, and again whenever the agent signs in mid-turn; the label says when the turn reused an earlier login |
 | `vault_token` | the Vault token that login returned, with `ttlSeconds` | with each `k8s_sa_token` |
 | `aws_sts_credentials` | `fields.access_key_id`, `secret_access_key`, `session_token` from `aws/sts/bedrock-reader` | each Knowledge Base call |
+| `aws_sts_credentials` | the model's own keys from the same path; the label says they are for calling the model | whenever they are refreshed during a turn (botocore refreshes them within 15 minutes of expiry, on the Bedrock call that needs them). The startup issuance belongs to no request and is not shown |
 | `db_credentials` | `fields.username`, `password` from `database/creds/uc1-readonly`, with `leaseId` | each `query_database` call |
 
-These values go only onto the requesting visitor's stream. They are never written to the pod log, never returned from a tool (tool results go to Bedrock), and never added to the JSON reply. The AWS keys and the database login are issued per request. The service-account JWT and the Vault token are the agent's own login, so every visitor sees the same ones until the agent signs in again.
+These values go only onto the requesting visitor's stream. They are never written to the pod log, never returned from a tool (tool results go to Bedrock), and never added to the JSON reply. The knowledge-base keys and the database login are issued per request. The model's keys are shared by every request, so only the turn whose Bedrock call refreshes them shows them. The service-account JWT and the Vault token are the agent's own login, so every visitor sees the same ones until the agent signs in again.
 
 **Concurrency.** The Vault login and the Bedrock model are set up once at pod startup. Each `/query` builds its own Strands `Agent` and runs it in a worker thread, so visitors are answered in parallel and no visitor's question or answer enters another visitor's conversation.
 

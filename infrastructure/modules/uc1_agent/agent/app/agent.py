@@ -136,15 +136,11 @@ def _narrate_vault_login(identity: dict) -> None:
     _show_login_credentials(reused=False)
 
 
-def _narrate_kb_credentials(issued: dict) -> None:
-    activity.narrate(
-        "Vault issued short-lived AWS credentials for reading the knowledge base "
-        f"({issued['vault_path']}, {issued['ttl_seconds']}s)."
-    )
-    # The keys themselves, in full, for the streamed request only (queue, never a log).
+def _show_sts_credentials(issued: dict, label: str) -> None:
+    """The AWS keys themselves, in full, for the streamed request only (queue, never a log)."""
     activity.credential(
         "aws_sts_credentials",
-        "Short-lived AWS keys Vault issued for reading the knowledge base",
+        label,
         "AWS STS (via Vault)",
         fields={
             "access_key_id": issued["access_key_id"],
@@ -155,6 +151,28 @@ def _narrate_kb_credentials(issued: dict) -> None:
         lease_id=issued.get("lease_id"),
         ttl_seconds=issued["ttl_seconds"],
         expires_at=int((time.time() + issued["ttl_seconds"]) * 1000),
+    )
+
+
+def _narrate_kb_credentials(issued: dict) -> None:
+    activity.narrate(
+        "Vault issued short-lived AWS credentials for reading the knowledge base "
+        f"({issued['vault_path']}, {issued['ttl_seconds']}s)."
+    )
+    _show_sts_credentials(issued, "Short-lived AWS keys Vault issued for reading the knowledge base")
+
+
+def _narrate_model_credentials(issued: dict) -> None:
+    """The model's own AWS keys, issued at pod startup and refreshed by botocore
+    when they near expiry. A refresh runs on the thread making the Bedrock call,
+    inside the turn that needed it, so it lands on that turn's stream. The
+    startup issuance belongs to no request and stays silent."""
+    activity.narrate(
+        "Vault issued fresh short-lived AWS credentials for calling the model "
+        f"({issued['vault_path']}, {issued['ttl_seconds']}s); my previous ones were about to expire."
+    )
+    _show_sts_credentials(
+        issued, "Short-lived AWS keys Vault issued for calling the model, refreshed during this answer"
     )
 
 
@@ -299,7 +317,8 @@ def init_uc1_model() -> None:
     model_id = os.getenv("BEDROCK_MODEL_ID", "us.amazon.nova-pro-v1:0")
 
     # Obtain an STS session for the model invocation plane (primary region).
-    bedrock_session = _vault.get_bedrock_session(kb_region=region)
+    # Its refreshes are shown on the stream of the turn that triggers them.
+    bedrock_session = _vault.get_bedrock_session(kb_region=region, on_issued=_narrate_model_credentials)
 
     _model = BedrockModel(
         model_id=model_id,
