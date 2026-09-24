@@ -42,6 +42,10 @@ export async function sendChatMessage(
     const reader = res.body.getReader();
     const decoder = new TextDecoder('utf-8');
     let buffer = '';
+    // Every answer finishes with an `end` frame. A stream that closes without
+    // one was cut short (the agent died mid-answer), and the caller must hear
+    // about it: `end` or onError is what releases the chat.
+    let sawEnd = false;
 
     while (true) {
       const { value, done } = await reader.read();
@@ -55,12 +59,17 @@ export async function sendChatMessage(
         if (line.startsWith('data: ')) {
           try {
             const data = JSON.parse(line.substring(6)) as ChatResponse;
+            if (data.type === 'end') sawEnd = true;
             onMessage(data);
           } catch {
             // Skip malformed SSE lines
           }
         }
       }
+    }
+
+    if (!sawEnd) {
+      onError('The agent stopped before its answer was complete. Please try again.');
     }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
