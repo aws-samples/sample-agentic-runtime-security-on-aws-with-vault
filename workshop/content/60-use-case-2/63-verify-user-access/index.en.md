@@ -286,7 +286,15 @@ MCP Server  POST /mcp
   pgClient.end()
   await revokeLease(creds.leaseId)         ← credential handed back now, not left to TTL
     ↓
-  return accounts                          ← MCP tool response
+  return { accounts,                       ← MCP tool response: the rows,
+           credential_metadata,            ← the lease and whether the revoke succeeded,
+           issued_db_credentials,          ← the (now revoked) credential itself,
+           mcp_vault_token }               ← and the MCP server's own revoke token
+    ↓
+Banking Agent
+  takes out issued_db_credentials and mcp_vault_token
+                                           ← sent only on this user's activity stream
+  returns accounts to the model            ← the model never receives a credential
     ↓
 Banking Agent formats response
   → "You have 2 accounts: OVI-CHK-100001 ($4,250) and OVI-SAV-100002 ($18,750)"
@@ -298,6 +306,7 @@ Key design choices:
 - **Connection closed after query**: The Postgres connection is opened, used, and closed within the tool handler. No connection pool is used. This ensures the JIT credential's Postgres session variable (`app.current_user_sub`) is set fresh on every connection — no risk of session state leaking between users.
 - **Identity comes from the header, never from the tool arguments**: `get_accounts` declares no parameters and `get_transactions` declares only an optional `account_id`. The token the MCP server acts on is read from `Authorization: Bearer` on the request and closed over by the tool handlers (`createMcpServer(authenticatedJwt)`), so there is no field in the tool contract for a caller to put an identity in. If there were, the identity Vault saw would be whatever the caller typed into the payload and the header would constrain nothing.
 - **The credential is handed back, not left to expire**: after the connection closes, the handler's `finally` block calls `revokeLease()` against `sys/leases/revoke` using the MCP server's own Kubernetes-auth Vault token. The credential exists for the duration of one query. See the [Credential Revocation](../65-credential-revocation/) page.
+- **The model never receives a credential**: the MCP server replies after the revoke, with the rows, the lease and its revoke outcome, the credential itself and its own revoke token. The agent takes the credential and the token out before the model sees the tool result and sends them only on the signed-in user's own activity stream. If the revoke failed, the credential is labelled `revoke FAILED — this credential is still live until <time>`, the time its lease ends.
 - **The `sub` used for RLS is decoded from the JWT, and that is safe here**: `extractSubFromJwt()` base64-decodes the payload to get `sub` for `set_config('app.current_user_sub', ...)` — it does **not** verify the signature, and the code says so. The verification that matters already happened one step earlier: Vault validated the same token against IVIA's JWKS before issuing any credential. A forged token never gets a Postgres credential at all, so a `sub` decoded from one never reaches a live connection. The decode is a convenience on a token Vault has already accepted, not an identity decision.
 :::
 
