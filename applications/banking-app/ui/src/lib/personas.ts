@@ -1,8 +1,8 @@
 /**
  * personas.ts — Fictional persona mapping for the workshop's logged-in users.
  *
- * Single source of truth for display name, About Me backstory, Wikipedia link,
- * and the avatar shown both in the header dropdown and on the About Me page.
+ * Single source of truth for display name, the short role shown in the left
+ * navigation, About Me backstory, Wikipedia link, and the About Me avatar.
  *
  * The underlying IVIA `sub` claim stays canonical ('oscar' | 'jaime'); only the
  * UI-facing presentation is dressed up with these fictional Six Million Dollar
@@ -15,6 +15,8 @@ import jaimeAvatar from '$lib/assets/avatars/jaime.webp';
 export interface Persona {
 	sub: string;
 	fullName: string;
+	/** Short title for the left navigation, taken from the tagline. */
+	role: string;
 	avatar: string;
 	wikipediaUrl?: string;
 	tagline: string;
@@ -25,6 +27,7 @@ export const PERSONAS: Record<string, Persona> = {
 	oscar: {
 		sub: 'oscar',
 		fullName: 'Oscar Goldman',
+		role: 'Director, OSI',
 		avatar: oscarAvatar,
 		wikipediaUrl: 'https://en.wikipedia.org/wiki/Oscar_Goldman',
 		tagline: 'Director, Office of Scientific Intelligence (OSI)',
@@ -37,6 +40,7 @@ export const PERSONAS: Record<string, Persona> = {
 	jaime: {
 		sub: 'jaime',
 		fullName: 'Jaime Sommers',
+		role: 'OSI field operative',
 		avatar: jaimeAvatar,
 		wikipediaUrl: 'https://en.wikipedia.org/wiki/Jaime_Sommers_(The_Bionic_Woman)',
 		tagline: 'The Bionic Woman — OSI field operative',
