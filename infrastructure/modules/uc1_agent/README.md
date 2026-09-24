@@ -62,6 +62,46 @@ All outbound traffic from pods in the `uc1` namespace is denied by default excep
 
 The UC1 Strands agent Python application lives in `infrastructure/modules/uc1_agent/agent/` (populated in Plan 04-02). The `agent_image` input receives the ECR URI built from that source tree.
 
+Strands is pinned to `strands-agents==1.57.0` and `strands-agents-tools==0.8.9` in `agent/requirements.txt`.
+
+### `POST /query`
+
+Body: `{"query": "<question>"}`. The `Accept` header picks the reply format.
+
+**Default — JSON.** Any request that does not ask for `text/event-stream` (curl's default `*/*`, no `Accept` header at all, `application/json`) gets:
+
+```json
+{
+  "answer": "…",
+  "sources": [],
+  "credential_metadata": {
+    "vault_authenticated": true,
+    "vault_role": "uc1",
+    "leases": [{ "vault_path": "database/creds/uc1-readonly", "lease_id": "database/creds/uc1-readonly/…", "ttl_seconds": 900 }]
+  }
+}
+```
+
+`leases` lists every database credential Vault issued for this request, with the lease id spelled exactly as the Vault audit log spells it. It is `[]` when the question was answered from the Knowledge Base alone. The "Verify Credentials and Enforcement" page and check 9 of `verify-uc1.sh` read this reply.
+
+**`Accept: text/event-stream` — each step as it happens.** Server-Sent Events, one `data: <json>` frame per event, in the contract of `applications/banking-app/ui/src/lib/agent-events.ts`:
+
+| Event | What it says |
+|---|---|
+| `tool_planning` (legacy) | "Processing your request..." — always first |
+| `agent:thinking` | the agent starts reasoning |
+| `agent:narration` | no user is signed in; the agent either signs in to Vault as itself (Kubernetes auth, with the service account and Vault role Vault reports) or reuses its current login |
+| `tool_call` | each tool call, `in_progress` then `success` or `error`, with `args`, `result` and `durationMs`. A `retrieve_from_knowledge_base` result carries `sources`: `document` (S3 URI), `score`, `text`. A `query_database` result carries `row_count` and up to 50 `rows` when the rows are JSON; rows with values JSON cannot hold (dates, decimals) arrive as text in `output` |
+| `agent:narration` | during a tool call: Vault issued short-lived AWS credentials for the Knowledge Base (`aws/sts/bedrock-reader`, TTL), or a database credential (`database/creds/uc1-readonly`, lease id, TTL) |
+| `agent:audit_seed` | `requestId`, `vaultRole`, `leases` — the same leases as the JSON reply |
+| `agent:narration` | the `credential_metadata` the JSON reply would carry, then "Writing the answer." |
+| `agent:text_delta` + `delta` (legacy) | the answer, whole |
+| `end` (legacy), then `agent:done` | the turn is over; nothing follows `agent:done` |
+
+Tool and narration events arrive in the order they happen. On failure the stream ends `agent:error` → `error` (legacy) → `end` → `agent:done`. Every current event carries `requestId` (a UUID per turn, also written to the agent's `query_received` / `query_complete` log lines) and `ts` (epoch milliseconds). A client that disconnects stops the agent at its next checkpoint.
+
+**Concurrency.** The Vault login and the Bedrock model are set up once at pod startup. Each `/query` builds its own Strands `Agent` and runs it in a worker thread, so visitors are answered in parallel and no visitor's question or answer enters another visitor's conversation.
+
 ## Region Contract
 
 No hardcoded region string literals appear in any `.tf` file in this module. All region values flow through `var.region` (primary cluster region) and `var.kb_region` (Knowledge Base region).
