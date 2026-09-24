@@ -86,7 +86,7 @@ A compromised agent pod with its service account JWT intact could initiate a CIB
 4. Open a **fresh Incognito / Private window**, sign in as **oscar**, and repeat the same query — confirm you see only Oscar's records and zero of Jaime's.
 
 :::alert{type="info" header="Switch personas with Incognito, not Logout"}
-IVIA keeps its own SSO session cookie, so **Logout** in the banking app leaves you recognized by IVIA and re-opening the app jumps to the OAuth consent page rather than a fresh login. Use a separate Incognito / Private window per persona — each starts with an empty cookie jar and gives you a clean login.
+**Log out** clears the banking app's cookies and ends your IVIA session through `/pkmslogout`. Still use a separate Incognito / Private window per persona, so each keeps its own session side by side.
 :::
 
 A refund lookup works the same way: ask `What is the status of refund <jaime-refund-id>` while signed in as Oscar — the agent returns "Refund not found" with no detail about Jaime's refund (no information disclosure).
