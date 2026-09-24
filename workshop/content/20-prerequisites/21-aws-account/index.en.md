@@ -30,11 +30,25 @@ At minimum you need the AWS managed policies **PowerUserAccess** plus **IAMFullA
 
 ## Step 1: Configure Your AWS CLI Credentials
 
-Everything that follows — the pre-flight checker, `bootstrap.sh`, every `terraform apply` — runs as whatever identity your AWS CLI is configured with. Set that up first.
+Everything that follows — the pre-flight checker, `bootstrap.sh`, every `terraform apply` — runs as whatever identity your AWS CLI is configured with. Set that up first. Pick the environment you will work in:
 
-**If you use AWS CloudShell**, skip to the verification command below: CloudShell runs with your console session's own credentials and needs no configuration.
+### Option A — AWS CloudShell (nothing to configure)
 
-**If your account uses IAM Identity Center (AWS SSO)** — the usual case for an organization account:
+Sign in to the AWS console as your own account, confirm the region selector reads **`:param{key=region}`**, then launch CloudShell:
+
+:button[Open CloudShell]{href="https://:param{key=region}.console.aws.amazon.com/cloudshell/home?region=:param{key=region}" target="_blank" variant="primary" iconName="external" iconAlign="right"}
+
+CloudShell runs with your console session's own credentials, so there is nothing to configure. Skip to the verification command below.
+
+::::alert{header="CloudShell forgets your tools, not your files" type="info"}
+Tools installed outside `$HOME` are gone after an idle disconnect. If your session drops, re-run the pre-flight script in Step 2. The Vault license you upload and the `~/vault-init.json` the deploy writes both live in `$HOME` and survive.
+::::
+
+### Option B — Your own terminal or IDE
+
+macOS or Linux. Configure the AWS CLI with whichever of these matches your account.
+
+**IAM Identity Center (AWS SSO)** — the usual case for an organization account:
 
 ```bash
 aws configure sso
@@ -42,19 +56,21 @@ aws configure sso
 
 Answer the prompts, then sign in from the browser tab it opens. It writes a named profile; select it for this shell with `export AWS_PROFILE=<profile-name>`.
 
-**If you use long-lived IAM access keys:**
+**Long-lived IAM access keys:**
 
 ```bash
 aws configure
 ```
 
-It prompts for your access key ID, secret access key, default region (**us-east-1**) and output format. Create the key pair in the IAM console under your own user — never reuse someone else's.
+It prompts for your access key ID, secret access key, default region (**`:param{key=region}`**) and output format. Create the key pair in the IAM console under your own user — never reuse someone else's.
 
-**If you already have a working profile**, just select it:
+**A profile you already have** — just select it:
 
 ```bash
 export AWS_PROFILE=<profile-name>
 ```
+
+### Verify — both options
 
 **Why:** Confirm the CLI is configured, pointed at the account you meant, and carrying the identity that will own everything the deploy creates.
 
