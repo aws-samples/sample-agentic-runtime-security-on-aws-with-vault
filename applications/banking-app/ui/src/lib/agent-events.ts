@@ -144,7 +144,12 @@ export interface AgentTextDeltaEvent extends EventEnvelope {
 	text: string;
 }
 
-/** The turn is finished. Nothing follows it. */
+/**
+ * The turn is finished. No current event follows it. Legacy frames (`delta`,
+ * `end`, `error`) may still follow it until the Agent Log replaces them: the
+ * Use Case 2 agent sends `agent:done` and then the legacy `end` that today's
+ * dashboard waits for.
+ */
 export interface AgentDoneEvent extends EventEnvelope {
 	type: 'agent:done';
 }
