@@ -192,7 +192,7 @@
 	inputLabel="Message the banking agent"
 	placeholder="Ask about your accounts, transactions or a refund…"
 	onsend={sendMessage}
-	hint="Enter to send · Shift+Enter for new line · Your banking data is not stored in this session"
+	hint="Enter to send · Shift+Enter for new line · The refund agent keeps this conversation for the session"
 >
 	{#snippet icon()}
 		<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
