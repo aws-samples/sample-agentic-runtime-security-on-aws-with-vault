@@ -155,10 +155,17 @@ def decode_payload(jwt: str) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+# The claims agent:audit_seed carries, as the UI contract lists them
+# (ui/src/lib/agent-events.ts, AgentAuditSeedEvent.claims). jti is how Vault
+# names the caller's token (lookup-self display_name "JWT Token with JTI: <jti>"),
+# and act.sub is the agent Vault resolves the request's ceiling from.
+_AUDIT_CLAIMS = ("sub", "scope", "jti", "iss", "aud", "exp", "act")
+
+
 def decode_claims(jwt: str) -> dict[str, Any]:
     """The non-secret claims of the caller's token that label the turn (unverified)."""
     data = decode_payload(jwt)
-    return {key: data[key] for key in ("sub", "scope", "iss", "aud", "exp") if key in data}
+    return {key: data[key] for key in _AUDIT_CLAIMS if key in data}
 
 
 # ---------------------------------------------------------------------------
