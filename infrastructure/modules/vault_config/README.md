@@ -97,7 +97,7 @@ registry. No other policy in this module grants any path under
 | **UC1** | ONE | k8s `uc1-readonly` floor bound to the `uc1` role. The `uc1-ceiling` is INERT — k8s tokens carry no `act.sub`, so the ceiling never self-applies. |
 | **UC2** | THREE | human baseline (`uc2-human-baseline`, resolved from `sub`) ∩ agent ceiling (`uc2-agent-ceiling`, resolved from `act.sub`) ∩ per-request `vault:path_access` RAR (optional for UC2). |
 | **UC3** | THREE | human baseline (`uc3-human-baseline`, `sub=jaime`) ∩ agent ceiling (`uc3-agent-ceiling`, `act.sub=uc3-actor`) ∩ per-request `vault:path_access` RAR (**mandatory**). |
-| **UC3 agent as itself** | ONE | k8s `uc3-agent` policy bound to the `uc3` role (the pod's own login, held for its lifetime): `database/creds/uc3-readonly`, `aws/sts/bedrock-reader`, `aws/sts/uc3-logs-writer`, own-token lookup and lease renewal. It has **no** `database/creds/uc3-refund-writer`: the refund writer is reachable only through the three-layer UC3 row above. `verify-uc3.sh --bypass` Check 21 logs in as this role and asserts the denial. |
+| **UC3 agent as itself** | ONE | k8s `uc3-agent` policy bound to the `uc3` role (the pod's own login, held for its lifetime): `database/creds/uc3-readonly`, `aws/sts/bedrock-reader`, `aws/sts/uc3-logs-writer`, own-token lookup and lease renewal. It has **no** `database/creds/uc3-refund-writer`: the refund writer is reachable only through the three-layer UC3 row above. `verify-uc3.sh` Check 21, in both normal mode and `--bypass`, logs in as this role and asserts the denial. |
 
 The ceiling is **restrict-only** — it can only shrink the human baseline, never grant
 beyond it (a path in the ceiling but absent from the baseline is still denied). The
