@@ -139,6 +139,10 @@
 		overflow-y: auto;
 		background: var(--ovi-nav-bg);
 		border-right: 1px solid var(--ovi-hairline);
+		/* Carbon's body sets line-height: 1 and 0.16px tracking; the design's navigation uses
+		   the font's normal line height and tracking, which spaces the links as drawn. */
+		line-height: normal;
+		letter-spacing: normal;
 	}
 
 	.brand {
