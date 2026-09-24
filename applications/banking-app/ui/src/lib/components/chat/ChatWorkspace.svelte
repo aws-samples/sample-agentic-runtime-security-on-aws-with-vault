@@ -490,8 +490,13 @@
 			height: auto;
 		}
 
+		/* The navigation stacks above the chat here, so the chat column is one viewport tall
+		   rather than the full page: the message log keeps its own scroll, new replies are
+		   scrolled into view, and the composer stays at the bottom of the chat. */
 		.chat {
-			min-height: 80vh;
+			flex: none;
+			height: 100vh;
+			height: 100dvh;
 		}
 	}
 </style>
