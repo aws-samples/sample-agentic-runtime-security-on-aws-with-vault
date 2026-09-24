@@ -33,7 +33,9 @@ The agent's OWN credentials are shown the same way (report_model_credentials):
 the Kubernetes service-account JWT and Vault token of its login, and the
 Bedrock keys Vault issued under that login, which sign the turn's model calls.
 So is the MCP server's own Vault token, which it revokes each lease with
-(report_mcp_vault_token). Unlike the caller's token and database credential,
+(report_mcp_vault_token), and the Kubernetes service-account token its Vault
+login presented (report_mcp_service_account_token). Unlike the caller's token
+and database credential,
 these are standing: every turn that runs while they are current shows the
 same values.
 
@@ -677,8 +679,44 @@ def report_model_credentials(issued: Any) -> None:
 
 
 # ---------------------------------------------------------------------------
-# The MCP server's own Vault token
+# The MCP server's own credentials: its Kubernetes login and its Vault token
 # ---------------------------------------------------------------------------
+
+
+def report_mcp_service_account_token(tool_name: str, sa_token: Any) -> None:
+    """Show, in full, the Kubernetes service-account token the MCP server signed in to Vault with.
+
+    `sa_token` is the MCP server's mcp_service_account_token (tools.ts), which the
+    tool has already taken out of the response so the model never sees it. It is
+    the server's projected ServiceAccount token, presented to auth/kubernetes/login
+    for the Vault token that revokes the lease (report_mcp_vault_token). It is
+    standing, like that token, so each distinct value is shown once per turn. An
+    MCP server that does not report it, or whose login failed, leaves this silent.
+    """
+    turn = current()
+    if turn is None or not isinstance(sa_token, dict):
+        return
+    jwt = sa_token.get("jwt")
+    if not isinstance(jwt, str) or not jwt or not turn.first_showing("mcp_k8s_sa_token", jwt):
+        return
+    account = sa_token.get("service_account") or "its service account"
+    role = sa_token.get("role") or "unknown"
+    when = (
+        f"during this {tool_name} call"
+        if sa_token.get("logged_in_for_this_call") is True
+        else "for the Vault token it is still reusing"
+    )
+    claims = decode_payload(jwt)
+    exp = claims.get("exp")
+    turn.credential(
+        kind="k8s_sa_token",
+        label=f"The MCP server's own Kubernetes service-account token ({account}), "
+        f"presented to Vault to sign in (role {role}) {when}",
+        issuer="Kubernetes",
+        value=jwt,
+        claims=claims or None,
+        expires_at=int(exp * 1000) if isinstance(exp, (int, float)) else None,
+    )
 
 
 def report_mcp_vault_token(tool_name: str, login: Any) -> None:
