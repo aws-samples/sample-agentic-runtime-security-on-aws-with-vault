@@ -9,7 +9,7 @@ Every page so far built the approval path. This one tries to get round it — an
 
 ### Run the bypass test
 
-**Why:** Everything so far has been the happy path. Now we attack it three ways: forge the signature, act as the wrong agent, and ask for a path the token does not name. All three have to fail before any credential is issued.
+**Why:** Everything so far has been the happy path. Now we attack it four ways: forge the signature, act as the wrong agent, ask for a path the token does not name, and skip the approval by using the agent's own login. All four have to fail before any credential is issued.
 
 ```bash
 cd infrastructure/scripts && ./verify-uc3.sh --bypass
@@ -28,8 +28,9 @@ silently pass on an infrastructure error:
 - **Wrong-RAR-path control (Check 17 — the money shot):** the *same* valid token, presented to `database/creds/uc3-readonly` — a path its `vault:path_access` RAR does not name. Vault denies with `RAR_NO_MATCH` even though the human baseline and the agent ceiling both permit that path.
 - **Wrong-agent control (Check 18):** a genuine UC2 token for the same human, carrying `act.sub=agent-uc2`. The signature, issuer and human all check out, but `agent-uc2`'s ceiling omits the refund path, so the on-behalf-of intersection blocks a UC2 agent from reaching UC3's privileged credential.
 - **Client-allowlist control (Check 20):** the identical token-exchange request is refused as `agent-uc2` with `unauthorized_client`, while `uc3-actor` gets past the client gate — delegation cannot be requested by any client that merely reaches the endpoint.
+- **No-approval control (Check 21):** logs in to Vault exactly as the agent pod does — its Kubernetes service account, role `uc3` — and asks for `database/creds/uc3-refund-writer` directly, with no approval and no delegated token. Vault denies it with `permission denied`, because the role's only policy, `uc3-agent`, does not name the refund-writer path. The same login is still **allowed** `database/creds/uc3-readonly`, so the denial cannot be a broken login.
 
-**Expected output** — eight checks pass, and **one check is deliberately skipped**:
+**Expected output** — nine checks pass, and **one check is deliberately skipped**:
 
 ```
   ℹ INFO Use Case 3 — CIBA Privileged verification — BYPASS TEST MODE
@@ -45,9 +46,10 @@ silently pass on an infrastructure error:
   ✓ PASS Bypass Check 18 PASSED: the agent-uc2 UC2 token (sub=oscar, act.sub=agent-uc2) was DENIED reading database/creds/uc3-refund-writer — agent-uc2's ceiling omits the refund path ...
   ⚠ WARN Bypass Check 19: SKIPPED — no UC3_WRONG_ACTOR_TOKEN supplied ...
   ✓ PASS Bypass Check 20 PASSED: an identical exchange request was refused as agent-uc2 with unauthorized_client ... while uc3-actor got past the client gate
+  ✓ PASS Bypass Check 21 PASSED: the agent's own Kubernetes login (role uc3, policies=default,uc3-agent) was DENIED database/creds/uc3-refund-writer (permission denied) while still ALLOWED database/creds/uc3-readonly ...
 
 ===============================================================================
- ✓ 8 check(s) passed
+ ✓ 9 check(s) passed
 ===============================================================================
 ```
 
