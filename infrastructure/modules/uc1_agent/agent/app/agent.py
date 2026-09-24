@@ -162,11 +162,33 @@ def _narrate_kb_credentials(issued: dict) -> None:
     _show_sts_credentials(issued, "Short-lived AWS keys Vault issued for reading the knowledge base")
 
 
+# Lease and timing of the latest issuance of the model's AWS keys, with the
+# access key id they belong to, so a turn that reuses the keys can say which
+# lease they came from. Never the secret key or the session token.
+_model_keys_issuance: dict[str, Any] = {}
+_model_keys_issuance_lock = threading.Lock()
+
+# How many model-key issuances ran in the current context. A turn compares it
+# before and after reading the keys to tell whether that read refreshed them.
+_MODEL_KEYS_ISSUED_HERE: ContextVar[int] = ContextVar("uc1_model_keys_issued_here", default=0)
+
+
 def _narrate_model_credentials(issued: dict) -> None:
     """The model's own AWS keys, issued at pod startup and refreshed by botocore
-    when they near expiry. A refresh runs on the thread making the Bedrock call,
-    inside the turn that needed it, so it lands on that turn's stream. The
-    startup issuance belongs to no request and stays silent."""
+    when they near expiry. A refresh runs on the thread that reads the keys — a
+    turn's first read of them (_show_model_keys) or the Bedrock call that signs
+    with them — inside the turn that needed it, so it lands on that turn's
+    stream. The startup issuance belongs to no request and stays silent."""
+    with _model_keys_issuance_lock:
+        _model_keys_issuance.clear()
+        _model_keys_issuance.update(
+            access_key_id=issued["access_key_id"],
+            vault_path=issued["vault_path"],
+            lease_id=issued.get("lease_id"),
+            ttl_seconds=issued["ttl_seconds"],
+            issued_at=time.time(),
+        )
+    _MODEL_KEYS_ISSUED_HERE.set(_MODEL_KEYS_ISSUED_HERE.get() + 1)
     activity.narrate(
         "Vault issued fresh short-lived AWS credentials for calling the model "
         f"({issued['vault_path']}, {issued['ttl_seconds']}s); my previous ones were about to expire."
@@ -298,6 +320,11 @@ def retrieve_from_knowledge_base(query: str, tool_context: ToolContext) -> list[
 # backed by thread-safe RefreshableCredentials.
 _model: BedrockModel | None = None
 
+# The model's live AWS credentials: the botocore RefreshableCredentials its
+# Bedrock client signs with (boto3 Session.get_credentials returns the session's
+# own object, not a copy). Reading them always gives the keys in use right now.
+_model_credentials: Any = None
+
 
 def init_uc1_model() -> None:
     """Sign in to Vault once and build the shared Bedrock model (pod startup).
@@ -308,7 +335,7 @@ def init_uc1_model() -> None:
     from the REGION env var). That session is for model invocations only; each
     tool call independently fetches its own ephemeral credentials from Vault.
     """
-    global _model
+    global _model, _model_credentials
 
     # Authenticate once at startup; token is cached for the pod's lifetime.
     _vault.login()
@@ -319,6 +346,7 @@ def init_uc1_model() -> None:
     # Obtain an STS session for the model invocation plane (primary region).
     # Its refreshes are shown on the stream of the turn that triggers them.
     bedrock_session = _vault.get_bedrock_session(kb_region=region, on_issued=_narrate_model_credentials)
+    _model_credentials = bedrock_session.get_credentials()
 
     _model = BedrockModel(
         model_id=model_id,
@@ -452,6 +480,42 @@ def build_uc1_agent() -> Agent:
     )
 
 
+def _show_model_keys() -> None:
+    """Every streamed turn shows the AWS keys the model signs with, read live.
+
+    get_frozen_credentials refreshes the keys first when they are near expiry
+    (botocore credentials.py:663-698). If this read was that refresh, the keys
+    have just been shown as "refreshed during this answer" and are not shown a
+    second time as reused. The lease, TTL and expiry are sent only when the last
+    recorded issuance belongs to these exact keys.
+    """
+    if activity.current() is None or _model_credentials is None:
+        return
+    issued_before = _MODEL_KEYS_ISSUED_HERE.get()
+    keys = _model_credentials.get_frozen_credentials()
+    if _MODEL_KEYS_ISSUED_HERE.get() != issued_before:
+        return
+    with _model_keys_issuance_lock:
+        issuance = dict(_model_keys_issuance)
+    same_keys = issuance.get("access_key_id") == keys.access_key
+    ttl = issuance.get("ttl_seconds") if same_keys else None
+    activity.narrate("I reuse the short-lived AWS keys Vault issued earlier for calling the model.")
+    activity.credential(
+        "aws_sts_credentials",
+        "Short-lived AWS keys Vault issued for calling the model — reused this turn",
+        "AWS STS (via Vault)",
+        fields={
+            "access_key_id": keys.access_key,
+            "secret_access_key": keys.secret_key,
+            "session_token": keys.token,
+        },
+        vault_path=issuance.get("vault_path") if same_keys else None,
+        lease_id=issuance.get("lease_id") if same_keys else None,
+        ttl_seconds=ttl,
+        expires_at=int((issuance["issued_at"] + ttl) * 1000) if same_keys and ttl else None,
+    )
+
+
 _KB_TOOL = "retrieve_from_knowledge_base"
 
 
@@ -508,9 +572,10 @@ def run_uc1_turn(query: str, cancel_signal: threading.Event | None = None) -> Tu
     """Answer one /query. Blocking — the caller runs it in asyncio.to_thread.
 
     First confirms the agent's own Vault login, so a streamed request can say
-    truthfully whether it signed in again or reused its login, then runs a
-    fresh Agent. `cancel_signal` stops the Agent at its next checkpoint (set
-    when a streaming visitor disconnects).
+    truthfully whether it signed in again or reused its login, and (streamed
+    requests only) shows the model's AWS keys, then runs a fresh Agent.
+    `cancel_signal` stops the Agent at its next checkpoint (set when a
+    streaming visitor disconnects).
     """
     try:
         if not _vault.ensure_authenticated():
@@ -522,6 +587,13 @@ def run_uc1_turn(query: str, cancel_signal: threading.Event | None = None) -> Tu
     except Exception as exc:  # noqa: BLE001 — each tool checks the login again itself
         logger.warning("turn_vault_check_failed", exc_info=True)
         activity.narrate(f"I could not confirm my Vault login ({type(exc).__name__}); each tool will try again.")
+    try:
+        _show_model_keys()
+    except Exception as exc:  # noqa: BLE001 — the model call refreshes its keys again itself
+        logger.warning("turn_model_keys_read_failed", extra={"error_type": type(exc).__name__})
+        activity.narrate(
+            f"I could not read my AWS keys for calling the model ({type(exc).__name__}); the model call will try again."
+        )
     agent = build_uc1_agent()
     result = agent(query, cancel_signal=cancel_signal)
     return TurnOutcome(result=result, sources=kb_passages(agent.messages))

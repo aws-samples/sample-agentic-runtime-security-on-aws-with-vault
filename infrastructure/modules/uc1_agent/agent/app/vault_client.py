@@ -183,7 +183,8 @@ class VaultClient:
                 session, with {"vault_path", "lease_id", "ttl_seconds",
                 "access_key_id", "secret_access_key", "session_token"}. It runs
                 on the thread that needed the keys: the knowledge-base tool's
-                call, or the Bedrock model call whose signing triggered a
+                call, or — for the model's session — a turn's first read of the
+                keys or the Bedrock model call whose signing triggered a
                 refresh. Each caller passes its own callback, so the stream
                 says which of the two the keys are for. The keys must go only
                 to the per-request event queue — never to a log or a tool
