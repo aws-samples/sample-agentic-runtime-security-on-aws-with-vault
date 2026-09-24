@@ -34,12 +34,70 @@
 		const path = page.url.pathname;
 		return path === href || path.startsWith(`${href}/`);
 	}
+
+	// ---- Narrow screens: the navigation is a drawer opened from the top bar ----------
+	// Must match the max-width media query in the styles below.
+	const NARROW = '(max-width: 960px)';
+
+	let menuOpen = $state(false);
+
+	function closeMenu() {
+		menuOpen = false;
+	}
+
+	function toggleMenu() {
+		menuOpen = !menuOpen;
+	}
+
+	// Leaving the narrow layout (a rotated tablet, a widened window) closes the drawer.
+	$effect(() => {
+		const query = window.matchMedia(NARROW);
+		const onChange = () => {
+			if (!query.matches) closeMenu();
+		};
+		query.addEventListener('change', onChange);
+		return () => query.removeEventListener('change', onChange);
+	});
 </script>
 
 <a class="skip-link" href="#main-content">Skip to main content</a>
 
-<div class="shell">
-	<nav class="shell-nav" aria-label="Main">
+<div class="shell" class:menu-open={menuOpen}>
+	<!-- Top bar, shown only on screens 960px and narrower. -->
+	<header class="bar">
+		<button
+			type="button"
+			class="menu-button"
+			aria-expanded={menuOpen}
+			aria-controls="main-nav"
+			aria-label={menuOpen ? 'Close navigation' : 'Open navigation'}
+			onclick={toggleMenu}
+		>
+			{#if menuOpen}
+				<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+					<path d="M5 5l10 10M15 5L5 15"></path>
+				</svg>
+			{:else}
+				<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+					<path d="M3 6h14M3 10h14M3 14h14"></path>
+				</svg>
+			{/if}
+		</button>
+		<span class="bar-mark" aria-hidden="true">OVI</span>
+		<span class="bar-name">OscarVault</span>
+		{#if signedIn}
+			<span class="bar-avatar" role="img" aria-label={displayName}>{initials}</span>
+		{/if}
+	</header>
+
+	{#if menuOpen}
+		<!-- Pointer users close the drawer on the scrim; keyboard users have the menu button. -->
+		<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+		<div class="scrim" aria-hidden="true" onclick={closeMenu}></div>
+	{/if}
+
+	<!-- The left navigation on wide screens; the drawer on narrow ones. -->
+	<nav id="main-nav" class="shell-nav" aria-label="Main">
 		{#if signedIn}
 			<a class="brand" href="/dashboard" data-sveltekit-reload>
 				<span class="brand-mark" aria-hidden="true">OVI</span>
@@ -66,6 +124,7 @@
 						href={link.href}
 						aria-current={isCurrent(link.href) ? 'page' : undefined}
 						data-sveltekit-reload
+						onclick={closeMenu}
 					>
 						{link.label}
 					</a>
@@ -88,7 +147,7 @@
 				<!-- GET /logout clears the session cookies and ends the IVIA WebSEAL session.
 				     data-sveltekit-reload makes this a full navigation that SvelteKit never
 				     preloads, so hovering the link cannot sign anyone out. -->
-				<a class="me-action" href="/logout" data-sveltekit-reload>Log out</a>
+				<a class="me-action" href="/logout" data-sveltekit-reload onclick={closeMenu}>Log out</a>
 			{:else}
 				<div class="me-row">
 					<span class="me-avatar me-avatar-anon" aria-hidden="true">—</span>
@@ -98,7 +157,7 @@
 					</div>
 				</div>
 				<p class="me-note">Use Case 1 needs no sign-in</p>
-				<a class="me-action" href="/" data-sveltekit-reload>Sign in</a>
+				<a class="me-action" href="/" data-sveltekit-reload onclick={closeMenu}>Sign in</a>
 			{/if}
 		</div>
 	</nav>
@@ -303,28 +362,145 @@
 		outline: none;
 	}
 
-	/* Narrow viewports: the navigation stacks above the page instead of beside it. */
+	/* ---- Top bar and drawer (screens 960px and narrower) --------------------------- */
+	.bar,
+	.scrim {
+		display: none;
+	}
+
 	@media (max-width: 960px) {
 		.shell {
 			flex-direction: column;
 		}
 
+		.bar {
+			position: sticky;
+			top: 0;
+			z-index: 30;
+			box-sizing: border-box;
+			height: var(--ovi-bar-height);
+			flex-shrink: 0;
+			display: flex;
+			align-items: center;
+			gap: 12px;
+			padding: 0 16px;
+			background: var(--ovi-nav-bg);
+			border-bottom: 1px solid var(--ovi-hairline-strong);
+			color: var(--ovi-text-primary);
+			line-height: normal;
+			letter-spacing: normal;
+		}
+
+		.menu-button {
+			box-sizing: border-box;
+			width: 44px;
+			height: 44px;
+			flex-shrink: 0;
+			padding: 0;
+			border: 1px solid var(--ovi-border);
+			border-radius: 12px;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			background: var(--ovi-card);
+			color: var(--ovi-text-primary);
+			cursor: pointer;
+		}
+
+		.menu-button:focus-visible {
+			outline: var(--ovi-focus-ring);
+			outline-offset: 2px;
+		}
+
+		.bar-mark {
+			width: 34px;
+			height: 34px;
+			flex-shrink: 0;
+			border-radius: 9px;
+			background: var(--ovi-brand-primary);
+			color: #ffffff;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			font: 600 12px var(--ovi-font-mono);
+		}
+
+		.bar-name {
+			font-weight: 600;
+			font-size: 17px;
+			line-height: 1.2;
+		}
+
+		.bar-avatar {
+			width: 36px;
+			height: 36px;
+			flex-shrink: 0;
+			margin-left: auto;
+			border-radius: 50%;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			background: var(--ovi-amber-soft);
+			color: var(--ovi-amber);
+			font-weight: 600;
+			font-size: 13px;
+		}
+
+		/* The navigation becomes a drawer under the bar, off screen and hidden from
+		   assistive technology and the Tab order (visibility: hidden) until opened. */
 		.shell-nav {
-			position: static;
-			width: auto;
+			position: fixed;
+			top: var(--ovi-bar-height);
+			bottom: 0;
+			left: 0;
+			z-index: 20;
+			box-sizing: border-box;
+			width: 300px;
+			max-width: 100%;
 			height: auto;
 			border-right: 0;
-			border-bottom: 1px solid var(--ovi-hairline);
+			box-shadow: 4px 0 24px rgba(22, 22, 22, 0.18);
+			transform: translateX(-100%);
+			visibility: hidden;
+			transition:
+				transform 0.2s ease,
+				visibility 0s linear 0.2s;
+		}
+
+		.menu-open .shell-nav {
+			transform: none;
+			visibility: visible;
+			transition:
+				transform 0.2s ease,
+				visibility 0s linear 0s;
+		}
+
+		/* The bar carries the brand here. */
+		.shell-nav .brand {
+			display: none;
 		}
 
 		.nav-links {
-			flex-direction: row;
-			flex-wrap: wrap;
-			gap: 0 20px;
+			padding: 12px 24px;
 		}
 
-		.nav-me {
-			margin-top: 0;
+		.me-action {
+			font-size: 15px;
+		}
+
+		.scrim {
+			display: block;
+			position: fixed;
+			inset: var(--ovi-bar-height) 0 0 0;
+			z-index: 10;
+			background: var(--ovi-scrim);
+		}
+	}
+
+	@media (max-width: 960px) and (prefers-reduced-motion: reduce) {
+		.shell-nav,
+		.menu-open .shell-nav {
+			transition: none;
 		}
 	}
 </style>

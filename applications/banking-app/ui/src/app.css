@@ -73,6 +73,11 @@
 	--ovi-nav-amber: #876500; /* 4.78:1 */
 
 	--ovi-focus-ring: 2px solid var(--ovi-brand-primary);
+
+	/* Layout. On screens 960px and narrower the left navigation becomes a drawer opened from a
+	   top bar this tall (hairline included); the chat fills the rest of the window. */
+	--ovi-bar-height: 60px;
+	--ovi-scrim: rgba(22, 22, 22, 0.45);
 }
 
 /* Carbon Gray 10 tokens re-pointed at the OVI palette (html carries theme="g10"). */

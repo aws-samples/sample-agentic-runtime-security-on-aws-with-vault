@@ -1,7 +1,8 @@
 <!--
   ChatWorkspace — the chat column plus the right-hand panel slot, shared by every chat page.
 
-  Layout: [ chat column | panel ]. The left navigation comes from +layout.svelte.
+  Layout: [ chat column | panel ]. The left navigation comes from +layout.svelte; on screens
+  960px and narrower it is a drawer behind a top bar, and the chat fills the rest of the window.
 
   Header buttons
     - "View security flow": disabled until `onSecurityFlowToggle` is passed. `securityFlowOpen`
@@ -487,19 +488,55 @@
 		color: var(--ovi-text-helper);
 	}
 
+	/* Screens 960px and narrower: the navigation is a drawer behind a top bar
+	   (+layout.svelte), so the chat fills the window under the bar. The message log keeps its
+	   own scroll, new replies are scrolled into view, and the composer stays on screen. */
 	@media (max-width: 960px) {
 		.workspace {
 			flex-direction: column;
-			height: auto;
+			height: calc(100vh - var(--ovi-bar-height));
+			height: calc(100dvh - var(--ovi-bar-height));
 		}
 
-		/* The navigation stacks above the chat here, so the chat column is one viewport tall
-		   rather than the full page: the message log keeps its own scroll, new replies are
-		   scrolled into view, and the composer stays at the bottom of the chat. */
 		.chat {
-			flex: none;
-			height: 100vh;
-			height: 100dvh;
+			min-height: 0;
+		}
+
+		/* The pills move to a row of their own under the title. */
+		.chat-header {
+			padding: 12px 16px;
+			gap: 10px;
+		}
+
+		.chat-header-pills {
+			margin-left: 0;
+			width: 100%;
+		}
+
+		.chat-messages {
+			padding: 16px;
+		}
+
+		/* One row of chips that scrolls sideways. The 4px bottom padding keeps the focus ring
+		   of a focused chip inside the scroller, which clips on both axes. */
+		.chat-suggestions {
+			flex-wrap: nowrap;
+			overflow-x: auto;
+			padding: 10px 16px 4px;
+		}
+
+		.suggestion {
+			flex-shrink: 0;
+			white-space: nowrap;
+		}
+
+		.chat-composer {
+			padding: 6px 16px;
+		}
+
+		.chat-hint {
+			padding: 0 12px 10px;
+			font-size: 12px;
 		}
 	}
 </style>
