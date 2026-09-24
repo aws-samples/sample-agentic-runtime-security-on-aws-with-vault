@@ -77,8 +77,11 @@ class UC3VaultClient:
         """Authenticate using the Kubernetes Service Account JWT (OBJ-1).
 
         Presents the projected SA token to Vault Kubernetes auth method.
-        Role "uc3" is bound to the uc3-agent service account; policy grants
-        read-only DB creds + aws/sts/bedrock-reader + kv reads.
+        Role "uc3" is bound to the uc3-privileged-actor-sa service account in
+        banking-app and to the uc3-agent policy: database/creds/uc3-readonly,
+        aws/sts/bedrock-reader, aws/sts/uc3-logs-writer, own-token lookup and
+        lease renewal. It grants no refund-writer credentials; those come only
+        from an approved refund's delegated token (get_refund_credentials).
 
         A login during a chat request (re-login after the token expired) shows
         the service-account JWT and the new Vault token on that request's
