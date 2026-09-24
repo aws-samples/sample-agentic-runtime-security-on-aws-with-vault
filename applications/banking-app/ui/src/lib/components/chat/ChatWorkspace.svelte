@@ -437,9 +437,12 @@
 		resize: none;
 	}
 
+	/* Carbon gives the placeholder its own 14px type; the design shows it at the typed-text size. */
 	.chat-composer :global(.bx--text-area::placeholder) {
 		color: var(--ovi-text-helper);
 		opacity: 1;
+		font-size: inherit;
+		letter-spacing: inherit;
 	}
 
 	.chat-composer :global(.bx--text-area:disabled) {
