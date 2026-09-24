@@ -137,6 +137,14 @@ Then `rm -f infrastructure/.acme-state ~/vault-init.json`.
 bash workshop/cfn-wrapper/sim-workshop-studio.sh --yes
 ```
 
+It backgrounds the deploy and prints two watch commands as it starts. Hand both over in chat immediately, alongside the walkthrough log:
+
+```bash
+aws logs tail /aws/codebuild/workshop-tier1 --follow --region us-east-1
+```
+
+That is the CodeBuild build itself — the log group is declared at `workshop/static/cfn/bootstrap.yaml:207`. The simulator's own local log is the second, printed as `tail -f <repo>/workshop/scripts/logs/<name>.log` when it starts; `bash workshop/cfn-wrapper/sim-workshop-studio.sh --status` reprints both at any time.
+
 It deploys **tier 1 only** (`workshop/assets/buildspec/buildspec.yml:91` runs `deploy-workshop.sh --tier 1`) and stages only `tier1/terraform.tfstate` and `tier1/terraform.tfvars`. The attendee runs tiers 2 and 3 themselves — that is the lesson.
 
 Judge progress by the **CodeBuild log, never the stack events** — CFN shows `CREATE_IN_PROGRESS` and nothing else for the whole build, by design. Tier 1 took ~18 min observed. The lines that matter at the end:
