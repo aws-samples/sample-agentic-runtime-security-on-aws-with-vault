@@ -10,6 +10,10 @@
  *                     via IVIA JWKS + jti) and returns ephemeral
  *                     { username, password } for the pg client.
  *
+ * lookupCallerPolicies(jwt) — GET /v1/auth/token/lookup-self with the same JWT as
+ *                     the X-Vault-Token, so the tool can report the policies
+ *                     Vault attaches to the caller's token. Read-only.
+ *
  * revokeLease(leaseId) — POST /v1/sys/leases/revoke using the MCP SERVER's OWN
  *                     Vault identity, obtained by Kubernetes auth login with its
  *                     uc2-mcp-server-sa ServiceAccount token. Revoking is a
@@ -96,6 +100,18 @@ export interface DbCredentials {
   password: string;
   leaseId: string;
   leaseDuration: number;
+  /** The Vault path the credential was read from, e.g. database/creds/uc2-personal-readonly. */
+  vaultPath: string;
+  /** The Vault database role in that path, e.g. uc2-personal-readonly. */
+  dbRole: string;
+}
+
+/** The policies Vault attaches to the caller's token, as auth/token/lookup-self reports them. */
+export interface CallerPolicies {
+  /** lookup-self data.policies */
+  policies: string[];
+  /** lookup-self data.identity_policies */
+  identityPolicies: string[];
 }
 
 /**
@@ -116,7 +132,8 @@ export async function getDbCreds(
   oauthJwt: string,
   role: string = 'uc2-personal-readonly'
 ): Promise<DbCredentials> {
-  const url = `${VAULT_ADDR}/v1/database/creds/${role}`;
+  const vaultPath = `database/creds/${role}`;
+  const url = `${VAULT_ADDR}/v1/${vaultPath}`;
 
   const res = await fetch(url, {
     method: 'GET',
@@ -146,7 +163,50 @@ export async function getDbCreds(
     password,
     leaseId: data.lease_id ?? 'unknown',
     leaseDuration: data.lease_duration ?? 0,
+    vaultPath,
+    dbRole: role,
   };
+}
+
+/**
+ * Ask Vault which policies it attaches to the caller's OAuth JWT, presented
+ * exactly as getDbCreds presents it (X-Vault-Token). Read-only: GET
+ * auth/token/lookup-self, which the Use Case 2 human baseline and agent ceiling
+ * both grant.
+ *
+ * These are the policies as Vault labels them on the caller's token. They are
+ * NOT the effective permission: that is also bounded by the agent's ceiling
+ * (resolved from act.sub), which lookup-self does not list.
+ *
+ * Best-effort: any failure returns null and the tool still succeeds. Only the
+ * two policy lists are read — the response's `id` field is the token itself, so
+ * the body is never logged or returned.
+ *
+ * @param oauthJwt - User IVIA-issued OAuth JWT, the same one getDbCreds presented
+ * @returns the token and identity policies, or null when Vault did not answer
+ */
+export async function lookupCallerPolicies(oauthJwt: string): Promise<CallerPolicies | null> {
+  const names = (value: unknown): string[] =>
+    Array.isArray(value) ? value.filter((p): p is string => typeof p === 'string') : [];
+
+  try {
+    const res = await fetch(`${VAULT_ADDR}/v1/auth/token/lookup-self`, {
+      method: 'GET',
+      headers: { 'X-Vault-Token': oauthJwt },
+    });
+    if (!res.ok) {
+      console.error(`vault_lookup_self_failed status=${res.status}`);
+      return null;
+    }
+    const body = (await res.json()) as { data?: { policies?: unknown; identity_policies?: unknown } };
+    return {
+      policies: names(body?.data?.policies),
+      identityPolicies: names(body?.data?.identity_policies),
+    };
+  } catch (err) {
+    console.error(`vault_lookup_self_error error=${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  }
 }
 
 /**
@@ -166,6 +226,8 @@ export async function getDbCreds(
  * with a broken response.
  *
  * @param leaseId - lease_id returned alongside the credentials by getDbCreds
+ * @returns true only when Vault confirmed the revoke; tools.ts reports this to
+ *          the agent as lease_revoked
  */
 export async function revokeLease(leaseId: string): Promise<boolean> {
   if (!leaseId || leaseId === 'unknown') return false;
