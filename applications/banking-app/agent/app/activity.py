@@ -393,8 +393,9 @@ def report_credential_metadata(tool_name: str, meta: Any, issued: Any = None) ->
     revoked = reported.get("lease_revoked")
     turn.record_lease(db_role, lease_id, ttl)
 
+    # Tools can run concurrently, so every line names the tool it belongs to.
     turn.narrate(
-        f"Response credential_metadata: {json.dumps(reported)}",
+        f'Tool "{tool_name}" response credential_metadata: {json.dumps(reported)}',
         glyph="⚡",
         accent="tool_output",
     )
@@ -447,17 +448,17 @@ def report_credential_metadata(tool_name: str, meta: Any, issued: Any = None) ->
 
     if lease_id and lease_id != "unknown":
         if revoked is True:
-            turn.narrate(f"The MCP server reports Vault revoked lease {lease_id} before it replied.")
+            turn.narrate(f"The MCP server reports Vault revoked the {tool_name} lease {lease_id} before it replied.")
         elif revoked is False:
             ttl_text = f" after {ttl}s" if isinstance(ttl, (int, float)) else ""
             turn.narrate(
-                f"The MCP server reports Vault did not confirm revoking lease {lease_id}; "
+                f"The MCP server reports Vault did not confirm revoking the {tool_name} lease {lease_id}; "
                 f"the credential expires on its own{ttl_text}."
             )
         else:
             turn.narrate(
-                f"Credential revoked: not observed in this flow. The MCP server revokes lease {lease_id} itself "
-                "and does not report the outcome to the agent."
+                f"Credential revoked: not observed in this flow. The MCP server revokes the {tool_name} lease "
+                f"{lease_id} itself and does not report the outcome to the agent."
             )
 
 
