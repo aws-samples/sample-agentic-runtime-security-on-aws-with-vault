@@ -63,7 +63,17 @@ export AWS_PROFILE=<profile-name>
 aws sts get-caller-identity
 ```
 
-**Expected output:**
+**Expected output** — the `Arn` depends on how you signed in. With SSO or any assumed role:
+
+```json
+{
+    "UserId": "AROAXXXXXXXXXXXXXXXXX:your-name",
+    "Account": "123456789012",
+    "Arn": "arn:aws:sts::123456789012:assumed-role/AWSReservedSSO_AdministratorAccess_xxxx/your-name"
+}
+```
+
+With long-lived IAM access keys:
 
 ```json
 {
@@ -73,7 +83,7 @@ aws sts get-caller-identity
 }
 ```
 
-If the output starts with `arn:aws:sts::` (assumed role), note the underlying IAM role ARN — `bootstrap.sh` stamps it as `admin_principal_arn` in `infrastructure/terraform.tfvars`.
+Either is fine. `bootstrap.sh` stamps whichever identity you are as `admin_principal_arn` in `infrastructure/terraform.tfvars`.
 
 If it fails with `Unable to locate credentials`, nothing above took effect — re-run the configuration route that matches your account.
 
