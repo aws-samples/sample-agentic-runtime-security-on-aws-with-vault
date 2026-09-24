@@ -98,7 +98,7 @@
 	inputLabel="Ask the knowledge agent"
 	placeholder="Ask about company policy…"
 	onsend={sendMessage}
-	hint="Enter to send · Shift+Enter for new line · No sign-in: this agent reads company policy only"
+	hint="Enter to send · Shift+Enter for new line · No sign-in: this agent reads the policy knowledge base and can run read-only database queries"
 >
 	{#snippet icon()}
 		<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
