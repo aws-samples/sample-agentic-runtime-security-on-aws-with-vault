@@ -73,7 +73,7 @@ Body: `{"query": "<question>"}`. The `Accept` header picks the reply format.
 ```json
 {
   "answer": "…",
-  "sources": [],
+  "sources": ["# Employee Handbook This handbook describes the working norms …", "…"],
   "credential_metadata": {
     "vault_authenticated": true,
     "vault_role": "uc1",
@@ -82,7 +82,7 @@ Body: `{"query": "<question>"}`. The `Accept` header picks the reply format.
 }
 ```
 
-`leases` lists every database credential Vault issued for this request, with the lease id spelled exactly as the Vault audit log spells it. It is `[]` when the question was answered from the Knowledge Base alone. The "Verify Credentials and Enforcement" page and check 9 of `verify-uc1.sh` read this reply.
+`sources` holds the Knowledge Base passages the agent read for this answer, in the order it retrieved them, and is `[]` when it did not search the Knowledge Base. `leases` lists every database credential Vault issued for this request, with the lease id spelled exactly as the Vault audit log spells it. It is `[]` when the question was answered from the Knowledge Base alone. The "Verify Credentials and Enforcement" page and check 9 of `verify-uc1.sh` read this reply.
 
 **`Accept: text/event-stream` — each step as it happens.** Server-Sent Events, one `data: <json>` frame per event, in the contract of `applications/banking-app/ui/src/lib/agent-events.ts`:
 

@@ -18,7 +18,7 @@ import os
 import threading
 import time
 from contextvars import ContextVar
-from typing import Any
+from typing import Any, NamedTuple
 
 import psycopg2
 import psycopg2.extras
@@ -452,7 +452,59 @@ def build_uc1_agent() -> Agent:
     )
 
 
-def run_uc1_turn(query: str, cancel_signal: threading.Event | None = None) -> AgentResult:
+_KB_TOOL = "retrieve_from_knowledge_base"
+
+
+def kb_passages(messages: list[dict]) -> list[str]:
+    """The passages the knowledge-base tool returned during one turn, in order.
+
+    Read from the conversation the turn's Agent kept, because that is where
+    Strands 1.57.0 puts tool results: AgentResult carries none
+    (strands/agent/agent_result.py:36-42); each round's results become one user
+    message of toolResult blocks (strands/event_loop/event_loop.py:918-921),
+    appended to Agent.messages (event_loop.py:960); and a tool's list[str]
+    return value is JSON-encoded into the block's content[0].text
+    (strands/tools/decorator.py:703-715). Only successful calls to the
+    knowledge-base tool count, matched to their toolUse by toolUseId, so
+    query_database rows never land here.
+    """
+    kb_calls = {
+        block["toolUse"]["toolUseId"]
+        for message in messages
+        if message.get("role") == "assistant"
+        for block in message.get("content", [])
+        if "toolUse" in block and block["toolUse"].get("name") == _KB_TOOL
+    }
+    passages: list[str] = []
+    for message in messages:
+        for block in message.get("content", []):
+            tool_result = block.get("toolResult")
+            if not tool_result or tool_result.get("toolUseId") not in kb_calls:
+                continue
+            if tool_result.get("status") != "success":
+                continue
+            for part in tool_result.get("content", []):
+                text = part.get("text")
+                if not isinstance(text, str):
+                    continue
+                try:
+                    value = json.loads(text)
+                except ValueError:
+                    continue
+                if isinstance(value, list):
+                    passages.extend(item for item in value if isinstance(item, str))
+    return passages
+
+
+class TurnOutcome(NamedTuple):
+    """One answered /query: what the Agent returned, and the knowledge-base
+    passages it read to write the answer."""
+
+    result: AgentResult
+    sources: list[str]
+
+
+def run_uc1_turn(query: str, cancel_signal: threading.Event | None = None) -> TurnOutcome:
     """Answer one /query. Blocking — the caller runs it in asyncio.to_thread.
 
     First confirms the agent's own Vault login, so a streamed request can say
@@ -470,4 +522,6 @@ def run_uc1_turn(query: str, cancel_signal: threading.Event | None = None) -> Ag
     except Exception as exc:  # noqa: BLE001 — each tool checks the login again itself
         logger.warning("turn_vault_check_failed", exc_info=True)
         activity.narrate(f"I could not confirm my Vault login ({type(exc).__name__}); each tool will try again.")
-    return build_uc1_agent()(query, cancel_signal=cancel_signal)
+    agent = build_uc1_agent()
+    result = agent(query, cancel_signal=cancel_signal)
+    return TurnOutcome(result=result, sources=kb_passages(agent.messages))

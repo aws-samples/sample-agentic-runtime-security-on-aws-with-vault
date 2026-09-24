@@ -175,7 +175,7 @@ async def _stream_turn(query: str, request_id: str, vault_role: str) -> AsyncIte
         while (event := await turn.queue.get()) is not activity.END:
             yield _sse(event)
         try:
-            result = await worker
+            outcome = await worker
         except Exception as exc:
             logger.error(f'"query_error" request_id="{request_id}" error="{exc}"')
             message = f"Agent error: {exc}"
@@ -185,7 +185,7 @@ async def _stream_turn(query: str, request_id: str, vault_role: str) -> AsyncIte
             yield _sse(stamped({"type": "agent:done"}))
             return
 
-        answer = _clean_answer(result)
+        answer = _clean_answer(outcome.result)
         try:
             vault_authenticated = await asyncio.to_thread(_vault.is_authenticated)
         except Exception:  # noqa: BLE001 — the answer is already written; report the login as unconfirmed
@@ -318,21 +318,16 @@ async def query(request: QueryRequest, http_request: Request) -> Any:
     try:
         # Off the event loop: a blocking call here held every other request —
         # including /health — until this answer was finished.
-        result = await asyncio.to_thread(run_uc1_turn, request.query)
-        answer = _clean_answer(result)
+        outcome = await asyncio.to_thread(run_uc1_turn, request.query)
+        answer = _clean_answer(outcome.result)
+        # The knowledge-base passages the answer was written from (see kb_passages).
+        sources = outcome.sources
         leases = [VaultLease(**issued) for issued in (_ISSUED_CREDENTIALS.get() or [])]
     except Exception as exc:
         logger.error(f'"query_error" error="{exc}"')
         raise HTTPException(status_code=500, detail=f"Agent error: {exc}") from exc
     finally:
         _ISSUED_CREDENTIALS.reset(ctx_token)
-
-    # Extract KB source passages from tool results if available.
-    sources: list[str] = []
-    if hasattr(result, "tool_results"):
-        for tr in result.tool_results:
-            if isinstance(tr, list):
-                sources.extend([str(s) for s in tr])
 
     logger.info(
         f'"query_complete" request_id="{request_id}" source_count={len(sources)} lease_count={len(leases)}'
