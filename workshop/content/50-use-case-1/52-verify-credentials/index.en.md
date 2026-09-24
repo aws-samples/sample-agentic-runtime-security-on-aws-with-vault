@@ -3,13 +3,15 @@ title: 'Verify Credentials and Enforcement'
 weight: 52
 ---
 
-## Overview
+## Objective 2 · No standing privileges
 
 Query the Use Case 1 agent, watch Vault issue just-in-time credentials, prove the agent **cannot** reach Use Case 3 credentials (ENFC-01), and run `verify-uc1.sh` to confirm every success criterion.
 
-## Step 1 — Ask the agent (no sign-in)
+### Step 1 — Ask the agent (no sign-in)
 
-The agent is exposed through a public, read-only chat page. Print the full clickable URL (the banking-UI nip.io FQDN backed by a Let's Encrypt cert, with the `/ask` path appended):
+The agent is exposed through a public, read-only chat page. Print the full clickable URL (the banking-UI FQDN backed by a Let's Encrypt cert, with the `/ask` path appended):
+
+**Why:** The page is minted per deployment, so it carries your own workshop hostname. Resolve it rather than typing one.
 
 ```bash
 source infrastructure/.acme-state && echo "Ask page: https://${NIP_FQDN_BANKING}/ask"
@@ -21,15 +23,19 @@ Open that URL in your browser. You should see a lock icon in your browser addres
 
 You get an answer grounded in the Knowledge Base corpus (PTO accrual: 15 days at 0–2 years, 20 at 2–5, 25 at 5+). The agent reached that answer using credentials it did not have until the moment you asked.
 
-## Step 2 — Inspect the credential metadata (CLI)
+### Step 2 — Inspect the credential metadata (CLI)
 
 To see the Vault authentication behind the answer, port-forward and call `/query` directly:
+
+**Why:** The browser gave you an answer and told you nothing about how. The rest of this page is what Vault did to produce it, and that is only visible on the API behind the chat page.
 
 ```bash
 kubectl port-forward -n uc1 svc/uc1-agent-svc 8080:80
 ```
 
 In a second terminal, send a SQL-shaped question — the agent's `query_database` tool routes this to Vault for a Just-In-Time Postgres credential, which we'll observe in Step 3:
+
+**Why:** Ask for something that needs the database, not just the knowledge base — that is what forces the agent to go to Vault for a credential. The reply hands you back the lease id it was given.
 
 ```bash
 curl -s http://localhost:8080/query \
@@ -42,19 +48,30 @@ The response surfaces the Vault authentication state:
 
 ```json
 {
-  "answer": "I was unable to find any tables in the database ...",
+  "answer": "There are no tables in the 'public' schema of the database ...",
   "credential_metadata": {
     "vault_authenticated": true,
-    "vault_role": "uc1"
+    "vault_role": "uc1",
+    "leases": [
+      {
+        "vault_path": "database/creds/uc1-readonly",
+        "lease_id": "database/creds/uc1-readonly/JMk2pg5DTC1JJMTtoBD7oiWa",
+        "ttl_seconds": 900
+      }
+    ]
   }
 }
 ```
 
 `vault_authenticated: true` with `vault_role: uc1` confirms the pod authenticated to Vault with its ServiceAccount identity — not a static key. The "no tables" answer is itself a teaching moment: the `uc1-readonly` Vault role only GRANTs SELECT on schema `public` (empty here), so even though the agent successfully obtained a credential, that credential's reach is bounded by the role.
 
-## Step 3 — Observe credential issuance in the Vault audit log
+`leases` is the OBJ-5 hook: one entry per Just-In-Time credential Vault issued while answering **this** request, with the lease id spelled exactly as Vault spells it. **Copy your `lease_id` — Step 3 finds the very same string in the Vault audit log.** The value is attached by the runtime, never written by the model: an agent that narrated its own credential ids would be quoting itself, not producing an audit trail. Ask a question the agent answers from the Knowledge Base alone and `leases` is `[]`, because no database credential was issued.
+
+### Step 3 — Observe credential issuance in the Vault audit log
 
 The SQL-shaped question in Step 2 made the agent call Vault for a Just-In-Time database credential. Read the audit log for that issuance event:
+
+**Why:** The same lease id, this time out of Vault's own audit log. One string appearing on both sides is the whole of Objective 5: the answer somebody read, tied to the credential that produced it.
 
 ```bash
 kubectl logs -n vault -l app.kubernetes.io/name=vault --since=15m --tail=-1 \
@@ -82,11 +99,13 @@ Expected:
 }
 ```
 
-`display_name` is `kubernetes-uc1-uc1-retriever-sa` — the Vault Kubernetes mount, the role, and the ServiceAccount that authenticated. `lease_id` is unique per issuance — every `query_database` call produces a fresh one, which is the audit-trail proof that credentials are JIT (not reused). This entry is the first link in the audit-correlation chain that Use Case 3 completes end-to-end. The 15-minute TTL comes from the `default_ttl = 900` on `vault_database_secret_backend_role.uc1_readonly` (visible via `vault read database/roles/uc1-readonly` from the previous page).
+**This `lease_id` is the one your Step 2 response just showed you** — the same string on both sides is the correlation: the answer an attendee read, tied to the credential Vault vended for it. `display_name` is `kubernetes-uc1-uc1-retriever-sa` — the Vault Kubernetes mount, the role, and the ServiceAccount that authenticated. `lease_id` is unique per issuance — every `query_database` call produces a fresh one, which is the audit-trail proof that credentials are JIT (not reused). This entry is the first link in the audit-correlation chain that Use Case 3 completes end-to-end. The 15-minute TTL comes from the `default_ttl = 900` on `vault_database_secret_backend_role.uc1_readonly` (visible via `vault read database/roles/uc1-readonly` from the previous page).
 
-## Step 4 — ENFC-01 enforcement test (the thing that must NOT happen)
+### Step 4 — ENFC-01 enforcement test (the thing that must NOT happen)
 
 Use Case 1 is read-only and must never obtain Use Case 3's refund-writer database credentials. Have the agent attempt it **with its own Vault identity** — Vault must refuse:
+
+**Why:** Everything so far has been the happy path. Now the agent asks Vault for Use Case 3's refund-writer credential using its own identity. The refusal is the pass.
 
 ```bash
 kubectl exec -n uc1 deploy/uc1-agent -- python3 -c '
@@ -108,7 +127,9 @@ DENIED (expected): Forbidden
 
 The `403 Forbidden` is the passing result — the UC1 token can mint its own `database/creds/uc1-readonly` but is denied `database/creds/uc3-refund-writer`, because that path is absent from the `uc1-readonly` policy (you read that policy on the previous page).
 
-## Step 5 — Run verify-uc1.sh
+### Step 5 — Run verify-uc1.sh
+
+**Why:** Ten checks in one command — what you just did by hand, plus the parts there is never time to demonstrate live.
 
 ```bash
 bash infrastructure/scripts/verify-uc1.sh

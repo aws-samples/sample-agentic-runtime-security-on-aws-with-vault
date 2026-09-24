@@ -3,15 +3,13 @@ title: 'The Bypass Test'
 weight: 73
 ---
 
-## Where Enforcement Now Lives: at Vault, per request
+## Objective 4 · Enforcement at the point of use
 
-Vault Enterprise's OAuth resource server enforces the delegation itself. When the delegated JWT is presented via `X-Vault-Token`, Vault resolves the agent actor from `act.sub` and narrows the token per request from the `vault:path_access` RAR. Three attacks on a token fail **at Vault** — before any credential is issued, and you run all three below:
+Every page so far built the approval path. This one tries to get round it — and every route fails at Vault, not in the application code.
 
-- **Forged signature** — a token whose claims match a genuine one exactly, differing only in that the attacker signed it. Vault trusts only IVIA's RS256 JWKS, so it dies at the signature layer.
-- **Wrong agent** — a genuine, IVIA-signed token for the same human, but carrying a *different registered* agent in `act.sub`. That agent's ceiling bounds what the token can reach, and the refund path is outside it. (A token naming an agent Vault has never registered fails even earlier — no agent entity resolves at all — but your IVIA cannot mint one to try, so the run proves the layer with the registered case.)
-- **Wrong RAR path** — a token whose `vault:path_access` RAR names a path *other than* the one being requested is denied **even though the human baseline and the agent ceiling both permit the target path**. The per-request RAR is a hard, in-Vault narrowing.
+### Run the bypass test
 
-## Run the Bypass Test
+**Why:** Everything so far has been the happy path. Now we attack it three ways: forge the signature, act as the wrong agent, and ask for a path the token does not name. All three have to fail before any credential is issued.
 
 ```bash
 cd infrastructure/scripts && ./verify-uc3.sh --bypass
@@ -62,7 +60,7 @@ load-bearing by denying a genuine token whose actor is a *different registered* 
 have such a token, set `UC3_WRONG_ACTOR_TOKEN` and re-run to exercise it.
 :::
 
-## Three Independent Denials, Each Sufficient On Its Own
+### Three independent denials, each sufficient on its own
 
 | Layer | Mechanism | What It Enforces |
 |---|---|---|
@@ -70,27 +68,17 @@ have such a token, set `UC3_WRONG_ACTOR_TOKEN` and re-run to exercise it.
 | Agent actor | `act.sub` resolved against the Agent Registry, then that agent's `ceiling_policies` intersected with the human baseline | The actor claim decides what the token can reach. Check 18 proves it with a genuine token whose actor is a *different registered* agent (`agent-uc2`): same human, same signature, denied — because `agent-uc2`'s ceiling omits the refund path. An **unregistered** actor resolves to no entity at all and fails closed even earlier |
 | Per-request RAR | `vault:path_access` path must match the requested path | Evaluated in Vault at the point of use: a delegated token whose RAR names a different path is denied **even though baseline ∩ ceiling permit the target** |
 
-The RAR-path control is the one that proves enforcement moved *into* Vault: the human baseline and the agent ceiling both allow `database/creds/uc3-refund-writer`, yet Vault still denies the request when the per-request `vault:path_access` RAR does not name that exact path. Vault — not IVIA, not the agent — is the interpreter of the RAR.
+The RAR-path control is the one that proves enforcement moved *into* Vault: the baseline and the ceiling both allow `database/creds/uc3-refund-writer`, yet Vault still denies the request when the per-request RAR does not name that exact path.
 
-### Threat Model
+:::alert{type="info" header="What this does not protect against"}
+A compromised agent pod with its service account JWT intact could initiate a CIBA flow and present the resulting delegated token to Vault. Mitigations for pod compromise — runtime rules, session policy restrictions — are the next layer of defense and out of scope here.
+:::
 
-**What this protects against:** A rogue agent pod that obtains a user's delegated token cannot repurpose it. If its `act.sub` names a different registered agent, that agent's ceiling — not the human's baseline — bounds what it can reach, and the refund path is outside it; if `act.sub` names an unregistered agent, no agent entity resolves at all and Vault fails closed; if it carries a `vault:path_access` RAR for a different path, Vault narrows the token away from the refund-writer credential. A self-forged token is rejected even earlier, at RS256 signature validation. No DB credentials are ever issued.
+### Row-level security holds on the read path too
 
-**What this does NOT protect against:** A compromised agent-uc3 pod with its service account JWT intact could initiate a CIBA flow and present the resulting delegated token to Vault. Mitigations for pod compromise (e.g., falco runtime rules, IRSA session policy restrictions) are out of scope for this workshop but represent the next layer of defense.
+**Why:** Approval protects the write. This checks the read — one legitimate credential, two customers, and neither can see the other's money.
 
-## Read-Path Tenant Isolation
-
-The bypass tests above prove the write path is protected. This section proves the read path is isolated — Jaime can only read Jaime's data, and a request scoped to a different user's account returns no results.
-
-Use Case 3 enforces read isolation through three independent layers:
-
-1. **Row-Level Security (RLS):** The `banking.transactions`, `banking.accounts`, and `banking.refunds` tables carry Postgres RLS policies that filter every SELECT by the `app.current_user_sub` GUC. The agent sets this GUC to the verified `sub` from the bearer token before executing any query.
-2. **Vault least-privilege role:** All read operations use the `uc3-readonly` Vault DB role, which carries `GRANT SELECT` only — it cannot INSERT into any banking table.
-3. **Owner predicate (defense-in-depth):** `check_refund_status` includes an explicit `JOIN banking.accounts WHERE a.user_sub = <authenticated_sub>` predicate in addition to the GUC/RLS layer.
-
-### Section 1 — Browser Read Isolation
-
-Sign in to the banking application as Jaime and ask the Use Case 3 agent to list your transactions or check a refund status.
+#### In the browser
 
 1. Open an **Incognito / Private browser window**, go to the banking application URL, and sign in as **jaime** using the IVIA login page.
 2. Navigate to the Use Case 3 chat interface and send the message: `List my recent transactions`.
@@ -98,16 +86,16 @@ Sign in to the banking application as Jaime and ask the Use Case 3 agent to list
 4. Open a **fresh Incognito / Private window**, sign in as **oscar**, and repeat the same query — confirm you see only Oscar's records and zero of Jaime's.
 
 :::alert{type="info" header="Switch personas with Incognito, not Logout"}
-IVIA keeps its own SSO session cookie, so **Logout** in the banking app leaves you recognised by IVIA and re-opening the app jumps to the OAuth consent page rather than a fresh login. Use a separate Incognito / Private window per persona — each starts with an empty cookie jar and gives you a clean login.
+IVIA keeps its own SSO session cookie, so **Logout** in the banking app leaves you recognized by IVIA and re-opening the app jumps to the OAuth consent page rather than a fresh login. Use a separate Incognito / Private window per persona — each starts with an empty cookie jar and gives you a clean login.
 :::
 
 A refund lookup works the same way: ask `What is the status of refund <jaime-refund-id>` while signed in as Oscar — the agent returns "Refund not found" with no detail about Jaime's refund (no information disclosure).
 
-### Section 2 — Postgres GUC and RLS Assertion
+#### Now prove it without the agent in the path
 
-This section lets you prove RLS is active at the database layer independently of the agent. You will obtain a `uc3-readonly` Vault credential, connect to RDS, set the `app.current_user_sub` GUC to each user's sub, and observe that `SELECT count(*)` returns only that user's rows.
+**Why:** The browser result could be the application filtering for you. Do it yourself against the database, with a real credential, and see the filter is in Postgres.
 
-#### Step 2.1 — Obtain a Vault uc3-readonly credential
+##### Get a read-only credential
 
 ```bash
 export VAULT_ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)
@@ -125,7 +113,7 @@ export RDS_HOST=$(kubectl get configmap uc3-agent-config -n banking-app -o jsonp
 The `uc3-readonly` credential expires after 15 minutes. If you see `psql: FATAL: password authentication failed`, re-run Step 2.1 to mint a fresh credential.
 :::
 
-#### Step 2.2 — Confirm RLS scoping by sub
+##### Count transactions as each persona
 
 The value RLS filters on is the IVIA `sub` claim, seeded as the plain strings `oscar` and `jaime` (`seed.sql`, column `banking.accounts.user_sub`). You do **not** need to look anything up in the IVIA LMI or decode an id_token — use those two values directly.
 
@@ -168,7 +156,9 @@ kubectl run pg-rls-test --rm -i --restart=Never --image=postgres:16-alpine -n ba
 
 Each count includes only the active `sub`'s rows — cross-tenant rows are invisible. This is the RLS policy (the `USING (user_sub = current_setting('app.current_user_sub', true))` clause) enforcing isolation at the Postgres layer, independently of the agent. The pod is deleted automatically (`--rm`) when the query finishes.
 
-### Section 3 — Least-Privilege: INSERT is Denied
+### The read-only credential cannot write
+
+**Why:** The agent holds two credentials. This is the one it uses to look things up — if it could also write, the approval step would be theatre.
 
 The `uc3-readonly` role carries `GRANT SELECT` only. The same credential used in Step 2.1 cannot write to the banking tables.
 
@@ -194,13 +184,15 @@ pod "pg-insert-uc3" deleted
 
 The Postgres GRANT layer rejects the INSERT before the RLS policy (or any constraint) is even evaluated. This confirms that a bug in the agent code that accidentally attempted a write would fail closed at the database layer — Vault's `uc3-readonly` role has no write capability.
 
-### Section 4 — Hostile Read Attempt (Owner Predicate)
+### Knowing a refund id gets you nothing
+
+**Why:** A refund id is not a secret — it sits in the chat transcript. So hand it to the wrong customer and check they still get zero rows.
 
 RLS is not the only layer scoping refund reads. The `check_refund_status` tool adds an explicit **owner predicate** — it `JOIN banking.accounts` and requires `a.user_sub = <authenticated_sub>` — so a `refund_id` you do not own returns the **same** empty result as a non-existent one. The agent reports `{"error": "Refund <id> not found"}` either way, leaking nothing about another user's refunds. This section proves that predicate at the database layer with the `uc3-readonly` credential from Step 2.1, running the exact query the agent runs (`uc3-agent/app/agent.py`, `check_refund_status`).
 
 Refunds are **created by you** during the CIBA approval flow (page 71) — they are never seeded — so the IDs below are examples from one run; **yours will differ.**
 
-#### Step 4.1 — Find a refund you created
+##### Step 4.1 — Find a refund you created
 
 A refund is visible only to its owner (RLS), so list refunds under each persona you ran a refund as:
 
@@ -237,7 +229,7 @@ export OWNER=<the persona it appeared under: oscar or jaime>
 export ATTACKER=<the other persona>
 ```
 
-#### Step 4.2 — Cross-owner read returns nothing; owner read returns the row
+##### Step 4.2 — Cross-owner read returns nothing; owner read returns the row
 
 Run the exact owner-predicate JOIN `check_refund_status` executes — first as the **other** persona (the hostile reader), then as the **owner**:
 
@@ -283,26 +275,24 @@ kubectl run pg-owner-test --rm -i --restart=Never --image=postgres:16-alpine -n 
 
 The cross-owner read returns zero rows because of the `AND a.user_sub = <authenticated_sub>` predicate — the same one `check_refund_status` applies on every call. That is why asking the agent for a refund you don't own returns `{"error": "Refund <id> not found"}` instead of another user's data: a cross-tenant refund is made indistinguishable from one that does not exist (no information disclosure). `list_transactions` and account lookups use the same pattern — they set `app.current_user_sub` to the verified `sub` from the bearer token before querying, so RLS filters cross-tenant rows before they ever reach the agent.
 
-## One Approval Pays Once
+### One approval pays once
 
-The sections above prove a delegated token cannot be repurposed. This one proves the **approval itself cannot be spent twice**.
-
-When you approved the refund on your phone, the agent obtained a `uc3-refund-writer` credential with a 5-minute TTL. A short TTL limits *how long* the credential lives — it does not limit *how many rows* it can write. Within those five minutes the same credential can `INSERT` as many times as it likes, so "the credential is short-lived" is not an answer to replay. Two layers answer it:
+**Why:** A tap on a phone authorizes one refund. A five-minute credential limits how *long* the agent can write, not how *many times* — so replay needs its own answer. Two layers give one:
 
 | Layer | Mechanism | What it stops |
 |---|---|---|
 | Agent | `complete_refund` re-reads the terms recorded when the approval was requested and refuses if the `request_id` or the approver does not match (`applications/uc3-agent/app/agent.py`) | A refund being completed under an approval that was granted for different terms |
 | Database | `refunds_request_id_key` — a unique index on `banking.refunds (request_id)` (`applications/banking-app/db/seed.sql`) | A second refund row ever existing for one approval, even if the agent is bypassed entirely |
 
-This section exercises the **database** layer directly — with a real write-capable credential and real SQL, no agent in the path — because that is the layer that still holds when the application layer is the thing that failed.
+You exercise the **database** layer directly here — real credential, real SQL, no agent in the path — because that is the layer that still holds on the day the application is the thing that failed.
 
 :::alert{type="info" header="Complete a refund first"}
 These steps replay *your* refund, so run the **Test the Refund Flow** page first. If `banking.refunds` is empty the `SELECT` feeding the `INSERT` returns no rows and you will see `INSERT 0 0` — nothing was tested.
 :::
 
-### Step 1 — Obtain a write-capable credential
+#### Get a write-capable credential
 
-The read-path sections above used `uc3-readonly`. Replay is a write, so this step reads `database/creds/uc3-refund-writer` with the workshop's admin Vault token. That is deliberate: the delegation path that normally gates this role was already proven above — here we are testing **Postgres**, and taking the agent and Vault's authorization out of the picture is what makes the result attributable to the database alone.
+**Why:** Taking Vault's authorization out of the picture on purpose. The delegation path was proved above; what is on trial now is Postgres alone.
 
 ```bash
 export VAULT_ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)
@@ -320,7 +310,9 @@ echo "$CREDS_JSON" | jq '{username: .data.username}'
 `uc3-refund-writer` is the shortest-lived role in the workshop. If Step 3 fails with `password authentication failed`, re-run Step 1 and continue.
 :::
 
-### Step 2 — Positive control: the credential really can write
+#### Positive control — the credential really can write
+
+**Why:** If the replay fails and you never checked this, you have not proved anything: you cannot tell a working guard from a broken credential.
 
 Before proving a write is refused, prove this credential can write at all — otherwise the rejection in Step 3 could just as easily be a missing privilege. This inserts a copy of your most recent refund with a **fresh** `request_id`, then rolls it back, so nothing is left behind (the `uc3-refund-writer` role has no `DELETE` — refund rows are audit records).
 
@@ -351,7 +343,9 @@ ROLLBACK
 pod "pg-replay-uc3" deleted
 ```
 
-### Step 3 — The replay: same approval, second refund
+#### The replay — same approval, second refund
+
+**Why:** This is the test. Same terms, same `request_id`, and the database refuses.
 
 Identical statement, one column changed: `request_id` is now carried over from the existing row instead of generated. This is precisely the replay — the same human approval, redeemed a second time.
 

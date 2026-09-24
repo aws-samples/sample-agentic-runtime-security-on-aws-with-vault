@@ -3,11 +3,11 @@ title: 'OAuth Login Flow'
 weight: 61
 ---
 
-## Overview
+## Objective 3 · Actions tied to user intent
 
 In this module you open the OscarVault Banking UI, sign in with your LDAP credentials at the IBM Verify Identity Access (IVIA) login page, and observe how the **OAuth Authorization Code + PKCE** flow delivers a JWT to the SvelteKit server. You will see how the JWT carries the `sub` claim that Vault's **OAuth resource server** validates — the MCP Server presents that JWT directly via the `X-Vault-Token` header — and that PostgreSQL Row-Level Security uses to filter rows.
 
-## Request Flow
+### Request Flow
 
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': {
@@ -128,23 +128,25 @@ The `sub` claim in the `access_token` (e.g. `oscar`) flows to:
 3. **Vault OAuth resource server** — the MCP server presents the JWT directly via `X-Vault-Token`; Vault resolves `sub` and the actor `act.sub = agent-uc2` and applies `uc2-human-baseline ∩ uc2-agent-ceiling`.
 4. **PostgreSQL RLS** — the `app.current_user_sub` session variable is set from `sub`; the RLS policy filters `banking.accounts` rows to the authenticated user.
 
-## Step 1 — Get the Banking UI URL
+### Step 1 — Get the Banking UI URL
 
 :::alert{header="Use an incognito / private browser window" type="info"}
 Open the Banking UI in a fresh incognito / private window. Stale WebSEAL/IVIA session cookies from a previous login can prevent a clean sign-in, and this workshop has you log in as more than one user. Open a new incognito window for each user (Oscar, then Jaime) so each login starts from a clean session.
 :::
 
-At the end of `bash infrastructure/scripts/deploy-workshop.sh`, the script prints `NIP_FQDN_BANKING` — the banking-UI nip.io URL backed by a Let's Encrypt certificate served on the shared workshop ALB. Print the full HTTPS URL (read back from `infrastructure/.acme-state`) and open it in your browser:
+At the end of `bash infrastructure/scripts/deploy-workshop.sh`, the script prints `NIP_FQDN_BANKING` — the banking-UI URL backed by a Let's Encrypt certificate served on the shared workshop ALB. Print the full HTTPS URL (read back from `infrastructure/.acme-state`) and open it in your browser:
+
+**Why:** The URL is minted per deployment and carries your own workshop hostname. Resolve it rather than typing one.
 
 ```bash
 echo "https://$(grep '^NIP_FQDN_BANKING=' infrastructure/.acme-state | cut -d= -f2)/"
 ```
 
 :::alert{header="HTTPS with HTTP redirect — trusted Let's Encrypt cert" type="info"}
-The Banking UI ALB listens on both HTTP (port 80) and HTTPS (port 443). HTTP requests are automatically redirected to HTTPS (ssl-redirect annotation). The certificate is a Let's Encrypt-issued cert bound to the nip.io FQDN and imported into ACM. You should see a lock icon in your browser address bar — the cert is trusted by every major OS/browser out of the box. If you see a "Your connection is not private" warning, this is a regression — re-run `bash infrastructure/scripts/deploy-workshop.sh` to re-issue the cert.
+The Banking UI ALB listens on both HTTP (port 80) and HTTPS (port 443). HTTP requests are automatically redirected to HTTPS (ssl-redirect annotation). The certificate is a Let's Encrypt-issued cert bound to the workshop FQDN and imported into ACM. You should see a lock icon in your browser address bar — the cert is trusted by every major OS/browser out of the box. If you see a "Your connection is not private" warning, this is a regression — re-run `bash infrastructure/scripts/deploy-workshop.sh` to re-issue the cert.
 :::
 
-## Step 2 — Sign in at the IVIA login page
+### Step 2 — Sign in at the IVIA login page
 
 When you open the Banking UI URL, the browser is immediately redirected to the IVIA WebSEAL Reverse Proxy login page. You will not see a Banking UI login form — the entire credential entry happens on IVIA.
 
@@ -159,9 +161,11 @@ Click **Login**. WebSEAL performs an LDAP bind against OpenLDAP and, on success,
 This workshop uses OpenLDAP as the user registry, with two pre-provisioned users (Oscar and Jaime) created by the `verify_access` Terraform module. WebSEAL authenticates them via LDAP bind. The IVIA OIDC Provider then issues JWTs that the MCP Server uses to obtain user-scoped database credentials from Vault.
 :::
 
-## Step 3 — Inspect the Banking UI logs
+### Step 3 — Inspect the Banking UI logs
 
 View the Banking UI pod logs to confirm it is running and serving:
+
+**Why:** You signed in at IVIA, not at this app. The Banking UI's own log is where you watch it take delivery of a token it never minted and cannot forge.
 
 ```bash
 kubectl logs -n banking-app -l app=banking-ui --tail=30
@@ -169,14 +173,14 @@ kubectl logs -n banking-app -l app=banking-ui --tail=30
 
 Credentials never reach the Banking UI — they are entered on the WebSEAL login page and validated by WebSEAL via LDAP bind. The OAuth code-for-token exchange happens between the browser and IVIA/WebSEAL, so its detail is not in these UI logs; the authoritative record of the downstream credential issuance is the Vault audit log (queried via Athena in [Credential Revocation](../65-credential-revocation/)).
 
-## Step 4 — Confirm personalized dashboard data
+### Step 4 — Confirm personalized dashboard data
 
 After login, the dashboard shows Oscar's accounts and transactions. Observe:
 
 - The balance figures are specific to Oscar — RLS is filtering the `banking.accounts` table by `sub = 'oscar'`.
 - The agent responds to natural-language queries about Oscar's financial data.
 
-## Step 5 — Switch users: sign in as Jaime
+### Step 5 — Switch users: sign in as Jaime
 
 To act as a different user, open a **new Incognito / Private browser window** and go to the Banking UI URL again. Sign in as:
 
@@ -189,11 +193,13 @@ To act as a different user, open a **new Incognito / Private browser window** an
 
 The dashboard now shows Jaime's accounts and transactions — not Oscar's. The `sub` claim changed, activating a different RLS filter in PostgreSQL.
 
-## Step 6 — Confirm the tool contract has nowhere to put an identity
+### Step 6 — Confirm the tool contract has nowhere to put an identity
 
 Steps 1 through 5 proved the login works. This step proves the claim that makes it worth anything: the token the MCP server acts on comes from the `Authorization` header and from nothing else.
 
 Ask the MCP server to describe its own tools. `tools/list` needs no user — any non-empty bearer value gets past the auth gate, because listing tools touches neither Vault nor the database:
+
+**Why:** Ask the server what its tools actually accept. If any tool took a user id as an argument, the agent could name whichever customer it liked — so the interesting part of this schema is what is missing from it.
 
 ```bash
 kubectl delete pod mcp-probe -n banking-app --ignore-not-found --now >/dev/null 2>&1
@@ -228,9 +234,11 @@ Expected output — `get_accounts` takes **no arguments at all**, `get_transacti
 
 There is no `jwt` field. A caller cannot name the user it wants to be, because the contract has no field for it.
 
-### Now prove it behaves that way
+#### Now prove it behaves that way
 
 A schema is a promise. This request tests it: it puts a **JWT-shaped** token in the tool arguments and a string that is obviously **not a JWT** in the header. Whichever one the server acts on decides the error you get back.
+
+**Why:** A schema states an intention; it does not prove what the server does with it. Send a real-looking JWT in the arguments and obvious rubbish in the header. Whichever one the server acts on is the one deciding identity.
 
 ```bash
 kubectl delete pod mcp-probe -n banking-app --ignore-not-found --now >/dev/null 2>&1
@@ -255,7 +263,7 @@ Expected output:
 If the server had acted on the tool argument instead, that argument *is* JWT-shaped, so it would have travelled all the way to Vault and come back `Vault DB creds fetch failed [403]: {"errors":["permission denied"]}` — Vault rejecting an unsigned token. Same request, completely different error, and the header would have been decoration. Anything that could reach the MCP server would then be choosing the identity Vault saw, and the OBO intersection, the RLS predicate and the audit record would all faithfully enforce the *caller's* choice of user.
 :::
 
-## How the login is split between Banking UI and IVIA
+### How the login is split between Banking UI and IVIA
 
 IBM Verify Identity Access has two components in this deployment:
 
@@ -282,16 +290,16 @@ The IVIA `agent-uc2` client is provisioned by the `verify_access` Terraform modu
 | `response_types` | `code` | Authorization Code response type |
 | `require_pkce` | `true` | PKCE proof required at token exchange |
 | `token_endpoint_auth_method` | `client_secret_basic` | HTTP Basic auth on `/oauth2/token` |
-| `redirect_uris` | `http://<UI_ALB>/callback` | Patched post-deploy with the real Banking UI ALB hostname |
+| `redirect_uris` | `https://<NIP_FQDN_BANKING>/callback` | Patched post-deploy with the workshop banking FQDN — the host the Let's Encrypt certificate was issued for |
 | `scopes` | `openid`, `profile`, `email` | JWT carries sub, email, name claims |
 
 The authorize URL the browser is redirected to:
 
 ```
-http://<IVIA_ALB>/isvaop/oauth2/authorize
+https://<NIP_FQDN_WRP>/isvaop/oauth2/authorize
   ?response_type=code
   &client_id=agent-uc2
-  &redirect_uri=http://<UI_ALB>/callback
+  &redirect_uri=https://<NIP_FQDN_BANKING>/callback
   &code_challenge=<S256 hash of code_verifier>
   &code_challenge_method=S256
   &state=<CSRF token>
@@ -307,13 +315,15 @@ Content-Type: application/x-www-form-urlencoded
 
 grant_type=authorization_code
 &code=<one-time code>
-&redirect_uri=http://<UI_ALB>/callback
+&redirect_uri=https://<NIP_FQDN_BANKING>/callback
 &code_verifier=<original PKCE verifier>
 ```
 
 The `client_secret` is injected into the Banking UI pod from the `banking-ui-oidc` **Kubernetes Secret** — never a ConfigMap. Each OIDC client registered with the provider (`agent-uc1`, `agent-uc2`, `agent-uc3`, `uc3-actor`) is generated its own distinct secret at deploy time by the `verify_access` Terraform module, so holding one client's credential does not let you authenticate as another.
 
 Confirm both properties on the running cluster:
+
+**Why:** Two properties, checked on the running cluster rather than taken on trust: the browser never sees a client secret, and the server holds exactly one.
 
 ```bash
 kubectl get configmap -n banking-app banking-ui-config -o yaml | grep -c CLIENT_SECRET; kubectl get secret -n banking-app banking-ui-oidc -o jsonpath='{.data.IVIA_CLIENT_SECRET}' | wc -c

@@ -90,6 +90,28 @@ check "No bash-4-only constructs (3.2 compat)" bash -c '! grep -En "^[[:space:]]
 echo ""
 
 ################################################################################
+# Phase 5: Let's Encrypt TLS-suffix fallback behaviour (issue #5)
+################################################################################
+echo -e "${YELLOW}Phase 5: TLS-Suffix Fallback Behaviour${NC}"
+# Drives the real fallback branch against a stubbed kubectl. No cluster and no
+# ACME traffic: the rate-limit path cannot be provoked on demand, and provoking
+# it for real would spend the shared magic-DNS budget the workshop depends on.
+check "ACME suffix fallback (8 scenarios, 35 assertions)" bash "$SCRIPT_DIR/test-acme-fallback.sh"
+echo ""
+
+################################################################################
+# Phase 6: Vault OAuth entity-alias sweep + gate behaviour (issue #5)
+################################################################################
+echo -e "${YELLOW}Phase 6: Vault OAuth Alias Sweep + Gate Behaviour${NC}"
+# Drives the real sweep and the real gate against a modelled Vault. The collision
+# they exist for needs AWS to hand a re-created ALB an IP address it held before —
+# observed once on a live cluster, not provocable on demand — so the live path can
+# never cover it. Both transports are modelled, which is what lets the port-forward
+# be taken down while Vault stays healthy.
+check "Vault OAuth alias sweep + gate + issuer coherence (23 scenarios, 66 assertions)" bash "$SCRIPT_DIR/test-vault-alias-gate.sh"
+echo ""
+
+################################################################################
 # Summary
 ################################################################################
 echo -e "${BLUE}===============================================================================${NC}"

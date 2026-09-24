@@ -71,23 +71,25 @@ terraform -chdir=infrastructure apply
 kubectl get ingress -n verify-access
 ```
 
-Expected — one ALB Ingress with an `ADDRESS` like `k8s-workshopacme-<hash>.<region>.elb.amazonaws.com`. The shared `workshop-acme` IngressGroup fronts both this WRP Ingress and the banking-UI Ingress, so one Let's Encrypt cert covers both nip.io FQDNs.
+Expected — one ALB Ingress with an `ADDRESS` like `k8s-workshopacme-<hash>.<region>.elb.amazonaws.com`. The shared `workshop-acme` IngressGroup fronts both this WRP Ingress and the banking-UI Ingress, so one Let's Encrypt cert covers both workshop FQDNs.
 
-The hostname the browser trusts is the **nip.io FQDN** the cert was issued for — read it from `.acme-state`, not the raw ALB hostname:
+The hostname the browser trusts is the **workshop FQDN** the cert was issued for — read it from `.acme-state`, not the raw ALB hostname:
 
 ```bash
 source infrastructure/.acme-state && WRP_HOST="$NIP_FQDN_WRP" && echo "WRP host: $WRP_HOST"
 ```
 
+Compare this value; don't open it. The bare host serves a login page that takes your password and goes nowhere — sign in at the **banking** URL, on the [OAuth Login Flow](../../../60-use-case-2/61-oauth-pkce-flow/) page.
+
 :::alert{header="Trusted cert vs. raw ALB" type="info"}
-The browser and mobile app validate against the nip.io FQDN (`NIP_FQDN_WRP`), not the raw `k8s-workshopacme-*.elb.amazonaws.com` hostname — hitting the raw host shows a TLS warning, which is expected. `deploy-workshop.sh` Step 7 issued that trusted Let's Encrypt cert and wrote `.acme-state`. If Step 7 failed, return to page 31 and re-run.
+The browser and mobile app validate against the workshop FQDN (`NIP_FQDN_WRP`), not the raw `k8s-workshopacme-*.elb.amazonaws.com` hostname — hitting the raw host shows a TLS warning, which is expected. `deploy-workshop.sh` Step 7 issued that trusted Let's Encrypt cert and wrote `.acme-state`. If Step 7 failed, return to page 31 and re-run.
 :::
 
 ## Step 3 — Confirm OIDC discovery via WRP junction
 
 Browser flows reach the OIDC Provider through the WRP `/isvaop` junction:
 
-Note there is no `-k` here. The alert above claims the nip.io FQDN carries a browser-trusted Let's Encrypt certificate — skipping verification would leave that claim untested, so this command verifies the chain. If it succeeds, the certificate really is trusted:
+Note there is no `-k` here. The alert above claims the workshop FQDN carries a browser-trusted Let's Encrypt certificate — skipping verification would leave that claim untested, so this command verifies the chain. If it succeeds, the certificate really is trusted:
 
 ```bash
 curl -s "https://$WRP_HOST/isvaop/oauth2/.well-known/openid-configuration" | jq .issuer

@@ -15,7 +15,8 @@
 #  10. database/ + aws/ secrets engines mounted (license-module gate)
 #  11. agent-registry responds (uc1-agent registration resolvable by display-name)
 #  12. oauth-resource-server profile 'ivia' responds
-#  13. jwt/ auth mount ABSENT (retired IVIA jwt backend gone — decision (e))
+#  13. jwt/ auth mount ABSENT (no Vault auth method in the OAuth token path)
+#  14. Issuer coherence: Vault's issuer_id == the issuer iviaop advertises
 #
 # Usage:
 #   ./test-vault-verify.sh [--help]
@@ -45,7 +46,7 @@ test-vault-verify.sh — ${SCRIPT_DESCRIPTION}
 Usage:
   ./test-vault-verify.sh [--help]
 
-Checks (13 total):
+Checks (14 total):
   1. Vault pods running (3 of 3)
   2. Vault seal status: unsealed
   3. Vault Raft peers: 3
@@ -58,7 +59,8 @@ Checks (13 total):
  10. database/ + aws/ secrets engines mounted (license-module gate)
  11. agent-registry responds (uc1-agent registration by display-name)
  12. oauth-resource-server profile 'ivia' responds
- 13. jwt/ auth mount ABSENT (retired IVIA jwt backend gone — decision (e))
+ 13. jwt/ auth mount ABSENT (no Vault auth method in the OAuth token path)
+ 14. Issuer coherence: Vault issuer_id == the issuer iviaop advertises
 
 Env-var overrides:
   VAULT_NAMESPACE   (default: vault)
@@ -200,8 +202,8 @@ fi
 #   11. agent-registry responds — the uc1-agent registration reads back
 #       (agent-registry/registration/display-name/<name>, 09-DISCOVERY path)
 #   12. oauth-resource-server profile 'ivia' responds (sys/config/oauth-resource-server/ivia)
-#   13. jwt/ auth mount is ABSENT — the retired IVIA jwt auth backend is GONE
-#       (locked decision (e) cutover proof; a still-mounted jwt/ FAILS LOUD)
+#   13. jwt/ auth mount is ABSENT — the OAuth access token IS the Vault token,
+#       so no auth method belongs in this path; a mounted jwt/ FAILS LOUD
 #
 # All use the same kubectl-exec + root-token pattern as Checks 3/4 above.
 #===============================================================================
@@ -276,20 +278,60 @@ else
 fi
 
 #-------------------------------------------------------------------------------
-# Check 13 — jwt/ auth mount is ABSENT (locked decision (e) cutover proof)
+# Check 13 — jwt/ auth mount is ABSENT
 #
-# The retired IVIA jwt auth backend (and its uc2-jwt / uc3-jwt roles) MUST be
-# gone: UC2/UC3 now present the OAuth JWT directly via X-Vault-Token against the
-# oauth-resource-server profile. A lingering jwt/ mount means the cutover is
-# incomplete and a dead auth path survives — FAIL LOUD.
+# UC2/UC3 present the IVIA-issued OAuth access token directly via X-Vault-Token
+# against the oauth-resource-server profile — there is no Vault auth method in
+# that path at all. A jwt/ mount would be a second, unenforced way in. FAIL LOUD.
 #-------------------------------------------------------------------------------
 auth_list_json=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
     sh -c "${VAULT_EXEC} vault auth list -format=json" 2>/dev/null || echo "{}")
 if echo "${auth_list_json}" | jq -e 'has("jwt/")' >/dev/null 2>&1; then
-    print_fail "jwt/ auth mount ABSENT (decision (e) cutover)" \
-        "The retired IVIA jwt/ auth backend is STILL mounted — the native cutover (locked decision (e)) is incomplete. UC2/UC3 must present the OAuth JWT via X-Vault-Token, not vault write auth/jwt/login. Disable it: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault auth disable jwt. Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault auth list"
+    print_fail "jwt/ auth mount ABSENT" \
+        "A jwt/ auth backend is mounted — it must not be. UC2/UC3 present the OAuth access token via X-Vault-Token, not vault write auth/jwt/login. Disable it: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault auth disable jwt. Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault auth list"
 else
-    print_pass "jwt/ auth mount is ABSENT — retired IVIA jwt backend removed (decision (e) cutover proof)"
+    print_pass "jwt/ auth mount is ABSENT — the OAuth access token IS the Vault token; no auth method in the path"
+fi
+
+
+#-------------------------------------------------------------------------------
+# Check 14 — issuer coherence between Vault and IVIA
+#
+# Two independent values decide whether a UC2/UC3 token is accepted, and until
+# now nothing compared them:
+#
+#   Vault's sys/config/oauth-resource-server/ivia issuer_id — what Vault
+#   validates the token's iss claim AGAINST. Tier 2 writes it, from .acme-state.
+#
+#   iviaop's advertised OIDC issuer — what iviaop STAMPS INTO the token. Tier 3's
+#   iviaop_clients_patch writes it, also from .acme-state, but on a later apply.
+#
+# Both are derived from the same file, so they agree on a deploy that ran start to
+# finish. They diverge whenever the TLS host names move and the run stops at tier
+# 2 — an ALB IP change or a suffix fallback — because tier 2 moves Vault's end and
+# tier 3 has not yet moved IVIA's. Every existing gate still passes, because each
+# one reads a single side: the tier-2 exit contract compares Vault's value with
+# .acme-state, and check 6 above only asks whether IVIA's is non-empty.
+#
+# The placeholder case is NOT a failure. Tier 2 deliberately ships iviaop with
+# https://issuer-patched-at-root.invalid (RFC 6761 reserved TLD) and tier 3 flips
+# it; warning about that on a healthy tier-2 run is the exact false alarm that has
+# sent this workshop down wrong debugging paths before. So a placeholder reports
+# what it is and passes; only two REAL issuers that disagree fail.
+#-------------------------------------------------------------------------------
+vault_issuer_id=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
+    sh -c "${VAULT_EXEC} vault read -format=json sys/config/oauth-resource-server/ivia" 2>/dev/null \
+    | jq -r '.data.issuer_id // empty' 2>/dev/null || echo "")
+if [ -z "${vault_issuer_id}" ] || [ -z "${ivia_issuer}" ]; then
+    print_fail "Issuer coherence (Vault issuer_id vs iviaop advertised issuer)" \
+        "Could not read both issuers, so they were NOT compared (Vault issuer_id='${vault_issuer_id:-<unreadable>}', iviaop issuer='${ivia_issuer:-<unreadable>}'). A comparison that cannot run is not a pass. Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault read sys/config/oauth-resource-server/ivia"
+elif echo "${ivia_issuer}" | grep -q '\.invalid'; then
+    print_pass "Issuer coherence: not yet applicable — iviaop still advertises the tier-2 placeholder (${ivia_issuer}); tier 3 flips it to ${vault_issuer_id}"
+elif [ "${vault_issuer_id}" = "${ivia_issuer}" ]; then
+    print_pass "Issuer coherence: Vault validates against the same issuer iviaop stamps (${vault_issuer_id})"
+else
+    print_fail "Issuer coherence (Vault issuer_id vs iviaop advertised issuer)" \
+        "Vault validates the token iss claim against '${vault_issuer_id}' but iviaop stamps '${ivia_issuer}' into the tokens it mints. Both come from infrastructure/.acme-state, so this is a tier-3 apply that has not caught up with a tier-2 host change (ALB IP drift or a TLS suffix fallback). Re-apply tier 3: bash infrastructure/scripts/deploy-workshop.sh --tier 3"
 fi
 
 # Summary is printed automatically by the common-checks.sh EXIT trap

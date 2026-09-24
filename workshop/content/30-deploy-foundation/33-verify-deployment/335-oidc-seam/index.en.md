@@ -6,11 +6,10 @@ weight: 335
 The OIDC seam is where an IVIA-issued JWT becomes a Vault-vended dynamic credential. `deploy-workshop.sh` already wired Vault's **OAuth resource server** profile (`ivia`) to trust IVIA — confirm the wiring is correct before running use cases.
 
 :::alert{header="There is no jwt auth backend — and that is the point" type="info"}
-Vault Enterprise consumes the IVIA-issued OAuth JWT **directly**: the token is presented in the
-`X-Vault-Token` header and validated against the OAuth resource server profile. Earlier
-iterations of this workshop used a hand-rolled `jwt` auth backend with a `POST auth/jwt/login`
-round-trip; that backend has been **removed**. If you see no `jwt/` row in Step 1, the deploy is
-correct — its absence is asserted by `test-vault-verify.sh`.
+Vault Enterprise consumes the IVIA-issued OAuth access token **directly**: the token is presented
+in the `X-Vault-Token` header and validated against the OAuth resource server profile. There is no
+login round-trip and no second Vault token in the path. If you see no `jwt/` row in Step 1, the
+deploy is correct — its absence is asserted by `test-vault-verify.sh`.
 :::
 
 ## The OIDC Seam at Runtime
@@ -124,7 +123,7 @@ kubectl exec -n vault vault-0 -- \
   sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read sys/config/oauth-resource-server/ivia" | grep -E 'issuer_id|enabled|audiences'
 ```
 
-Expected — `enabled` is `true`; `issuer_id` matches the `iss` claim IVIA stamps on its tokens (the public WRP host = the nip.io FQDN from `infrastructure/.acme-state`); `audiences` lists the registered agent actors:
+Expected — `enabled` is `true`; `issuer_id` matches the `iss` claim IVIA stamps on its tokens (the public WRP host = the workshop FQDN from `infrastructure/.acme-state`); `audiences` lists the registered agent actors:
 
 ```
 audiences    [uc3-actor agent-uc2]

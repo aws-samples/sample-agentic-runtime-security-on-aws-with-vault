@@ -1,0 +1,250 @@
+<title>Agentic Runtime Security on AWS</title>
+<style>
+/* Fonts are inlined, not fetched. A network request at render time is a
+   fidelity risk the flyer cannot take: headless Chrome snapshots the page
+   before a slow stylesheet lands and silently falls back to a system face, and
+   a printed flyer has no second chance. Both are variable fonts, so one file
+   per family covers every weight used here. */
+@font-face{font-family:'Inter';font-style:normal;font-weight:100 900;font-display:block;
+  src:url(data:font/woff2;base64,__FONT_INTER__) format('woff2')}
+@font-face{font-family:'JetBrains Mono';font-style:normal;font-weight:100 800;font-display:block;
+  src:url(data:font/woff2;base64,__FONT_MONO__) format('woff2')}
+:root{
+  --ground:#0d1117; --panel:#161b22; --panel-2:#1c2330; --line:#30363d;
+  --ink:#e6edf3; --ink-2:#c9d1d9; --mute:#8b949e;
+  --vault:#a855f7; --agent:#2dd4bf; --identity:#60a5fa; --data:#fdba74; --ok:#4ade80;
+  --g1:#9B72F2; --g2:#E87CA8; --g3:#F2A96B;
+  --sans:'Inter','Helvetica Neue',Arial,sans-serif;
+  --mono:'JetBrains Mono','Fira Code',Consolas,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);
+     -webkit-font-smoothing:antialiased;line-height:1.5}
+.sheet{max-width:860px;margin:0 auto;padding-block:32px;padding-left:28px;padding-right:28px;
+       display:flex;flex-direction:column;gap:22px}
+
+/* ── masthead: transparent reversed marks straight on the dark ground ── */
+.mast{display:flex;flex-wrap:wrap;gap:16px;align-items:center;justify-content:space-between}
+.marks{display:flex;align-items:center;gap:20px}
+.marks img{display:block;max-width:100%}
+.marks .aws{height:29px}
+.marks .hcp{height:31px}
+.marks .div{width:1px;height:26px;background:var(--line)}
+.meta{display:flex;gap:8px;flex-wrap:wrap}
+.chip{font-family:var(--mono);font-size:11px;font-weight:500;letter-spacing:.08em;
+      text-transform:uppercase;padding:6px 11px;border-radius:999px;
+      border:1px solid var(--line);color:var(--ink-2);background:var(--panel)}
+.chip.lvl{border-color:rgba(242,169,107,.45);color:var(--data);background:rgba(242,169,107,.08)}
+
+/* ── title ── */
+h1{margin:0;font-size:clamp(34px,6vw,52px);font-weight:800;letter-spacing:-.03em;
+   line-height:1.03;text-wrap:balance;
+   background:linear-gradient(96deg,var(--g1) 0%,var(--g2) 52%,var(--g3) 100%);
+   -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:var(--g2)}
+.lede{margin:0;font-size:16.5px;color:var(--ink-2);max-width:66ch}
+.lede b{color:var(--ink);font-weight:600}
+
+/* ── three planes ── */
+.planes{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);
+        border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.plane{background:var(--panel);padding:13px 15px;display:flex;flex-direction:column;gap:3px}
+.plane .k{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase}
+.plane .q{font-size:13.5px;color:var(--ink);font-weight:500}
+.plane.u .k{color:var(--identity)} .plane.w .k{color:var(--agent)} .plane.d .k{color:var(--data)}
+
+/* ── Vault native primitives ── */
+.natives{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+.native{background:var(--panel);border:1px solid var(--line);border-radius:9px;
+        border-top:2px solid var(--vault);padding:11px 13px;display:flex;flex-direction:column;gap:4px}
+.native .k{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;color:var(--vault);font-weight:700}
+.native .q{font-size:12.5px;color:var(--ink-2);line-height:1.45}
+.native em{color:var(--ink);font-style:normal;font-weight:600}
+.native code{font-family:var(--mono);font-size:11px;color:var(--agent);
+             background:rgba(45,212,191,.09);padding:1px 4px;border-radius:3px}
+
+/* ── build sequence ── */
+.sec-h{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+       color:var(--mute);margin:0 0 9px}
+.steps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:7px;counter-reset:uc}
+.steps li{counter-increment:uc;display:grid;grid-template-columns:26px 1fr;gap:12px;
+          align-items:baseline;padding:10px 14px;background:var(--panel);
+          border:1px solid var(--line);border-radius:8px;border-left:3px solid var(--step)}
+.steps li:nth-child(1){--step:var(--agent)}
+.steps li:nth-child(2){--step:var(--identity)}
+.steps li:nth-child(3){--step:var(--vault)}
+.steps li::before{content:counter(uc);font-family:var(--mono);font-weight:700;font-size:15px;
+                  color:var(--step);line-height:1.3}
+.steps .t{font-weight:600;font-size:14.5px;color:var(--ink)}
+.steps .d{font-size:13px;color:var(--mute);display:block;margin-top:1px}
+
+/* ── delivery modes ── */
+.modes{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.mode{background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+      display:flex;flex-direction:column;gap:6px}
+.mode .tag{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;
+           color:var(--ok);display:flex;align-items:center;gap:6px}
+.mode.sp .tag{color:var(--vault)}
+.mode .tag::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.mode h3{margin:0;font-size:15.5px;font-weight:600;color:var(--ink)}
+.mode p{margin:0;font-size:13px;color:var(--ink-2)}
+.mode .need{margin-top:auto;padding-top:7px;font-family:var(--mono);font-size:11px;
+            color:var(--mute);border-top:1px dashed var(--line)}
+
+/* ── footer / QR ── */
+.foot{display:flex;gap:20px;align-items:center;flex-wrap:wrap;
+      background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px}
+.qr{background:#fff;border-radius:8px;padding:9px;flex:0 0 auto;line-height:0}
+.qr svg{width:104px;height:104px;display:block}
+.foot .txt{flex:1 1 240px;display:flex;flex-direction:column;gap:5px}
+.foot .lbl{font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute)}
+.foot .who{font-size:13.5px;color:var(--ink-2)}
+.foot .url{font-family:var(--mono);font-size:11px;color:var(--identity);word-break:break-all}
+.rule{height:1px;background:linear-gradient(90deg,var(--g1),var(--g2) 45%,var(--g3) 80%,transparent)}
+
+@media (max-width:640px){ .planes{grid-template-columns:1fr} .modes{grid-template-columns:1fr} .natives{grid-template-columns:1fr} }
+@media print{
+  /* The flyer is a dark design. Browsers drop background colours when printing
+     unless the page says otherwise, which would leave dark text on white. */
+  html,body{background:var(--ground) !important;
+            -webkit-print-color-adjust:exact;print-color-adjust:exact}
+  /* @page supplies the white trim. Inside it the body paints the dark ground
+     edge to edge, so the sheet's own padding is what separates the ink from
+     that edge — and it has to be the SAME on all four sides or the panel reads
+     as misaligned. It also has to be non-zero: the AWS mark has ink in its very
+     first pixel column, so flush against the edge its "p" gets shaved off. */
+  html,body{height:100%}
+  /* Centre the sheet so spare height splits evenly above and below instead of
+     pooling into a dead band under the footer. */
+  body{display:flex;align-items:center}
+  .sheet{max-width:none;width:100%;padding:10px;gap:3px}
+  /* Screen leads at 1.5 for comfortable on-screen reading. Print is denser by
+     nature and this is a one-pager, so tighten the leading rather than the type
+     size — no body copy drops below 12px, which is 9pt at print scale. */
+  body{line-height:1.38}
+  /* Chrome's print pipeline does not honour background-clip:text — it paints the
+     gradient as a solid box over the glyphs and the title disappears. Print the
+     title in flat ink instead. */
+  h1{font-size:37px;background:none;-webkit-text-fill-color:currentColor;color:var(--g1)}
+  /* Screen caps the lede at a comfortable 66ch; on paper the measure is already
+     fixed by the page box, so the cap only forces extra lines. */
+  .lede{max-width:none;font-size:12px;line-height:1.38}
+  .sec-h{margin-bottom:3px;font-size:10.5px}
+  .plane{padding:6px 11px} .plane .q{font-size:12px}
+  .natives{gap:5px} .native{padding:5px 10px;gap:2px} .native .q{font-size:12px;line-height:1.35}
+  .steps{gap:3px} .steps li{padding:4px 11px} .steps .t{font-size:12.5px} .steps .d{font-size:12px}
+  .modes{gap:8px} .mode{padding:7px 12px;gap:3px} .mode h3{font-size:13.5px}
+  .mode p{font-size:12px} .mode .need{padding-top:5px;font-size:11px}
+  .foot{padding:7px 13px;gap:14px} .qr{padding:6px} .qr svg{width:96px;height:96px}
+  .foot .who{font-size:12.5px} .foot .url{font-size:11px}
+  /* Nothing may split across a page: this is a one-pager. */
+  .planes,.natives,.modes,.foot,.steps li,.native,.mode{break-inside:avoid;page-break-inside:avoid}
+}
+@page{ size:Letter portrait; margin:16mm; }
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+
+<div class="sheet">
+
+  <header class="mast">
+    <div class="marks">
+      <img class="aws" src="data:image/png;base64,__AWS_LOGO__" alt="Amazon Web Services">
+      <span class="div"></span>
+      <img class="hcp" src="data:image/png;base64,__HASHICORP_LOGO__" alt="HashiCorp">
+    </div>
+    <div class="meta">
+      <span class="chip lvl">Level 300 · Advanced</span>
+      <span class="chip">~3 hours</span>
+    </div>
+  </header>
+
+  <h1>Agentic Runtime Security on AWS</h1>
+
+  <p class="lede">AI agents broke the assumptions security tooling has relied on for two decades.
+  An agent is not a user, and not a workload in the classic sense — it acts on its own behalf one
+  request and on a person's behalf the next. In this workshop you <b>deploy a working implementation</b>
+  of five control objectives for agentic systems on EKS, using IBM Verify Identity Access and
+  <b>HashiCorp Vault Enterprise 2.0.3 and its native AI agent support</b>: every agent has a
+  verifiable identity, no standing privileges, actions are tied to user intent, enforcement happens
+  at the point of use, and audit evidence correlates across all three trust planes.</p>
+
+  <div class="rule"></div>
+
+  <section>
+    <p class="sec-h">Vault's native AI agent support — released, and configured by you here</p>
+    <div class="natives">
+      <div class="native">
+        <span class="k">Agent Registry</span>
+        <span class="q">Each agent is a first-class identity, distinct from human users and
+        from traditional non-human identities.</span>
+      </div>
+      <div class="native">
+        <span class="k">Agent ceiling policies</span>
+        <span class="q">The maximum an agent may <em>ever</em> hold. A ceiling restricts and never
+        grants — effective permission is the human's baseline &cap; the agent's ceiling.</span>
+      </div>
+      <div class="native">
+        <span class="k">OAuth resource server</span>
+        <span class="q">The issued OAuth token authorizes Vault directly. No login round-trip, no
+        intermediate Vault token, no auth method in that path at all.</span>
+      </div>
+      <div class="native">
+        <span class="k">Per-request RAR</span>
+        <span class="q">Authorization details of <code>type: vault:path_access</code> narrow a token
+        to the exact path and capability of a single request. Vault is the decision point.</span>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <p class="sec-h">The agentic threat model spans three planes at once</p>
+    <div class="planes">
+      <div class="plane u"><span class="k">User identity</span><span class="q">Who is asking?</span></div>
+      <div class="plane w"><span class="k">Workload identity</span><span class="q">Which agent process is acting?</span></div>
+      <div class="plane d"><span class="k">Data plane</span><span class="q">What credential does it present?</span></div>
+    </div>
+  </section>
+
+  <section>
+    <p class="sec-h">What you build — three agents, each layering on the last</p>
+    <ol class="steps">
+      <li><span><span class="t">Non-personalized read-only agent</span>
+        <span class="d">Workload identity and just-in-time database credentials. No standing grants.</span></span></li>
+      <li><span><span class="t">OAuth personalized read-only agent</span>
+        <span class="d">User intent carried into the request via Authorization Code + PKCE.</span></span></li>
+      <li><span><span class="t">Privileged action with CIBA</span>
+        <span class="d">Out-of-band approval for a real money movement, then one query correlating
+        identity, workload and database evidence for that single action.</span></span></li>
+    </ol>
+  </section>
+
+  <section>
+    <p class="sec-h">Two ways to run it</p>
+    <div class="modes">
+      <div class="mode">
+        <span class="tag">At an event</span>
+        <h3>Pre-provisioned AWS accounts</h3>
+        <p>Each attendee gets an account with the cluster, database and container images already
+        built. You start at the identity and secrets layer and spend the time on the agents.</p>
+        <span class="need">Bring: a laptop. Nothing to set up.</span>
+      </div>
+      <div class="mode sp">
+        <span class="tag">Self-paced</span>
+        <h3>Your own AWS account</h3>
+        <p>The same content, start to finish. You run the foundation build yourself first, then
+        follow the identical path through all three agents.</p>
+        <span class="need">Requires: your own AWS account.</span>
+      </div>
+    </div>
+  </section>
+
+  <footer class="foot">
+    <div class="qr">__QR__</div>
+    <div class="txt">
+      <span class="lbl">Start the workshop</span>
+      <span class="who">Built for security architects, platform and identity engineers putting
+      AI agents into production.</span>
+      <span class="url">__WORKSHOP_URL_DISPLAY__</span>
+    </div>
+  </footer>
+
+</div>

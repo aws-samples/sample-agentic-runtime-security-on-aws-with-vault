@@ -11,7 +11,7 @@ Follow **[Deploy — Self-paced](../31-deploy-self-paced/)** — you bootstrap a
 
 #### Step 1 — Clone the repository
 
-Clone the workshop repo at the pinned event tag from the public mirror:
+Clone the workshop repo:
 
 ```bash
 git clone https://github.com/aws-samples/sample-agentic-runtime-security-on-aws-with-vault.git && cd sample-agentic-runtime-security-on-aws-with-vault
@@ -65,6 +65,8 @@ Either way, the values are written only into the gitignored `terraform.tfvars` �
 
 Tier 2 also needs a **Vault Enterprise license** — Vault runs in Enterprise mode for the native Agent Registry. Unlike the two secrets above it is read from a **file**, not a prompt, so place it before you run the deploy: save the `.hclic` your organizer provides to `~/Downloads/vault-ent.hclic`, or point `VAULT_ENTERPRISE_LICENSE_PATH` at it. The preflight fails fast (and tells you the path) if the file is missing.
 
+On **AWS CloudShell** there is no `cp` source to copy from — upload the file instead: **Actions -> Upload file**, targeting `~/Downloads` (run `mkdir -p ~/Downloads` first). See [Running from AWS CloudShell](../../20-prerequisites/23-pre-flight-checks/#step-1-choose-where-you-will-run-the-workshop).
+
 ```bash
 # organizer-provided Vault Enterprise license — save to the default path...
 cp /path/to/vault-ent.hclic ~/Downloads/vault-ent.hclic
@@ -96,16 +98,66 @@ When both tiers report success, continue with **[Configure kubectl](../32-config
 
 ---
 
-## If Tier 2 fails on the Let's Encrypt cert (`Step 7: Certificate Ready=true`)
+:::::expand{header="Troubleshooting — if Tier 2 fails on the Let's Encrypt certificate"}
 
-On the Tier 2 deploy you may see this in the Step 7 summary:
+Step 7 obtains the browser-trusted Let's Encrypt certificate. It has two distinct failure modes, and the Fix line tells you which one you hit.
+
+### Case A — Let's Encrypt refused the magic-DNS domain (rate limited)
+
+```
+✗ Step 7: Certificate Ready=true
+   Fix: Let's Encrypt refused BOTH nip.io and sslip.io as rate limited — both magic-DNS budgets are exhausted.
+```
+
+**What happened:** the workshop's TLS host names are built on `nip.io`, a free magic-DNS service shared by the whole internet. Let's Encrypt budgets certificates per registered domain, so everyone using `nip.io` draws on the same bucket. **Waiting a few minutes and re-running will not help** — the budget refills over days, not minutes.
+
+The deploy already tried the fallback for you: `sslip.io` is a separate registered domain with its own separate budget. This message means both were exhausted, which is rare.
+
+Point the deploy at a different magic-DNS provider and re-run. The suffix you
+choose must be a **dashed-IPv4 magic-DNS** service — one that resolves
+`<anything>.<ip-with-dashes>.<suffix>` to that IP address, the same convention
+`nip.io` and `sslip.io` use — because the deploy builds its host names as
+`wrp.<deploy-id>.<alb-ip-dashed>.<suffix>`. A domain you own does not work here
+unless it provides that wildcard resolution.
+
+```bash
+TLS_DNS_SUFFIX=<dashed-ipv4-magic-dns-suffix> bash infrastructure/scripts/deploy-workshop.sh --tier 2 --skip-vault-init
+```
+
+::::alert{header="This warning is not a failure" type="info"}
+If you instead see `⚠ Step 7: Let's Encrypt refused nip.io as rate limited ...; retrying on sslip.io` and the deploy continues, the fallback worked. Your TLS host names are on `sslip.io` rather than `nip.io`, and the FQDN to expect below is the `sslip.io` one.
+
+**One thing does change.** The host names live in `infrastructure/.acme-state`, and **Tier 3 builds the banking-UI Ingress from that file**. When the suffix moves during a `--tier 2` run, the deploy tells you so:
+
+```
+⚠ Step 7: the TLS suffix changed, but this run is --tier 2. Tier 3 builds the
+  banking-UI Ingress host from .acme-state, so banking stays on the OLD host
+  until you re-apply it: bash infrastructure/scripts/deploy-workshop.sh --tier 3
+```
+
+Re-run Tier 3 when you see that line. Until you do, banking is unreachable on both names — a 404 on the new one, a certificate-name mismatch on the old.
+::::
+
+::::alert{header="If the suffix you pick is also the fallback" type="info"}
+`TLS_DNS_SUFFIX=sslip.io` is a sensible choice here — it is the suffix the fallback message just named. Because the default `TLS_DNS_SUFFIX_FALLBACK` is *also* `sslip.io`, the deploy runs on the suffix you asked for with the retry switched off, rather than refusing to start. If Let's Encrypt then refuses that suffix too, you get:
+
+```
+✗ Step 7: Certificate Ready=true
+   Fix: Let's Encrypt refused sslip.io as rate limited, and no fallback is
+   available because TLS_DNS_SUFFIX_FALLBACK is the same suffix.
+```
+
+Pick a third dashed-IPv4 magic-DNS suffix, or point `TLS_DNS_SUFFIX_FALLBACK` at a different one.
+::::
+
+### Case B — issuance ran past the readiness gate (timing)
 
 ```
 ✗ Step 7: Certificate Ready=true
    Fix: cert-manager did not mark workshop-le-tls Ready within 900s
 ```
 
-**What happened:** Let's Encrypt issuance for the fresh `nip.io` host occasionally takes longer than Step 7's 15-minute readiness gate. When the gate trips, the deploy records the failure and continues — but the "re-apply IVIA on the trusted host" sub-step is skipped, so Vault's `jwt` auth stays bound to the internal load-balancer hostname instead of the public `nip.io` issuer. Use Case 2 and Use Case 3 token validation depend on that issuer, so correct this before Tier 3.
+**What happened:** issuance for the fresh host occasionally takes longer than Step 7's 15-minute readiness gate. When the gate trips, the deploy records the failure and continues — but the "re-apply IVIA on the trusted host" sub-step is skipped, so Vault's OAuth resource server profile (`ivia`) keeps an `issuer_id` pointing at the internal load-balancer hostname instead of the public magic-DNS issuer. Use Case 2 and Use Case 3 token validation depend on that issuer, so correct this before Tier 3.
 
 **1. Confirm the certificate finished issuing** (wait a minute or two after the gate trips), until `READY` shows `True`:
 
@@ -123,16 +175,17 @@ bash infrastructure/scripts/deploy-workshop.sh --tier 2 --skip-vault-init
 `--skip-acme` returns before the IVIA re-apply step, so it will **not** correct the issuer. Re-run with `--skip-vault-init` only.
 ::::
 
-**3. Validate the fix** — Vault's OAuth resource server `issuer_id` must be the `nip.io` host, not an `*.elb.amazonaws.com` load-balancer hostname:
+**3. Validate the fix** — Vault's OAuth resource server `issuer_id` must be the magic-DNS host, not an `*.elb.amazonaws.com` load-balancer hostname:
 
 ```bash
 export VAULT_ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json) && kubectl exec -n vault vault-0 -- sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read sys/config/oauth-resource-server/ivia" | grep issuer_id
 ```
 
-Expected — the `nip.io` FQDN (resolve the exact value with `grep NIP_FQDN_WRP infrastructure/.acme-state`):
+Expected — the FQDN the deploy actually used. Resolve the exact value with `grep NIP_FQDN_WRP infrastructure/.acme-state`; the suffix is `nip.io` normally, or `sslip.io` if the fallback above kicked in:
 
 ```
 issuer_id    https://wrp.<deploy-id>.<alb-ip-dashed>.nip.io
 ```
 
 If it still shows an `*.elb.amazonaws.com` host, the IVIA re-apply did not run — confirm the certificate is `Ready=True`, that you did **not** pass `--skip-acme`, then re-run the Tier 2 command above.
+:::::

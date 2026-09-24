@@ -5,8 +5,11 @@ Exposes three endpoints:
   GET  /health  — liveness/readiness probe (includes Vault token validity)
   GET  /        — welcome message describing the agent's role
 
-Credential metadata (Vault lease_id, ttl) is returned in /query responses so
-attendees can correlate agent actions back to the Vault audit log (OBJ-5).
+Credential metadata is returned in /query responses: `credential_metadata.leases`
+carries the lease_id and TTL of every JIT Vault credential issued while serving
+the request, spelled exactly as Vault spells it, so attendees can find the same
+lease in the Vault audit log (OBJ-5). A question the model answers from the
+Knowledge Base alone issues no database credential, and the list is then empty.
 """
 
 import logging
@@ -19,10 +22,10 @@ from typing import Any
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from strands import Agent
 
-from .agent import build_uc1_agent, _vault
+from .agent import build_uc1_agent, _vault, _ISSUED_CREDENTIALS
 
 # ---------------------------------------------------------------------------
 # Structured JSON logging — matches Vault audit log timestamp format.
@@ -70,9 +73,23 @@ class QueryRequest(BaseModel):
     query: str
 
 
+class VaultLease(BaseModel):
+    """One JIT credential Vault issued while serving this request.
+
+    `lease_id` is Vault's own spelling, byte for byte, so it matches the
+    `database/creds/...` lease recorded in the Vault audit log exactly — that
+    identity is what makes the OBJ-5 correlation exercise work.
+    """
+
+    vault_path: str
+    lease_id: str
+    ttl_seconds: int
+
+
 class CredentialMetadata(BaseModel):
     vault_authenticated: bool
     vault_role: str
+    leases: list[VaultLease] = Field(default_factory=list)
 
 
 class QueryResponse(BaseModel):
@@ -158,14 +175,21 @@ async def query(request: QueryRequest) -> QueryResponse:
         f'"query_received" query_preview="{request.query[:80]}"',
     )
 
+    # Bind a fresh per-request sink BEFORE invoking the agent: query_database
+    # appends the lease of every JIT credential it issues. Reset in the finally
+    # so the binding never outlives the request on a reused uvicorn task.
+    ctx_token = _ISSUED_CREDENTIALS.set([])
     try:
         result = _agent(request.query)
         # Strip any <thinking>...</thinking> chain-of-thought the model emits so it
         # never leaks into the answer (mirrors uc3-agent + banking-app agent).
         answer = re.sub(r'<thinking>.*?</thinking>\s*', '', str(result), flags=re.DOTALL)
+        leases = [VaultLease(**issued) for issued in (_ISSUED_CREDENTIALS.get() or [])]
     except Exception as exc:
         logger.error(f'"query_error" error="{exc}"')
         raise HTTPException(status_code=500, detail=f"Agent error: {exc}") from exc
+    finally:
+        _ISSUED_CREDENTIALS.reset(ctx_token)
 
     # Extract KB source passages from tool results if available.
     sources: list[str] = []
@@ -174,7 +198,7 @@ async def query(request: QueryRequest) -> QueryResponse:
             if isinstance(tr, list):
                 sources.extend([str(s) for s in tr])
 
-    logger.info(f'"query_complete" source_count={len(sources)}')
+    logger.info(f'"query_complete" source_count={len(sources)} lease_count={len(leases)}')
 
     return QueryResponse(
         answer=answer,
@@ -182,6 +206,7 @@ async def query(request: QueryRequest) -> QueryResponse:
         credential_metadata=CredentialMetadata(
             vault_authenticated=_vault.is_authenticated(),
             vault_role=vault_role,
+            leases=leases,
         ),
     )
 

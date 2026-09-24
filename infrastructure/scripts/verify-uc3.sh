@@ -17,8 +17,8 @@
 #   2.  ServiceAccount uc3-privileged-actor-sa exists in banking-app namespace
 #   3.  Vault k8s auth role uc3 bound to uc3-privileged-actor-sa
 #   4.  UC3 native OBO surface: uc3-actor registration + uc3-agent-ceiling policy +
-#       OAuth alias binding (profile config_id == accessor .id). The retired uc3-jwt
-#       jwt-auth role is GONE (decisions (a)/(e)).
+#       OAuth alias binding (profile config_id == accessor .id). No jwt auth
+#       method is involved — the delegated token authorizes the request itself.
 #   5.  Vault DB role uc3-refund-writer generates credentials (JIT)
 #   6.  banking.refunds table exists in RDS
 #   7.  JIT credential fetch: vault read database/creds/uc3-refund-writer
@@ -34,7 +34,7 @@
 #       check is SKIPPED with a print_warn — never a fake pass.
 #   13. UC3 agent /chat multi-turn session — same UC3_VERIFY_CHAT_TOKEN gate.
 #
-# Bypass mode (--bypass) — the native enforcement done-gate (jwt/ backend GONE).
+# Bypass mode (--bypass) — the native enforcement done-gate.
 # SELF-MINTING: the suite headlessly mints a REAL IVIA-issued delegated token via
 # the production path (a REAL CIBA approval, then an RFC 8693 token-exchange) for a
 # workshop persona,
@@ -271,11 +271,11 @@ ivia_client_secret() {
         *) return 1 ;;
     esac
     kubectl get secret -n "${BANKING_NAMESPACE}" "${secret_name}" \
-        -o "jsonpath={.data.${key}}" 2>/dev/null | base64 -d 2>/dev/null
+        -o "jsonpath={.data.${key}}" 2>/dev/null | base64 --decode 2>/dev/null
 }
 
 
-# --- Native-model helpers (Phase 9 cutover — the jwt/ auth backend is GONE) ---
+# --- Native-model helpers (delegated token presented directly via X-Vault-Token) ---
 #
 # UC3 now presents the IVIA-issued delegated JWT DIRECTLY as the Vault token
 # (X-Vault-Token / VAULT_TOKEN=<jwt>) against the oauth-resource-server profile.
@@ -294,7 +294,7 @@ decode_jwt_claim() {
         2) payload="${payload}==" ;;
         3) payload="${payload}=" ;;
     esac
-    printf '%s' "$payload" | tr '_-' '/+' | base64 -d 2>/dev/null \
+    printf '%s' "$payload" | tr '_-' '/+' | base64 --decode 2>/dev/null \
         | jq -r "$filter" 2>/dev/null || echo ""
 }
 
@@ -374,14 +374,19 @@ assert_native_allow() {
     fi
 }
 
-# _mint_uc3_tokens <user> — obtain a REAL IVIA-issued delegated OBO token (and the
-# subject token underneath it) for <user> by driving an ACTUAL human approval.
-# Populates two globals:
-#   MINTED_SUBJECT_TOKEN   — the genuine CIBA access token: sub=<user>, issued to
-#                            the CIBA client, NO act claim (a first-party token).
+# _mint_uc3_tokens <user> — obtain a REAL IVIA-issued delegated OBO token for
+# <user> by driving an ACTUAL human approval.
+# Populates one global:
 #   MINTED_DELEGATED_TOKEN — sub=<user>, act.sub=uc3-actor, a native jti, and a
 #                            vault:path_access RAR = database/creds/uc3-refund-writer.
 # Returns 0 on success, 1 on any failure (so a check HARD-FAILs, never silent-passes).
+#
+# The CIBA subject token underneath it is NOT surfaced as a global. It used to be,
+# back when a check modelled the wrong-agent case on it; since issue #29 made it a
+# first-party token carrying no act claim it cannot serve that purpose, and Check 18
+# mints its own UC2 login token instead (see the comment at the DELEG_TOKEN
+# assignment). The token exchange still consumes it — inside the mint helper below,
+# where it is a local of the embedded python, not a shell global.
 #
 # WHY THIS IS NOT A PKCE LOGIN ANY MORE (issue #29): this function used to mint the
 # subject token from a plain authorization_code login and hand it to the token
@@ -398,7 +403,7 @@ assert_native_allow() {
 # the tokens are presented to Vault separately via _present_native_token.
 _mint_uc3_tokens() {
     local user="$1"
-    MINTED_SUBJECT_TOKEN=""; MINTED_DELEGATED_TOKEN=""; MINT_ERR=""
+    MINTED_DELEGATED_TOKEN=""; MINT_ERR=""
 
     local acme_state="${SCRIPT_DIR}/../.acme-state"
     local base_layer="${SCRIPT_DIR}/../modules/verify_access/base_layer/base_layer.yaml.tftpl"
@@ -499,11 +504,13 @@ r = c.post(token_url, auth=(actor_client, actor_secret),
                  "requested_token_type": "urn:ietf:params:oauth:token-type:access_token"})
 if r.status_code != 200:
     print("MINT_ERR token-exchange %d %s" % (r.status_code, r.text[:200])); sys.exit(1)
-print("SUBJECT=" + subject)
+# The subject token is deliberately NOT printed. Nothing reads it any more, and
+# the failure path below echoes the first 200 characters of this output into
+# MINT_ERR — which, with the subject token printed first, put a live IVIA access
+# token into the log of every run whose exchange failed.
 print("DELEGATED=" + r.json()["access_token"])
 PYEOF
 )
-    MINTED_SUBJECT_TOKEN=$(printf '%s\n' "${mint_out}" | sed -n 's/^SUBJECT=//p')
     MINTED_DELEGATED_TOKEN=$(printf '%s\n' "${mint_out}" | sed -n 's/^DELEGATED=//p')
     if [ -z "${MINTED_DELEGATED_TOKEN}" ]; then
         MINT_ERR=$(printf '%s\n' "${mint_out}" | grep 'MINT_ERR' | head -1)
@@ -588,7 +595,7 @@ PYEOF
 
 if [ "${BYPASS_MODE}" = true ]; then
     #===========================================================================
-    # Native enforcement suite (Phase 9 — the jwt/ backend is GONE, decision (e)).
+    # Native enforcement suite (delegated token presented directly via X-Vault-Token).
     #
     # UC3 presents the IVIA-issued delegated JWT DIRECTLY to Vault (X-Vault-Token)
     # against the oauth-resource-server profile. The suite SELF-MINTS a real
@@ -832,7 +839,7 @@ print(jwt.encode(payload, 'forged-secret', algorithm='HS256'))
                 "Got sub='${w_sub}', jti='${w_jti:-<absent>}', RAR path(s)='${w_rar:-<none>}'. ONLY act.sub may differ; jti presence and a matching RAR path must hold so the deny hinges on the actor alone."
         else
             assert_native_deny "Bypass Check 19 (wrong actor, act.sub=${w_act:-<absent>})" "${UC3_WRONG_ACTOR_TOKEN}" \
-                "Bypass Check 19 PASSED: a delegated token varying act.sub to a wrong actor (act.sub=${w_act:-<absent>}, sub=${w_sub}) was DENIED — no actor alias resolves, the OBO agent-ceiling cannot attach; the native actor check is re-homed from the retired jwt bound_claims (decision (e))" \
+                "Bypass Check 19 PASSED: a delegated token varying act.sub to a wrong actor (act.sub=${w_act:-<absent>}, sub=${w_sub}) was DENIED — no actor alias resolves, the OBO agent-ceiling cannot attach; the actor claim is what Vault resolves the agent identity from" \
                 "A wrong-actor token that is ALLOWED means the native act.sub actor binding regressed. Confirm only the uc3-actor actor alias (external_id=uc3-actor) is bound; a wrong act.sub must resolve no entity."
         fi
     fi
@@ -1365,8 +1372,8 @@ fi
 # Check 4 — UC3 native OBO surface: uc3-actor registration + agent ceiling +
 #           OAuth alias binding (profile config_id == the synthetic accessor's .id)
 #
-# Phase 9 cutover (locked decisions (a)/(e)): the uc3-jwt jwt-auth role is RETIRED
-# (the jwt/ backend is GONE — asserted in test-vault-verify.sh). UC3 is OBO: the
+# The delegated token is presented directly via X-Vault-Token; no jwt auth role
+# (no jwt/ mount exists — asserted in test-vault-verify.sh). UC3 is OBO: the
 # human sub=jaime + the agent act.sub=uc3-actor resolve via the oauth-resource-server
 # profile. Assert the native surfaces + the alias binding.
 #-------------------------------------------------------------------------------

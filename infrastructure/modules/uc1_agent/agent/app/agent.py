@@ -15,6 +15,7 @@ SA JWT rotation projected by the Kubernetes token controller (OBJ-1).
 import json
 import logging
 import os
+from contextvars import ContextVar
 from typing import Any
 
 import psycopg2
@@ -25,6 +26,39 @@ from strands.models import BedrockModel
 from .vault_client import VaultClient, _build_default_client
 
 logger = logging.getLogger(__name__)
+
+# Request-scoped record of the Vault credentials issued while serving one
+# /query. A ContextVar — NOT a module global — so concurrent requests never read
+# each other's leases; app.py binds a fresh list per request and resets it in a
+# finally. Mirrors uc3-agent's _AUTHENTICATED_SUB ContextVar.
+#
+# The default None means "no request scope bound". The tools are also reachable
+# outside an HTTP request — Use Case 1's "Verify Credentials and Enforcement"
+# page drives _vault directly via kubectl exec — and recording must no-op there
+# rather than raise.
+_ISSUED_CREDENTIALS: ContextVar[list[dict] | None] = ContextVar(
+    "uc1_issued_credentials", default=None
+)
+
+
+def _record_issuance(vault_path: str, creds: dict) -> None:
+    """Record one Vault credential issuance for the in-flight request.
+
+    Captures only audit-correlatable metadata: the lease id exactly as Vault
+    spelled it, and its TTL. NEVER the username or password — this record is
+    serialized into the /query response body.
+    """
+    sink = _ISSUED_CREDENTIALS.get()
+    if sink is None:
+        return
+    sink.append(
+        {
+            "vault_path": vault_path,
+            "lease_id": creds["lease_id"],
+            "ttl_seconds": creds["lease_duration"],
+        }
+    )
+
 
 # Module-level VaultClient: authenticated once at startup.
 # login() is called in build_uc1_agent() which is invoked during FastAPI startup.
@@ -45,6 +79,7 @@ def query_database(query: str) -> list[dict]:
         List of row dicts (column-name → value). Empty list on no results.
     """
     creds = _vault.get_db_credentials(role_name="uc1-readonly")
+    _record_issuance("database/creds/uc1-readonly", creds)
     db_host = os.getenv("DB_HOST", "")
     db_port = int(os.getenv("DB_PORT", "5432"))
     db_name = os.getenv("DB_NAME", "workshop")
@@ -165,7 +200,9 @@ def build_uc1_agent() -> Agent:
         "Your capabilities: "
         "(1) query_database — run read-only SQL against the workshop Postgres database using Just-In-Time Vault credentials; "
         "(2) retrieve_from_knowledge_base — semantic search against the Bedrock Knowledge Base using ephemeral STS credentials. "
-        "Always cite credential metadata (lease_id, ttl) in your reasoning to demonstrate OBJ-5 audit correlation. "
+        "Never state, invent or restate credential identifiers — lease IDs, TTLs, usernames or passwords — in your "
+        "answer. You are never given them, and an invented one reads as authoritative. The runtime attaches the real "
+        "Vault lease metadata to the response's credential_metadata field, which is what OBJ-5 audit correlation uses. "
         "Never request, store, or disclose user-identifying information — this use case is intentionally non-personalized."
     )
 

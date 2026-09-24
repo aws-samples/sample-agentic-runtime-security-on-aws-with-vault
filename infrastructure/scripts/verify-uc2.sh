@@ -9,8 +9,8 @@
 #   4.  ServiceAccount uc2-mcp-server-sa exists in banking-app namespace
 #   5.  Vault k8s auth role uc2 bound to uc2-mcp-server-sa
 #   6.  UC2 native OBO surface: agent-uc2 registration + uc2-agent-ceiling policy
-#       (the retired uc2-jwt jwt-auth role is GONE — decisions (b)/(e))
-#   6b. REAL UC2 token: jti present AND act.sub=agent-uc2 (OBO cutover gate; the token
+#       (no jwt auth role — the OAuth token authorizes the request itself)
+#   6b. REAL UC2 token: jti present AND act.sub=agent-uc2 (OBO gate; the token
 #       is SELF-MINTED headlessly via the production PKCE login path — UC2_VERIFY_TOKEN
 #       overrides; a mint failure = warn-skip in default mode, HARD FAIL under --gate)
 #   6c. UC2 refresh grant FAILS CLOSED — agent-uc2 withholds the refresh_token grant so
@@ -60,8 +60,8 @@ Usage:
 Modes:
   (default)   Routine deploy verify. Checks 6b/6c/6d SELF-MINT a real agent-uc2 OBO
               token headlessly; they warn-SKIP only if the self-mint is unavailable.
-  --gate      UC2 cutover done-gate. Checks 6b/6c/6d HARD FAIL (not skip) if the
-              self-mint fails, so the OBO cutover (jti + act.sub=agent-uc2 + the
+  --gate      UC2 OBO done-gate. Checks 6b/6c/6d HARD FAIL (not skip) if the
+              self-mint fails, so the OBO path (jti + act.sub=agent-uc2 + the
               refresh-grant fail-closed edge) is provably exercised. This is the
               AUTHORITATIVE UC2 gate the Part B live run must invoke.
 
@@ -139,7 +139,7 @@ decode_jwt_claim() {
         2) payload="${payload}==" ;;
         3) payload="${payload}=" ;;
     esac
-    printf '%s' "$payload" | tr '_-' '/+' | base64 -d 2>/dev/null \
+    printf '%s' "$payload" | tr '_-' '/+' | base64 --decode 2>/dev/null \
         | jq -r "$filter" 2>/dev/null || echo ""
 }
 
@@ -157,7 +157,7 @@ ivia_client_secret() {
         *) return 1 ;;
     esac
     kubectl get secret -n "${BANKING_NAMESPACE}" "${secret_name}" \
-        -o "jsonpath={.data.${key}}" 2>/dev/null | base64 -d 2>/dev/null
+        -o "jsonpath={.data.${key}}" 2>/dev/null | base64 --decode 2>/dev/null
 }
 
 
@@ -335,8 +335,8 @@ fi
 #-------------------------------------------------------------------------------
 # Check 6 — UC2 native OBO surface: agent-uc2 registration + agent ceiling
 #
-# Phase 9 cutover (locked decisions (b)/(e)): the uc2-jwt jwt-auth role is RETIRED
-# (the jwt/ backend is GONE — asserted in test-vault-verify.sh). UC2 is now OBO:
+# No jwt auth role is involved (test-vault-verify.sh asserts no jwt/ mount
+# exists at all). UC2 is OBO:
 # the human `sub` + the agent `act.sub=agent-uc2` resolve via the
 # oauth-resource-server profile. Assert the two native surfaces exist:
 #   (a) the agent-uc2 registration reads back by display-name, and
@@ -364,10 +364,10 @@ else
 fi
 
 #-------------------------------------------------------------------------------
-# Check 6b — REAL UC2 token: jti present AND act.sub=agent-uc2 (OBO cutover gate)
+# Check 6b — REAL UC2 token: jti present AND act.sub=agent-uc2 (OBO gate)
 #
-# UNCONDITIONAL native assertion (no UC2_ENDSTATE / jwt_login branch — the cutover
-# is LOCKED, decision (b)). UC2 is OBO: AGENT_IDENTITY_CLAIM_UC2=act.sub. Decode the
+# UNCONDITIONAL native assertion (no UC2_ENDSTATE / jwt_login branch).
+# UC2 is OBO: AGENT_IDENTITY_CLAIM_UC2=act.sub. Decode the
 # ACTUAL banking OAuth JWT the MCP server forwards to Vault and assert:
 #   - a non-empty `jti` claim (JTI_MANDATORY — a jti-less token 403s at Vault), and
 #   - `act.sub` == agent-uc2 (the OBO actor binding).
@@ -389,7 +389,7 @@ if [ -n "${UC2_VERIFY_TOKEN:-}" ]; then
         print_pass "UC2 real token carries a jti claim (jti=${uc2_jti})"
     else
         print_fail "UC2 real-token jti MISSING" \
-            "The forwarded UC2 OAuth token has NO jti claim — Vault (JTI_MANDATORY) rejects it and UC2 (no fallback) breaks. Fix = Plan 04's UC2 jti emission on the aud=agent-uc2 authcode grant, NEVER a jwt_login fallback. Decode: echo <jwt> | cut -d. -f2 | base64 -d"
+            "The forwarded UC2 OAuth token has NO jti claim — Vault (JTI_MANDATORY) rejects it and UC2 (no fallback) breaks. Fix = Plan 04's UC2 jti emission on the aud=agent-uc2 authcode grant, NEVER a jwt_login fallback. Decode: echo <jwt> | cut -d. -f2 | base64 --decode"
     fi
 
     if [ "${uc2_actsub}" = "agent-uc2" ]; then
