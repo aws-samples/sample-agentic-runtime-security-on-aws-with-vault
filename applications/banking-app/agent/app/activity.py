@@ -52,6 +52,7 @@ import logging
 import re
 import threading
 import time
+from datetime import datetime
 from typing import Any, AsyncIterator
 from urllib.parse import urlsplit
 
@@ -359,11 +360,26 @@ _CREDENTIAL_METADATA_KEYS = (
     "vault_path",
     "lease_id",
     "lease_duration_seconds",
+    "lease_expires_at",
     "lease_revoked",
     "user_sub",
     "vault_policies",
     "vault_identity_policies",
 )
+
+
+def _utc_text(epoch_seconds: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch_seconds))
+
+
+def _iso_epoch(value: Any) -> float | None:
+    """Epoch seconds for an ISO 8601 timestamp the MCP server reported, or None."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value).timestamp()
+    except ValueError:
+        return None
 
 
 def _policy_names(value: Any) -> str | None:
@@ -414,7 +430,10 @@ def report_credential_metadata(tool_name: str, meta: Any, issued: Any = None) ->
     than lease_revoked / issued_db_credentials still works: the credential is
     then not shown and the revoke is narrated as not observed. Likewise the
     auth-path and policy lines appear only when the server reports
-    vault_auth_header and vault_policies / vault_identity_policies.
+    vault_auth_header and vault_policies / vault_identity_policies. When the
+    revoke failed, the credential is still shown, labelled as still live until
+    lease_expires_at (or, from a server that does not report it, until its
+    lease duration runs out).
     """
     turn = current()
     if turn is None or not isinstance(meta, dict) or not meta:
@@ -427,6 +446,15 @@ def report_credential_metadata(tool_name: str, meta: Any, issued: Any = None) ->
     lease_id = reported.get("lease_id")
     ttl = reported.get("lease_duration_seconds")
     revoked = reported.get("lease_revoked")
+    # When the lease ends unless revoked: the MCP server's receipt time plus the
+    # lease duration Vault returned (tools.ts, lease_expires_at).
+    lease_ends = _iso_epoch(reported.get("lease_expires_at"))
+    if lease_ends is not None:
+        still_live = f"still live until {_utc_text(lease_ends)}"
+    elif isinstance(ttl, (int, float)):
+        still_live = f"still live until its lease ends, {ttl}s after it was issued"
+    else:
+        still_live = "still live until its lease ends"
     turn.record_lease(db_role, lease_id, ttl, vault_path)
 
     # Tools can run concurrently, so every line names the tool it belongs to.
@@ -476,7 +504,8 @@ def report_credential_metadata(tool_name: str, meta: Any, issued: Any = None) ->
         if revoked is True:
             state = "revoked before the MCP server replied"
         elif revoked is False:
-            state = "Vault did not confirm its revoke"
+            # Bear, 2026-09-24: show it anyway, and say plainly that it still works.
+            state = f"revoke FAILED — this credential is {still_live}"
         else:
             state = "revoke not observed in this flow"
         turn.credential(
@@ -489,16 +518,17 @@ def report_credential_metadata(tool_name: str, meta: Any, issued: Any = None) ->
             vault_path=vault_path if isinstance(vault_path, str) else None,
             lease_id=lease_id if isinstance(lease_id, str) else None,
             ttl_seconds=ttl if isinstance(ttl, (int, float)) else None,
+            # An expiry only for a credential that may still work; a revoked one has none.
+            expires_at=int(lease_ends * 1000) if revoked is False and lease_ends is not None else None,
         )
 
     if lease_id and lease_id != "unknown":
         if revoked is True:
             turn.narrate(f"The MCP server reports Vault revoked the {tool_name} lease {lease_id} before it replied.")
         elif revoked is False:
-            ttl_text = f" after {ttl}s" if isinstance(ttl, (int, float)) else ""
             turn.narrate(
-                f"The MCP server reports Vault did not confirm revoking the {tool_name} lease {lease_id}; "
-                f"the credential expires on its own{ttl_text}."
+                f"The MCP server reports its revoke of the {tool_name} lease {lease_id} FAILED — "
+                f"the credential is {still_live}."
             )
         else:
             turn.narrate(
@@ -533,7 +563,7 @@ def _at(epoch_seconds: Any) -> str:
     """'at <UTC time>' for an epoch-seconds value, or 'earlier' when there is none."""
     if not isinstance(epoch_seconds, (int, float)):
         return "earlier"
-    return "at " + time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch_seconds))
+    return "at " + _utc_text(epoch_seconds)
 
 
 def _expires_ms(start: Any, ttl: Any) -> int | None:
