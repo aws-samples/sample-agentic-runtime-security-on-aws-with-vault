@@ -22,9 +22,10 @@ WRP ALB and the agent's own /chat):
 
 Subcommands:
   run <wrp> <user> <password> <agent_client> <client_secret> <redirect_uri> <op_url>
-      <merchant> <refund_amount>
+      <merchant> <refund_amount> <charge_amount>
       Enroll a virtual device, drive the real /chat refund turns for <refund_amount>
-      of the <merchant> charge, sign the approval, and report each step as KEY=value
+      of the <merchant> charge, sign the approval, then ask for the whole
+      <charge_amount> (which must be refused), and report each step as KEY=value
       lines. Always deletes its own device.
   approveonly <same arguments as run>
       As run, but stop once the approval resolves, leaving the CIBA grant unredeemed.
@@ -350,13 +351,14 @@ def wait_for_resolution(device, wrp, bearer, transaction_id, timeout=40):
 
 
 def chat(message, session_id, id_token, timeout):
-    """One /chat turn. Returns (status, text).
+    """One /chat turn. Returns (status, text, tools).
 
     text  — the stream's legacy frames only (tool_planning, delta, end, error): the
             same text this returned before the activity stream was added, so Check N2
             reads what it always read. The activity stream also carries
             agent:credential events holding full credential values; they are never
             returned, so they never reach the KEY=value output.
+    tools — "name:status:requestId" for each tool call that finished, nothing else.
     """
     resp = httpx.post(
         "http://127.0.0.1:8080/chat",
@@ -365,8 +367,8 @@ def chat(message, session_id, id_token, timeout):
         timeout=timeout,
     )
     if resp.status_code != 200:
-        return resp.status_code, one_line(resp.text)
-    legacy = []
+        return resp.status_code, one_line(resp.text), []
+    legacy, tools = [], []
     for line in resp.text.splitlines():
         if not line.startswith("data: "):
             continue
@@ -374,13 +376,30 @@ def chat(message, session_id, id_token, timeout):
             event = json.loads(line[len("data: "):])
         except ValueError:
             continue
-        if event.get("type") in ("tool_planning", "delta", "end", "error"):
+        kind = event.get("type")
+        if kind in ("tool_planning", "delta", "end", "error"):
             legacy.append(line)
-    return resp.status_code, one_line(" ".join(legacy))
+        elif kind == "tool_call" and event.get("status") in ("success", "error"):
+            tools.append(f"{event.get('name', '')}:{event['status']}:{event.get('requestId') or '-'}")
+    return resp.status_code, one_line(" ".join(legacy)), tools
+
+
+def wait_for_new_pending(device, wrp, bearer, before, timeout):
+    """Pending MMFA transactions that were not pending before, after `timeout` seconds."""
+    deadline = time.time() + timeout
+    while True:
+        new = [
+            txn
+            for txn in scim_transactions(device, wrp, bearer, "transactionsPending")
+            if (txn.get("txnStatus") or "").upper() == "PENDING" and txn.get("transactionId") not in before
+        ]
+        if new or time.time() >= deadline:
+            return new
+        time.sleep(3)
 
 
 def run(wrp, user, password, agent_client, client_secret, redirect_uri, op_url,
-        merchant, refund_amount, complete=True):
+        merchant, refund_amount, charge_amount, complete=True):
     """Drive a real Use Case 3 refund with a virtual authenticator.
 
     The refund is `refund_amount` of the persona's `merchant` charge, named by
@@ -390,6 +409,10 @@ def run(wrp, user, password, agent_client, client_secret, redirect_uri, op_url,
 
     complete=True  (subcommand `run`)         — approve, then tell the agent to
                                                 finish, so the refund is written.
+                                                Then ask, in a new session, for the
+                                                whole `charge_amount`: more than is
+                                                left, so the agent must refuse it
+                                                before any approval (Check N9).
     complete=False (subcommand `approveonly`) — stop at the approval and leave the
                                                 CIBA grant UNREDEEMED, so a caller
                                                 holding the auth_req_id can poll the
@@ -438,20 +461,20 @@ def run(wrp, user, password, agent_client, client_secret, redirect_uri, op_url,
         emit("KEY_REGISTERED", 1)
 
         # --- Turn 1: the agent lists the persona's transactions ------------------
-        status, body = chat("I need a refund", session_id, id_token, 120)
+        status, body, _ = chat("I need a refund", session_id, id_token, 120)
         emit("CHAT1_STATUS", status)
         emit("CHAT1", body)
 
         # --- Turn 2: pick one and authorize it; the agent fires the MMFA push ----
         emit("REFUND_ASKED", f"{refund_amount} of the {merchant} charge")
-        status, body = chat(f"Refund ${refund_amount} of the {merchant} charge", session_id, id_token, 180)
+        status, body, _ = chat(f"Refund ${refund_amount} of the {merchant} charge", session_id, id_token, 180)
         emit("CHAT2_STATUS", status)
         emit("CHAT2", body)
 
         txn, pending_count = wait_for_pending(device, wrp, bearer, 25)
         if txn is None:
             # The agent usually confirms before initiating — confirm, then wait again.
-            status, body = chat(
+            status, body, _ = chat(
                 "Yes, send it now — I authorize this refund.", session_id, id_token, 180
             )
             emit("CHAT2B_STATUS", status)
@@ -478,10 +501,38 @@ def run(wrp, user, password, agent_client, client_secret, redirect_uri, op_url,
             return
 
         # --- Turn 3: the agent polls CIBA, exchanges, and writes the refund -----
-        status, body = chat("I approved the request on my device", session_id, id_token, 300)
+        status, body, tools = chat("I approved the request on my device", session_id, id_token, 300)
         emit("CHAT3_STATUS", status)
         emit("CHAT3", body)
+        emit("CHAT3_TOOLS", ",".join(tools))
         emit("RUN_COMPLETE", 1)
+
+        # --- The negative: the whole charge is now more than is left -------------
+        # Only once this run's refund is written: before that, the whole charge may
+        # still be refundable and the ask would rightly fire a real push. A new
+        # session, so the model has no earlier turn to work a smaller amount out of.
+        if not any(t.startswith("complete_refund:success:") for t in tools):
+            emit("NEG_SKIPPED", "turn 3 wrote no refund (no complete_refund success), so the over-refund was not asked")
+            return
+        before = {t.get("transactionId") for t in scim_transactions(device, wrp, bearer, "transactionsPending")}
+        over_session = f"{session_id}-over"
+        emit("NEG_ASKED", f"{charge_amount}, the whole {merchant} charge")
+        status, body, tools = chat(
+            f"Refund the {merchant} charge in full (${charge_amount})", over_session, id_token, 180
+        )
+        emit("NEG_CHAT_STATUS", status)
+        emit("NEG_CHAT", body)
+        initiated = [t for t in tools if t.startswith("initiate_refund:")]
+        if not initiated:
+            # The agent usually confirms before initiating — confirm once.
+            status, body, tools = chat(
+                "Yes, send it now — I authorize this refund.", over_session, id_token, 180
+            )
+            emit("NEG_CHATB_STATUS", status)
+            emit("NEG_CHATB", body)
+            initiated = [t for t in tools if t.startswith("initiate_refund:")]
+        emit("NEG_INITIATE", ",".join(initiated))
+        emit("NEG_NEW_PENDING", len(wait_for_new_pending(device, wrp, bearer, before, 30)))
     finally:
         try:
             deleted, foreign_left = delete_ours(web, wrp)
@@ -507,15 +558,15 @@ if __name__ == "__main__":
     if len(sys.argv) < 2:
         die("usage: uc3-virtual-authenticator.py run|approveonly|cleanup <args>")
     command = sys.argv[1]
-    refund_args = "<wrp> <user> <password> <agent_client> <client_secret> <redirect_uri> <op_url> <merchant> <refund_amount>"
+    refund_args = "<wrp> <user> <password> <agent_client> <client_secret> <redirect_uri> <op_url> <merchant> <refund_amount> <charge_amount>"
     if command == "run":
-        if len(sys.argv) != 11:
+        if len(sys.argv) != 12:
             die(f"usage: run {refund_args}")
-        run(*sys.argv[2:11])
+        run(*sys.argv[2:12])
     elif command == "approveonly":
-        if len(sys.argv) != 11:
+        if len(sys.argv) != 12:
             die(f"usage: approveonly {refund_args}")
-        run(*sys.argv[2:11], complete=False)
+        run(*sys.argv[2:12], complete=False)
     elif command == "cleanup":
         if len(sys.argv) != 5:
             die("usage: cleanup <wrp> <user> <password>")

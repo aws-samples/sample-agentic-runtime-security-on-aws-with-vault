@@ -72,7 +72,8 @@
 # end when nobody has the IBM Verify app: it enrols a throwaway virtual authenticator
 # over the same OAuth + SCIM endpoints the app uses, signs the real user-presence
 # challenge, and then prints the full three-plane Athena correlation for the refund it
-# produced (checks N1-N8). Nothing is stubbed — IVIA resolves the transaction on its
+# produced (checks N1-N8), then proves a refund larger than what is left on the
+# charge is refused before any approval (N9). Nothing is stubbed — IVIA resolves the transaction on its
 # own evidence and approval stays bound to the exact transaction the agent fired. It
 # refuses to run if the persona already has a device it did not enrol, and it never
 # leaves one enrolled. See uc3-virtual-authenticator.py.
@@ -205,6 +206,10 @@ three-plane Athena audit correlation for the refund it just produced:
   N7. The virtual authenticator was deleted (nothing left enrolled)
   N8. audit_correlation returns the row for this refund's request_id — printed in
       full, every column (the three-plane capstone)
+  N9. Asked, in a new session, for the whole charge — more than is left after this
+      run's refund — the agent refused it before any approval: every initiate_refund
+      call failed with refund_terms_refused (exceeds_refundable), none sent a push,
+      and no new approval reached the device. A turn with no call FAILS.
   Nothing is stubbed: IVIA resolves the transaction on its own evidence and the
   approval stays bound to the EXACT transaction the agent fired. Every check is a
   HARD FAIL — there are no skips in this mode.
@@ -307,13 +312,14 @@ ivia_client_secret() {
 # choice — every seeded row for a persona shares one created_at.
 UC3_VERIFY_REFUND_AMOUNT="0.01"
 
-# _refund_charge <persona> — echoes the merchant of the seeded charge
-# (applications/banking-app/db/seed.sql) the run refunds; non-zero for a persona
-# with no seeded charge.
+# _refund_charge <persona> — echoes "<merchant>|<full charge amount>" for the seeded
+# charge (applications/banking-app/db/seed.sql) the run refunds; non-zero for a
+# persona with no seeded charge. The full amount is what --no-phone then asks for
+# to prove the over-refund is refused (Check N9).
 _refund_charge() {
     case "$1" in
-        jaime) echo "United Airlines" ;;
-        oscar) echo "Whole Foods Market" ;;
+        jaime) echo "United Airlines|210.00" ;;
+        oscar) echo "Whole Foods Market|52.40" ;;
         *) return 1 ;;
     esac
 }
@@ -624,7 +630,7 @@ _mint_uc3_tokens() {
     kubectl exec -i -n "${BANKING_NAMESPACE}" "${pod}" -- python3 - approveonly \
         "${wrp}" "${user}" "${persona_pw}" "${agent_client}" \
         "${login_secret}" "${ru}" "${op_url}" \
-        "${refund_charge}" "${UC3_VERIFY_REFUND_AMOUNT}" \
+        "${refund_charge%%|*}" "${UC3_VERIFY_REFUND_AMOUNT}" "${refund_charge#*|}" \
         <"${helper}" >"${approve_log}" 2>&1
     if ! grep -q '^APPROVED_NOT_REDEEMED=1' "${approve_log}"; then
         MINT_ERR=$(sed -n 's/^ERR=//p' "${approve_log}" | tail -1)
@@ -1158,11 +1164,13 @@ if [ "${NOPHONE_MODE}" = true ]; then
             "wrp='${np_wrp}' redirect_uri='${np_redirect}' client='${np_client}' secret=$([ -n "${np_secret}" ] && echo set || echo MISSING) password=$([ -n "${np_password}" ] && echo set || echo MISSING) uc3-agent pod='${np_pod}'. Fix: deploy tier 3 and confirm the banking-ui-config ConfigMap and the banking-ui-oidc Secret exist. Check: kubectl get configmap,secret -n ${BANKING_NAMESPACE}"
         exit 0
     fi
-    if ! np_merchant=$(_refund_charge "${NOPHONE_PERSONA}"); then
+    if ! np_charge=$(_refund_charge "${NOPHONE_PERSONA}"); then
         print_fail "Check N1: persona '${NOPHONE_PERSONA}' has no seeded charge to refund" \
             "The run refunds ${UC3_VERIFY_REFUND_AMOUNT} of one named charge (see _refund_charge). jaime and oscar have one. Fix: UC3_NOPHONE_PERSONA=jaime"
         exit 0
     fi
+    np_merchant="${np_charge%%|*}"
+    np_charge_amount="${np_charge#*|}"
 
     np_log="${TMPDIR:-/tmp}/verify-uc3-no-phone-$$.log"
     np_started=$(date +%s)
@@ -1173,7 +1181,7 @@ if [ "${NOPHONE_MODE}" = true ]; then
     kubectl exec -i -n "${BANKING_NAMESPACE}" "${np_pod}" -- python3 - run \
         "${np_wrp}" "${NOPHONE_PERSONA}" "${np_password}" "${np_client}" \
         "${np_secret}" "${np_redirect}" "${np_op}" \
-        "${np_merchant}" "${UC3_VERIFY_REFUND_AMOUNT}" \
+        "${np_merchant}" "${UC3_VERIFY_REFUND_AMOUNT}" "${np_charge_amount}" \
         <"${nophone_helper}" 2>&1 | tee "${np_log}"
     np_rc=${PIPESTATUS[0]}
     echo ""
@@ -1399,6 +1407,73 @@ if [ "${NOPHONE_MODE}" = true ]; then
         else
             print_fail "Check N8: audit_correlation returned ZERO rows for request_id=${np_request_id} after ~200s" \
                 "The refund is written (Check N6) but the planes have not correlated. Fix: wait for fluent-bit + Firehose (60s buffer) + Glue, then re-run just this assertion: UC3_VERIFY_REQUEST_ID=${np_request_id} ./verify-uc3.sh"
+        fi
+    fi
+
+    #---------------------------------------------------------------------------
+    # Check N9 — the whole charge, asked for after this run's refund, is refused
+    # before any approval is requested
+    #
+    # With this run's refund written, the whole charge is more than is still
+    # refundable, so the agent must refuse it (issue #73). The proof is the agent's
+    # own record, request by request: every initiate_refund call in that turn
+    # failed, each one's request_id has a refund_terms_refused line with
+    # reason_code exceeds_refundable and no ciba_mobile_push_sent line, and no new
+    # approval reached the device. No push on its own proves nothing — the model
+    # may never have called the tool — so a turn with no initiate_refund FAILS.
+    #---------------------------------------------------------------------------
+    np_neg_skipped=$(_np NEG_SKIPPED)
+    np_neg_initiate=$(_np NEG_INITIATE)
+    np_neg_pending=$(_np NEG_NEW_PENDING)
+    np_neg_reply=$(_np NEG_CHATB)
+    [ -z "${np_neg_reply}" ] && np_neg_reply=$(_np NEG_CHAT)
+    if [ -n "${np_neg_skipped}" ]; then
+        print_fail "Check N9: the whole-charge refund was not asked — ${np_neg_skipped}" \
+            "It is asked only once this run's refund is written; before that the whole charge may still be refundable and the ask would rightly fire a push. Fix the refund first (Checks N5 and N6)."
+    elif [ -z "${np_neg_initiate}" ]; then
+        print_fail "Check N9: the agent never called initiate_refund for the whole ${np_merchant} charge (${np_charge_amount}), so no refusal was exercised" \
+            "No push is not proof on its own. The agent replied: '${np_neg_reply:0:200}'. Detail: ${np_err:-see ${np_log}}"
+    else
+        np_agent_log="${TMPDIR:-/tmp}/verify-uc3-agent-log-$$.log"
+        kubectl logs -n "${BANKING_NAMESPACE}" "${np_pod}" --tail=-1 >"${np_agent_log}" 2>/dev/null
+        np_neg_verdict=$(python3 - "${np_agent_log}" "${np_neg_initiate}" <<'PYEOF'
+import json, sys
+refused, pushed = {}, set()
+with open(sys.argv[1]) as log:
+    for line in log:
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(rec, dict):
+            continue
+        if rec.get("event") == "refund_terms_refused":
+            refused[rec.get("request_id")] = rec.get("reason_code")
+        elif rec.get("event") == "ciba_mobile_push_sent":
+            pushed.add(rec.get("request_id"))
+bad, ok = [], []
+for call in [c for c in sys.argv[2].split(",") if c]:
+    name, status, rid = (call.split(":") + ["", "", ""])[:3]
+    if status != "error":
+        bad.append(f"initiate_refund {status} for request_id {rid}")
+    elif rid in pushed:
+        bad.append(f"a push was sent for request_id {rid}")
+    elif refused.get(rid) != "exceeds_refundable":
+        bad.append(f"request_id {rid} logged refusal reason {refused.get(rid) or 'none'}")
+    else:
+        ok.append(rid)
+if bad:
+    print("NOT_REFUSED " + "; ".join(bad))
+else:
+    print("REFUSED request_id " + ", ".join(ok) + " logged refund_terms_refused (exceeds_refundable) and no push")
+PYEOF
+)
+        rm -f "${np_agent_log}"
+        if [ "${np_neg_verdict%% *}" = "REFUSED" ] && [ "${np_neg_pending}" = "0" ]; then
+            print_pass "Check N9: asking for the whole ${np_merchant} charge (${np_charge_amount}) after this run's refund was refused before any approval — ${np_neg_verdict#REFUSED }, and no new approval reached the device"
+        else
+            print_fail "Check N9: asking for the whole ${np_merchant} charge (${np_charge_amount}) was NOT refused before approval — ${np_neg_verdict:-agent log unreadable}; new approvals on the device: ${np_neg_pending:-unknown}" \
+                "A refund larger than what is left on the charge must be refused before bc-authorize and the push. The agent replied: '${np_neg_reply:0:200}'. Check: kubectl logs deployment/uc3-agent -n ${BANKING_NAMESPACE} | grep -E 'refund_terms_refused|ciba_mobile_push_sent'"
         fi
     fi
 
