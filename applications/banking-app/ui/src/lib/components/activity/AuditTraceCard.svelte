@@ -16,8 +16,14 @@
     facts the turn's own events reported — credential kinds, Vault paths, leases,
     time-to-live. Nothing is queried.
 
-  Props: `turn` is the answer's turn; `AuditTraceTurn` stands in for Task 10's `Turn`
-  (lib/turn-events.svelte.ts) until Phase B switches to it.
+  Props: `turn` is the answer's Turn from the page's TurnLog ($lib/turn-events.svelte).
+  A chat page passes `useCase` and `turn` only:
+
+        <AuditTraceCard useCase={3} {turn} />
+
+  and the card finds the audit key itself: the request ID of the turn's agent:audit_seed,
+  before the turn's first request ID. `requestId` overrides that, so a page never passes
+  `turn.requestId` — in a turn that used two tools it is the wrong one.
 
   The card shows no credential value: only metadata and a few non-secret claims.
 -->
@@ -35,15 +41,16 @@
 		type AuditSource,
 		type AuditTraceErrorResponse,
 		type AuditTraceResponse,
-		type AuditTraceTurn,
 		type AuditUseCase
 	} from '$lib/audit-trace';
 	import { goToSignIn, isSessionEnded } from '$lib/session-ended';
+	import type { Turn } from '$lib/turn-events.svelte';
 
 	interface Props {
 		useCase: AuditUseCase;
-		requestId: string | undefined;
-		turn: AuditTraceTurn | undefined;
+		turn: Turn | undefined;
+		/** Overrides the audit key the card finds in `turn`. Chat pages leave it unset. */
+		requestId?: string;
 	}
 
 	let { useCase, requestId, turn }: Props = $props();

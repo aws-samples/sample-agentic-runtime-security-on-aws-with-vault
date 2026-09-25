@@ -24,6 +24,8 @@
  */
 
 import type { AgentAuditSeedEvent, AgentCredentialEvent, AgentEvent, JsonObject, JsonValue } from '$lib/agent-events';
+// Type-only: the server route imports this file, and the store module uses Svelte runes.
+import type { Turn } from '$lib/turn-events.svelte';
 
 // ---------------------------------------------------------------------------
 // The endpoint's contract
@@ -82,22 +84,8 @@ export function auditTraceStatus(rows: AuditCorrelationRow[]): AuditTraceStatus 
 }
 
 // ---------------------------------------------------------------------------
-// The turn the card sits under
+// The turn the card sits under: a chat page's Turn ($lib/turn-events.svelte)
 // ---------------------------------------------------------------------------
-
-/**
- * Structurally the `Turn` that lib/turn-events.svelte.ts exports (Task 10 · #66 Agent
- * Log is creating it in parallel). Phase B imports that type instead of this one.
- */
-export interface AuditTraceTurn {
-	id: string;
-	question: string;
-	/** When the turn began: milliseconds since the Unix epoch. */
-	startedAt: number;
-	requestId?: string;
-	events: AgentEvent[];
-	done: boolean;
-}
 
 export type AuditUseCase = 1 | 2 | 3;
 
@@ -370,7 +358,7 @@ function authorizationType(claims: JsonObject | undefined): string | undefined {
 	return undefined;
 }
 
-export function turnAuditFacts(turn: AuditTraceTurn | undefined, requestId: string | undefined): TurnAuditFacts {
+export function turnAuditFacts(turn: Turn | undefined, requestId?: string): TurnAuditFacts {
 	const events = turn?.events ?? [];
 	const seed = events.filter(isAuditSeed).pop();
 	const credentials = events.filter(isCredential);
