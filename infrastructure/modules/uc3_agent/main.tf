@@ -21,7 +21,8 @@
 #     CloudWatch Logs STS). That login cannot reach the refund writer: each approved
 #     refund's delegated token (act.sub + RAR, validated natively by Vault's OAuth
 #     resource server) is what fetches the short-TTL uc3-refund-writer credential
-#     (OBJ-2 + OBJ-3, issue #72).
+#     (OBJ-2 + OBJ-3, issue #72 · Use Case 3: the refund agent's everyday Vault
+#     login can get refund-writing database credentials with no approval).
 #   - No Ingress / ALB — the UC3 agent is a ClusterIP service reached from
 #     the banking-agent (uc2-agent) or via kubectl port-forward for workshop demos.
 #   - IVIA_CLIENT_SECRET (agent-uc3) and IVIA_ACTOR_CLIENT_SECRET (uc3-actor) are
