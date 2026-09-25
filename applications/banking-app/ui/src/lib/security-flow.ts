@@ -238,6 +238,9 @@ interface ToolRun {
 	end?: Seen;
 }
 
+/** The refund tools; the request ID they carry is the refund's own once they bind it. */
+const REFUND_TOOL_NAMES = new Set(['initiate_refund', 'complete_refund']);
+
 class Facts {
 	readonly list: Seen[];
 	readonly tools: ToolRun[] = [];
@@ -263,7 +266,16 @@ class Facts {
 			if (e.status === 'in_progress') run.start ??= seen;
 			else run.end = seen;
 		}
-		this.requestId = this.list.find((s) => typeof s.event.requestId === 'string' && s.event.requestId)?.event.requestId;
+		// The ID the audit trail files this turn under, the same rule as the Audit Trace card
+		// (audit-trace.ts turnAuditFacts): the audit seed's, else the one a refund tool bound
+		// (initiate_refund binds the refund's ID; a turn that listed transactions first carries
+		// the turn's own ID on its earlier events), else the first one the turn carried.
+		const hasId = (s: Seen) => typeof s.event.requestId === 'string' && s.event.requestId !== '';
+		const seed = this.list.find((s) => s.event.type === 'agent:audit_seed' && hasId(s));
+		const refundTool = this.list.find(
+			(s) => s.event.type === 'tool_call' && REFUND_TOOL_NAMES.has(s.event.name) && hasId(s)
+		);
+		this.requestId = (seed ?? refundTool ?? this.list.find(hasId))?.event.requestId;
 	}
 
 	of<T extends AgentEvent['type']>(type: T): (Seen & { event: Extract<AgentEvent, { type: T }> })[] {
@@ -398,7 +410,7 @@ function useCase1Signals(f: Facts): SignalSpec[] {
 			id: 'request-id',
 			stop: 'request',
 			label: 'Request ID assigned by the agent',
-			seen: f.list.filter((s) => s.event.requestId).slice(0, 1),
+			seen: f.list.filter((s) => s.event.requestId === f.requestId).slice(0, 1),
 			required: true,
 			chips: ['request_id']
 		},
@@ -472,7 +484,7 @@ function useCase2Signals(f: Facts): SignalSpec[] {
 			id: 'request-id',
 			stop: 'request',
 			label: 'Request ID assigned by the agent',
-			seen: f.list.filter((s) => s.event.requestId).slice(0, 1),
+			seen: f.list.filter((s) => s.event.requestId === f.requestId).slice(0, 1),
 			required: true,
 			chips: ['request_id']
 		},
@@ -616,7 +628,7 @@ function useCase3Signals(f: Facts): SignalSpec[] {
 				id: 'request-id',
 				stop: 'request',
 				label: 'Request ID bound to the refund',
-				seen: refundIdBound ? f.list.filter((s) => s.event.requestId).slice(0, 1) : [],
+				seen: refundIdBound ? f.list.filter((s) => s.event.requestId === f.requestId).slice(0, 1) : [],
 				chips: ['request_id']
 			},
 			{
