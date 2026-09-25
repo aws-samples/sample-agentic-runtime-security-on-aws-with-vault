@@ -177,45 +177,45 @@ const UC1_MODEL_KEYS_LABEL = 'Short-lived AWS keys Vault issued for calling the 
 /** infrastructure/modules/uc1_agent/agent/app/agent.py:110 — the login was made on an earlier turn */
 const UC1_SA_REUSED = 'not presented again';
 
-/** applications/banking-app/agent/app/activity.py:532 (followed by "... as X-Vault-Token") */
+/** applications/banking-app/agent/app/activity.py:470 (followed at :471 by "... as X-Vault-Token") */
 const UC2_X_VAULT_TOKEN = 'The MCP server reports it read';
-/** applications/banking-app/agent/app/activity.py:587 */
+/** applications/banking-app/agent/app/activity.py:525 */
 const UC2_REVOKED = 'The MCP server reports Vault revoked the ';
-/** applications/banking-app/agent/app/activity.py:590 */
+/** applications/banking-app/agent/app/activity.py:528 */
 const UC2_REVOKE_FAILED = 'The MCP server reports its revoke of the ';
-/** applications/banking-app/agent/app/activity.py:630 */
+/** applications/banking-app/agent/app/activity.py:568 */
 const UC2_LOOKUP_SELF = "The MCP server reports Vault's lookup-self for the caller's token during ";
-/** applications/banking-app/agent/app/activity.py:616 — present only when the ceiling was read */
+/** applications/banking-app/agent/app/activity.py:554 — present only when the ceiling was read */
 const UC2_CEILING_READ = " The agent's ceiling, read from ";
-/** applications/banking-app/agent/app/activity.py:789 and :826 — the MCP server's own login */
+/** applications/banking-app/agent/app/activity.py:727 and :764 — the MCP server's own login */
 const UC2_MCP_OWN = "The MCP server's own";
 
-/** applications/uc3-agent/app/agent.py:138 */
+/** applications/uc3-agent/app/agent.py:171 */
 const UC3_OWNER_OK = 'Account owner check passed:';
-/** applications/uc3-agent/app/agent.py:131 */
+/** applications/uc3-agent/app/agent.py:164 */
 const UC3_OWNER_REFUSED = 'Account owner check refused:';
-/** applications/uc3-agent/app/agent.py:789, :804, :816 and :954 */
+/** applications/uc3-agent/app/agent.py:1049, :1064, :1076 and :1275 */
 const UC3_REFUSED = 'Refused:';
 /**
  * applications/uc3-agent/app/agent.py:216 (the refund terms checked before any approval is
  * requested) and :1226-1232 (the refundable amount re-checked inside the write)
  */
 const UC3_TERMS_REFUSED = 'Refund refused:';
-/** applications/uc3-agent/app/agent.py:671 */
+/** applications/uc3-agent/app/agent.py:920 */
 const UC3_CIBA_SENT = 'Backchannel sign-in request (CIBA) sent';
-/** applications/uc3-agent/app/agent.py:845 */
+/** applications/uc3-agent/app/agent.py:1107 */
 const UC3_APPROVAL_POLL = "Checking IBM Verify Identity Access for the user's approval";
-/** applications/uc3-agent/app/agent.py:525 */
+/** applications/uc3-agent/app/agent.py:748, narrated at :1117 */
 const UC3_TOKEN_EXCHANGED = 'Token exchanged (RFC 8693)';
-/** applications/uc3-agent/app/agent.py:877 */
+/** applications/uc3-agent/app/agent.py:1139 */
 const UC3_WRITER_ISSUED = 'Vault issued a uc3-refund-writer database credential';
-/** applications/uc3-agent/app/agent.py:961 */
+/** applications/uc3-agent/app/agent.py:1282 */
 const UC3_REFUND_WRITTEN = 'Refund written: INSERT into banking.refunds';
-/** applications/uc3-agent/app/agent.py:1027 */
+/** applications/uc3-agent/app/agent.py:1348 */
 const UC3_ANCHOR_OK = 'Audit anchor written to CloudWatch Logs';
-/** applications/uc3-agent/app/agent.py:1036 */
+/** applications/uc3-agent/app/agent.py:1357 */
 const UC3_ANCHOR_FAILED = 'The audit anchor could not be written to CloudWatch Logs';
-/** applications/uc3-agent/app/agent.py:869 */
+/** applications/uc3-agent/app/vault_client.py:221, the writer credential's vaultPath (sent at :243) */
 const UC3_WRITER_PATH = 'database/creds/uc3-refund-writer';
 
 const BEDROCK_KEYS_PATH = 'aws/sts/bedrock-reader';
@@ -646,7 +646,7 @@ function useCase3Signals(f: Facts): SignalSpec[] {
 	if (complete) {
 		const delegated = f.creds('delegated_token', (e) => e.issuer === 'IBM Verify Identity Access');
 		// RAR is shown when the delegated token's claims carry authorization_details, or when the
-		// agent's exchange line lists them (applications/uc3-agent/app/agent.py:519-521), so the
+		// agent's exchange line lists them (applications/uc3-agent/app/agent.py:742-744), so the
 		// chip survives a filter that drops a credential's claims.
 		const rar =
 			delegated.some((s) => {
