@@ -10,9 +10,10 @@
  *   - issuer: the one IVIA's discovery document names;
  *   - audience: this app's own OAuth client (IVIA_CLIENT_ID, agent-uc2), the client
  *     whose code flow minted the token;
+ *   - type: an id_token (typ JWT), not an access token (typ at+jwt);
  *   - expiry: exp must be in the future; sub, iss, aud and exp are required.
- * Anything else — no cookie, a forged or expired token, another client's token — is
- * no session. Only the verified `sub` leaves this module.
+ * Anything else — no cookie, a forged or expired token, another client's token, an
+ * access token — is no session. Only the verified `sub` leaves this module.
  */
 
 import { env } from '$env/dynamic/private';
@@ -83,6 +84,10 @@ export async function verifySession(idToken: string | undefined): Promise<Verifi
 	try {
 		const { payload } = await jwtVerify(idToken, jwks, {
 			algorithms: ['RS256'],
+			// IVIA signs its id_tokens with typ JWT and its access tokens with typ at+jwt
+			// (RFC 9068), same keys, same issuer, same audience. Checking typ keeps an
+			// access token from standing in for a sign-in.
+			typ: 'JWT',
 			issuer,
 			audience,
 			requiredClaims: ['sub', 'iss', 'aud', 'exp']
