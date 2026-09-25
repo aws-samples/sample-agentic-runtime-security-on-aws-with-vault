@@ -511,18 +511,25 @@ def run(wrp, user, password, agent_client, client_secret, redirect_uri, op_url,
         # Only once this run's refund is written: before that, the whole charge may
         # still be refundable and the ask would rightly fire a real push. A new
         # session, so the model has no earlier turn to work a smaller amount out of.
+        # It opens the way the refund above does, with the list: in a new session
+        # the model lists the transactions before it acts on any charge. The list
+        # carries no refunded amounts, so it gives the model no smaller figure.
         if not any(t.startswith("complete_refund:success:") for t in tools):
             emit("NEG_SKIPPED", "turn 3 wrote no refund (no complete_refund success), so the over-refund was not asked")
             return
         before = {t.get("transactionId") for t in scim_transactions(device, wrp, bearer, "transactionsPending")}
         over_session = f"{session_id}-over"
         emit("NEG_ASKED", f"{charge_amount}, the whole {merchant} charge")
+        status, body, tools = chat("I need a refund", over_session, id_token, 120)
+        emit("NEG_CHAT0_STATUS", status)
+        emit("NEG_CHAT0", body)
+        initiated = [t for t in tools if t.startswith("initiate_refund:")]
         status, body, tools = chat(
             f"Refund the {merchant} charge in full (${charge_amount})", over_session, id_token, 180
         )
         emit("NEG_CHAT_STATUS", status)
         emit("NEG_CHAT", body)
-        initiated = [t for t in tools if t.startswith("initiate_refund:")]
+        initiated += [t for t in tools if t.startswith("initiate_refund:")]
         if not initiated:
             # The agent usually confirms before initiating — confirm once.
             status, body, tools = chat(
@@ -530,7 +537,7 @@ def run(wrp, user, password, agent_client, client_secret, redirect_uri, op_url,
             )
             emit("NEG_CHATB_STATUS", status)
             emit("NEG_CHATB", body)
-            initiated = [t for t in tools if t.startswith("initiate_refund:")]
+            initiated += [t for t in tools if t.startswith("initiate_refund:")]
         emit("NEG_INITIATE", ",".join(initiated))
         emit("NEG_NEW_PENDING", len(wait_for_new_pending(device, wrp, bearer, before, 30)))
     finally:
