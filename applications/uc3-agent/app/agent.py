@@ -1484,8 +1484,8 @@ def check_refund_status(refund_id: str) -> dict:
 # order the tool returned them. Asking the model not to repeat the rows under
 # that card, or to count to the row a person picked, is not reliable. So after
 # the first listing of a session no model call is made: the reply is one fixed
-# question. And a reply that is only a row number is resolved here, against
-# that same listing, never counted by the model.
+# question. And a reply that is only a row number, sent when a row pick is due,
+# is resolved here against that same listing, never counted by the model.
 # ---------------------------------------------------------------------------
 
 # The reply after the first listing of a session.
@@ -1500,6 +1500,10 @@ _ROW_NUMBER = re.compile(r"\s*(?:(?:#|no\.|number|transaction|txn|item)\s*)?(\d{
 
 # The fields of the selected row the model is given.
 _SELECTED_FIELDS = ("id", "account_id", "description", "merchant", "amount", "created_at")
+
+# The start of the code's own reply to a row number the listing does not have
+# (_out_of_range_reply).
+_OUT_OF_RANGE_REPLY = re.compile(r"There is no transaction \d{1,3} — ")
 
 
 def row_number(text) -> int | None:
@@ -1559,13 +1563,44 @@ def _latest_listing(messages: list) -> list | None:
     return latest
 
 
-def _row_selection(message, history: list) -> tuple[int, list] | None:
-    """(number, rows) when `message` is only a row number and `history` holds a listing, else None.
+def _row_pick_due(history: list) -> bool:
+    """True when the session's last reply is waiting for a row number.
 
-    `rows` are the session's most recent successful list_transactions result, in
-    the order returned — the order the card numbers them. They come only from
-    that result, which list_transactions read for the verified sub; nothing the
-    message says is used but the number.
+    That reply came straight after a successful list_transactions result (the
+    app's own question, or the model's reply after a re-list), or it is the
+    code's own "There is no transaction N" reply. After any other reply — the
+    model asking how much to refund, or confirming a charge — a bare number is
+    not a row: "5" there may mean $5.
+    """
+    if len(history) < 2 or history[-1].get("role") != "assistant":
+        return False
+    for block in history[-1].get("content", []):
+        text = block.get("text") if isinstance(block, dict) else None
+        if isinstance(text, str) and _OUT_OF_RANGE_REPLY.match(text):
+            return True
+    before = history[-2]
+    if before.get("role") != "user":
+        return False
+    names = _tool_names(history)
+    for block in before.get("content", []):
+        tool_result = block.get("toolResult") if isinstance(block, dict) else None
+        if (
+            isinstance(tool_result, dict)
+            and names.get(tool_result.get("toolUseId")) == "list_transactions"
+            and _listing_rows(tool_result) is not None
+        ):
+            return True
+    return False
+
+
+def _row_selection(message, history: list) -> tuple[int, list] | None:
+    """(number, rows) when `message` is only a row number sent when a row pick is due, else None.
+
+    A row pick is due when the session's last reply is waiting for one
+    (_row_pick_due). `rows` are the session's most recent successful
+    list_transactions result, in the order returned — the order the card
+    numbers them. They come only from that result, which list_transactions read
+    for the verified sub; nothing the message says is used but the number.
     """
     if not isinstance(message, dict) or message.get("role") != "user":
         return None
@@ -1573,7 +1608,7 @@ def _row_selection(message, history: list) -> tuple[int, list] | None:
     if len(content) != 1 or not isinstance(content[0], dict):
         return None
     number = row_number(content[0].get("text"))
-    if number is None:
+    if number is None or not _row_pick_due(history):
         return None
     rows = _latest_listing(history)
     if rows is None:
@@ -1611,12 +1646,15 @@ class RefundReplies(HookProvider):
     empty list, or a second listing (the no-phone driver's "Refund $X of the
     {merchant} charge" turn may re-list) — is left to the model.
 
-    A reply that is only a row number (row_number), with a listing in the
-    session, is resolved against the most recent listing:
+    A reply that is only a row number (row_number), sent when a row pick is due
+    (_row_pick_due: the last reply came straight after a successful listing, or
+    was the code's own out-of-range reply), is resolved against the most recent
+    listing:
       - in range: the row is added to the user's message, beside what they
         typed, before the message is saved, so the model confirms that row;
       - out of range: the model is not called; the reply names the valid range.
-    With no listing in the session the message goes to the model untouched.
+    Otherwise — no listing, or the model last asked something else, such as how
+    much to refund — the message goes to the model untouched.
 
     A failure in a callback is logged without any value and the model writes
     the reply: Strands raises a hook's exception into the turn, and this must
@@ -1744,8 +1782,8 @@ def build_uc3_agent(vault_client=None, session_id: str = "default") -> Agent:
         "   Transaction number N is the Nth transaction in the list_transactions result, in the\n"
         "   order it was returned.\n"
         "4. When the user selects a number, confirm the transaction details and ask 'Shall I proceed?'\n"
-        "   A reply that is only a number arrives with the transaction it selects attached by the\n"
-        "   app; confirm that transaction.\n"
+        "   When a number the user sends selects a transaction, the app attaches that transaction\n"
+        "   to their message; confirm that transaction.\n"
         "5. When the user confirms, call the initiate_refund tool with:\n"
         "   - account_id: the account_id from the selected transaction\n"
         "   - transaction_id: the id from the selected transaction\n"
