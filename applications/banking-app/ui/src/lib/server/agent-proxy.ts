@@ -10,7 +10,8 @@
  *    followed by `end` when an event stream had.
  *
  * A route creates one AgentCall per request, passes `call.signal` to fetch(),
- * and reads the agent's body only through `call.readText()` or
+ * calls `call.touch()` when the agent's headers arrive, and reads the agent's
+ * body only through `call.readText()` or
  * `streamAgentEvents()`. Both end the call, so its listeners and timer never
  * outlive the request.
  *
@@ -26,14 +27,16 @@ import type { LegacyEndEvent, LegacyErrorEvent } from '$lib/agent-events';
 import { createActivityFilter } from '$lib/server/activity-filter';
 
 /**
- * Longest the UI server waits for the next byte from an agent. It must be
- * longer than the longest silence of an agent that is still working: Use Case
- * 3 waiting for the user's phone approval, applications/uc3-agent/app/agent.py.
- * It polls for up to CIBA_TIMEOUT_SECONDS = 120 (agent.py:149) without sending
- * anything; its last poll can start just before that deadline and take up to
- * its HTTP timeout of 30 s (timeout=30.0, agent.py:283), and a slow_down answer
- * adds a 10 s back-off (CIBA_POLL_INTERVAL_SECONDS * 2, agent.py:322). That is
- * 160 s of silence, plus a 30 s margin.
+ * Longest the UI server waits for the next byte from an agent (headers count).
+ * It must be longer than the longest silence of an agent that is still
+ * working: Use Case 3 waiting for the user's phone approval, in
+ * applications/uc3-agent/app/agent.py `_poll_ciba`. It polls for up to
+ * CIBA_TIMEOUT_SECONDS = 120 without sending anything; its last poll can start
+ * just before that deadline and wait on its httpx client's timeout=30.0, and a
+ * slow_down answer adds a back-off of CIBA_POLL_INTERVAL_SECONDS * 2 = 10 s.
+ * (Lines 149, 283 and 322 of agent.py when this was written.) That is a
+ * realistic worst case of 160 s of silence — not a hard ceiling, since httpx
+ * applies its 30 s to each phase of a request separately — plus a 30 s margin.
  */
 export const AGENT_IDLE_TIMEOUT_SECONDS = 120 + 30 + 10 + 30;
 
@@ -76,7 +79,7 @@ export class AgentCall {
 		return this.#stopped;
 	}
 
-	/** The agent just sent something: restart the idle clock. */
+	/** The agent just sent something (its headers or a body chunk): restart the idle clock. */
 	touch(): void {
 		if (this.#ended) return;
 		clearTimeout(this.#timer);

@@ -53,6 +53,7 @@ export const POST: RequestHandler = async ({ request, platform }) => {
 			`Cannot reach Use Case 1 agent: ${err instanceof Error ? err.message : String(err)}`
 		);
 	}
+	call.touch();
 
 	if (!agentRes.ok) {
 		// The agent can close the connection, or go quiet, part-way through its error body.

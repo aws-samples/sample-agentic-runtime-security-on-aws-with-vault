@@ -40,6 +40,7 @@ export const POST: RequestHandler = async ({ request, cookies, platform }) => {
 			`Cannot reach the Use Case 3 agent: ${err instanceof Error ? err.message : String(err)}`
 		);
 	}
+	call.touch();
 
 	if (!agentRes.ok) {
 		// The agent can close the connection, or go quiet, part-way through its error body.
