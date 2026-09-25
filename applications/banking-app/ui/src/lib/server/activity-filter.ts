@@ -162,6 +162,7 @@ type FieldSpec =
 	| { kind: 'string'; maxLength?: number }
 	| { kind: 'enum'; values: readonly string[] }
 	| { kind: 'number'; min?: number }
+	| { kind: 'boolean' }
 	/** Any JSON value, walked with the payload structure rules. */
 	| { kind: 'json' }
 	/** A JSON object, walked with the payload structure rules. */
@@ -246,7 +247,8 @@ const SCHEMAS: Schemas = {
 		vaultPath: { kind: 'string', maxLength: MAX_ID_CHARS, required: false },
 		leaseId: { kind: 'string', maxLength: MAX_ID_CHARS, required: false },
 		ttlSeconds: { kind: 'number', min: 0, required: false },
-		expiresAt: { kind: 'number', min: 0, required: false }
+		expiresAt: { kind: 'number', min: 0, required: false },
+		reused: { kind: 'boolean', required: false }
 	},
 
 	// Legacy events: exactly type, role and content, as today's dashboard reads them.
@@ -275,6 +277,8 @@ function sanitizeField(value: unknown, rule: FieldRule, stats: FilterStats): Jso
 		case 'number':
 			if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
 			return rule.min !== undefined && value < rule.min ? undefined : value;
+		case 'boolean':
+			return typeof value === 'boolean' ? value : undefined;
 		case 'json':
 			return scrubValue(value, 0, stats);
 		case 'object':

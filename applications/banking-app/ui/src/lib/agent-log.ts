@@ -14,7 +14,8 @@
  *                      ⚡ Tool "<name>" output: <result>  /  ✕ Tool "<name>" failed: <result>
  *   agent:hitl_*       ▶ Agent: <text>, then ⚡ Approval details: <details> when present
  *   agent:credential   ⚡ Credential <issued|presented|reused> · <kind>: <issuer · path · the agent's label>
- *                        with the value or its parts in full, and a line of metadata
+ *                        with the value or its parts in full, and a line of metadata;
+ *                        the verb comes from the event's `reused` flag (credentialVerb)
  *   agent:error        ✕ Error: <message>
  *
  * agent:text_delta (the answer, shown in the chat), agent:audit_seed (the Audit
@@ -83,10 +84,24 @@ export function clockTime(epochMs: number): string {
 	return new Date(epochMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 }
 
+/**
+ * What this turn did with a credential: 'reused' when it was obtained earlier
+ * and used again now; otherwise 'presented' for a token shown to prove who is
+ * asking (PRESENTED_KINDS) and 'issued' for one made for this turn.
+ *
+ * The agent's `reused` flag decides. Only an event without it — from an agent
+ * built before the flag existed — falls back to the label: the word "reused"
+ * in it means reused.
+ */
+export function credentialVerb(event: Pick<AgentCredentialEvent, 'kind' | 'label' | 'reused'>): CredentialView['verb'] {
+	const reused = typeof event.reused === 'boolean' ? event.reused : /\breused\b/i.test(event.label ?? '');
+	if (reused) return 'reused';
+	return PRESENTED_KINDS.has(event.kind) ? 'presented' : 'issued';
+}
+
 function credentialView(event: AgentCredentialEvent): CredentialView {
 	const kind = event.kind;
-	const reused = /\breused\b/i.test(event.label ?? '');
-	const verb: CredentialView['verb'] = reused ? 'reused' : PRESENTED_KINDS.has(kind) ? 'presented' : 'issued';
+	const verb = credentialVerb(event);
 	const source = [event.issuer, event.vaultPath].filter((part) => typeof part === 'string' && part !== '').join(' · ');
 
 	const fields =

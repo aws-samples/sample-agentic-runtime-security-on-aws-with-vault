@@ -219,6 +219,19 @@ export interface AgentCredentialEvent extends EventEnvelope {
 	ttlSeconds?: number;
 	/** When the credential expires: milliseconds since the Unix epoch (UTC). */
 	expiresAt?: number;
+	/**
+	 * Whether this turn obtained the credential or reused one it already had.
+	 * Set by the agent that sends the event, the only party that knows:
+	 *   - true: obtained BEFORE this turn (or before this tool call) and used
+	 *     again now, not obtained again — e.g. an agent's standing Vault login
+	 *     (its service-account JWT and Vault token) or the AWS keys it signs its
+	 *     model calls with, while they are still current;
+	 *   - false: made, or first presented, during this turn.
+	 * The label keeps its plain-English text but no longer decides this. Absent
+	 * only from agents built before the flag existed; the Agent Log then falls
+	 * back to reading the label (credentialVerb in $lib/agent-log).
+	 */
+	reused?: boolean;
 }
 
 export type AgentEvent =
