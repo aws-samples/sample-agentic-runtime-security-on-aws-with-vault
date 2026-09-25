@@ -56,7 +56,7 @@ policy then opens 53/UDP and 53/TCP to CoreDNS for all pods.
 
 | Pod | Ingress Allowed | Egress Allowed |
 |---|---|---|
-| `banking-ui` | 0.0.0.0/0 :5173 (ALB health + user) | `banking-agent`:3002, :443 (IVIA OIDC; Athena, Glue, S3 for the Audit Trace), `vault` namespace:8200 |
+| `banking-ui` | 0.0.0.0/0 :5173 (ALB health + user) | `banking-agent`:3002, :443 (IVIA OIDC; the Athena API for the Audit Trace — Athena reads Glue and S3 itself), `vault` namespace:8200 |
 | `banking-agent` | `banking-ui`:3002 | `banking-mcp-server`:3001, :8200 (Vault), :443 (Bedrock) |
 | `banking-mcp-server` | `banking-agent`:3001 | :8200 (Vault), `rds_cidr`:5432 (RDS), :443 (IVIA) |
 
