@@ -30,6 +30,7 @@
 	import AnswerCard from '$lib/components/chat/AnswerCard.svelte';
 	import AgentLogPanel from '$lib/components/activity/AgentLogPanel.svelte';
 	import SecurityFlowPanel from '$lib/components/activity/SecurityFlowPanel.svelte';
+	import AuditTraceCard from '$lib/components/activity/AuditTraceCard.svelte';
 	import { countEntries } from '$lib/agent-log';
 	import { createTurnLog } from '$lib/turn-events.svelte';
 
@@ -39,8 +40,11 @@
 	type AgentName = 'Banking Agent' | 'Refund Agent';
 	const agentFor = (endpoint: string): AgentName => (endpoint === '/api/uc3-chat' ? 'Refund Agent' : 'Banking Agent');
 
-	/** `agent` is set on every agent-side message: the agent whose turn it belongs to. */
-	type Msg = { role: string; content: string; type?: string; agent?: AgentName };
+	/**
+	 * `agent` is set on every agent-side message: the agent whose turn it belongs to. `turnId` is
+	 * the TurnLog turn a streamed message arrived in; messages the page adds itself have none.
+	 */
+	type Msg = { role: string; content: string; type?: string; agent?: AgentName; turnId?: string };
 	type Turn = { kind: 'user'; msg: Msg } | { kind: 'agent'; agent: AgentName; msgs: Msg[] };
 
 	// Chat state
@@ -72,6 +76,21 @@
 	/** The use case each turn was sent to, by Turn id: 3 for the refund chat, 2 for banking. */
 	let useCaseOf = $state<Record<string, 2 | 3>>({});
 	const latestTurn = $derived(log.turns.at(-1));
+
+	// The Audit Trace card sits above the first answer of each finished turn: the message it
+	// goes above, mapped to that turn.
+	const auditTurnFor = $derived.by(() => {
+		const byMsg = new Map<Msg, (typeof log.turns)[number]>();
+		const seen = new Set<string>();
+		for (const msg of messages) {
+			if (!msg.turnId || seen.has(msg.turnId)) continue;
+			if (msg.role === 'user' || msg.role === 'tool' || msg.role === 'error' || msg.type === 'tool_planning') continue;
+			seen.add(msg.turnId);
+			const logTurn = log.turns.find((t) => t.id === msg.turnId);
+			if (logTurn?.done) byMsg.set(msg, logTurn);
+		}
+		return byMsg;
+	});
 	/** `agent` is the agent whose turn asked for the consent. */
 	let pendingConsent: {
 		auth_req_id: string;
@@ -213,18 +232,21 @@
 				}
 				if (chunk.type === 'error') {
 					failure ??= chunk.content;
-					messages = [...messages, { role: 'error', content: chunk.content, agent }];
+					messages = [...messages, { role: 'error', content: chunk.content, agent, turnId: turn.id }];
 					isLoading = false;
 					return;
 				}
 				if (chunk.content) {
 					extractConsent(chunk.content, agent);
-					messages = [...messages, { role: chunk.role ?? 'ai', content: chunk.content, type: chunk.type, agent }];
+					messages = [
+						...messages,
+						{ role: chunk.role ?? 'ai', content: chunk.content, type: chunk.type, agent, turnId: turn.id }
+					];
 				}
 			},
 			(err) => {
 				failure ??= err;
-				messages = [...messages, { role: 'error', content: `Error: ${err}`, agent }];
+				messages = [...messages, { role: 'error', content: `Error: ${err}`, agent, turnId: turn.id }];
 				isLoading = false;
 			},
 			endpoint,
@@ -303,6 +325,10 @@
 					{:else if msg.role === 'error'}
 						<InlineNotification kind="error" lowContrast hideCloseButton title="Error" subtitle={msg.content} />
 					{:else}
+						{@const auditTurn = auditTurnFor.get(msg)}
+						{#if auditTurn}
+							<AuditTraceCard useCase={msg.agent === 'Refund Agent' ? 3 : 2} turn={auditTurn} />
+						{/if}
 						<AnswerCard>{msg.content}</AnswerCard>
 					{/if}
 				{/each}
