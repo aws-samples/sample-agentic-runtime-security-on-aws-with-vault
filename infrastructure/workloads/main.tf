@@ -143,6 +143,11 @@ module "uc2_app" {
   # + ORIGIN are LE-trusted instead of raw ALB. Empty string until
   # deploy-workshop.sh ACME step writes .acme-state (pre-bootstrap fallback).
   nip_io_banking_host = local.nip_io_banking_host
+  # The banking UI server's own Vault login (uc2-ui-sa) and where its Audit Trace
+  # query runs (issue #68). The role name matches vault_config's banking_ui role.
+  ui_vault_role       = "banking-ui"
+  athena_workgroup    = local.infra.athena_workgroup_name
+  audit_glue_database = local.infra.glue_database_name
   tags                = local.infra.tags
 }
 
