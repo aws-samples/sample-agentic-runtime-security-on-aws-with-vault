@@ -152,13 +152,15 @@ export interface FlowContext {
 	 */
 	startedAt?: number;
 	/**
-	 * The stream has ended. The refund agent sends no agent:done (it ends on the legacy
-	 * `end` frame), so for Use Case 3 this is the only way the flow learns the turn is over.
+	 * The stream has ended. Every agent ends a turn with agent:done (the refund agent at
+	 * applications/uc3-agent/app/main.py:258 and :265), which ends the flow on its own; this
+	 * covers a stream from before that, which ended only on the legacy `end` frame.
 	 */
 	done?: boolean;
 	/**
-	 * The answer the page received. The refund agent sends its answer only as the legacy
-	 * `delta` frame, never as agent:text_delta; the page passes it here.
+	 * The answer the page received. The refund agent sends it as agent:text_delta
+	 * (applications/uc3-agent/app/main.py:257); a stream from before that carried it only as the
+	 * legacy `delta` frame, and for such a stream this becomes the answer's evidence row.
 	 */
 	answer?: string;
 }
@@ -718,11 +720,14 @@ function useCase3Signals(f: Facts): SignalSpec[] {
 			});
 			specs.push(...toolSignals(f, 'execution', true));
 		}
+		// A stream without agent:text_delta is given the page's answer in buildFlow.
 		specs.push({
 			id: 'answer',
 			stop: 'result',
 			label: 'Answer returned to the chat',
-			seen: [],
+			seen: f.of('agent:text_delta'),
+			failed: f.of('agent:error'),
+			failedLabel: 'The turn failed',
 			required: true
 		});
 	}
@@ -1224,12 +1229,12 @@ const REFUND_TECHNICAL_ROWS = ['approval', 'delegated-token', 'writer-cred', 're
  * The five stops, their signals and the evidence for one turn.
  *
  * `events` are the turn's events in the order they arrived. `context` carries what the page
- * itself knows: the question, when it was sent, whether the stream has ended, and (for Use
- * Case 3, whose agent sends its answer only as a legacy frame) the answer.
+ * itself knows: the question, when it was sent, whether the stream has ended, and the answer
+ * it received (the evidence for a refund stream from before agent:text_delta).
  */
 export function buildFlow(useCase: UseCase, events: readonly AgentEvent[], context: FlowContext = {}): Flow {
-	// Use Cases 1 and 2 end every turn with agent:done; the refund agent does not.
-	const done = context.done === true || (useCase !== 3 && events.some((e) => e.type === 'agent:done'));
+	// Every agent ends a turn with agent:done; context.done covers a stream from before that.
+	const done = context.done === true || events.some((e) => e.type === 'agent:done');
 	const f = new Facts(useCase, events, done, context);
 	const phase = useCase === 3 ? refundPhase(f) : { initiate: false, complete: false };
 	const refundTurn = phase.initiate || phase.complete;
@@ -1266,7 +1271,10 @@ export function buildFlow(useCase: UseCase, events: readonly AgentEvent[], conte
 			raw: s.event as unknown as JsonValue
 		});
 	}
-	const answerRow = useCase === 3 && context.answer ? evidence.length : -1;
+	// The page's answer is evidence only when the stream itself carried none, so the answer is
+	// listed once.
+	const streamAnswered = events.some((e) => e.type === 'agent:text_delta');
+	const answerRow = useCase === 3 && context.answer && !streamAnswered ? evidence.length : -1;
 	if (answerRow >= 0) {
 		evidence.push({
 			index: answerRow,

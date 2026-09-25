@@ -32,8 +32,9 @@
 	/**
 	 * One chat turn. Structurally the same as the Turn Task 10 exports from
 	 * $lib/turn-events.svelte; replace this with that import when it lands.
-	 * `answer` is optional and not part of that shape: the refund agent sends its answer only as
-	 * the legacy `delta` frame, so the page passes it here when it has it.
+	 * `answer` is optional and not part of that shape: a refund stream from before the agent sent
+	 * agent:text_delta carried its answer only as the legacy `delta` frame, so the page passes it
+	 * here when it has it; the flow lists it only when the stream carried no answer of its own.
 	 */
 	export interface Turn {
 		id: string;
