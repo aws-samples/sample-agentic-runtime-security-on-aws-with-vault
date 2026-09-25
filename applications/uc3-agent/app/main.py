@@ -30,6 +30,7 @@ import json
 import logging
 import os
 import re
+import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
@@ -164,8 +165,9 @@ async def chat(request: Request, body: ChatRequest):
     # so the credentials this turn uses before the agent starts (a Vault
     # re-login, the caller's id_token, the Bedrock STS keys issued by
     # build_uc3_agent) are queued for the stream; nothing is sent unless the
-    # request gets as far as streaming.
-    sink = activity.EventSink(asyncio.get_running_loop())
+    # request gets as far as streaming. The id is this turn's requestId unless
+    # a refund binds its own (activity.py, "The turn's requestId").
+    sink = activity.EventSink(asyncio.get_running_loop(), request_id=str(uuid.uuid4()))
     prep_sink_token = activity.bind_sink(sink)
     try:
         if not _vault_client.is_authenticated():

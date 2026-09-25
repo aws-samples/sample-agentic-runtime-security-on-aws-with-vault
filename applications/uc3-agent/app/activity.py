@@ -25,6 +25,19 @@ never full and a push never blocks, so a browser that disconnects cannot stall
 the worker: the refund still runs to completion, and pushes after close() are
 dropped.
 
+The turn's requestId
+--------------------
+Every event in a turn carries the same requestId (the contract). In a refund
+turn that is the refund's request_id — the id the CIBA binding_message, Vault's
+X-Correlation-Id, the pgaudit statement comment and banking.refunds.request_id
+carry. initiate_refund mints it and complete_refund takes it from the approval
+it redeems, once its checks prove the approval is the caller's; neither id
+exists when the refund tool's call starts. So the sink holds every event until
+the turn's requestId is known and then sends them, stamped, in the order they
+were reported. A turn that binds no refund — a non-refund tool runs, a refund
+tool ends without binding, or the turn ends — uses the id main.py minted for
+it. From then on every event is sent at once.
+
 Credentials
 -----------
 Every credential the turn uses is shown IN FULL, in exactly one place: an
@@ -121,21 +134,22 @@ def _json_safe(value: Any, depth: int = 0) -> Any:
 
 
 class EventSink:
-    """One /chat request's event queue, safe to push to from any thread."""
+    """One /chat request's event queue, safe to push to from any thread.
 
-    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
+    `request_id` is the id this turn uses if it binds no refund (see "The turn's
+    requestId" above).
+    """
+
+    def __init__(self, loop: asyncio.AbstractEventLoop, request_id: str) -> None:
         self._loop = loop
         self.queue: asyncio.Queue = asyncio.Queue()  # unbounded: a push never blocks
         self._closed = False
         self._lock = threading.Lock()
         self._request_by_tool_call: dict[str, str] = {}
         self._tool_call_by_request: dict[str, str] = {}
-        # Credentials the turn holds before its refund's request_id exists (the
-        # caller's id_token, the agent's Vault token, the Bedrock STS keys) are
-        # held back and sent, stamped, the moment a refund binds its request_id.
-        # If the turn runs a non-refund tool or ends first, they go unstamped.
-        self._latest_request_id: str | None = None
-        self._holding = True
+        self._own_request_id = request_id
+        # The turn's requestId once it is known; until then every event is held.
+        self._request_id: str | None = None
         self._held: list[dict] = []
         self._credentials_sent: set[str] = set()  # sha256 of kind+value, per turn
 
@@ -157,56 +171,71 @@ class EventSink:
         """Stop accepting events: the browser has gone or the stream has ended."""
         self._closed = True
 
+    def publish(self, event: dict) -> None:
+        """Send one event stamped with the turn's requestId, or hold it until that is known.
+
+        An event that already names a requestId keeps it.
+        """
+        with self._lock:
+            if self._closed:
+                return
+            if self._request_id is None:
+                self._held.append(event)
+                return
+            event.setdefault("requestId", self._request_id)
+            self.push(event)
+
+    def _settle_locked(self, request_id: str, send) -> None:
+        """Fix the turn's requestId and send what was held, in order, through `send`."""
+        if self._request_id is not None:
+            return
+        self._request_id = request_id
+        for event in self._held:
+            event.setdefault("requestId", request_id)
+            send(event)
+        self._held = []
+
     def bind_request(self, tool_call_id: str, request_id: str) -> None:
+        """A refund tool call has its request_id: the turn's requestId, if not already fixed."""
         with self._lock:
             self._request_by_tool_call[tool_call_id] = request_id
             self._tool_call_by_request[request_id] = tool_call_id
-            self._latest_request_id = request_id
-            self._release_held_locked(request_id)
+            self._settle_locked(request_id, self.push)
 
-    def _release_held_locked(self, request_id: str | None) -> None:
-        if not self._holding:
-            return
-        self._holding = False
-        for event in self._held:
-            if request_id:
-                event["requestId"] = request_id
-            event["ts"] = int(time.time() * 1000)
-            self.push(event)
-        self._held = []
-
-    def release_held(self) -> None:
-        """A non-refund tool is running: this turn has no refund in play."""
+    def settle_without_refund(self) -> None:
+        """No refund bound its request_id before this point: the turn uses its own id."""
         with self._lock:
-            self._release_held_locked(None)
+            self._settle_locked(self._own_request_id, self.push)
+
+    @property
+    def request_id(self) -> str:
+        """The turn's requestId: the refund's, or the turn's own when no refund bound one."""
+        return self._request_id or self._own_request_id
 
     def offer_credential(self, event: dict, request_id: str | None, digest: str) -> None:
-        """Send a credential event once per turn, stamped with the refund's request_id."""
+        """Send a credential event once per turn."""
         with self._lock:
             if self._closed or digest in self._credentials_sent:
                 return
             self._credentials_sent.add(digest)
-            request_id = request_id or self._latest_request_id
-            if request_id:
-                event["requestId"] = request_id
-            elif self._holding:
-                self._held.append(event)
-                return
-            event["ts"] = int(time.time() * 1000)
-            self.push(event)
+        if request_id:
+            event["requestId"] = request_id
+        event["ts"] = int(time.time() * 1000)
+        self.publish(event)
 
     def finish(self) -> None:
         """On the request's loop, after the agent task is done: flush, then END.
 
         Everything the worker pushed is already queued (call_soon_threadsafe ran
-        ahead of the task's completion); held credentials go unstamped because no
-        refund bound a request_id this turn.
+        ahead of the task's completion). Events still held — the turn bound no
+        refund — are stamped with the turn's own id and queued directly, ahead
+        of END. Once the stream has closed nothing is queued: nobody reads it.
         """
         with self._lock:
-            held, self._held, self._holding = self._held, [], False
-        for event in held:
-            event["ts"] = int(time.time() * 1000)
-            self.queue.put_nowait(event)
+            if self._closed:
+                self._held = []
+                return
+            self._settle_locked(self._own_request_id, self.queue.put_nowait)
         self.queue.put_nowait(END)
 
     def request_id_for(self, tool_call_id: str) -> str | None:
@@ -255,7 +284,7 @@ def emit(event_type: str, **fields: Any) -> None:
                     continue
             event[name] = value
         event["ts"] = int(time.time() * 1000)
-        sink.push(event)
+        sink.publish(event)
     except Exception:  # noqa: BLE001 — reporting a step must never break it
         logger.warning("uc3_activity_emit_failed", extra={"event_type": event_type}, exc_info=True)
 
@@ -264,7 +293,7 @@ def bind_request(tool_context: Any, request_id: str) -> None:
     """Tie a refund's request_id to the tool call that is running it.
 
     From here on the tool call's own events (tool_call success/error, HITL)
-    carry that request_id.
+    carry that request_id, and so does every event the turn held until now.
     """
     sink = _EVENT_SINK.get()
     if sink is None:
@@ -444,8 +473,8 @@ class ToolActivityHooks(HookProvider):
     """Reports every tool call's start and finish as `tool_call` events.
 
     `refund_tools` names the tools that bind a refund's request_id. When any
-    other tool starts, the turn has no refund in play, so credentials held for
-    a request_id are sent without one.
+    other tool starts, or a refund tool finishes without binding one, the turn
+    has no refund in play: it takes its own requestId and what it held is sent.
 
     A hook only reports; it must never change what the tool call does. Strands
     hands an exception raised in a hook to the tool call itself: from the
@@ -484,7 +513,7 @@ class ToolActivityHooks(HookProvider):
         tool_call_id = str(tool_use.get("toolUseId", ""))
         sink = _EVENT_SINK.get()
         if sink is not None and tool_use.get("name") not in self._refund_tools:
-            sink.release_held()
+            sink.settle_without_refund()
         emit(
             "tool_call",
             toolCallId=tool_call_id,
@@ -503,6 +532,11 @@ class ToolActivityHooks(HookProvider):
             or event.cancel_message is not None
             or result.get("status") == "error"
         )
+        sink = _EVENT_SINK.get()
+        if sink is not None:
+            # A refund tool that refused before binding a request_id: no refund
+            # this turn, so its held events go out now rather than at turn end.
+            sink.settle_without_refund()
         emit(
             "tool_call",
             toolCallId=tool_call_id,

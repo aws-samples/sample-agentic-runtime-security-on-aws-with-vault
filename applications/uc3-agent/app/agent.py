@@ -1038,8 +1038,9 @@ def complete_refund(auth_req_id: str, request_id: str, tool_context: ToolContext
     # The approved terms, recovered from the approval this auth_req_id names.
     # Fail closed: no record means this process never fired that push (or it has
     # aged out of the store), and there is no safe value to fall back on.
-    # The three refusals below report no requestId: until all three checks pass,
-    # the request_id argument is unverified model input.
+    # The three refusals below never report the request_id argument: until all
+    # three checks pass it is unverified model input. They carry the turn's own
+    # requestId instead (activity.py, "The turn's requestId").
     terms = ciba_store.get_terms(auth_req_id)
     if terms is None:
         logger.warning(
