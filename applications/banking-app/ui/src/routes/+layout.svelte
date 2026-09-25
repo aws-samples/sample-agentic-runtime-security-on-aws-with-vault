@@ -6,8 +6,10 @@
 	import '../app.css';
 
 	import { tick } from 'svelte';
+	import { browser } from '$app/environment';
 	import { page } from '$app/state';
 	import { getPersona } from '$lib/personas';
+	import { HEAD_SCRIPT, isMarkedCollapsed, setCollapsed } from '$lib/nav-rail';
 	import type { LayoutData } from './$types';
 
 	let { data, children }: { data: LayoutData; children: import('svelte').Snippet } = $props();
@@ -34,6 +36,26 @@
 	function isCurrent(href: string): boolean {
 		const path = page.url.pathname;
 		return path === href || path.startsWith(`${href}/`);
+	}
+
+	// ---- Wide screens: the navigation collapses to a 72px icon rail -----------------
+	// The rail is drawn by CSS from an attribute on <html> that the head script sets before
+	// the first paint ($lib/nav-rail), so the markup is the same in both states and this
+	// state only drives the toggle's aria-expanded. On screens 960px and narrower the rail
+	// does not apply: the navigation is the drawer below, whatever was chosen here.
+	let collapsed = $state(browser && isMarkedCollapsed());
+
+	function toggleCollapsed() {
+		collapsed = !collapsed;
+		setCollapsed(collapsed);
+	}
+
+	// Escape hides a rail link's name tooltip without moving focus or the pointer (WCAG
+	// 1.4.13). Leaving or blurring the link brings tooltips back.
+	let tipsDismissed = $state(false);
+
+	function showingTip(): boolean {
+		return Boolean(nav?.querySelector('.nav-links a:hover, .nav-links a:focus-visible'));
 	}
 
 	// ---- Narrow screens: the navigation is a drawer opened from the top bar ----------
@@ -94,7 +116,12 @@
 	// While the drawer is open: Escape closes it, and Tab / Shift+Tab wrap through the menu
 	// button and the drawer.
 	function onWindowKeydown(e: KeyboardEvent) {
-		if (!menuOpen) return;
+		if (!menuOpen) {
+			if (e.key === 'Escape' && collapsed && !window.matchMedia(NARROW).matches && showingTip()) {
+				tipsDismissed = true;
+			}
+			return;
+		}
 		if (e.key === 'Escape') {
 			e.preventDefault();
 			closeMenu();
@@ -118,6 +145,11 @@
 </script>
 
 <svelte:window onkeydown={onWindowKeydown} />
+
+<svelte:head>
+	<!-- Marks <html> collapsed before the first paint when the viewer chose the rail. -->
+	{@html HEAD_SCRIPT}
+</svelte:head>
 
 <a class="skip-link" href="#main-content">Skip to main content</a>
 
@@ -161,7 +193,7 @@
 	{/if}
 
 	<!-- The left navigation on wide screens; the drawer on narrow ones. -->
-	<nav id="main-nav" class="shell-nav" aria-label="Main" bind:this={nav}>
+	<nav id="main-nav" class="shell-nav" class:tips-dismissed={tipsDismissed} aria-label="Main" bind:this={nav}>
 		{#if signedIn}
 			<a class="brand" href="/dashboard" data-sveltekit-reload>
 				<span class="brand-mark" aria-hidden="true">OVI</span>
@@ -183,14 +215,32 @@
 		<ul class="nav-links">
 			{#each links as link (link.href)}
 				<li>
-					<!-- Full page loads, as before: each page starts a fresh chat session. -->
+					<!-- Full page loads, as before: each page starts a fresh chat session.
+					     The icon shows only in the rail. There the label stays the link's name,
+					     clipped out of sight, and shows as a tooltip on hover and focus. -->
 					<a
 						href={link.href}
 						aria-current={isCurrent(link.href) ? 'page' : undefined}
 						data-sveltekit-reload
 						onclick={() => closeMenu({ returnFocus: false })}
+						onmouseleave={() => (tipsDismissed = false)}
+						onblur={() => (tipsDismissed = false)}
 					>
-						{link.label}
+						<svg class="nav-icon" width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+							{#if link.href === '/dashboard'}
+								<rect x="3" y="3" width="6" height="6" rx="1.5"></rect>
+								<rect x="11" y="3" width="6" height="6" rx="1.5"></rect>
+								<rect x="3" y="11" width="6" height="6" rx="1.5"></rect>
+								<rect x="11" y="11" width="6" height="6" rx="1.5"></rect>
+							{:else if link.href === '/ask'}
+								<path d="M4 3h9l3 3v11H4z"></path>
+								<path d="M7 9h6M7 12h6"></path>
+							{:else}
+								<circle cx="10" cy="7" r="3.2"></circle>
+								<path d="M4 17c1-3.3 3.3-5 6-5s5 1.7 6 5"></path>
+							{/if}
+						</svg>
+						<span class="nav-label">{link.label}</span>
 					</a>
 				</li>
 			{/each}
@@ -228,6 +278,22 @@
 				<p class="me-note">Use Case 1 needs no sign-in</p>
 				<a class="me-action" href="/" data-sveltekit-reload onclick={() => closeMenu({ returnFocus: false })}>Sign in</a>
 			{/if}
+		</div>
+
+		<!-- Collapse / expand, in the navigation's footer as in Carbon's UI Shell side nav.
+		     Wide screens only. Both names are in the markup and CSS shows the one that
+		     matches the state, so the name is right before the page has started. -->
+		<div class="nav-foot">
+			<button type="button" class="nav-toggle" aria-expanded={!collapsed} aria-controls="main-nav" onclick={toggleCollapsed}>
+				<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+					<rect x="2.5" y="3.5" width="15" height="13" rx="2"></rect>
+					<path d="M7.5 3.5v13"></path>
+					<path class="toggle-when-full" d="M13.5 8l-2 2 2 2"></path>
+					<path class="toggle-when-rail" d="M11.5 8l2 2-2 2"></path>
+				</svg>
+				<span class="toggle-when-full">Collapse</span>
+				<span class="toggle-when-rail">Expand navigation</span>
+			</button>
 		</div>
 	</nav>
 
@@ -345,6 +411,12 @@
 		font-weight: 500;
 	}
 
+	/* The link icons and the toggle's "Expand" parts belong to the rail only. */
+	.nav-icon,
+	.toggle-when-rail {
+		display: none;
+	}
+
 	.nav-me {
 		margin-top: auto;
 		display: flex;
@@ -424,6 +496,191 @@
 		outline: var(--ovi-focus-ring);
 		outline-offset: 2px;
 		border-radius: 4px;
+	}
+
+	/* ---- Collapse / expand control (wide screens) ---------------------------------- */
+	.nav-foot {
+		padding: 8px 16px;
+		border-top: 1px solid var(--ovi-hairline-strong);
+	}
+
+	.nav-toggle {
+		box-sizing: border-box;
+		width: 100%;
+		height: 40px;
+		padding: 0 8px;
+		border: 0;
+		border-radius: 10px;
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		background: none;
+		color: var(--ovi-text-strong);
+		font: 500 14px var(--ovi-font-sans);
+		letter-spacing: normal;
+		cursor: pointer;
+	}
+
+	.nav-toggle:hover {
+		background: rgba(15, 98, 254, 0.08);
+	}
+
+	.nav-toggle:focus-visible {
+		outline: var(--ovi-focus-ring);
+		outline-offset: 2px;
+	}
+
+	/* ---- The rail: wide screens, collapsed ----------------------------------------- */
+	/* <html data-ovi-nav="collapsed"> is set before the first paint ($lib/nav-rail). The
+	   query is the exact complement of the drawer's (max-width: 960px), so no width gets
+	   both or neither. The rail keeps every name in the accessibility tree: link labels and
+	   the account name are clipped out of sight, never display: none. */
+	@media not all and (max-width: 960px) {
+		/* overflow: visible lets the link tooltips extend over the chat; z-index keeps them
+		   above it. */
+		:global(html[data-ovi-nav='collapsed']) .shell-nav {
+			z-index: 2;
+			width: 72px;
+			overflow: visible;
+		}
+
+		:global(html[data-ovi-nav='collapsed']) .brand {
+			margin: 0 16px;
+			justify-content: center;
+		}
+
+		:global(html[data-ovi-nav='collapsed']) .brand-text,
+		:global(html[data-ovi-nav='collapsed']) .me-text,
+		:global(html[data-ovi-nav='collapsed']) span.toggle-when-rail {
+			position: absolute;
+			width: 1px;
+			height: 1px;
+			margin: -1px;
+			padding: 0;
+			overflow: hidden;
+			clip-path: inset(50%);
+			white-space: nowrap;
+		}
+
+		/* The toggle's name in the rail (its "Collapse" text is hidden there). */
+		:global(html[data-ovi-nav='collapsed']) span.toggle-when-rail {
+			display: block;
+		}
+
+		:global(html[data-ovi-nav='collapsed']) .nav-links {
+			align-items: center;
+			gap: 6px;
+			padding: 14px 0 6px;
+		}
+
+		:global(html[data-ovi-nav='collapsed']) .nav-links a {
+			position: relative;
+			box-sizing: border-box;
+			width: 44px;
+			height: 44px;
+			padding: 0;
+			border-radius: 12px;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			color: var(--ovi-text-strong);
+		}
+
+		:global(html[data-ovi-nav='collapsed']) .nav-links a:hover {
+			background: var(--ovi-card);
+			color: var(--ovi-text-primary);
+			text-decoration: none;
+			box-shadow: 0 1px 2px rgba(22, 22, 22, 0.08);
+		}
+
+		:global(html[data-ovi-nav='collapsed']) .nav-links a[aria-current='page'] {
+			background: rgba(15, 98, 254, 0.1);
+			color: var(--ovi-brand-primary);
+			box-shadow: none;
+		}
+
+		:global(html[data-ovi-nav='collapsed']) .nav-icon {
+			display: block;
+			flex-shrink: 0;
+		}
+
+		/* The label is the tooltip: clipped to nothing (still the link's name) until the
+		   link is hovered or focused. */
+		:global(html[data-ovi-nav='collapsed']) .nav-label {
+			position: absolute;
+			top: 50%;
+			left: calc(100% + 12px);
+			z-index: 1;
+			transform: translateY(-50%);
+			padding: 6px 10px;
+			border-radius: 6px;
+			background: var(--ovi-text-primary);
+			box-shadow: 0 2px 8px rgba(22, 22, 22, 0.2);
+			color: #ffffff;
+			font: 500 13px var(--ovi-font-sans);
+			white-space: nowrap;
+			clip-path: inset(50%);
+		}
+
+		/* The arrow pointing at the icon. */
+		:global(html[data-ovi-nav='collapsed']) .nav-label::before {
+			content: '';
+			position: absolute;
+			top: 50%;
+			left: -4px;
+			width: 8px;
+			height: 8px;
+			background: var(--ovi-text-primary);
+			transform: translateY(-50%) rotate(45deg);
+		}
+
+		/* Bridges the gap to the icon, so the pointer can move onto the tooltip without it
+		   disappearing (WCAG 1.4.13). */
+		:global(html[data-ovi-nav='collapsed']) .nav-label::after {
+			content: '';
+			position: absolute;
+			top: 0;
+			right: 100%;
+			bottom: 0;
+			width: 12px;
+		}
+
+		:global(html[data-ovi-nav='collapsed']) .nav-links a:hover .nav-label,
+		:global(html[data-ovi-nav='collapsed']) .nav-links a:focus-visible .nav-label {
+			clip-path: none;
+		}
+
+		/* Escape hides it until the pointer leaves or focus moves. */
+		:global(html[data-ovi-nav='collapsed']) .shell-nav.tips-dismissed .nav-links a .nav-label {
+			clip-path: inset(50%);
+		}
+
+		:global(html[data-ovi-nav='collapsed']) .nav-me {
+			align-items: center;
+			padding: 18px 0 22px;
+		}
+
+		:global(html[data-ovi-nav='collapsed']) .me-note,
+		:global(html[data-ovi-nav='collapsed']) .me-action,
+		:global(html[data-ovi-nav='collapsed']) .toggle-when-full {
+			display: none;
+		}
+
+		:global(html[data-ovi-nav='collapsed']) .nav-foot {
+			display: flex;
+			justify-content: center;
+			padding: 8px 0;
+		}
+
+		:global(html[data-ovi-nav='collapsed']) .nav-toggle {
+			width: 44px;
+			padding: 0;
+			justify-content: center;
+		}
+
+		:global(html[data-ovi-nav='collapsed']) path.toggle-when-rail {
+			display: inline;
+		}
 	}
 
 	/* ---- Main column -------------------------------------------------------------- */
@@ -562,6 +819,11 @@
 
 		.me-action {
 			font-size: 15px;
+		}
+
+		/* The drawer has no rail: the collapse control is for wide screens only. */
+		.nav-foot {
+			display: none;
 		}
 
 		.scrim {
