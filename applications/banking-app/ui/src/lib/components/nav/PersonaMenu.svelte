@@ -227,6 +227,8 @@
 
 <style>
 	/* ---- The account button ------------------------------------------------------- */
+	/* No card and no ring, open or closed: the button is part of the navigation and shows it
+	   is clickable by filling on hover alone, as the reference demo draws it. */
 	.me-button {
 		box-sizing: border-box;
 		width: 100%;
@@ -236,19 +238,17 @@
 		padding: 8px;
 		border: 0;
 		border-radius: 12px;
-		background: var(--ovi-card);
-		box-shadow: 0 0 0 1px var(--ovi-hairline-strong);
+		background: transparent;
 		color: var(--ovi-text-primary);
 		font: inherit;
 		letter-spacing: inherit;
 		text-align: left;
 		cursor: pointer;
+		transition: background-color 180ms ease;
 	}
 
 	.me-button:hover {
-		box-shadow:
-			0 0 0 1px var(--ovi-border),
-			0 1px 2px rgba(22, 22, 22, 0.08);
+		background: var(--ovi-surface-bg);
 	}
 
 	.me-button:focus-visible {
@@ -311,11 +311,10 @@
 		width: min(372px, calc(100vw - 32px));
 		overflow-y: auto;
 		padding: 8px 0;
-		border-radius: 14px;
+		border: 1px solid var(--ovi-hairline);
+		border-radius: 12px;
 		background: var(--ovi-card);
-		box-shadow:
-			0 0 0 1px var(--ovi-hairline-strong),
-			0 16px 40px rgba(22, 22, 22, 0.18);
+		box-shadow: 0 8px 24px rgba(15, 98, 254, 0.08);
 		color: var(--ovi-text-primary);
 		text-align: left;
 	}
@@ -325,11 +324,17 @@
 	}
 
 	.sec {
-		border-top: 1px solid var(--ovi-hairline-strong);
+		position: relative;
 	}
 
-	.sec:first-child {
-		border-top: 0;
+	.sec:not(:first-child)::before {
+		content: '';
+		position: absolute;
+		top: 0;
+		right: 12px;
+		left: 12px;
+		height: 1px;
+		background: var(--ovi-hairline);
 	}
 
 	.sec-head {
@@ -338,7 +343,7 @@
 		display: flex;
 		align-items: center;
 		gap: 10px;
-		padding: 12px 18px;
+		padding: 10px 16px;
 		border: 0;
 		background: none;
 		color: var(--ovi-text-primary);
@@ -346,6 +351,7 @@
 		letter-spacing: normal;
 		text-align: left;
 		cursor: pointer;
+		transition: background-color 180ms ease;
 	}
 
 	.sec.open .sec-head,
@@ -374,7 +380,7 @@
 	/* line-height: normal, as drawn; Carbon sets 1.5 on every <p>. */
 	.sec-sub {
 		margin: 0;
-		padding: 0 18px 6px;
+		padding: 0 16px 6px;
 		font-size: 12.5px;
 		line-height: normal;
 		color: var(--ovi-text-helper);
@@ -391,7 +397,7 @@
 		box-sizing: content-box;
 		max-height: 318px;
 		overflow: auto;
-		margin: 4px 18px 10px;
+		margin: 4px 16px 10px;
 		border: 1px solid var(--ovi-hairline-strong);
 		border-radius: 10px;
 	}
@@ -438,13 +444,24 @@
 	.logout {
 		display: flex;
 		align-items: center;
+		position: relative;
 		gap: 10px;
-		padding: 12px 18px;
-		border-top: 1px solid var(--ovi-hairline-strong);
+		padding: 10px 16px;
 		color: #da1e28;
 		font: 500 15px var(--ovi-font-sans);
 		letter-spacing: normal;
 		text-decoration: none;
+		transition: background-color 180ms ease;
+	}
+
+	.logout::before {
+		content: '';
+		position: absolute;
+		top: 0;
+		right: 12px;
+		left: 12px;
+		height: 1px;
+		background: var(--ovi-hairline);
 	}
 
 	.logout:hover {
@@ -464,8 +481,6 @@
 			width: auto;
 			padding: 0;
 			border-radius: 50%;
-			background: none;
-			box-shadow: none;
 		}
 
 		:global(html[data-ovi-nav='collapsed']) .me-text {
