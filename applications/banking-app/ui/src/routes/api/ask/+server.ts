@@ -28,12 +28,20 @@ import { AgentCall, agentFailed, streamAgentEvents } from '$lib/server/agent-pro
 
 const UC1_AGENT_URL = env.UC1_AGENT_URL ?? 'http://uc1-agent-svc.uc1.svc.cluster.local';
 
-/** The frames that tell the browser the agent answered in the old, non-streaming format. */
+/**
+ * What went wrong, stating a cause only where one is known: an Ask agent image older than
+ * this UI answers application/json. Any other reply is named, with no cause given.
+ */
+function notAStreamMessage(mediaType: string): string {
+	if (mediaType === 'application/json') {
+		return 'The Ask agent answered in the old non-streaming format (application/json) — its image is older than this UI.';
+	}
+	return `The Ask agent answered ${mediaType || 'with no content type'}, not a stream.`;
+}
+
+/** The frames that tell the browser the agent's answer was not a stream. */
 function notAStream(mediaType: string): Response {
-	const error: LegacyErrorEvent = {
-		type: 'error',
-		content: `The Ask agent answered in the old non-streaming format (${mediaType || 'no content type'}) — its image is older than this UI.`
-	};
+	const error: LegacyErrorEvent = { type: 'error', content: notAStreamMessage(mediaType) };
 	const end: LegacyEndEvent = { type: 'end' };
 	const body = [error, end].map((event) => `data: ${JSON.stringify(event)}\n\n`).join('');
 	return new Response(body, {
