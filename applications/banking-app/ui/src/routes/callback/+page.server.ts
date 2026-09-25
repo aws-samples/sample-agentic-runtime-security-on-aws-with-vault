@@ -7,10 +7,18 @@
  *   2. Retrieves code_verifier from the pkce cookie.
  *   3. POSTs to IVIA /oauth2/token (in-cluster DNS — bypasses WRP ALB)
  *      with HTTP Basic client_id:client_secret auth.
- *   4. Stores access_token + id_token in httpOnly session cookies.
+ *   4. Stores access_token + id_token (and refresh_token, when IVIA returns
+ *      one) in httpOnly session cookies.
  *   5. Redirects to /dashboard.
  *
- * Security: all token handling is server-side. Tokens never reach the browser DOM.
+ * Security: the tokens are held in httpOnly cookies, so no page script can
+ * read them from the cookie jar. They still reach the browser in two ways:
+ *   - page data: the root layout load (routes/+layout.server.ts) gives every
+ *     signed-in page the access token, and the dashboard load
+ *     (routes/dashboard/+page.server.ts) gives it the id token as well;
+ *   - the chat stream: agent:credential events show, in full, every token and
+ *     credential an agent issues or presents during a turn
+ *     (lib/agent-events.ts, passed by lib/server/activity-filter.ts).
  * The token exchange is server-to-server over the in-cluster service URL
  * (IVIA_BASE_URL), so the WRP ALB is not on the path here.
  */
