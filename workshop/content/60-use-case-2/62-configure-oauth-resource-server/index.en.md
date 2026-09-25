@@ -211,7 +211,7 @@ lease_id           database/creds/uc2-personal-readonly/<opaque>
 lease_duration     15m
 lease_renewable    false
 password           <ephemeral>
-username           v-JWT Toke-uc2-pers-<random>-<timestamp>
+username           v-JWT-Toke-uc2-pers-<random>-<timestamp>
 ```
 
 ::::alert{header="Use access_token, not id_token — the id_token cannot work here" type="warning"}

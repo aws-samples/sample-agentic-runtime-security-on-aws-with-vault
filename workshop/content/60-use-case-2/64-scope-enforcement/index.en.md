@@ -209,7 +209,7 @@ secret/db-master created
  Schema  |   Name   | Type  |                         Access privileges                          | Column privileges |                                    Policies
 ---------+----------+-------+--------------------------------------------------------------------+-------------------+---------------------------------------------------------------------------------
  banking | accounts | table | vault_root=arwdDxtm/vault_root                                    +|                   | user_accounts (r):                                                             +
-         |          |       | "v-JWT Toke-uc2-pers-<random>-<timestamp>"=r/vault_root           +|                   |   (u): ((user_sub)::text = current_setting('app.current_user_sub'::text, true))
+         |          |       | "v-JWT-Toke-uc2-pers-<random>-<timestamp>"=r/vault_root           +|                   |   (u): ((user_sub)::text = current_setting('app.current_user_sub'::text, true))
          |          |       | "v-root-uc2-pers-<random>-<timestamp>"=r/vault_root               +|                   |
          |          |       | "v-root-uc2-pers-<random>-<timestamp>"=r/vault_root                |                   |
 (1 row)
@@ -263,8 +263,8 @@ done
 Expected output — **both** succeed, with two different credentials:
 
 ```
-attempt 1 username=v-JWT Toke-uc2-pers-DiVXIMGjGIeX0uV8sFm9-1788385620
-attempt 2 username=v-JWT Toke-uc2-pers-gFzxJVMgIqTvaHP3K9R9-1788385654
+attempt 1 username=v-JWT-Toke-uc2-pers-DiVXIMGjGIeX0uV8sFm9-1788385620
+attempt 2 username=v-JWT-Toke-uc2-pers-gFzxJVMgIqTvaHP3K9R9-1788385654
 ```
 
 #### What this means, stated plainly

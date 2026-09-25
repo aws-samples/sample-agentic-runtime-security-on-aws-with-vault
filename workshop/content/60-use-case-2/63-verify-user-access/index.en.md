@@ -184,7 +184,7 @@ Expected summary output — a clean deploy self-mints the OBO token, so every ch
   ✓ PASS UC2 real token carries act.sub=agent-uc2 (OBO actor binding — AGENT_IDENTITY_CLAIM_UC2=act.sub)
   ✓ PASS UC2 refresh grant FAILS CLOSED at the source — agent-uc2 refresh_token grant rejected (HTTP 400; refresh_token issued at login=no)
   ✓ PASS UC2 alias accessor 'oauth-resource-server_root_<config_id>' matches oauth profile config_id — alias binding intact
-  ✓ PASS UC2 OBO allow: real token (sub + act.sub=agent-uc2) authorized database/creds/uc2-personal-readonly (username=v-JWT Toke-uc2-pers-<random>-<timestamp>)
+  ✓ PASS UC2 OBO allow: real token (sub + act.sub=agent-uc2) authorized database/creds/uc2-personal-readonly (username=v-JWT-Toke-uc2-pers-<random>-<timestamp>)
   ✓ PASS JIT DB creds issuance: username=v-root-uc2-pers-<random>-<timestamp>
   ✓ PASS DB read: SELECT from banking.accounts returned 2 row(s) for user 'oscar' (>= 2 expected)
   ✓ PASS ENFC-02: INSERT rejected by PostgreSQL (permission denied for table)
