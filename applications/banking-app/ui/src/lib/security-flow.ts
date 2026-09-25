@@ -27,7 +27,8 @@
  * -------------
  * Evidence is listed in the order events arrived, never sorted by `ts`: the refund agent
  * holds some credentials back and stamps `ts` when it releases them. `ts` is used only for
- * the "+1.2s" label.
+ * the "+1.2s" label, counted from the agent's first event so that every time is on the pod's
+ * clock; the page's own send time is on the browser's clock and never mixed in.
  */
 
 import type { AgentCredentialEvent, AgentEvent, JsonObject, JsonValue } from './agent-events';
@@ -97,7 +98,7 @@ export interface Signal {
 
 export interface EvidenceRow {
 	index: number;
-	/** "+1.2s" after the turn started, or "" when the event carries no time. */
+	/** "+1.2s" after the agent's first event, or "" for a row with no agent time (the page's own). */
 	t: string;
 	/** Where the row came from: the event type, or local:* for what the page itself did. */
 	src: string;
@@ -134,7 +135,10 @@ export interface Flow {
 export interface FlowContext {
 	/** The question the page sent. */
 	question?: string;
-	/** When the page sent it: milliseconds since the Unix epoch. */
+	/**
+	 * When the page sent it, in milliseconds since the Unix epoch on the browser's clock. Kept in
+	 * the question's evidence row; not used for the "+1.2s" times, which are on the pod's clock.
+	 */
 	startedAt?: number;
 	/**
 	 * The stream has ended. The refund agent sends no agent:done (it ends on the legacy
@@ -1166,13 +1170,15 @@ export function buildFlow(useCase: UseCase, events: readonly AgentEvent[], conte
 	const refundTurn = phase.initiate || phase.complete;
 
 	// Evidence rows: what the page sent, every event in arrival order, what the page received.
-	const t0 = context.startedAt ?? f.list.find((s) => typeof s.event.ts === 'number')?.event.ts;
+	// Times count from the agent's first event. The page's own send time is on the browser's
+	// clock and `ts` on the pod's, so mixing them would show skew as latency (or clamp to 0).
+	const t0 = f.list.find((s) => typeof s.event.ts === 'number')?.event.ts;
 	const evidence: EvidenceRow[] = [];
 	const rowOf = new Map<number, number>();
 	if (context.question) {
 		evidence.push({
 			index: 0,
-			t: context.startedAt !== undefined ? '+0.0s' : '',
+			t: '',
 			src: 'local:sendMessage',
 			kind: 'user.request',
 			status: 'success',
