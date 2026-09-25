@@ -28,7 +28,10 @@ service-account JWT the agent signs in to Vault with, its Vault token, the AWS
 keys and database login Vault issues. They travel ONLY as `agent:credential`
 events on this queue (credential() below). Never in narration text, never in a
 log line (pod logs are shipped off-cluster), never in a tool's return value
-(that goes to Bedrock, and the model can repeat it).
+(that goes to Bedrock, and the model can repeat it). Each one says for itself
+whether it was reused (`reused`): true for the agent's login and the model's
+keys when the turn runs on ones obtained before it, false for everything made
+or first presented during the turn.
 """
 
 from __future__ import annotations
@@ -114,6 +117,7 @@ def credential(
     label: str,
     issuer: str,
     *,
+    reused: bool,
     value: str | None = None,
     fields: dict[str, Any] | None = None,
     claims: dict[str, Any] | None = None,
@@ -124,12 +128,24 @@ def credential(
 ) -> None:
     """Send one issued credential, in full, as an `agent:credential` event.
 
+    `reused` is required, with no default, so a call that does not say fails
+    at once: True when the credential was obtained before this turn (or before
+    this tool call) and is used again now, False when it was made or first
+    presented during this turn. The UI's Agent Log reads it to say "reused",
+    "presented" or "issued".
+
     `value` for a single token, `fields` for a multi-part credential — never
     both. Only the fields that exist for the credential are sent.
     """
     if _TURN.get() is None:
         return
-    event: dict[str, Any] = {"type": "agent:credential", "kind": kind, "label": label, "issuer": issuer}
+    event: dict[str, Any] = {
+        "type": "agent:credential",
+        "kind": kind,
+        "label": label,
+        "issuer": issuer,
+        "reused": reused,
+    }
     if value is not None:
         event["value"] = value
     elif fields is not None:

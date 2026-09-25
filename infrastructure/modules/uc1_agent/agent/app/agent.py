@@ -71,6 +71,7 @@ def _record_issuance(vault_path: str, creds: dict) -> None:
         "db_credentials",
         "Short-lived database login Vault issued for this question",
         "Vault",
+        reused=False,
         fields={"username": creds["username"], "password": creds["password"]},
         vault_path=vault_path,
         lease_id=creds["lease_id"],
@@ -92,9 +93,13 @@ def _describe_identity(identity: dict) -> str:
     return f"my Kubernetes service account (Vault role {role})"
 
 
-def _show_login_credentials(reused: bool) -> None:
+def _show_login_credentials(*, reused: bool) -> None:
     """Send the agent's own login credentials in full: the service-account JWT it
-    presented to Vault and the Vault token it got back. Streamed requests only."""
+    presented to Vault and the Vault token it got back. Streamed requests only.
+
+    `reused` is True when this turn reuses a login made before it (both
+    credentials were obtained earlier and are not presented or issued again),
+    False when the agent signed in during this turn."""
     if activity.current() is None:
         return
     login = _vault.login_details()
@@ -112,6 +117,7 @@ def _show_login_credentials(reused: bool) -> None:
             else f"My Kubernetes service-account token ({account}), presented to Vault to sign in"
         ),
         "Kubernetes",
+        reused=reused,
         value=login["sa_jwt"],
         claims=claims,
         expires_at=int(claims["exp"] * 1000) if claims and isinstance(claims.get("exp"), (int, float)) else None,
@@ -125,6 +131,7 @@ def _show_login_credentials(reused: bool) -> None:
             else f"My Vault token from this Kubernetes login (role {role})"
         ),
         "Vault",
+        reused=reused,
         value=login["vault_token"],
         ttl_seconds=ttl,
         expires_at=int((login["issued_at"] + ttl) * 1000) if ttl is not None and login["issued_at"] else None,
@@ -140,11 +147,15 @@ def _narrate_vault_login(identity: dict) -> None:
 
 
 def _show_sts_credentials(issued: dict, label: str) -> None:
-    """The AWS keys themselves, in full, for the streamed request only (queue, never a log)."""
+    """The AWS keys themselves, in full, for the streamed request only (queue, never a log).
+
+    Called only from get_bedrock_session's on_issued callbacks, the moment
+    Vault issues the keys, so they are never reused here."""
     activity.credential(
         "aws_sts_credentials",
         label,
         "AWS STS (via Vault)",
+        reused=False,
         fields={
             "access_key_id": issued["access_key_id"],
             "secret_access_key": issued["secret_access_key"],
@@ -523,6 +534,7 @@ def _show_model_keys() -> None:
         "aws_sts_credentials",
         "Short-lived AWS keys Vault issued for calling the model — reused this turn",
         "AWS STS (via Vault)",
+        reused=True,
         fields={
             "access_key_id": keys.access_key,
             "secret_access_key": keys.secret_key,
