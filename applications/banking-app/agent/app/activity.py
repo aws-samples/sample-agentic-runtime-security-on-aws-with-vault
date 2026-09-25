@@ -39,6 +39,11 @@ and database credential,
 these are standing: every turn that runs while they are current shows the
 same values.
 
+Each credential event says for itself whether it was reused (`reused`): true
+when the credential was obtained before this turn (or, for the MCP server's
+login, before this tool call) and is used again now; false when it was made or
+first presented during this turn.
+
 Every OTHER event (narration, tool calls, the audit seed, errors) is sent with
 every key and value the agent gave it — nothing is removed or replaced (Bear,
 2026-09-25: the workshop shows attendees everything as it happens). It is only
@@ -167,6 +172,7 @@ class TurnActivity:
         kind: str,
         label: str,
         issuer: str,
+        reused: bool,
         value: str | None = None,
         fields: dict[str, str] | None = None,
         claims: dict[str, Any] | None = None,
@@ -180,8 +186,20 @@ class TurnActivity:
         Built from these named fields only: showing the credential is the event's
         purpose. Only credentials issued during the turn come through here — never
         a client secret or other configuration.
+
+        `reused` is required, with no default, so a call that does not say fails
+        at once: True when the credential was obtained before this turn (or before
+        this tool call) and is used again now, False when it was made or first
+        presented during this turn. The UI's Agent Log reads it to say "reused",
+        "presented" or "issued".
         """
-        event: dict[str, Any] = {"type": "agent:credential", "kind": kind, "label": label, "issuer": issuer}
+        event: dict[str, Any] = {
+            "type": "agent:credential",
+            "kind": kind,
+            "label": label,
+            "issuer": issuer,
+            "reused": reused,
+        }
         if value is not None:
             event["value"] = value
         elif fields is not None:
@@ -411,6 +429,7 @@ def report_mcp_call(tool_name: str, mcp_url: str, jwt: str) -> None:
             kind="access_token",
             label=f"The caller's access token{whose}, which the MCP server presents to Vault as X-Vault-Token",
             issuer="IBM Verify Identity Access",
+            reused=False,
             value=jwt,
             claims=claims or None,
             expires_at=int(exp * 1000) if isinstance(exp, (int, float)) else None,
@@ -512,6 +531,7 @@ def report_credential_metadata(tool_name: str, meta: Any, issued: Any = None) ->
             + (f" (role {db_role})" if db_role else "")
             + f", {state}",
             issuer="Vault",
+            reused=False,
             fields={"username": issued["username"], "password": issued["password"]},
             vault_path=vault_path if isinstance(vault_path, str) else None,
             lease_id=lease_id if isinstance(lease_id, str) else None,
@@ -597,8 +617,9 @@ def report_model_credentials(issued: Any) -> None:
     (vault_client._ReportingCredentials). The first time a set signs a request
     in this turn, the turn is shown the login those keys were issued under — the
     Kubernetes service-account JWT it presented and the Vault token it got back
-    — and then the keys. Labels say whether each was issued during this turn or
-    earlier and reused. These are the agent's standing credentials, so every turn
+    — and then the keys. Each event's `reused` flag (and its label) says whether
+    it was issued during this turn or earlier and reused: the login and the keys
+    are judged separately, by when each was issued. These are the agent's standing credentials, so every turn
     that runs while they are current shows the same values. Outside a turn
     (startup, /health) nothing is sent.
     """
@@ -647,6 +668,7 @@ def report_model_credentials(issued: Any) -> None:
                 else f"The Kubernetes service-account token ({account}) I presented to Vault to sign in {_at(login_at)}"
             ),
             issuer="Kubernetes",
+            reused=not login_this_turn,
             value=sa_jwt,
             claims=claims or None,
             expires_at=int(exp * 1000) if isinstance(exp, (int, float)) else None,
@@ -663,6 +685,7 @@ def report_model_credentials(issued: Any) -> None:
                 else f"My Vault token from my Kubernetes login {_at(login_at)} (role {role})"
             ),
             issuer="Vault",
+            reused=not login_this_turn,
             value=vault_token,
             ttl_seconds=token_ttl if isinstance(token_ttl, (int, float)) else None,
             expires_at=_expires_ms(login_at, token_ttl),
@@ -680,6 +703,7 @@ def report_model_credentials(issued: Any) -> None:
                 "reused to sign this turn's model calls"
             ),
             issuer="AWS STS (via Vault)",
+            reused=not keys_this_turn,
             fields={
                 "access_key_id": key_id,
                 "secret_access_key": access[0],
@@ -704,8 +728,10 @@ def report_mcp_service_account_token(tool_name: str, sa_token: Any) -> None:
     tool has already taken out of the response so the model never sees it. It is
     the server's projected ServiceAccount token, presented to auth/kubernetes/login
     for the Vault token that revokes the lease (report_mcp_vault_token). It is
-    standing, like that token, so each distinct value is shown once per turn. An
-    MCP server that does not report it, or whose login failed, leaves this silent.
+    standing, like that token, so each distinct value is shown once per turn,
+    marked `reused` unless the server logged in during this tool call
+    (logged_in_for_this_call). An MCP server that does not report it, or whose
+    login failed, leaves this silent.
     """
     turn = current()
     if turn is None or not isinstance(sa_token, dict):
@@ -715,11 +741,8 @@ def report_mcp_service_account_token(tool_name: str, sa_token: Any) -> None:
         return
     account = sa_token.get("service_account") or "its service account"
     role = sa_token.get("role") or "unknown"
-    when = (
-        f"during this {tool_name} call"
-        if sa_token.get("logged_in_for_this_call") is True
-        else "for the Vault token it is still reusing"
-    )
+    fresh = sa_token.get("logged_in_for_this_call") is True
+    when = f"during this {tool_name} call" if fresh else "for the Vault token it is still reusing"
     claims = decode_payload(jwt)
     exp = claims.get("exp")
     turn.credential(
@@ -727,6 +750,7 @@ def report_mcp_service_account_token(tool_name: str, sa_token: Any) -> None:
         label=f"The MCP server's own Kubernetes service-account token ({account}), "
         f"presented to Vault to sign in (role {role}) {when}",
         issuer="Kubernetes",
+        reused=not fresh,
         value=jwt,
         claims=claims or None,
         expires_at=int(exp * 1000) if isinstance(exp, (int, float)) else None,
@@ -740,8 +764,9 @@ def report_mcp_vault_token(tool_name: str, login: Any) -> None:
     already taken out of the response so the model never sees it. The token is
     the server's, from its Kubernetes login (role uc2) — not the caller's. It is
     standing: the server reuses it across calls and callers until it nears
-    expiry, so each distinct token is shown once per turn. An MCP server that
-    does not report it leaves this silent.
+    expiry, so each distinct token is shown once per turn, marked `reused` unless
+    the server logged in during this tool call (logged_in_for_this_call). An MCP
+    server that does not report it leaves this silent.
     """
     turn = current()
     if turn is None or not isinstance(login, dict):
@@ -764,6 +789,7 @@ def report_mcp_vault_token(tool_name: str, login: Any) -> None:
         label=f"The MCP server's own Vault token (Kubernetes login, role {role}, policies {policies}, {when}), "
         f"presented to revoke the {tool_name} lease",
         issuer="Vault",
+        reused=not fresh,
         value=token,
         ttl_seconds=ttl if isinstance(ttl, (int, float)) else None,
         expires_at=_expires_ms(issued_at, ttl),
