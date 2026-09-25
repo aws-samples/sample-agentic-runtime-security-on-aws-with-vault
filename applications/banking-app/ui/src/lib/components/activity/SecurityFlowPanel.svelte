@@ -26,6 +26,17 @@
   Width and landmark follow the ChatWorkspace panel contract: the panel is an <aside> beside the
   chat column, 520px wide on a desktop and full width under the chat on screens 960px and
   narrower.
+
+  Full width: wider than 960px a round expand button before the close button floats the panel
+  over the whole window, a modal dialog 24px inside it, with the page behind dimmed and inert
+  (ChatWorkspace's float contract). Floating, the controls show "Dock beside chat", and the
+  Technical view spreads out as the approved board draws it: the request and a wide five-stop
+  line across the top; under them the result card and "What's happening" side by side, the
+  Technical signals under both, and the Evidence list in a third column that scrolls on its
+  own. The Story view uses the same top row and columns. The first Escape docks the panel and
+  returns focus to the expand button; the next one closes it. A click on the scrim docks it.
+  Floating and docked are the same component: the view, the replay and opened raw events carry
+  over.
 -->
 <script module lang="ts">
 	import type { Turn as LoggedTurn } from '$lib/turn-events.svelte';
@@ -42,7 +53,8 @@
 </script>
 
 <script lang="ts">
-	import { tick } from 'svelte';
+	import { onDestroy, tick } from 'svelte';
+	import { getPanelFloat } from '$lib/components/chat/ChatWorkspace.svelte';
 	import {
 		buildFlow,
 		chipsUpTo,
@@ -135,43 +147,109 @@
 		demoPace = false;
 	}
 
+	// Full width. Without a ChatWorkspace around it the panel stays docked and draws no
+	// expand button.
+	const float = getPanelFloat();
+	let floating = $derived(float?.floating === id);
+	let dockButton: HTMLButtonElement | undefined = $state();
+
+	async function expand() {
+		float?.expand(id);
+		await tick();
+		dockButton?.focus();
+	}
+
+	// Floating: the page behind is inert, so the float ends before the panel closes and focus
+	// can go back to the header button.
+	onDestroy(() => float?.release(id));
+
 	/** Closes the panel and returns focus to the header button that opens it. */
 	async function close() {
 		const toggle = document.querySelector<HTMLElement>(`[aria-controls="${id}"]`);
+		float?.release(id);
 		onclose();
 		await tick();
 		toggle?.focus();
 	}
 
+	// Escape docks a floating panel (ChatWorkspace returns focus to the expand button) and
+	// closes a docked one.
 	function onkeydown(e: KeyboardEvent) {
 		if (e.key === 'Escape') {
 			e.stopPropagation();
-			close();
+			if (floating) {
+				e.preventDefault();
+				float?.dock();
+			} else {
+				close();
+			}
 		}
 	}
 
-	// ---- The line: node positions, segment paths and sub-step marks from the approved mockup.
-	const NODES = [
-		{ x: 30, y: 118 },
-		{ x: 135, y: 76 },
-		{ x: 240, y: 102 },
-		{ x: 345, y: 70 },
-		{ x: 440, y: 84 }
-	];
-	const SEGMENTS = [
-		'M30 118 C 70 98, 95 78, 135 76',
-		'M135 76 C 175 74, 200 102, 240 102',
-		'M240 102 C 280 102, 305 70, 345 70',
-		'M345 70 C 385 70, 410 84, 440 84'
-	];
-	const SUBSTEPS = [
-		['M78 92 l6 10', 'M104 80 l4 11'],
-		['M170 78 l-3 11', 'M196 88 l-6 9'],
-		['M276 96 l6 9', 'M302 80 l5 10'],
-		['M384 66 l-1 11', 'M410 72 l-2 11']
-	];
-	/** Label baseline below each node: small nodes, and the large focus node. */
-	const LABEL_GAP = [40, 42, 40, 38, 38];
+	// ---- The line: node positions, segment paths and sub-step marks from the approved boards.
+	// Docked, the line is the 468-wide drawing of the Technical board; floating, the 1200-wide
+	// drawing of the floating board. Labels sit below each node: `gap` for a small node, `big`
+	// for the large focus node, never below `maxY`.
+	interface LineGeometry {
+		viewBox: string;
+		nodes: { x: number; y: number }[];
+		segments: string[];
+		substeps: string[][];
+		gap: number[];
+		big: number[];
+		maxY: number;
+	}
+	const DOCKED_LINE: LineGeometry = {
+		viewBox: '0 0 468 176',
+		nodes: [
+			{ x: 30, y: 118 },
+			{ x: 135, y: 76 },
+			{ x: 240, y: 102 },
+			{ x: 345, y: 70 },
+			{ x: 440, y: 84 }
+		],
+		segments: [
+			'M30 118 C 70 98, 95 78, 135 76',
+			'M135 76 C 175 74, 200 102, 240 102',
+			'M240 102 C 280 102, 305 70, 345 70',
+			'M345 70 C 385 70, 410 84, 440 84'
+		],
+		substeps: [
+			['M78 92 l6 10', 'M104 80 l4 11'],
+			['M170 78 l-3 11', 'M196 88 l-6 9'],
+			['M276 96 l6 9', 'M302 80 l5 10'],
+			['M384 66 l-1 11', 'M410 72 l-2 11']
+		],
+		gap: [40, 42, 40, 38, 38],
+		big: [58, 58, 58, 58, 56],
+		maxY: 172
+	};
+	const WIDE_LINE: LineGeometry = {
+		viewBox: '0 0 1200 150',
+		nodes: [
+			{ x: 60, y: 96 },
+			{ x: 330, y: 54 },
+			{ x: 600, y: 80 },
+			{ x: 870, y: 48 },
+			{ x: 1140, y: 62 }
+		],
+		segments: [
+			'M60 96 C 173 96, 217 54, 330 54',
+			'M330 54 C 443 54, 487 80, 600 80',
+			'M600 80 C 713 80, 757 48, 870 48',
+			'M870 48 C 983 48, 1027 62, 1140 62'
+		],
+		substeps: [
+			['M154.0 79.7 L156.4 90.5', 'M233.6 59.5 L236.0 70.3'],
+			['M426.0 55.3 L424.4 66.2', 'M505.6 67.8 L504.0 78.7'],
+			['M694.3 66.3 L696.1 77.1', 'M773.9 50.9 L775.7 61.7'],
+			['M965.6 46.1 L964.8 57.1', 'M1045.2 52.9 L1044.4 63.9']
+		],
+		gap: [40, 40, 40, 40, 40],
+		big: [58, 58, 58, 58, 56],
+		maxY: 146
+	};
+	let geo = $derived(floating ? WIDE_LINE : DOCKED_LINE);
 
 	type NodeLook = 'done' | 'active' | 'final' | 'failed' | 'not-observed' | 'future';
 
@@ -190,7 +268,7 @@
 
 	function labelY(i: number, l: NodeLook): number {
 		const big = l === 'active' || l === 'final';
-		return Math.min(NODES[i].y + (big ? (i === 4 ? 56 : 58) : LABEL_GAP[i]), 172);
+		return Math.min(geo.nodes[i].y + (big ? geo.big[i] : geo.gap[i]), geo.maxY);
 	}
 
 	const LOOK_WORDS: Record<NodeLook, string> = {
@@ -243,13 +321,18 @@
 <aside
 	{id}
 	class="sf"
-	aria-label={mode === 'technical' ? 'Live security flow, technical view' : 'Live security flow'}
+	class:floating
+	role={floating ? 'dialog' : undefined}
+	aria-modal={floating ? 'true' : undefined}
+	aria-label={(mode === 'technical' ? 'Live security flow, technical view' : 'Live security flow') + (floating ? ', full width' : '')}
 	{onkeydown}
 >
 	<div class="sf-head">
-		<div class="eyebrow">Live security flow</div>
-		<h2 class="sf-title">See the trust decision unfold</h2>
-		<p class="sf-sub">A guided view of the identity, authorization, and agent actions behind this request.</p>
+		<div>
+			<div class="eyebrow">Live security flow</div>
+			<h2 class="sf-title">See the trust decision unfold</h2>
+			<p class="sf-sub">A guided view of the identity, authorization, and agent actions behind this request.</p>
+		</div>
 		<div class="sf-controls">
 			<div class="seg" role="group" aria-label="Detail level">
 				<button type="button" class:on={mode === 'story'} aria-pressed={mode === 'story'} onclick={() => (mode = 'story')}>
@@ -275,6 +358,25 @@
 			>
 				<span class="live-dot" aria-hidden="true"></span>Live
 			</button>
+			{#if float && floating}
+				<button type="button" class="dock" bind:this={dockButton} onclick={() => float.dock()}>
+					<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+						<rect x="1.5" y="2.5" width="11" height="9" rx="1.5"></rect>
+						<path d="M8.5 2.5v9"></path>
+					</svg>
+					Dock beside chat
+				</button>
+			{:else if float}
+				<!-- The tooltip repeats the button's name for sighted pointer and keyboard users. -->
+				<span class="sfxw">
+					<button type="button" class="sfxp" data-panel-expand aria-label="Expand to full width" onclick={expand}>
+						<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+							<path d="M1.5 3v8M12.5 3v8M4 7h6M5.8 5.2L4 7l1.8 1.8M8.2 5.2L10 7 8.2 8.8"></path>
+						</svg>
+					</button>
+					<span class="stip" aria-hidden="true">Expand to full width</span>
+				</span>
+			{/if}
 			<button type="button" class="close" aria-label="Close security flow" onclick={close}>
 				<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
 					<path d="M3 3l8 8M11 3l-8 8"></path>
@@ -285,64 +387,68 @@
 
 	<div class="sf-body">
 		{#if !turn || !flow || !focus}
-			<div class="card">
+			<div class="card card-empty">
 				<div class="eyebrow">What's happening</div>
 				<div class="card-title">Nothing to show yet.</div>
 				<p class="card-body">Ask a question. The flow follows the latest answer, one stop at a time.</p>
 			</div>
 		{:else}
-			<div class="request">
-				<span class="request-dot" aria-hidden="true"></span>
-				<div>
-					<b>{flow.requestLabel}</b><span class="request-q">“{turn.question}”</span>
+			<!-- Always in the markup: docked it lays out nothing (display: contents); floating it is
+			     the row across the top. Adding or removing it would redraw everything below. -->
+			<div class="toprow">
+				<div class="request">
+					<span class="request-dot" aria-hidden="true"></span>
+					<div>
+						<b>{flow.requestLabel}</b><span class="request-q">“{turn.question}”</span>
+					</div>
 				</div>
-			</div>
 
-			<svg class="line" viewBox="0 0 468 176" role="img" aria-label={lineLabel(flow, looks)}>
-				{#each SEGMENTS as d, i (i)}
-					<path {d} class="seg-path" class:seg-reached={reached(looks[i + 1])} stroke-width="7" fill="none" stroke-linecap="round"></path>
-				{/each}
-				{#if mode === 'technical'}
-					<g class="substeps" stroke-width="2" stroke-linecap="round">
-						{#each SUBSTEPS as marks, i (i)}
-							{#if reached(looks[i + 1])}
-								{#each marks as d (d)}<path {d}></path>{/each}
-							{/if}
-						{/each}
-					</g>
-				{/if}
-				{#each flow.stops as stop, i (stop.id)}
-					{@const n = NODES[i]}
-					{@const l = looks[i]}
-					{#if l === 'done'}
-						<circle cx={n.x} cy={n.y} r="16" class="node-done"></circle>
-						<path d="M{n.x - 7} {n.y}l5 5 9-9" class="tick" stroke-width="2.2"></path>
-					{:else if l === 'final'}
-						<circle cx={n.x} cy={n.y} r="38" class="halo"></circle>
-						<circle cx={n.x} cy={n.y} r="24" class="node-final"></circle>
-						<path d="M{n.x - 10} {n.y}l7 7 12-12" class="tick-white" stroke-width="3"></path>
-					{:else if l === 'active'}
-						<circle cx={n.x} cy={n.y} r="36" class="halo"></circle>
-						<circle cx={n.x} cy={n.y} r="20" class="node-active"></circle>
-						<circle cx={n.x} cy={n.y} r="8" class="node-core"></circle>
-					{:else if l === 'failed'}
-						<circle cx={n.x} cy={n.y} r="16" class="node-failed"></circle>
-						<path d="M{n.x - 5} {n.y - 5}l10 10M{n.x + 5} {n.y - 5}l-10 10" class="cross" stroke-width="2.2"></path>
-					{:else}
-						<circle cx={n.x} cy={n.y} r="12" class="node-future" class:node-unseen={l === 'not-observed'}></circle>
+				<svg class="line" viewBox={geo.viewBox} role="img" aria-label={lineLabel(flow, looks)}>
+					{#each geo.segments as d, i (i)}
+						<path {d} class="seg-path" class:seg-reached={reached(looks[i + 1])} stroke-width="7" fill="none" stroke-linecap="round"></path>
+					{/each}
+					{#if mode === 'technical'}
+						<g class="substeps" stroke-width="2" stroke-linecap="round">
+							{#each geo.substeps as marks, i (i)}
+								{#if reached(looks[i + 1])}
+									{#each marks as d (d)}<path {d}></path>{/each}
+								{/if}
+							{/each}
+						</g>
 					{/if}
-					<text
-						x={n.x}
-						y={labelY(i, l)}
-						text-anchor="middle"
-						class="stop-label"
-						class:label-active={l === 'active'}
-						class:label-strong={l === 'final' || l === 'failed'}
-						class:label-failed={l === 'failed'}
-						class:label-quiet={l === 'future' || l === 'not-observed'}>{stop.label}</text
-					>
-				{/each}
-			</svg>
+					{#each flow.stops as stop, i (stop.id)}
+						{@const n = geo.nodes[i]}
+						{@const l = looks[i]}
+						{#if l === 'done'}
+							<circle cx={n.x} cy={n.y} r="16" class="node-done"></circle>
+							<path d="M{n.x - 7} {n.y}l5 5 9-9" class="tick" stroke-width="2.2"></path>
+						{:else if l === 'final'}
+							<circle cx={n.x} cy={n.y} r="38" class="halo"></circle>
+							<circle cx={n.x} cy={n.y} r="24" class="node-final"></circle>
+							<path d="M{n.x - 10} {n.y}l7 7 12-12" class="tick-white" stroke-width="3"></path>
+						{:else if l === 'active'}
+							<circle cx={n.x} cy={n.y} r="36" class="halo"></circle>
+							<circle cx={n.x} cy={n.y} r="20" class="node-active"></circle>
+							<circle cx={n.x} cy={n.y} r="8" class="node-core"></circle>
+						{:else if l === 'failed'}
+							<circle cx={n.x} cy={n.y} r="16" class="node-failed"></circle>
+							<path d="M{n.x - 5} {n.y - 5}l10 10M{n.x + 5} {n.y - 5}l-10 10" class="cross" stroke-width="2.2"></path>
+						{:else}
+							<circle cx={n.x} cy={n.y} r="12" class="node-future" class:node-unseen={l === 'not-observed'}></circle>
+						{/if}
+						<text
+							x={n.x}
+							y={labelY(i, l)}
+							text-anchor="middle"
+							class="stop-label"
+							class:label-active={l === 'active'}
+							class:label-strong={l === 'final' || l === 'failed'}
+							class:label-failed={l === 'failed'}
+							class:label-quiet={l === 'future' || l === 'not-observed'}>{stop.label}</text
+						>
+					{/each}
+				</svg>
+			</div>
 
 			<div class="focus" class:focus-wait={focus.tone === 'waiting'} class:focus-bad={focus.tone === 'failed'} class:focus-quiet={focus.status === 'not observed'}>
 				<div class="focus-eyebrow">{focus.story.eyebrow}</div>
@@ -352,14 +458,14 @@
 			</div>
 			<p class="visually-hidden" aria-live="polite">{announcement}</p>
 
-			<div class="card">
+			<div class="card card-whats">
 				<div class="eyebrow">What's happening</div>
 				<div class="card-title">{focus.story.heading}</div>
 				<p class="card-body">{focus.story.body}</p>
 				{#if focus.story.note}<p class="card-note">{focus.story.note}</p>{/if}
 			</div>
 
-			<div class="card">
+			<div class="card card-signals">
 				<div class="eyebrow eyebrow-dark">Technical signals</div>
 				{#if chips.length > 0 || mode === 'story'}
 					<div class="chips">
@@ -409,7 +515,8 @@
 								<li class="evidence-row">
 									<span class="ev-t">{row.t}</span>
 									<span class="ev-main">
-										<span class="ev-src">{row.src}</span><br />
+										<!-- Floating, the source and the kind share a line, as the floating board sets them. -->
+										<span class="ev-src">{row.src}</span>{#if floating}{' · '}{:else}<br />{/if}
 										<b class="ev-kind">{row.kind}</b>
 										<span class="ev-status ev-{rowTone(row)}">· {row.status}</span><br />
 										<span class="ev-line">{row.line}</span>
@@ -582,6 +689,84 @@
 		outline-offset: 2px;
 	}
 
+	/* ---- Expand and dock (the approved expand-control and floating boards) ---------- */
+	/* The expand button, a round 38px button like the close button, placed before it; the
+	   pair sits together at the end of the row. On the light panel its tooltip is dark, the
+	   approved navigation tooltip. */
+	.sfxw {
+		position: relative;
+		display: flex;
+		margin-left: auto;
+	}
+
+	.sfxw + .close,
+	.dock + .close {
+		margin-left: 0;
+	}
+
+	.sfxp {
+		width: 38px;
+		height: 38px;
+		border: 0;
+		border-radius: 50%;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		background: var(--ovi-control-bg);
+		color: var(--ovi-text-strong);
+		cursor: pointer;
+	}
+
+	.sfxp:hover {
+		background: var(--ovi-neutral-soft);
+		color: var(--ovi-text-primary);
+	}
+
+	.stip {
+		display: none;
+		position: absolute;
+		top: calc(100% + 10px);
+		left: 50%;
+		z-index: 2;
+		transform: translateX(-50%);
+		padding: 6px 10px;
+		border-radius: 6px;
+		background: var(--ovi-text-primary);
+		color: #ffffff;
+		font: 500 13px var(--ovi-font-sans);
+		white-space: nowrap;
+		box-shadow: 0 2px 8px rgba(22, 22, 22, 0.2);
+	}
+
+	.stip::before {
+		content: '';
+		position: absolute;
+		top: -4px;
+		left: 50%;
+		width: 8px;
+		height: 8px;
+		background: var(--ovi-text-primary);
+		transform: translateX(-50%) rotate(45deg);
+	}
+
+	.sfxw:hover .stip,
+	.sfxp:focus-visible + .stip {
+		display: block;
+	}
+
+	.dock {
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+		padding: 10px 16px;
+		border: 0;
+		border-radius: var(--ovi-radius-pill);
+		background: var(--ovi-control-bg);
+		color: var(--ovi-text-strong);
+		font: 500 13px var(--ovi-font-sans);
+		cursor: pointer;
+	}
+
 	/* ---- Body -------------------------------------------------------------------- */
 	.sf-body {
 		flex: 1;
@@ -591,6 +776,17 @@
 		display: flex;
 		flex-direction: column;
 		gap: 12px;
+	}
+
+	/* The Technical view is taller than the window: every block keeps its full size and the
+	   body scrolls, instead of the five-stop line being squeezed (the approved board). */
+	.sf-body > * {
+		flex-shrink: 0;
+	}
+
+	/* Docked, the top row lays out nothing: the request and the line are rows of the body. */
+	.toprow {
+		display: contents;
 	}
 
 	.request {
@@ -999,6 +1195,95 @@
 		word-break: break-all;
 	}
 
+	/* ---- Floating, full width (the approved floating board) -------------------------- */
+	/* Fixed 24px inside the window, over ChatWorkspace's scrim (z-index 20). */
+	.sf.floating {
+		position: fixed;
+		inset: 24px;
+		z-index: 21;
+		width: auto;
+		border: 1px solid var(--ovi-hairline-strong);
+		border-radius: 12px;
+		overflow: hidden;
+		box-shadow: 0 24px 64px rgba(0, 0, 0, 0.35);
+	}
+
+	/* The title on the left, the controls on the right. */
+	.floating .sf-head {
+		display: flex;
+		align-items: flex-end;
+		gap: 32px;
+		padding: 20px 26px 16px;
+	}
+
+	.floating .sf-controls {
+		margin: 0 0 0 auto;
+		flex-shrink: 0;
+	}
+
+	/* The request and the line across the top; the result card and "What's happening" side by
+	   side under it, the Technical signals under both, and the Evidence in a third column that
+	   scrolls on its own. */
+	.floating .sf-body {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.5fr);
+		grid-template-rows: auto auto minmax(0, 1fr);
+		gap: 14px 18px;
+		padding: 14px 26px 18px;
+	}
+
+	.floating .toprow {
+		grid-column: 1 / -1;
+		display: grid;
+		grid-template-columns: 300px minmax(0, 1fr);
+		gap: 24px;
+		align-items: center;
+	}
+
+	.floating .line {
+		display: block;
+		max-width: none;
+	}
+
+	.floating .sf-body > .focus {
+		grid-column: 1;
+		grid-row: 2;
+		align-self: stretch;
+		width: auto;
+		display: flex;
+		flex-direction: column;
+		justify-content: center;
+		align-items: center;
+	}
+
+	.floating .sf-body > .card-whats {
+		grid-column: 2;
+		grid-row: 2;
+	}
+
+	.floating .sf-body > .card-signals {
+		grid-column: 1 / 3;
+		grid-row: 3;
+		align-self: start;
+	}
+
+	.floating .sf-body > .evidence {
+		grid-column: 3;
+		grid-row: 2 / 4;
+		display: flex;
+		flex-direction: column;
+		min-height: 0;
+		overflow: auto;
+	}
+
+	.floating .evidence-row {
+		padding: 5px 0;
+	}
+
+	.floating .sf-body > .card-empty {
+		grid-column: 1 / -1;
+	}
+
 	@media (prefers-reduced-motion: reduce) {
 		.seg-path {
 			transition: none;
@@ -1039,6 +1324,16 @@
 		/* A long status ("not observed in this flow") wraps instead of squeezing every label. */
 		.signals {
 			grid-template-columns: minmax(0, 1fr) fit-content(9em);
+		}
+
+		/* The panel already takes the full width here: no full-width control. */
+		.sfxw {
+			display: none;
+		}
+
+		/* The close button goes back to the end of the row. */
+		.sfxw + .close {
+			margin-left: auto;
 		}
 	}
 </style>
