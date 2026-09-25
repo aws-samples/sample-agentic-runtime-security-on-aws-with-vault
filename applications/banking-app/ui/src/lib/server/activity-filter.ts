@@ -4,15 +4,16 @@
  *
  * What the browser sees
  * ---------------------
- * The workshop shows, as it happens, what each use case does in the background,
- * so every credential issued during a turn reaches the browser IN FULL: sign-in
- * tokens, the refund tokens, Vault tokens, the Kubernetes service-account JWT,
- * database and AWS credentials. Values are never changed by this filter.
- * Configuration secrets are different: an OAuth client secret, a SCIM, admin or
- * LDAP password, Vault's root token and its unseal or recovery keys must never
- * reach a browser. They are removed by KEY NAME (isConfigSecretKey below).
+ * The workshop shows, as it happens, everything each use case does in the
+ * background, so everything an agent event carries reaches the browser
+ * UNCHANGED: every credential issued during a turn (sign-in tokens, the refund
+ * tokens, Vault tokens, the Kubernetes service-account JWT, database and AWS
+ * credentials) and any configuration value an agent puts in an event (an OAuth
+ * client secret, a password, Vault root or unseal material). This filter hides
+ * nothing by name or by value: it keeps the stream in the shape of the event
+ * contract, $lib/agent-events, so the browser code can trust what it parses.
  *
- * It fails closed: anything it does not recognise is dropped.
+ * It fails closed on shape: anything that is not in the contract is dropped.
  *
  * Two layers
  * ----------
@@ -21,13 +22,13 @@
  *    Unknown event types are dropped. Unknown fields are dropped. A frame
  *    missing a required field, or carrying one of the wrong type, is dropped.
  *
- * 2. Payload keys. Fields that carry arbitrary data — tool `args` and `result`,
- *    HITL `details`, audit `leases` and `claims`, a credential's `claims` and
- *    `fields` — are walked recursively:
- *      - a key that names a configuration secret is removed, however deep it
- *        sits, together with its value;
- *      - __proto__, constructor and prototype keys are removed (PROTOTYPE_KEYS);
- *      - nesting deeper than MAX_PAYLOAD_DEPTH is removed.
+ * 2. Payload structure. Fields that carry arbitrary data — tool `args` and
+ *    `result`, HITL `details`, audit `leases` and `claims`, a credential's
+ *    `claims` and `fields` — are walked recursively and copied unchanged, except:
+ *      - __proto__, constructor and prototype keys are removed (PROTOTYPE_KEYS),
+ *        so browser code that merges a payload cannot have its prototype changed;
+ *      - nesting deeper than MAX_PAYLOAD_DEPTH is removed;
+ *      - a number that is not finite is removed (JSON cannot carry it).
  *    The same rules apply to a JSON body that is not a stream (scrubJson) and to
  *    a JSON error body (scrubErrorText).
  *
@@ -40,10 +41,10 @@
  * data, MAX_LINE_CHARS for one unfinished line) so a frame that never ends
  * cannot grow memory without bound.
  *
- * What it does NOT catch: a configuration secret written as free text, such as
- * narration that says "the client secret is ..." or an error body that is not
- * JSON. Keys are matched by name; text is not interpreted. Keeping those values
- * out of what an agent writes is the agent's job; this filter is the second line.
+ * What an event carries is the agent's decision: a value the agent puts in a
+ * contract field reaches the browser as it was sent. Only a value outside the
+ * contract (an unknown type or field, a prototype key, over-deep nesting) is
+ * dropped.
  */
 
 import {
@@ -79,43 +80,6 @@ const MAX_ID_CHARS = 256;
 // ---------------------------------------------------------------------------
 
 /**
- * True when a key names a configuration secret. The key is lowercased with
- * every non-alphanumeric removed first, so client_secret, clientSecret and
- * IVIA_CLIENT_SECRET all contain "clientsecret". The rules cover the names this
- * repository gives those secrets:
- *   - OAuth client secrets: client_secret, clientSecret, IVIA_CLIENT_SECRET,
- *     IVIA_ACTOR_CLIENT_SECRET, ivia_mmfa_push_client_secret, MMFA_SECRET;
- *   - SCIM, admin and LDAP passwords: a password-like key (pass, pwd, or a
- *     trailing pw) that also names the account (DIRECTORY_ACCOUNTS below):
- *     IVIA_SCIM_PASSWORD, ivia_scim_bind_pwd, bind_pwd, admin_password,
- *     ADMIN_PWD, LDAP_ADMIN_PASSWORD, openldap_admin_pwd, dn_password,
- *     config_password, sec_master_password, cfgsvcpw, CONFIG_SERVICE_USER_PWD;
- *   - Vault root and unseal material: root_token, VAULT_ROOT_TOKEN,
- *     RECOVERY_KEYS, recovery_keys_b64, the CLI's unseal_keys_b64, and the
- *     keys_base64 of Vault's sys/init reply.
- * Issued credentials are NOT matched: password, username, secret_access_key,
- * session_token, access_token and the like pass.
- */
-function isConfigSecretKey(key: string): boolean {
-	const k = key.toLowerCase().replace(/[^a-z0-9]/g, '');
-	if (k.includes('clientsecret') || (k.includes('mmfa') && k.includes('secret'))) return true;
-	const passwordLike = k.includes('pass') || k.includes('pwd') || k.endsWith('pw');
-	if (passwordLike && DIRECTORY_ACCOUNTS.some((account) => k.includes(account))) return true;
-	return k.includes('roottoken') || k.includes('unsealkey') || k.includes('recoverykey') || k === 'keysbase64';
-}
-
-/**
- * The accounts whose passwords are configuration: the directory's and IVIA's
- * administrators, the SCIM and LDAP binds, and the configuration users. Where
- * this repository defines each (infrastructure/modules/verify_access):
- * bind_pwd (Secret ivia-scim-bind), dn_password (base_layer.yaml.tftpl, the LDAP
- * admin bind), config_password (Secret openldap-creds), sec_master_password
- * (Secret ivia-secauthority-creds), cfgsvcpw and CONFIG_SERVICE_USER_PWD (Secret
- * configreader, IVIA's admin password).
- */
-const DIRECTORY_ACCOUNTS: readonly string[] = ['admin', 'scim', 'ldap', 'bind', 'dnpass', 'dnpwd', 'config', 'cfgsvc', 'secmaster'];
-
-/**
  * Keys that change an object's prototype when browser code merges a payload
  * with Object.assign or a recursive merge. Never forwarded.
  */
@@ -130,10 +94,10 @@ function isJsonObject(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Returns a copy of `value` without configuration-secret keys, prototype keys
- * or over-deep nesting, or undefined when nothing of it may pass. Strings,
- * numbers and booleans are copied unchanged. The input is only ever read; a new
- * structure is built from what survives.
+ * Returns a copy of `value` without prototype keys, over-deep nesting or
+ * non-finite numbers, or undefined when nothing of it may pass. Every other key
+ * and value is copied unchanged, whatever it is named or holds. The input is
+ * only ever read; a new structure is built from what survives.
  */
 function scrubValue(value: unknown, depth: number, stats: FilterStats): JsonValue | undefined {
 	if (typeof value === 'string' || typeof value === 'boolean' || value === null) return value;
@@ -157,10 +121,6 @@ function scrubValue(value: unknown, depth: number, stats: FilterStats): JsonValu
 				stats.prototypeKeysRemoved++;
 				continue;
 			}
-			if (isConfigSecretKey(key)) {
-				stats.configKeysRemoved++;
-				continue;
-			}
 			const scrubbed = scrubValue(item, depth + 1, stats);
 			if (scrubbed !== undefined) entries.push([key, scrubbed]);
 		}
@@ -170,16 +130,18 @@ function scrubValue(value: unknown, depth: number, stats: FilterStats): JsonValu
 }
 
 /**
- * Applies the payload key rules to a JSON body that is not a stream, e.g. the
- * Use Case 1 agent's `{ answer, sources, credential_metadata }` reply.
+ * Applies the payload structure rules to a JSON body that is not a stream, e.g.
+ * the Use Case 1 agent's `{ answer, sources, credential_metadata }` reply:
+ * prototype keys and over-deep nesting are removed, everything else is kept.
  */
 export function scrubJson(value: unknown): JsonValue | undefined {
 	return scrubValue(value, 0, newStats());
 }
 
 /**
- * Prepares an agent's error body for the user. A JSON body loses its
- * configuration-secret keys; any other body is returned as it is.
+ * Prepares an agent's error body for the user. A JSON body loses prototype keys
+ * and over-deep nesting, and keeps everything else; any other body is returned
+ * as it is.
  */
 export function scrubErrorText(text: string): string {
 	let parsed: unknown;
@@ -200,16 +162,16 @@ type FieldSpec =
 	| { kind: 'string'; maxLength?: number }
 	| { kind: 'enum'; values: readonly string[] }
 	| { kind: 'number'; min?: number }
-	/** Any JSON value, walked with the payload key rules. */
+	/** Any JSON value, walked with the payload structure rules. */
 	| { kind: 'json' }
-	/** A JSON object, walked with the payload key rules. */
+	/** A JSON object, walked with the payload structure rules. */
 	| { kind: 'object' }
-	/** An array of JSON objects, walked with the payload key rules; non-object items are dropped. */
+	/** An array of JSON objects, walked with the payload structure rules; non-object items are dropped. */
 	| { kind: 'objectArray' }
 	/**
 	 * A flat object whose values are all strings, e.g. a credential's `fields`.
-	 * Configuration-secret and prototype keys are removed; any other value that
-	 * is not a string fails the rule, and so does an object left empty.
+	 * Prototype keys are removed; every other key passes with its value. A value
+	 * that is not a string fails the rule, and so does an object left empty.
 	 */
 	| { kind: 'stringMap' };
 
@@ -327,10 +289,6 @@ function sanitizeField(value: unknown, rule: FieldRule, stats: FilterStats): Jso
 					stats.prototypeKeysRemoved++;
 					continue;
 				}
-				if (isConfigSecretKey(key)) {
-					stats.configKeysRemoved++;
-					continue;
-				}
 				if (typeof item !== 'string') return undefined;
 				entries.push([key, item]);
 			}
@@ -398,7 +356,6 @@ interface FilterStats {
 	unknownType: number;
 	oversize: number;
 	unterminated: number;
-	configKeysRemoved: number;
 	prototypeKeysRemoved: number;
 	deepValuesDropped: number;
 }
@@ -411,7 +368,6 @@ function newStats(): FilterStats {
 		unknownType: 0,
 		oversize: 0,
 		unterminated: 0,
-		configKeysRemoved: 0,
 		prototypeKeysRemoved: 0,
 		deepValuesDropped: 0
 	};
@@ -537,14 +493,13 @@ export function createActivityFilter(label: string): TransformStream<Uint8Array,
 			// Per the SSE spec an event with no closing blank line is discarded.
 			if (pending !== '' || dataLines.length > 0) stats.unterminated++;
 			const dropped = stats.malformed + stats.invalid + stats.unknownType + stats.oversize + stats.unterminated;
-			const removed = stats.configKeysRemoved + stats.prototypeKeysRemoved + stats.deepValuesDropped;
+			const removed = stats.prototypeKeysRemoved + stats.deepValuesDropped;
 			if (dropped > 0 || removed > 0) {
 				// Counts only: an agent's content, even a dropped type's name, is never logged.
 				console.warn(
 					`[activity-filter] ${label}: forwarded=${stats.forwarded} dropped=${dropped}` +
 						` (malformed=${stats.malformed} invalid=${stats.invalid} unknown_type=${stats.unknownType}` +
 						` oversize=${stats.oversize} unterminated=${stats.unterminated})` +
-						` config_secret_keys_removed=${stats.configKeysRemoved}` +
 						` prototype_keys_removed=${stats.prototypeKeysRemoved}` +
 						` deep_values_dropped=${stats.deepValuesDropped}`
 				);
