@@ -346,13 +346,33 @@ def wait_for_resolution(device, wrp, bearer, transaction_id, timeout=40):
 
 
 def chat(message, session_id, id_token, timeout):
+    """One /chat turn. Returns (status, text).
+
+    text  — the stream's legacy frames only (tool_planning, delta, end, error): the
+            same text this returned before the activity stream was added, so Check N2
+            reads what it always read. The activity stream also carries
+            agent:credential events holding full credential values; they are never
+            returned, so they never reach the KEY=value output.
+    """
     resp = httpx.post(
         "http://127.0.0.1:8080/chat",
         json={"message": message, "sessionId": session_id},
         headers={"Authorization": f"Bearer {id_token}"},
         timeout=timeout,
     )
-    return resp.status_code, one_line(resp.text)
+    if resp.status_code != 200:
+        return resp.status_code, one_line(resp.text)
+    legacy = []
+    for line in resp.text.splitlines():
+        if not line.startswith("data: "):
+            continue
+        try:
+            event = json.loads(line[len("data: "):])
+        except ValueError:
+            continue
+        if event.get("type") in ("tool_planning", "delta", "end", "error"):
+            legacy.append(line)
+    return resp.status_code, one_line(" ".join(legacy))
 
 
 def run(wrp, user, password, agent_client, client_secret, redirect_uri, op_url, complete=True):
