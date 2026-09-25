@@ -260,7 +260,7 @@ Expected output:
 `not-a-jwt-at-all` is the header value, and `expected header.payload.signature` is the complaint about it. The server tried to use the **header** and never looked at the argument — even though the argument was the well-formed one.
 
 :::alert{type="info" header="What the other answer would have meant"}
-If the server had acted on the tool argument instead, that argument *is* JWT-shaped, so it would have travelled all the way to Vault and come back `Vault DB creds fetch failed [403]: {"errors":["permission denied"]}` — Vault rejecting an unsigned token. Same request, completely different error, and the header would have been decoration. Anything that could reach the MCP server would then be choosing the identity Vault saw, and the OBO intersection, the RLS predicate and the audit record would all faithfully enforce the *caller's* choice of user.
+If the server had acted on the tool argument instead, that argument *is* JWT-shaped, so it would have traveled all the way to Vault and come back `Vault DB creds fetch failed [403]: {"errors":["permission denied"]}` — Vault rejecting an unsigned token. Same request, completely different error, and the header would have been decoration. Anything that could reach the MCP server would then be choosing the identity Vault saw, and the OBO intersection, the RLS predicate and the audit record would all faithfully enforce the *caller's* choice of user.
 :::
 
 ### How the login is split between Banking UI and IVIA
