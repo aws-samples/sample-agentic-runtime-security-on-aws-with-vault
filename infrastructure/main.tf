@@ -376,6 +376,184 @@ resource "aws_iam_role_policy" "vault_assume_uc3_logs" {
 }
 
 #-------------------------------------------------------------------------------
+# Audit Trace reader role (issue #68 · Audit Trace card: each answer links to the
+# audit records every system wrote for it)
+#
+# Assumable ONLY by the Vault pod's IAM role, like uc3-logs-writer above. Vault
+# vends short-lived STS creds from it (aws/sts/audit-reader, modules/vault_config)
+# to the banking-ui's own Kubernetes login, so the UI server can read one refund's
+# rows from the audit_correlation VIEW with no standing AWS identity. Read-only:
+#   - Athena: run and read queries in work group `workshop`, and no other;
+#   - Glue:   read the audit database, the VIEW and the three tables it reads;
+#   - S3:     read the three log prefixes those tables sit on, and write only to the
+#             work group's result location, where Athena puts the rows it returns;
+#   - KMS:    the workshop CMK, only through S3 (both buckets are SSE-KMS with it).
+# Not granted: the agent-trace/ and errors/ prefixes, any other bucket or work
+# group, any Glue or Athena write beyond running a query.
+#
+# The credential can read EVERY user's refund rows. Per-user isolation is the UI
+# server's job: it filters the VIEW on the signed-in user's verified `sub`.
+#-------------------------------------------------------------------------------
+
+locals {
+  audit_reader_glue_arn_prefix = "arn:aws:glue:${var.region}:${data.aws_caller_identity.current.account_id}"
+  audit_reader_workgroup_arn   = "arn:aws:athena:${var.region}:${data.aws_caller_identity.current.account_id}:workgroup/${module.audit.athena_workgroup_name}"
+  audit_reader_log_bucket_arn  = module.observability.log_bucket_arn
+  audit_reader_results_bucket  = "arn:aws:s3:::${module.audit.athena_results_bucket}"
+
+  # s3://<bucket>/<prefix>/ -> <prefix>/ for each table the VIEW reads, and the
+  # work group's result location the same way.
+  audit_reader_log_prefixes = [
+    for location in values(module.observability.audit_correlation_source_tables) :
+    regex("^s3://[^/]+/(.*)$", location)[0]
+  ]
+  audit_reader_results_prefix = regex("^s3://[^/]+/(.*)$", module.audit.athena_results_location)[0]
+
+  audit_reader_glue_resources = concat(
+    [
+      "${local.audit_reader_glue_arn_prefix}:catalog",
+      "${local.audit_reader_glue_arn_prefix}:database/${module.audit.glue_database_name}",
+    ],
+    [
+      for table in concat(
+        [module.observability.audit_correlation_view_name],
+        keys(module.observability.audit_correlation_source_tables),
+      ) : "${local.audit_reader_glue_arn_prefix}:table/${module.audit.glue_database_name}/${table}"
+    ],
+  )
+
+  audit_reader_kms_via_s3 = {
+    StringEquals = { "kms:ViaService" = "s3.${var.region}.amazonaws.com" }
+  }
+
+  # The role's own policy: least privilege, down to the object prefix.
+  audit_reader_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "AthenaQueryInWorkshopWorkgroup"
+        Effect   = "Allow"
+        Action   = ["athena:StartQueryExecution", "athena:GetQueryExecution", "athena:GetQueryResults", "athena:StopQueryExecution"]
+        Resource = local.audit_reader_workgroup_arn
+      },
+      {
+        Sid      = "GlueReadAuditCatalog"
+        Effect   = "Allow"
+        Action   = ["glue:GetDatabase", "glue:GetTable"]
+        Resource = local.audit_reader_glue_resources
+      },
+      {
+        Sid      = "ReadAuditLogObjects"
+        Effect   = "Allow"
+        Action   = ["s3:GetObject"]
+        Resource = [for prefix in local.audit_reader_log_prefixes : "${local.audit_reader_log_bucket_arn}/${prefix}*"]
+      },
+      {
+        Sid       = "ListAuditLogPrefixes"
+        Effect    = "Allow"
+        Action    = ["s3:ListBucket"]
+        Resource  = local.audit_reader_log_bucket_arn
+        Condition = { StringLike = { "s3:prefix" = [for prefix in local.audit_reader_log_prefixes : "${prefix}*"] } }
+      },
+      {
+        Sid      = "WriteAndReadQueryResults"
+        Effect   = "Allow"
+        Action   = ["s3:PutObject", "s3:GetObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"]
+        Resource = "${local.audit_reader_results_bucket}/${local.audit_reader_results_prefix}*"
+      },
+      {
+        Sid      = "BucketLocation"
+        Effect   = "Allow"
+        Action   = ["s3:GetBucketLocation"]
+        Resource = [local.audit_reader_log_bucket_arn, local.audit_reader_results_bucket]
+      },
+      {
+        Sid       = "WorkshopCmkThroughS3"
+        Effect    = "Allow"
+        Action    = ["kms:Decrypt", "kms:GenerateDataKey"]
+        Resource  = module.audit.workshop_cmk_arn
+        Condition = local.audit_reader_kms_via_s3
+      },
+    ]
+  })
+
+  # The session policy Vault attaches to every AssumeRole it makes for
+  # aws/sts/audit-reader (belt and braces, like uc3-logs-writer). AWS caps an inline
+  # session policy at 2,048 characters and the role policy above sits near that
+  # limit, so this one stops at bucket, work group and database level. The effective
+  # permission is the intersection of the two, so the role policy still decides.
+  audit_reader_session_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["athena:StartQueryExecution", "athena:GetQueryExecution", "athena:GetQueryResults", "athena:StopQueryExecution"]
+        Resource = local.audit_reader_workgroup_arn
+      },
+      {
+        Effect = "Allow"
+        Action = ["glue:GetDatabase", "glue:GetTable"]
+        Resource = [
+          "${local.audit_reader_glue_arn_prefix}:catalog",
+          "${local.audit_reader_glue_arn_prefix}:database/${module.audit.glue_database_name}",
+          "${local.audit_reader_glue_arn_prefix}:table/${module.audit.glue_database_name}/*",
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = ["s3:GetObject", "s3:PutObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts", "s3:ListBucket", "s3:GetBucketLocation"]
+        Resource = [
+          local.audit_reader_log_bucket_arn,
+          "${local.audit_reader_log_bucket_arn}/*",
+          local.audit_reader_results_bucket,
+          "${local.audit_reader_results_bucket}/*",
+        ]
+      },
+      {
+        Effect    = "Allow"
+        Action    = ["kms:Decrypt", "kms:GenerateDataKey"]
+        Resource  = module.audit.workshop_cmk_arn
+        Condition = local.audit_reader_kms_via_s3
+      },
+    ]
+  })
+}
+
+resource "aws_iam_role" "audit_reader" {
+  name = "${var.cluster_name}-audit-reader"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Action    = ["sts:AssumeRole", "sts:TagSession"]
+      Principal = { AWS = module.vault_iam.vault_iam_role_arn }
+    }]
+  })
+
+  tags = var.tags
+}
+
+resource "aws_iam_role_policy" "audit_reader" {
+  name   = "audit-correlation-read"
+  role   = aws_iam_role.audit_reader.id
+  policy = local.audit_reader_role_policy
+}
+
+resource "aws_iam_role_policy" "vault_assume_audit_reader" {
+  name = "vault-assume-audit-reader"
+  role = module.vault_iam.vault_iam_role_id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["sts:AssumeRole", "sts:TagSession"]
+      Resource = aws_iam_role.audit_reader.arn
+    }]
+  })
+}
+
+#-------------------------------------------------------------------------------
 # Observability (fluent-bit DaemonSet + Firehose + Glue tables)
 # Depends on eks (cluster, Pod Identity), addons (IAM infra ready), audit (Glue
 # DB + Athena workgroup + workshop CMK), rds (pgaudit log group subscription).
