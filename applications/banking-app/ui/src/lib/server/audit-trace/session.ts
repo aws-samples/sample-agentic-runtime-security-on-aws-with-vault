@@ -11,13 +11,15 @@
  *   - audience: this app's own OAuth client (IVIA_CLIENT_ID, agent-uc2), the client
  *     whose code flow minted the token;
  *   - type: an id_token (typ JWT), not an access token (typ at+jwt);
- *   - expiry: exp must be in the future; sub, iss, aud and exp are required.
+ *   - expiry: exp must be in the future, by the rule and clock leeway in
+ *     lib/server/session-lifetime.ts; sub, iss, aud and exp are required.
  * Anything else — no cookie, a forged or expired token, another client's token, an
  * access token — is no session. Only the verified `sub` leaves this module.
  */
 
 import { env } from '$env/dynamic/private';
 import { createRemoteJWKSet, errors, jwtVerify } from 'jose';
+import { CLOCK_TOLERANCE_SECONDS, isExpired, readExp } from '$lib/server/session-lifetime';
 
 export type SessionFailure = 'no_session' | 'expired' | 'invalid' | 'unavailable' | 'misconfigured';
 
@@ -81,6 +83,10 @@ async function getVerifier(): Promise<Verifier> {
 export async function verifySession(idToken: string | undefined): Promise<VerifiedSession> {
 	if (!idToken) throw new SessionError('no_session');
 	const { issuer, audience, jwks } = await getVerifier();
+	// Expired by the shared rule, so every part of the UI that asks whether a sign-in
+	// has expired gets the same answer. jose re-checks exp below with the same leeway.
+	const exp = readExp(idToken);
+	if (exp !== null && isExpired(exp)) throw new SessionError('expired');
 	try {
 		const { payload } = await jwtVerify(idToken, jwks, {
 			algorithms: ['RS256'],
@@ -90,7 +96,8 @@ export async function verifySession(idToken: string | undefined): Promise<Verifi
 			typ: 'JWT',
 			issuer,
 			audience,
-			requiredClaims: ['sub', 'iss', 'aud', 'exp']
+			requiredClaims: ['sub', 'iss', 'aud', 'exp'],
+			clockTolerance: CLOCK_TOLERANCE_SECONDS
 		});
 		if (typeof payload.sub !== 'string' || payload.sub === '') throw new SessionError('invalid');
 		return { sub: payload.sub };
