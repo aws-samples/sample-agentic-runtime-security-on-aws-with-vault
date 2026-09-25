@@ -29,6 +29,7 @@
 	import SourcesCard, { type Source } from '$lib/components/chat/SourcesCard.svelte';
 	import AgentLogPanel from '$lib/components/activity/AgentLogPanel.svelte';
 	import SecurityFlowPanel from '$lib/components/activity/SecurityFlowPanel.svelte';
+	import AuditTraceCard from '$lib/components/activity/AuditTraceCard.svelte';
 
 	/** The uc1-agent tool whose result lists the knowledge-base passages. */
 	const RETRIEVE_TOOL = 'retrieve_from_knowledge_base';
@@ -256,6 +257,9 @@
 			{/each}
 			{#if reply?.error}
 				<InlineNotification kind="error" lowContrast hideCloseButton title="Error" subtitle={reply.error} />
+			{/if}
+			{#if turn.done && reply?.answer}
+				<AuditTraceCard useCase={1} {turn} />
 			{/if}
 			{#if reply?.answer}
 				<AnswerCard>{reply.answer.trim()}</AnswerCard>
