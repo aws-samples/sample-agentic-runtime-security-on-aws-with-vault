@@ -202,9 +202,8 @@
 		if (looks.every((l) => l === 'done' || l === 'final')) {
 			return 'All five stages complete' + (mode === 'technical' ? ', with sub-steps marked between them' : '');
 		}
-		const words = looks.map((l, i) =>
-			l === 'active' && f.stops[i].tone === 'waiting' ? 'waiting for approval' : LOOK_WORDS[l]
-		);
+		// The approved mockup reads a stop waiting for approval as "in progress" (Refund board).
+		const words = looks.map((l) => LOOK_WORDS[l]);
 		const parts: string[] = [];
 		let start = 0;
 		for (let i = 1; i <= words.length; i++) {
