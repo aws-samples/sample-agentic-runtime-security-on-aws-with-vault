@@ -378,8 +378,11 @@ export function turnAuditFacts(turn: AuditTraceTurn | undefined, requestId: stri
 	const saToken = credentials.filter((c) => c.kind === 'k8s_sa_token').pop();
 	const userToken = credentials.filter((c) => c.kind === 'access_token' || c.kind === 'id_token').pop();
 
+	// The audit key is the request ID in the turn's agent:audit_seed, before any other ID
+	// the turn carried: a refund turn that also lists transactions carries two IDs, and
+	// only the refund's is in the audit rows (Bear's ruling on #68).
 	const facts: TurnAuditFacts = {
-		requestId: requestId ?? turn?.requestId ?? seed?.requestId,
+		requestId: requestId ?? seed?.requestId ?? turn?.requestId,
 		seed,
 		vaultRole: seed?.vaultRole,
 		dbRole: seed?.dbRole

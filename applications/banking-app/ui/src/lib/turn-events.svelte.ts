@@ -33,7 +33,11 @@ export interface Turn {
 	question: string;
 	/** When the question was sent: milliseconds since the Unix epoch. */
 	startedAt: number;
-	/** The first requestId any of the turn's events carried: the key to its audit rows. */
+	/**
+	 * The first requestId any of the turn's events carried. A turn that uses two tools can
+	 * carry two, so this is not the key to its audit rows: the Audit Trace keys on the
+	 * requestId of the turn's agent:audit_seed event (see $lib/audit-trace).
+	 */
 	requestId?: string;
 	/** Every agent event of the turn, in arrival order. */
 	events: AgentEvent[];
