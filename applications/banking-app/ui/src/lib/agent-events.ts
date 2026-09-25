@@ -19,13 +19,14 @@
  *   - an event type not listed here is dropped;
  *   - a field not listed on its type is dropped;
  *   - a frame that is not valid JSON, or that is missing a required field, is dropped;
- *   - in payload fields (tool `args`/`result`, HITL `details`, audit `leases`/`claims`)
- *     any key that names a configuration secret (an OAuth client secret, a SCIM,
- *     admin or LDAP password, Vault's root token or unseal/recovery keys) is
- *     removed with its value, however deeply it is nested.
- * Values are never rewritten. Credentials issued during a turn (tokens, Vault
- * tokens, database and AWS credentials) reach the browser in full, by design:
- * the workshop shows what each use case does as it happens.
+ *   - in payload fields (tool `args`/`result`, HITL `details`, audit `leases`/`claims`,
+ *     a credential's `claims`/`fields`) the keys __proto__, constructor and
+ *     prototype are removed, and so is nesting deeper than the filter's limit.
+ * Nothing else is removed and values are never rewritten: whatever an agent puts
+ * in a contract field reaches the browser as it was sent, by design. That covers
+ * credentials issued during a turn (tokens, Vault tokens, database and AWS
+ * credentials) and any configuration value an agent includes: the workshop
+ * shows everything each use case does as it happens.
  *
  * Example frames, as the browser receives them:
  *
@@ -106,9 +107,9 @@ export interface ToolCallEvent extends EventEnvelope {
 	toolCallId: string;
 	name: string;
 	status: ToolCallStatus;
-	/** The tool's arguments, without configuration-secret keys. */
+	/** The tool's arguments, as the agent sent them. */
 	args?: JsonValue;
-	/** The tool's result, without configuration-secret keys. */
+	/** The tool's result, as the agent sent it. */
 	result?: JsonValue;
 	/** Wall-clock time the call took, in milliseconds. */
 	durationMs?: number;
@@ -120,7 +121,7 @@ interface HitlFields extends EventEnvelope {
 	toolCallId?: string;
 	/** Plain-English line for the log, e.g. "Approval pushed to the user's IBM Verify app". */
 	text?: string;
-	/** What is being approved (e.g. amount, currency, transaction), without configuration-secret keys. */
+	/** What is being approved (e.g. amount, currency, transaction). */
 	details?: JsonObject;
 }
 
@@ -174,12 +175,12 @@ export interface AgentAuditSeedEvent extends EventEnvelope {
 	dbRole?: string;
 	/**
 	 * The lease of every credential Vault issued for this turn, e.g.
-	 * `{ lease_id, vault_path, ttl_seconds }`, without configuration-secret keys.
+	 * `{ lease_id, vault_path, ttl_seconds }`.
 	 */
 	leases?: JsonObject[];
 	/**
 	 * Decoded claims of the token the agent acted with (sub, scope, jti, iss,
-	 * aud, exp, act), without configuration-secret keys.
+	 * aud, exp, act).
 	 */
 	claims?: JsonObject;
 }
