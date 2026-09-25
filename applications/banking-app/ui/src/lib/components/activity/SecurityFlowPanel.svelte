@@ -20,34 +20,29 @@
     id       the panel's element id (the header button's aria-controls).
     useCase  1 Ask page, 2 Banking Agent, 3 Refund Agent.
     turn     the turn to show; undefined before the first question.
-    onclose  closes the panel (the close button and Escape).
+    onclose  closes the panel (the close button and Escape). `id` must match the View security
+             flow button's aria-controls: closing returns focus to that button.
 
   Width and landmark follow the ChatWorkspace panel contract: the panel is an <aside> beside the
   chat column, 520px wide on a desktop and full width under the chat on screens 960px and
   narrower.
 -->
 <script module lang="ts">
-	import type { AgentEvent } from '$lib/agent-events';
+	import type { Turn as LoggedTurn } from '$lib/turn-events.svelte';
 
 	/**
-	 * One chat turn. Structurally the same as the Turn Task 10 exports from
-	 * $lib/turn-events.svelte; replace this with that import when it lands.
-	 * `answer` is optional and not part of that shape: a refund stream from before the agent sent
-	 * agent:text_delta carried its answer only as the legacy `delta` frame, so the page passes it
-	 * here when it has it; the flow lists it only when the stream carried no answer of its own.
+	 * One chat turn, as the page's TurnLog ($lib/turn-events.svelte) holds it. `answer` is
+	 * optional and not part of that shape: a refund stream from before the agent sent
+	 * agent:text_delta carried its answer only as the legacy `delta` frame, so a page may pass it
+	 * here; the flow lists it only when the stream carried no answer of its own.
 	 */
-	export interface Turn {
-		id: string;
-		question: string;
-		startedAt: number;
-		requestId?: string;
-		events: AgentEvent[];
-		done: boolean;
+	export interface Turn extends LoggedTurn {
 		answer?: string;
 	}
 </script>
 
 <script lang="ts">
+	import { tick } from 'svelte';
 	import {
 		buildFlow,
 		chipsUpTo,
@@ -140,10 +135,18 @@
 		demoPace = false;
 	}
 
+	/** Closes the panel and returns focus to the header button that opens it. */
+	async function close() {
+		const toggle = document.querySelector<HTMLElement>(`[aria-controls="${id}"]`);
+		onclose();
+		await tick();
+		toggle?.focus();
+	}
+
 	function onkeydown(e: KeyboardEvent) {
 		if (e.key === 'Escape') {
 			e.stopPropagation();
-			onclose();
+			close();
 		}
 	}
 
@@ -272,7 +275,7 @@
 			>
 				<span class="live-dot" aria-hidden="true"></span>Live
 			</button>
-			<button type="button" class="close" aria-label="Close security flow" onclick={onclose}>
+			<button type="button" class="close" aria-label="Close security flow" onclick={close}>
 				<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
 					<path d="M3 3l8 8M11 3l-8 8"></path>
 				</svg>
