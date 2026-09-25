@@ -197,9 +197,15 @@ export function auditPlaneRows(row: AuditCorrelationRow, index = 0): AuditListRo
 }
 
 /**
- * The audit stream for a set of audit_correlation rows, oldest first. A refund with
- * more than one pgaudit record comes back as several rows that repeat the same agent
- * and Vault columns, so each distinct record is listed once.
+ * The audit stream for a set of audit_correlation rows: agent, Vault, Postgres, in the
+ * order the view joins them. A refund with more than one pgaudit record comes back as
+ * several rows that repeat the same agent and Vault columns, so each distinct record is
+ * listed once.
+ *
+ * Not sorted by time: the three clocks do not order the planes truthfully. pgaudit
+ * stamps whole seconds, so the INSERT reads as earlier than the credential it used,
+ * and the agent writes its anchor after the refund is done (live refund
+ * 790805b0-…: Vault 15:43:49.464, anchor 15:43:49.566, pgaudit 15:43:49).
  */
 export function auditStreamRows(rows: AuditCorrelationRow[]): AuditListRow[] {
 	const seen = new Set<string>();
@@ -212,7 +218,7 @@ export function auditStreamRows(rows: AuditCorrelationRow[]): AuditListRow[] {
 			out.push(plane);
 		}
 	});
-	return out.sort((a, b) => (a.at ?? Number.MAX_SAFE_INTEGER) - (b.at ?? Number.MAX_SAFE_INTEGER));
+	return out;
 }
 
 // ---------------------------------------------------------------------------
