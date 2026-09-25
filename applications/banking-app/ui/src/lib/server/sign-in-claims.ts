@@ -10,9 +10,10 @@
  * the room what the tokens say, never for deciding who someone is; hooks.server.ts decides
  * whether the request is signed in, and the code that acts on a token verifies it first.
  *
- * A token that cannot be decoded (missing, not a JWT, a payload that is not a JSON object)
- * comes back as { readable: false } and the menu says its claims could not be read. Nothing
- * here throws, and no claim value is logged.
+ * A token that cannot be decoded (missing, not a JWT, a payload that is not a JSON object),
+ * or whose claims hold a key named "__proto__" that the page data cannot carry, comes back as
+ * { readable: false } and the menu says its claims could not be read. Nothing here throws, and
+ * no claim value is logged.
  */
 
 import type { Cookies } from '@sveltejs/kit';
@@ -22,7 +23,11 @@ import type { SignInClaims, TokenClaims } from '$lib/token-claims';
 function decode(token: string | undefined): TokenClaims {
 	if (!token) return { readable: false };
 	try {
-		return { readable: true, claims: { ...decodeJwt(token) } };
+		const claims = { ...decodeJwt(token) };
+		// SvelteKit cannot send the page an object with a "__proto__" key, at any depth: the whole
+		// page would fail with a 500. Such a token reads as unreadable instead.
+		if (JSON.stringify(claims).includes('"__proto__":')) return { readable: false };
+		return { readable: true, claims };
 	} catch {
 		return { readable: false };
 	}
