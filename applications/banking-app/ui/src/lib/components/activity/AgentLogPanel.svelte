@@ -61,7 +61,10 @@
 	let wasLive = false;
 	$effect(() => {
 		const now = live;
-		if (wasLive && !now) announcement = `Agent activity finished: ${untrack(() => entries)} entries.`;
+		if (wasLive && !now) {
+			const count = untrack(() => entries);
+			announcement = `Agent activity finished: ${count} ${count === 1 ? 'entry' : 'entries'}.`;
+		}
 		wasLive = now;
 	});
 
