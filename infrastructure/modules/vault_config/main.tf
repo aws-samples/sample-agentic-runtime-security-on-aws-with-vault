@@ -491,6 +491,12 @@ resource "vault_policy" "uc2_agent" {
     path "auth/token/lookup-self" {
       capabilities = ["read"]
     }
+    # Its OWN Agent Registry registration, read only, so the agent can show each
+    # turn the ceiling Vault intersects with the caller's baseline. Same variable
+    # as the registration's display_name below, so the two cannot drift apart.
+    path "agent-registry/registration/display-name/${var.uc2_agent_identity}" {
+      capabilities = ["read"]
+    }
   EOT
 }
 

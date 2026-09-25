@@ -14,6 +14,7 @@ Terraform module that provisions all Vault configuration required by the three a
 | AWS secrets engine (STS assumed_role) | `aws/` | CONF-04 |
 | Policy: uc1-readonly | — | CONF-01, CONF-03 |
 | Policy: uc2-personal | — | CONF-02, CONF-03, CONF-04 |
+| Policy: uc2-agent (the banking agent's own Kubernetes login: Bedrock STS, `lookup-self`, and read on its own registration) | `aws/sts/bedrock-reader`, `agent-registry/registration/display-name/agent-uc2` | CONF-04, VNAI-03 |
 | Policy: uc3-refund-writer | — | CONF-02, CONF-03, CONF-04 |
 | K8s role: uc1 | `kubernetes/role/uc1` | CONF-01 |
 | K8s role: uc2 | `kubernetes/role/uc2` | CONF-01 |
@@ -64,6 +65,14 @@ Inspect a registration:
 ```bash
 vault read agent-registry/registration/display-name/uc3-actor
 ```
+
+The Use Case 2 banking agent reads its own registration at runtime, with its own
+Kubernetes-auth token (policy `uc2-agent`), so each chat turn can show the ceiling
+Vault intersects with the caller's human baseline. The policy grants `read` on
+exactly `agent-registry/registration/display-name/<uc2_agent_identity>` — the same
+variable the registration's `display_name` uses — and nothing else in the
+registry. No other policy in this module grants any path under
+`agent-registry/`.
 
 ### Aliases (how a JWT claim resolves to an entity)
 
