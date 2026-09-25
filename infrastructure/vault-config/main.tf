@@ -26,7 +26,9 @@
 ################################################################################
 
 terraform {
-  required_version = ">= 1.0"
+  # >= 1.7 for the `removed` block in modules/vault_config (retired activation
+  # flag); 1.10 is the workshop floor (check-prerequisites.sh TERRAFORM_MIN_VERSION).
+  required_version = ">= 1.10"
 
   required_providers {
     vault = {

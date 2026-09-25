@@ -17,6 +17,10 @@
 ################################################################################
 
 terraform {
+  # `removed` blocks (the retired activation flag below) need Terraform >= 1.7;
+  # the workshop floor is 1.10 (check-prerequisites.sh TERRAFORM_MIN_VERSION).
+  required_version = ">= 1.10"
+
   required_providers {
     vault = {
       source = "hashicorp/vault"
@@ -121,10 +125,22 @@ resource "vault_kubernetes_auth_backend_config" "this" {
 # profile-wide false.
 ################################################################################
 
-# Activation gate — the oauth-resource-server feature must be enabled before the
-# profile (and Plan 05's agent registrations) reconcile.
-resource "vault_activation_flags" "oauth_resource_server" {
-  feature = "oauth-resource-server"
+# The oauth-resource-server activation flag is RETIRED. Vault 2.1.0 release notes:
+# "The Agentic IAM no longer requires an activation flag to use." On 2.1.x the
+# endpoint is gone (sys/activation-flags/oauth-resource-server/activate answers
+# 404 unsupported path), so keeping the resource would make every apply on 2.1.1
+# try to re-create it and fail.
+#
+# `removed` with destroy = false makes Terraform FORGET the flag in existing
+# vault-config states without calling Vault: no read, no delete. A fresh state
+# never had it and the block is a no-op there. Do not replace this with
+# `terraform state rm` or any manual step — the block is the whole migration.
+removed {
+  from = vault_activation_flags.oauth_resource_server
+
+  lifecycle {
+    destroy = false
+  }
 }
 
 resource "vault_oauth_resource_server_config_profile" "ivia" {
@@ -142,8 +158,6 @@ resource "vault_oauth_resource_server_config_profile" "ivia" {
   audiences            = ["uc3-actor", "agent-uc2"]
   supported_algorithms = ["RS256"]
   user_claim           = "sub"
-
-  depends_on = [vault_activation_flags.oauth_resource_server]
 }
 
 ################################################################################
@@ -793,16 +807,14 @@ locals {
   }
 }
 
-# Every identity write below is ordered AFTER the oauth-resource-server activation
-# flag. The gate declared at the top of this file names the agent registrations, but
-# the edge only ever reached the config profile — so Terraform was free to schedule
-# identity writes concurrently with the activation. An entity create whose request is
-# in flight when the feature activates comes back without `id`, and the provider reads
-# that field unguarded (resource_identity_entity.go:146), panicking the plugin process
-# and failing the whole apply. Observed 2026-08-10: of five entities dispatched in one
-# wave, the three issued after the flag landed created in 0s; the two issued before it
-# panicked. The registrations and aliases inherit this ordering transitively through
-# entity_id / canonical_id, so the edge belongs on the entities.
+# The identity entities need no ordering edge on 2.1.x. On 2.0.3 every entity carried a
+# depends_on on the oauth-resource-server activation flag: an entity create in flight
+# while the feature activated came back without `id` and panicked the provider
+# (resource_identity_entity.go:146), observed 2026-08-10. Vault 2.1.x has no activation
+# step (the flag is retired above), so nothing activates mid-apply and the race cannot
+# occur. The registrations and aliases still order themselves after their entities
+# through entity_id / canonical_id, and the oauth aliases after the profile through
+# their explicit depends_on.
 #
 # --- UC1: Kubernetes registry identity (entity + registration; alias in Task 3) ---
 resource "vault_identity_entity" "uc1_agent" {
@@ -810,8 +822,6 @@ resource "vault_identity_entity" "uc1_agent" {
   # No entity policies: UC1's enforcement floor is vault_policy.uc1_readonly bound
   # to the uc1 k8s role. This entity exists purely as the Agent Registry identity;
   # its ceiling is inert (k8s tokens carry no act.sub).
-
-  depends_on = [vault_activation_flags.oauth_resource_server]
 }
 
 resource "vault_agent_registration" "uc1_agent" {
@@ -829,8 +839,6 @@ resource "vault_identity_entity" "human" {
   for_each = local.obo_human_subs
   name     = each.value
   policies = local.obo_human_policies[each.key]
-
-  depends_on = [vault_activation_flags.oauth_resource_server]
 }
 
 # --- UC2 agent (agent-uc2): entity + registration ---
@@ -838,8 +846,6 @@ resource "vault_identity_entity" "agent_uc2" {
   name = var.uc2_agent_identity # "agent-uc2"
   # No baseline policies: in OBO the agent contributes its ceiling via the
   # registration below, not via entity policies.
-
-  depends_on = [vault_activation_flags.oauth_resource_server]
 }
 
 resource "vault_agent_registration" "agent_uc2" {
@@ -854,8 +860,6 @@ resource "vault_agent_registration" "agent_uc2" {
 # --- UC3 agent (uc3-actor): entity + registration ---
 resource "vault_identity_entity" "uc3_actor" {
   name = var.uc3_agent_identity # "uc3-actor" — the ACTOR, not the human sub
-
-  depends_on = [vault_activation_flags.oauth_resource_server]
 }
 
 resource "vault_agent_registration" "uc3_actor" {
