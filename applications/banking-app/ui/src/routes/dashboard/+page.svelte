@@ -29,6 +29,7 @@
 	import ToolChip from '$lib/components/chat/ToolChip.svelte';
 	import AnswerCard from '$lib/components/chat/AnswerCard.svelte';
 	import AgentLogPanel from '$lib/components/activity/AgentLogPanel.svelte';
+	import SecurityFlowPanel from '$lib/components/activity/SecurityFlowPanel.svelte';
 	import { countEntries } from '$lib/agent-log';
 	import { createTurnLog } from '$lib/turn-events.svelte';
 
@@ -65,6 +66,12 @@
 	function toggleLog() {
 		openPanel = openPanel === 'log' ? null : 'log';
 	}
+	function toggleFlow() {
+		openPanel = openPanel === 'flow' ? null : 'flow';
+	}
+	/** The use case each turn was sent to, by Turn id: 3 for the refund chat, 2 for banking. */
+	let useCaseOf = $state<Record<string, 2 | 3>>({});
+	const latestTurn = $derived(log.turns.at(-1));
 	/** `agent` is the agent whose turn asked for the consent. */
 	let pendingConsent: {
 		auth_req_id: string;
@@ -190,6 +197,7 @@
 		messages = [...messages, { role: 'user', content: userMsg }];
 		isLoading = true;
 		const turn = log.begin(userMsg);
+		useCaseOf[turn.id] = endpoint === '/api/uc3-chat' ? 3 : 2;
 		// The first error the page shows for this turn, without the "Error: " the
 		// notification puts in front of it: the Agent Log line has its own label.
 		let failure: string | undefined;
@@ -248,6 +256,8 @@
 	agentLogControls="agent-log"
 	onAgentLogToggle={toggleLog}
 	securityFlowOpen={openPanel === 'flow'}
+	securityFlowControls="security-flow"
+	onSecurityFlowToggle={latestTurn ? toggleFlow : undefined}
 	bind:messagesEl
 	{suggestions}
 	bind:value={inputMessage}
@@ -268,6 +278,13 @@
 	{#snippet panel()}
 		{#if openPanel === 'log'}
 			<AgentLogPanel id="agent-log" turns={log.turns} {systems} onclose={() => (openPanel = null)} />
+		{:else if openPanel === 'flow'}
+			<SecurityFlowPanel
+				id="security-flow"
+				useCase={(latestTurn && useCaseOf[latestTurn.id]) || 2}
+				turn={latestTurn}
+				onclose={() => (openPanel = null)}
+			/>
 		{/if}
 	{/snippet}
 
