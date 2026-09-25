@@ -28,6 +28,7 @@
 	import ToolChip from '$lib/components/chat/ToolChip.svelte';
 	import SourcesCard, { type Source } from '$lib/components/chat/SourcesCard.svelte';
 	import AgentLogPanel from '$lib/components/activity/AgentLogPanel.svelte';
+	import SecurityFlowPanel from '$lib/components/activity/SecurityFlowPanel.svelte';
 
 	/** The uc1-agent tool whose result lists the knowledge-base passages. */
 	const RETRIEVE_TOOL = 'retrieve_from_knowledge_base';
@@ -144,6 +145,10 @@
 		openPanel = openPanel === 'log' ? null : 'log';
 	}
 
+	function toggleFlow() {
+		openPanel = openPanel === 'flow' ? null : 'flow';
+	}
+
 	async function sendMessage() {
 		const query = inputMessage.trim();
 		if (!query || isLoading) return;
@@ -194,6 +199,8 @@
 	agentLogControls="agent-log"
 	onAgentLogToggle={toggleLog}
 	securityFlowOpen={openPanel === 'flow'}
+	securityFlowControls="security-flow"
+	onSecurityFlowToggle={log.turns.length > 0 ? toggleFlow : undefined}
 	bind:messagesEl
 	{suggestions}
 	bind:value={inputMessage}
@@ -219,6 +226,8 @@
 				systems="Kubernetes auth · Vault · Bedrock"
 				onclose={() => (openPanel = null)}
 			/>
+		{:else if openPanel === 'flow'}
+			<SecurityFlowPanel id="security-flow" useCase={1} turn={log.turns.at(-1)} onclose={() => (openPanel = null)} />
 		{/if}
 	{/snippet}
 
