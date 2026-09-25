@@ -1556,8 +1556,10 @@ step_07_acme_cert_issuance() {
 # once with Kubernetes auth role uc3 and keeps that token until it expires: it
 # re-logs in only when lookup-self fails (ensure_authenticated in
 # applications/uc3-agent/app/vault_client.py). When vault_config changes which
-# policy role uc3 carries and deletes the old one (issue #72: uc3-refund-writer
-# became uc3-agent), a pod started before the apply keeps a token that names the
+# policy role uc3 carries and deletes the old one (issue #72 · Use Case 3: the
+# refund agent's everyday Vault login can get refund-writing database credentials
+# with no approval, where uc3-refund-writer became uc3-agent), a pod started
+# before the apply keeps a token that names the
 # deleted policy. lookup-self still succeeds, so the agent never re-logs in, but
 # every path it uses is denied (transaction lookups, Bedrock, its audit-record
 # credentials) until the token expires, up to an hour later. Restarting the
