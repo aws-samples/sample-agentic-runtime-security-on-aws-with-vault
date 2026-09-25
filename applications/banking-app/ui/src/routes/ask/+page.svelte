@@ -8,8 +8,8 @@
 
   The browser POSTs { message } to /api/ask (via $lib/agent-client), which relays
   the uc1-agent's event stream. Each turn's events are kept per turn
-  ($lib/turn-events.svelte): the tool chips, the Sources card and the Agent Log
-  are drawn from them as they arrive. The answer is the legacy `delta` frame,
+  ($lib/turn-events.svelte): the tool chips, the result cards ($lib/answer-cards)
+  and the Agent Log are drawn from them as they arrive. The answer is the legacy `delta` frame,
   so an agent event never becomes a chat bubble.
 
   The left navigation comes from the root layout; signed-out visitors see
@@ -18,21 +18,20 @@
 <script lang="ts">
 	import { InlineNotification } from 'carbon-components-svelte';
 	import { sendChatMessage } from '$lib/agent-client';
-	import type { AgentEvent, JsonValue } from '$lib/agent-events';
 	import { countEntries } from '$lib/agent-log';
 	import { createTurnLog, type Turn } from '$lib/turn-events.svelte';
+	import { toolCallsOf } from '$lib/accounts-turn';
+	import { answerCardsOf } from '$lib/answer-cards';
 	import ChatWorkspace, { type Suggestion } from '$lib/components/chat/ChatWorkspace.svelte';
 	import UserMessage from '$lib/components/chat/UserMessage.svelte';
 	import AgentTurn from '$lib/components/chat/AgentTurn.svelte';
 	import AnswerCard from '$lib/components/chat/AnswerCard.svelte';
-	import ToolChip from '$lib/components/chat/ToolChip.svelte';
-	import SourcesCard, { type Source } from '$lib/components/chat/SourcesCard.svelte';
+	import ToolCallChip from '$lib/components/chat/ToolCallChip.svelte';
+	import AnswerCards from '$lib/components/chat/AnswerCards.svelte';
+	import FormattedAnswer from '$lib/components/chat/FormattedAnswer.svelte';
 	import AgentLogPanel from '$lib/components/activity/AgentLogPanel.svelte';
 	import SecurityFlowPanel from '$lib/components/activity/SecurityFlowPanel.svelte';
 	import AuditTraceCard from '$lib/components/activity/AuditTraceCard.svelte';
-
-	/** The uc1-agent tool whose result lists the knowledge-base passages. */
-	const RETRIEVE_TOOL = 'retrieve_from_knowledge_base';
 
 	const log = createTurnLog();
 	/** Which right-hand panel is open. Shared convention with the other chat pages. */
@@ -44,78 +43,14 @@
 
 	const entryCount = $derived(countEntries(log.turns));
 
-	interface ToolView {
-		id: string;
-		name: string;
-		status: 'in_progress' | 'success' | 'error';
-		durationMs?: number;
-	}
-
-	interface SourcesView {
-		key: string;
-		sources: Source[];
-		vaultPath?: string;
-		ttlSeconds?: number;
-	}
-
-	/** One chip per tool call, in the order the calls started, at their latest status. */
-	function toolsOf(events: AgentEvent[]): ToolView[] {
-		const byId = new Map<string, ToolView>();
-		for (const event of events) {
-			if (event.type !== 'tool_call') continue;
-			byId.set(event.toolCallId, {
-				id: event.toolCallId,
-				name: event.name,
-				status: event.status,
-				durationMs: event.durationMs ?? byId.get(event.toolCallId)?.durationMs
-			});
-		}
-		return [...byId.values()];
-	}
-
-	function sourceList(result: JsonValue | undefined): Source[] | null {
-		if (!result || typeof result !== 'object' || Array.isArray(result) || !Array.isArray(result.sources)) return null;
-		const sources: Source[] = [];
-		for (const item of result.sources) {
-			if (item && typeof item === 'object' && !Array.isArray(item) && typeof item.document === 'string') {
-				sources.push({ document: item.document, score: typeof item.score === 'number' ? item.score : undefined });
-			}
-		}
-		return sources;
-	}
-
-	/**
-	 * A Sources card for each successful knowledge-base retrieval. Its AWS credential is the
-	 * one aws_sts_credentials event between the call's start and its result; with none, or
-	 * more than one (calls that overlap), the footer says "not observed".
-	 */
-	function sourcesOf(events: AgentEvent[]): SourcesView[] {
-		const cards: SourcesView[] = [];
-		events.forEach((event, index) => {
-			if (event.type !== 'tool_call' || event.name !== RETRIEVE_TOOL || event.status !== 'success') return;
-			const sources = sourceList(event.result);
-			if (!sources || sources.length === 0) return;
-			const start = events.findIndex((e) => e.type === 'tool_call' && e.toolCallId === event.toolCallId);
-			const keys = events
-				.slice(start, index)
-				.filter((e) => e.type === 'agent:credential' && e.kind === 'aws_sts_credentials');
-			const keysEvent = keys.length === 1 && keys[0].type === 'agent:credential' ? keys[0] : undefined;
-			cards.push({ key: event.toolCallId, sources, vaultPath: keysEvent?.vaultPath, ttlSeconds: keysEvent?.ttlSeconds });
-		});
-		return cards;
-	}
-
-	function vaultRoleOf(events: AgentEvent[]): string | undefined {
-		for (const event of events) if (event.type === 'agent:audit_seed' && event.vaultRole) return event.vaultRole;
-		return undefined;
-	}
-
+	// Each answer as the approved #65 board draws it: a chip per tool call, a card of what each
+	// tool returned with the credential that read it ($lib/answer-cards), then the Audit Trace
+	// card and the formatted answer.
 	const views = $derived(
 		log.turns.map((turn) => ({
 			turn,
-			tools: toolsOf(turn.events),
-			sources: sourcesOf(turn.events),
-			vaultRole: vaultRoleOf(turn.events),
+			tools: toolCallsOf(turn.events, turn.done),
+			cards: answerCardsOf(turn.events),
 			reply: replies[turn.id]
 		}))
 	);
@@ -236,25 +171,13 @@
 		<p class="empty-state">Ask a question about company policies, or pick a starter prompt below.</p>
 	{/if}
 
-	{#each views as { turn, tools, sources, vaultRole, reply } (turn.id)}
+	{#each views as { turn, tools, cards, reply } (turn.id)}
 		<UserMessage>{turn.question}</UserMessage>
 		<AgentTurn label="Knowledge Agent" icon={agentIcon}>
 			{#each tools as tool (tool.id)}
-				<ToolChip
-					label={tool.name}
-					status={tool.status === 'success' ? 'done' : undefined}
-					detail={tool.status === 'in_progress'
-						? 'running…'
-						: tool.status === 'error'
-							? 'failed'
-							: tool.durationMs !== undefined
-								? `${tool.durationMs} ms`
-								: undefined}
-				/>
+				<ToolCallChip name={tool.name} status={tool.status} durationMs={tool.durationMs} />
 			{/each}
-			{#each sources as card (card.key)}
-				<SourcesCard sources={card.sources} {vaultRole} vaultPath={card.vaultPath} ttlSeconds={card.ttlSeconds} />
-			{/each}
+			<AnswerCards {cards} />
 			{#if reply?.error}
 				<InlineNotification kind="error" lowContrast hideCloseButton title="Error" subtitle={reply.error} />
 			{/if}
@@ -262,7 +185,7 @@
 				<AuditTraceCard useCase={1} {turn} />
 			{/if}
 			{#if reply?.answer}
-				<AnswerCard>{reply.answer.trim()}</AnswerCard>
+				<FormattedAnswer text={reply.answer} />
 			{:else if !turn.done}
 				<AnswerCard pending>Thinking…</AnswerCard>
 			{:else if !reply?.error}
