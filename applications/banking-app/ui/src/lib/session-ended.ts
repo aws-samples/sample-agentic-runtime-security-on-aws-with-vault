@@ -2,7 +2,9 @@
  * session-ended.ts — the 401 that says a sign-in is over, and what the browser does with it.
  *
  * hooks.server.ts answers a request under /api/ (other than the public /api/ask) whose
- * ID token has expired, is missing or cannot be read with 401 and a SessionEndedBody.
+ * ID token has expired, is missing or cannot be read with 401 and a SessionEndedBody;
+ * /api/chat, /api/uc3-chat and /api/audit-trace send the same body when the sign-in
+ * cookies are gone altogether (both expire with their tokens).
  * The browser code that calls those routes sends the person to sign in when it gets one:
  * lib/agent-client.ts for the Banking Agent and refund chats, and the Audit Trace card.
  * That is a full navigation to /, which starts sign-in, so no page stays on screen

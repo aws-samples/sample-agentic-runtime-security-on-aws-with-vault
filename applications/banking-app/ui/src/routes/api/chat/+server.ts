@@ -1,4 +1,5 @@
 import { json, type RequestHandler } from '@sveltejs/kit';
+import { sessionEndedBody } from '$lib/session-ended';
 import { env } from '$env/dynamic/private';
 import { scrubErrorText } from '$lib/server/activity-filter';
 import { AgentCall, agentFailed, streamAgentEvents } from '$lib/server/agent-proxy';
@@ -13,7 +14,9 @@ export const POST: RequestHandler = async ({ request, cookies, platform }) => {
 	// Vault denies the database-creds read. See verify_access/iviaop-config/rules.yaml.
 	const accessToken = cookies.get('access_token');
 	if (!accessToken) {
-		return json({ error: 'Not authenticated' }, { status: 401 });
+		// No sign-in cookie left (both expire with their tokens): the same marked 401 the
+		// hook sends, so the open page goes to sign-in instead of showing an error.
+		return json(sessionEndedBody('unverifiable'), { status: 401, headers: { 'Cache-Control': 'no-store' } });
 	}
 
 	let body: unknown;

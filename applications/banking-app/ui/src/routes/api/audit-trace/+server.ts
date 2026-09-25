@@ -6,7 +6,9 @@
  * audit_correlation rows of the turn's request ID.
  *
  *   401  no id_token cookie, or one that fails verification (signature, issuer,
- *        audience, expiry) — the browser's say-so is never an identity
+ *        audience, expiry) — the browser's say-so is never an identity. With no
+ *        cookie or an expired one the body carries the sessionEnded marker
+ *        (lib/session-ended.ts), so the card goes to sign-in
  *   400  requestId missing or not a UUID
  *   200  AuditTraceResponse — rows only where the request ID was approved by the
  *        signed-in user; another user's request ID gets the same empty "pending"
@@ -21,6 +23,7 @@ import { json, type RequestHandler } from '@sveltejs/kit';
 import { REQUEST_ID_PATTERN, auditTraceStatus, type AuditTraceErrorResponse, type AuditTraceResponse } from '$lib/audit-trace';
 import { AuditQueryError, queryAuditCorrelation } from '$lib/server/audit-trace/athena';
 import { SessionError, verifySession } from '$lib/server/audit-trace/session';
+import { sessionEndedBody } from '$lib/session-ended';
 
 const NO_STORE = { 'Cache-Control': 'no-store' };
 
@@ -50,6 +53,12 @@ export const GET: RequestHandler = async ({ url, cookies }) => {
 		({ sub } = await verifySession(cookies.get('id_token')));
 	} catch (err) {
 		if (err instanceof SessionError) {
+			// No sign-in cookie left, or one that has expired: the marked 401 the hook sends,
+			// so the card sends the person to sign in instead of showing an error.
+			if (err.failure === 'no_session' || err.failure === 'expired') {
+				const reason = err.failure === 'expired' ? 'expired' : 'unverifiable';
+				return json(sessionEndedBody(reason), { status: 401, headers: NO_STORE });
+			}
 			const [status, message] = SESSION_MESSAGES[err.failure];
 			return fail(status, message);
 		}
