@@ -26,6 +26,7 @@
 import type { AgentAuditSeedEvent, AgentCredentialEvent, AgentEvent, JsonObject, JsonValue } from '$lib/agent-events';
 // Type-only: the server route imports this file, and the store module uses Svelte runes.
 import type { Turn } from '$lib/turn-events.svelte';
+import { credentialVerb } from '$lib/agent-log';
 
 // ---------------------------------------------------------------------------
 // The endpoint's contract
@@ -236,16 +237,21 @@ const SOURCE_BY_ISSUER: Record<string, AuditSource> = {
 	'AWS STS (via Vault)': 'aws sts'
 };
 
-const KIND_TEXT: Record<string, string> = {
-	access_token: 'access token issued',
-	id_token: 'ID token issued',
-	refresh_token: 'refresh token issued',
-	ciba_token: 'approval (CIBA) token issued',
-	delegated_token: 'delegated token issued',
-	k8s_sa_token: 'service-account token presented',
-	vault_token: 'Vault token issued',
-	db_credentials: 'database credential issued',
-	aws_sts_credentials: 'AWS STS keys issued'
+/**
+ * What each credential kind is called in a row. The verb after it (reused, presented or
+ * issued) is the Agent Log's own rule, credentialVerb in $lib/agent-log, so the card and
+ * the log never disagree about what a turn did with a credential.
+ */
+const KIND_NOUN: Record<string, string> = {
+	access_token: 'access token',
+	id_token: 'ID token',
+	refresh_token: 'refresh token',
+	ciba_token: 'approval (CIBA) token',
+	delegated_token: 'delegated token',
+	k8s_sa_token: 'service-account token',
+	vault_token: 'Vault token',
+	db_credentials: 'database credential',
+	aws_sts_credentials: 'AWS STS keys'
 };
 
 export function isAuditSeed(event: AgentEvent): event is AgentAuditSeedEvent {
@@ -272,7 +278,7 @@ export function liveFactRows(events: AgentEvent[]): AuditListRow[] {
 			key: `c${index}`,
 			source: SOURCE_BY_ISSUER[event.issuer] ?? 'agent',
 			at: typeof event.ts === 'number' ? event.ts : null,
-			summary: `${KIND_TEXT[event.kind] ?? event.kind}${where}`,
+			summary: `${KIND_NOUN[event.kind] ?? event.kind} ${credentialVerb(event)}${where}`,
 			fields: [
 				['kind', event.kind],
 				['issuer', event.issuer],
