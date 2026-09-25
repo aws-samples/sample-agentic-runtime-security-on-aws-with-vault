@@ -192,7 +192,7 @@ To act as a different user, open a **new Incognito / Private browser window** an
 - **Password:** `WorkshopUser1!`
 
 :::alert{type="info" header="Why a second window here?"}
-**Log out** (bottom of the navigation) fully signs you out: the Banking UI `/logout` handler clears its session cookies and then redirects to IVIA's `/pkmslogout`, which terminates the WebSEAL single sign-on session as well — so clicking **Log out** and signing back in as Jaime in the *same* window works and lands you on a fresh credential prompt. We open a **separate Incognito / Private window** here only so your Oscar session stays live in the first window and you can compare the two personas side-by-side.
+**Log out** (click your name at the bottom of the navigation, then **Log out**) fully signs you out: the Banking UI `/logout` handler clears its session cookies and then redirects to IVIA's `/pkmslogout`, which terminates the WebSEAL single sign-on session as well — so clicking **Log out** and signing back in as Jaime in the *same* window works and lands you on a fresh credential prompt. We open a **separate Incognito / Private window** here only so your Oscar session stays live in the first window and you can compare the two personas side-by-side.
 :::
 
 Click **Show me my account balances** again. The agent now answers with Jaime's accounts — not Oscar's. The `sub` claim changed, activating a different RLS filter in PostgreSQL.
