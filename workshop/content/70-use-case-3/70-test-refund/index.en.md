@@ -21,9 +21,9 @@ Open the printed URL, incognito window, sign in `jaime` / `WorkshopUser1!`.
 
 **Why:** You are talking to an agent that can read your transactions but cannot move money on its own. Watch where it stops.
 
-Click the red **I need a refund for a recent transaction** suggestion under the chat. When the agent asks which transaction, reply with the number of a **charge** (money that went out) that you have not refunded before, then confirm.
+Click the red **I need a refund for a recent transaction** suggestion under the chat. The app lists your transactions and asks which number you want to refund. Type the number of a **charge** (money that went out) that you have not refunded before — just the number — then confirm.
 
-The agent checks your choice against the database before it asks you to approve anything. It refuses a deposit, a charge that is already refunded in full, and an amount larger than what is left to refund on the charge, and it tells you why. A refused refund sends nothing to your phone — pick a different charge and ask again.
+The agent checks your choice against the database before it asks you to approve anything. It refuses a deposit, a charge that is already refunded in full, and an amount larger than what is left to refund on the charge, and it tells you why. A refused refund sends nothing to your phone: the app asks for another transaction number, so type a different number straight into the same chat rather than starting over.
 
 ### 3. Approve on your phone
 
