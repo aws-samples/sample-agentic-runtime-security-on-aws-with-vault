@@ -29,14 +29,15 @@
 	import ToolChip from '$lib/components/chat/ToolChip.svelte';
 	import AnswerCard from '$lib/components/chat/AnswerCard.svelte';
 	import ToolCallChip from '$lib/components/chat/ToolCallChip.svelte';
-	import AccountsCard from '$lib/components/chat/AccountsCard.svelte';
+	import AnswerCards from '$lib/components/chat/AnswerCards.svelte';
 	import FormattedAnswer from '$lib/components/chat/FormattedAnswer.svelte';
 	import AgentLogPanel from '$lib/components/activity/AgentLogPanel.svelte';
 	import SecurityFlowPanel from '$lib/components/activity/SecurityFlowPanel.svelte';
 	import AuditTraceCard from '$lib/components/activity/AuditTraceCard.svelte';
 	import { countEntries } from '$lib/agent-log';
 	import { createTurnLog } from '$lib/turn-events.svelte';
-	import { accountsCardsOf, hasAccountsCall, toolCallsOf } from '$lib/accounts-turn';
+	import { toolCallsOf } from '$lib/accounts-turn';
+	import { answerCardsOf } from '$lib/answer-cards';
 
 	let { data }: { data: PageData } = $props();
 
@@ -146,18 +147,19 @@
 	});
 
 	/**
-	 * A banking turn in which the agent called get_accounts is drawn as the approved #65 board
-	 * draws it: a chip per tool call in place of the "Processing your request..." pill, a "Your
-	 * accounts" card, then the Audit Trace card and the formatted answer. Every other turn keeps
-	 * its layout (Bear, 2026-09-25). Null for any other turn.
+	 * Every answer, in the banking chat and the refund chat, is drawn as the approved #65 boards
+	 * draw it: a chip per tool call in place of the "Processing your request..." pill, a card of
+	 * what each tool returned with the credential that read it ($lib/answer-cards), then the Audit
+	 * Trace card and the formatted answer (Bear, 2026-09-25). The turn is the one its streamed
+	 * messages arrived in; a message the page adds itself (the consent follow-up) has none and is
+	 * drawn as a plain answer in that turn. Null for a group with no streamed turn at all.
 	 */
-	function accountsViewOf(turn: Turn) {
-		if (turn.kind !== 'agent' || turn.agent !== 'Banking Agent') return null;
-		const turnId = turn.msgs[0]?.turnId;
-		if (!turnId || turn.msgs.some((msg) => msg.turnId !== turnId)) return null;
-		const logTurn = log.turns.find((t) => t.id === turnId);
-		if (!logTurn || !hasAccountsCall(logTurn.events)) return null;
-		return { tools: toolCallsOf(logTurn.events, logTurn.done), cards: accountsCardsOf(logTurn.events) };
+	function answerViewOf(turn: Turn) {
+		if (turn.kind !== 'agent') return null;
+		const turnId = turn.msgs.find((msg) => msg.turnId)?.turnId;
+		const logTurn = turnId ? log.turns.find((t) => t.id === turnId) : undefined;
+		if (!logTurn) return null;
+		return { tools: toolCallsOf(logTurn.events, logTurn.done), cards: answerCardsOf(logTurn.events) };
 	}
 
 	function extractConsent(text: string, agent: AgentName) {
@@ -336,20 +338,22 @@
 	{/if}
 
 	{#each turns as turn, i}
-		{@const accounts = accountsViewOf(turn)}
+		{@const answer = answerViewOf(turn)}
 		{#if turn.kind === 'user'}
 			<UserMessage>{turn.msg.content}</UserMessage>
-		{:else if accounts}
+		{:else if answer}
 			<AgentTurn label={turn.agent} icon={agentIcon}>
-				{#each accounts.tools as tool (tool.id)}
+				{#each answer.tools as tool (tool.id)}
 					<ToolCallChip name={tool.name} status={tool.status} durationMs={tool.durationMs} />
 				{/each}
-				{#each accounts.cards as card (card.key)}
-					<AccountsCard accounts={card.accounts} credential={card.credential} owner={actingFor || undefined} />
-				{/each}
+				<AnswerCards cards={answer.cards} owner={actingFor || undefined} />
 				{#each turn.msgs as msg}
 					{#if msg.type === 'tool_planning'}
-						<!-- The tool chips above stand in for the "Processing your request..." pill. -->
+						<!-- The tool chips above stand in for the "Processing your request..." pill; a turn
+						     with no tool call in its stream keeps the pill. -->
+						{#if answer.tools.length === 0}
+							<ToolChip label={msg.content} />
+						{/if}
 					{:else if msg.role === 'tool'}
 						<ToolChip label={msg.content} />
 					{:else if msg.role === 'error'}
@@ -357,7 +361,7 @@
 					{:else}
 						{@const auditTurn = auditTurnFor.get(msg)}
 						{#if auditTurn}
-							<AuditTraceCard useCase={2} turn={auditTurn} turns={log.turns} />
+							<AuditTraceCard useCase={msg.agent === 'Refund Agent' ? 3 : 2} turn={auditTurn} turns={log.turns} />
 						{/if}
 						<FormattedAnswer text={msg.content} />
 					{/if}
