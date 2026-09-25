@@ -51,9 +51,14 @@
 		turn: Turn | undefined;
 		/** Overrides the audit key the card finds in `turn`. Chat pages leave it unset. */
 		requestId?: string;
+		/**
+		 * The page's turns. A refund's amount and account are in the approval request of the
+		 * turn before the one that completes it; the card finds them there.
+		 */
+		turns?: Turn[];
 	}
 
-	let { useCase, requestId, turn }: Props = $props();
+	let { useCase, requestId, turn, turns }: Props = $props();
 
 	/** How often an open card asks Athena again while records are still landing. */
 	const POLL_MS = 10_000;
@@ -71,7 +76,7 @@
 	let attempt = $state(0);
 	const openRows = new SvelteSet<string>();
 
-	const facts = $derived(turnAuditFacts(turn, requestId));
+	const facts = $derived(turnAuditFacts(turn, requestId, turns));
 	/** The request ID to query Athena for, or undefined when this turn has no audit_correlation row to find. */
 	const traceId = $derived(
 		useCase === 3 && facts.seed !== undefined && facts.requestId && REQUEST_ID_PATTERN.test(facts.requestId)

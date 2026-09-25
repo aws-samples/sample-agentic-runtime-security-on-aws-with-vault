@@ -327,7 +327,7 @@
 					{:else}
 						{@const auditTurn = auditTurnFor.get(msg)}
 						{#if auditTurn}
-							<AuditTraceCard useCase={msg.agent === 'Refund Agent' ? 3 : 2} turn={auditTurn} />
+							<AuditTraceCard useCase={msg.agent === 'Refund Agent' ? 3 : 2} turn={auditTurn} turns={log.turns} />
 						{/if}
 						<AnswerCard>{msg.content}</AnswerCard>
 					{/if}

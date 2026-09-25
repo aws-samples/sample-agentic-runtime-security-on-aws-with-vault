@@ -364,7 +364,14 @@ function authorizationType(claims: JsonObject | undefined): string | undefined {
 	return undefined;
 }
 
-export function turnAuditFacts(turn: Turn | undefined, requestId?: string): TurnAuditFacts {
+/**
+ * `turns` is the page's other turns. A refund's terms (amount, currency, account) travel in
+ * the approval request, agent:hitl_required, which the agent sends in the turn that asks for
+ * approval; the turn that completes the refund carries only the approval, agent:hitl_approved,
+ * with the same auth_req_id. So when this turn has no terms of its own, they are taken from
+ * the request its approval answers.
+ */
+export function turnAuditFacts(turn: Turn | undefined, requestId?: string, turns: Turn[] = []): TurnAuditFacts {
 	const events = turn?.events ?? [];
 	const seed = events.filter(isAuditSeed).pop();
 	const credentials = events.filter(isCredential);
@@ -391,7 +398,14 @@ export function turnAuditFacts(turn: Turn | undefined, requestId?: string): Turn
 	const iat = num(delegated?.claims?.iat);
 	if (exp !== undefined && iat !== undefined && exp > iat) facts.delegatedTtlSeconds = Math.round(exp - iat);
 
-	for (const event of events) {
+	const approved = new Set(
+		events.flatMap((event) => (event.type === 'agent:hitl_approved' ? [text(event.details?.auth_req_id)] : [])).filter(Boolean)
+	);
+	const answered = turns
+		.filter((other) => other.id !== turn?.id)
+		.flatMap((other) => other.events)
+		.filter((event) => event.type === 'agent:hitl_required' && approved.has(text(event.details?.auth_req_id)));
+	for (const event of [...answered, ...events]) {
 		if (event.type === 'agent:hitl_approved' || event.type === 'agent:hitl_required') {
 			const details = event.details;
 			if (!details) continue;
