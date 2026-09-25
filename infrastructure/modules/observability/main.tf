@@ -892,6 +892,10 @@ resource "aws_glue_catalog_table" "agent_traces" {
 #-------------------------------------------------------------------------------
 
 locals {
+  # The VIEW's name, used in its DDL and SELECT below and exported (outputs.tf) for
+  # the audit-reader IAM policy, so the Glue grant and the VIEW cannot drift apart.
+  audit_correlation_view_name = "audit_correlation"
+
   # 12-column audit_correlation VIEW (CONTEXT Delta-6, Option B — locked 2026-05-24;
   # CloudTrail plane removed 2026-05-25 — see SUMMARY: no workshop-owned trail delivers
   # to S3 in a fresh attendee account, and the refund is a Postgres write CloudTrail
@@ -955,7 +959,7 @@ locals {
   #        into its Branch-B ivia_decisions anchor record (db_credential_ttl), so the
   #        VIEW surfaces db_credential_ttl from ivia.db_credential_ttl, request_id-keyed.
   athena_view_sql = <<-SQL
-    CREATE OR REPLACE VIEW audit_correlation AS
+    CREATE OR REPLACE VIEW ${local.audit_correlation_view_name} AS
     SELECT
         ivia.request_id                                              AS request_id,
         ivia.timestamp                                               AS approval_time,
@@ -983,7 +987,7 @@ locals {
   # captured request_id for REPLACE_WITH_REQUEST_ID and asserts exactly one row.
   athena_select_sql = <<-SQL
     SELECT *
-    FROM audit_correlation
+    FROM ${local.audit_correlation_view_name}
     WHERE request_id = 'REPLACE_WITH_REQUEST_ID'
     LIMIT 1
   SQL

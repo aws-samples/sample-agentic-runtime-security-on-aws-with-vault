@@ -38,6 +38,11 @@ output "athena_workgroup_name" {
   value       = aws_athena_workgroup.workshop.name
 }
 
+output "athena_results_location" {
+  description = "The workshop work group's enforced query result location (s3://<results bucket>/results/). Athena writes every query's results here; the audit-reader IAM policy grants write on exactly this prefix."
+  value       = aws_athena_workgroup.workshop.configuration[0].result_configuration[0].output_location
+}
+
 output "athena_results_bucket" {
   description = "S3 bucket holding Athena query results (workshop CMK SSE)."
   value       = aws_s3_bucket.athena_results.id
