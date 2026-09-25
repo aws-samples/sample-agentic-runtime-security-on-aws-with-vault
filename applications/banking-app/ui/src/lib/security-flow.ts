@@ -898,11 +898,28 @@ function list(items: string[]): string {
 	return `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`;
 }
 
+/**
+ * A failed tool call's reason, in the shape each agent sends it: `{"error": "<text>"}` from the
+ * Use Case 1 agent (infrastructure/modules/uc1_agent/agent/app/agent.py:434) and the banking
+ * agent (applications/banking-app/agent/app/activity.py:852); the bare text from the refund
+ * agent (applications/uc3-agent/app/activity.py:511, via _tool_result_payload at :431).
+ */
+function toolError(result: JsonValue | undefined): string | undefined {
+	if (typeof result === 'string') return result;
+	if (result && typeof result === 'object' && !Array.isArray(result) && typeof result.error === 'string') return result.error;
+	return undefined;
+}
+
 function firstText(seen: Seen[]): string | undefined {
 	for (const s of seen) {
 		const e = s.event;
 		if (e.type === 'agent:narration') return e.text;
 		if (e.type === 'agent:error') return e.message;
+		if (e.type === 'tool_call') {
+			const reason = e.status === 'error' ? toolError(e.result) : undefined;
+			if (reason) return reason;
+			continue;
+		}
 		if ('text' in e && typeof e.text === 'string') return e.text;
 	}
 	return undefined;
