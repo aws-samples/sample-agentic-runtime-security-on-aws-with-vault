@@ -263,7 +263,7 @@ if kubectl get pod -n "$VAULT_NAMESPACE" "$VAULT_POD" &>/dev/null; then
         print_pass "Vault Enterprise edition (version=${vault_version})"
     else
         print_fail "Vault Enterprise edition" \
-            "Vault does not report the '+ent' build (version='${vault_version}'). Native Agent Registry is Enterprise-only — the vault_server image must be hashicorp/vault-enterprise:2.0.3-ent. Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault status"
+            "Vault does not report the '+ent' build (version='${vault_version}'). Native Agent Registry is Enterprise-only — the vault_server image must be hashicorp/vault-enterprise:2.1.1-ent. Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault status"
         failures=$((failures + 1))
     fi
 

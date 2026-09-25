@@ -226,7 +226,7 @@ if echo "${vault_version}" | grep -qi 'ent' \
     print_pass "Vault Enterprise edition (version=${vault_version:-unknown}; sys/license/status responds)"
 else
     print_fail "Vault Enterprise edition" \
-        "Vault does NOT report Enterprise (version='${vault_version}', license/status='${lic_out:0:120}'). The native Agent Registry + OAuth resource server are Enterprise-only — the vault_server image must be hashicorp/vault-enterprise:2.0.3-ent with a platform-standard license. Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault status"
+        "Vault does NOT report Enterprise (version='${vault_version}', license/status='${lic_out:0:120}'). The native Agent Registry + OAuth resource server are Enterprise-only — the vault_server image must be hashicorp/vault-enterprise:2.1.1-ent with a platform-standard license. Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault status"
 fi
 
 #-------------------------------------------------------------------------------

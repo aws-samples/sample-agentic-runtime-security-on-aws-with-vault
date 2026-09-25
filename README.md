@@ -213,7 +213,7 @@ Every `verify-*.sh` and `test-*.sh` script is non-destructive, prints `✓ PASS 
 
 Single-region (`us-west-2`) EKS 1.34 cluster running:
 
-- **HashiCorp Vault Enterprise `2.0.3-ent`** (Raft 3-node, KMS auto-unseal, autoloaded `platform-standard` license) — non-human IAM, JIT credentials, and the **native Agent Registry + OAuth resource server** primitives adopted in Phase 9. Every agent is a first-class registered identity; UC2/UC3 authorize Vault directly with the IVIA OAuth JWT (`X-Vault-Token`, no `jwt_login`), enforced by human-baseline ∩ agent-ceiling ∩ per-request `vault:path_access` RAR.
+- **HashiCorp Vault Enterprise `2.1.1-ent`** (Raft 3-node, KMS auto-unseal, autoloaded `platform-standard` license) — non-human IAM, JIT credentials, and the **native Agent Registry + OAuth resource server** primitives adopted in Phase 9. Every agent is a first-class registered identity; UC2/UC3 authorize Vault directly with the IVIA OAuth JWT (`X-Vault-Token`, no `jwt_login`), enforced by human-baseline ∩ agent-ceiling ∩ per-request `vault:path_access` RAR.
 - **IBM Verify Identity Access 11.0.2** — 7 pods: `iviaconfig` (LMI), `iviaruntime` (AAC), `iviadsc` (DSC), `iviawrprp1` (WebSEAL reverse proxy), `iviaop` (OIDC Provider), `openldap`, `postgresql`. Owns human IAM, OAuth, CIBA.
 - **UC1/UC2/UC3 Strands agents** plus the banking-app UI for UC2/UC3.
 - **RDS PostgreSQL** with Row-Level Security + pgaudit.
