@@ -4,6 +4,7 @@
  * The answers to "has this sign-in expired?" and "which cookies hold it, with which
  * attributes?" live here, so no two parts of the UI can answer differently:
  *   - lib/server/audit-trace/session.ts: has the Audit Trace caller's sign-in expired?
+ *   - routes/callback/+page.server.ts: how long each session cookie lives.
  *   - routes/logout/+server.ts: which cookies to clear, and with which attributes.
  *
  * The rule is jose's (the library that verifies the Audit Trace's id_token): a token
@@ -49,4 +50,9 @@ export function readExp(token: string | undefined): number | null {
 /** Whether a token with this `exp` has expired. */
 export function isExpired(exp: number, now: number = nowSeconds()): boolean {
 	return exp <= now - CLOCK_TOLERANCE_SECONDS;
+}
+
+/** Whole seconds until `exp`, never below 0: the Max-Age of the cookie holding the token. */
+export function secondsLeft(exp: number, now: number = nowSeconds()): number {
+	return Math.max(0, exp - now);
 }

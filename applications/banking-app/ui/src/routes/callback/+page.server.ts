@@ -8,7 +8,12 @@
  *   3. POSTs to IVIA /oauth2/token (in-cluster DNS — bypasses WRP ALB)
  *      with HTTP Basic client_id:client_secret auth.
  *   4. Stores access_token + id_token (and refresh_token, when IVIA returns
- *      one) in httpOnly session cookies.
+ *      one) in httpOnly session cookies. The access_token and id_token cookies
+ *      each live exactly as long as their own token: Max-Age is the seconds left
+ *      until the token's `exp` (never below 0), not expires_in and not a fixed
+ *      time. A response without an id_token, or a token without a readable
+ *      `exp`, is refused rather than given a made-up lifetime: the id_token is
+ *      what says who signed in and when that sign-in ends.
  *   5. Redirects to /dashboard.
  *
  * Security: the tokens are held in httpOnly cookies, so no page script can
@@ -27,6 +32,7 @@ import { redirect, error } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 import type { PageServerLoad } from './$types';
 import { exchangeCodeForTokens } from '$lib/auth';
+import { SESSION_COOKIE_OPTIONS, nowSeconds, readExp, secondsLeft } from '$lib/server/session-lifetime';
 
 export const load: PageServerLoad = async ({ url, cookies }) => {
   const code = url.searchParams.get('code');
@@ -86,26 +92,31 @@ export const load: PageServerLoad = async ({ url, cookies }) => {
   if (!tokens.access_token) {
     throw error(502, 'IVIA token response missing access_token');
   }
+  if (!tokens.id_token) {
+    throw error(502, 'IVIA token response missing id_token');
+  }
 
-  const maxAge = tokens.expires_in ?? 3600;
+  // Read, not verified: the cookie's lifetime is the only thing taken from it.
+  const accessExp = readExp(tokens.access_token);
+  const idExp = readExp(tokens.id_token);
+  if (accessExp === null) {
+    throw error(502, 'IVIA access_token has no readable exp claim');
+  }
+  if (idExp === null) {
+    throw error(502, 'IVIA id_token has no readable exp claim');
+  }
+
+  const now = nowSeconds();
 
   cookies.set('access_token', tokens.access_token, {
-    path: '/',
-    httpOnly: true,
-    secure: true,
-    sameSite: 'lax',
-    maxAge
+    ...SESSION_COOKIE_OPTIONS,
+    maxAge: secondsLeft(accessExp, now)
   });
 
-  if (tokens.id_token) {
-    cookies.set('id_token', tokens.id_token, {
-      path: '/',
-      httpOnly: true,
-      secure: true,
-      sameSite: 'lax',
-      maxAge: 60 * 60 * 24
-    });
-  }
+  cookies.set('id_token', tokens.id_token, {
+    ...SESSION_COOKIE_OPTIONS,
+    maxAge: secondsLeft(idExp, now)
+  });
 
   if (tokens.refresh_token) {
     cookies.set('refresh_token', tokens.refresh_token, {
