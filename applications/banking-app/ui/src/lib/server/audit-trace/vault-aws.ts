@@ -65,6 +65,22 @@ async function vaultErrors(res: Response): Promise<string> {
 	return `HTTP ${res.status}`;
 }
 
+/**
+ * fetch() against Vault, with a network failure or timeout reported as a Vault error.
+ * Without this the bare "fetch failed" reached the card as "The audit query failed",
+ * naming no step — the one case an attendee most needs named (Vault down, or the pod's
+ * egress to Vault on 8200 missing).
+ */
+async function vaultFetch(url: string, init: RequestInit, step: string): Promise<Response> {
+	try {
+		return await fetch(url, init);
+	} catch (err) {
+		const cause = (err as { cause?: { code?: unknown } })?.cause?.code;
+		const reason = `${err instanceof Error ? err.message : String(err)}${typeof cause === 'string' ? ` (${cause})` : ''}`;
+		throw new VaultCredentialError(`cannot reach Vault at ${env.VAULT_ADDR} for ${step}: ${reason}`);
+	}
+}
+
 async function issue(): Promise<AuditReaderCredentials> {
 	const vaultAddr = env.VAULT_ADDR;
 	const role = env.VAULT_ROLE;
@@ -80,12 +96,16 @@ async function issue(): Promise<AuditReaderCredentials> {
 		throw new VaultCredentialError(`cannot read the service-account token at ${tokenPath}`);
 	}
 
-	const login = await fetch(`${vaultAddr}/v1/auth/kubernetes/login`, {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ role, jwt }),
-		signal: AbortSignal.timeout(10_000)
-	});
+	const login = await vaultFetch(
+		`${vaultAddr}/v1/auth/kubernetes/login`,
+		{
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ role, jwt }),
+			signal: AbortSignal.timeout(10_000)
+		},
+		`the login as ${role}`
+	);
 	if (!login.ok) {
 		throw new VaultCredentialError(`Vault login as ${role} failed: ${await vaultErrors(login)}`);
 	}
@@ -95,10 +115,14 @@ async function issue(): Promise<AuditReaderCredentials> {
 		throw new VaultCredentialError(`Vault login as ${role} returned no token`);
 	}
 
-	const read = await fetch(`${vaultAddr}/v1/${AUDIT_READER_STS_PATH}`, {
-		headers: { 'X-Vault-Token': vaultToken },
-		signal: AbortSignal.timeout(15_000)
-	});
+	const read = await vaultFetch(
+		`${vaultAddr}/v1/${AUDIT_READER_STS_PATH}`,
+		{
+			headers: { 'X-Vault-Token': vaultToken },
+			signal: AbortSignal.timeout(15_000)
+		},
+		`the read of ${AUDIT_READER_STS_PATH}`
+	);
 	if (!read.ok) {
 		throw new VaultCredentialError(`Vault read of ${AUDIT_READER_STS_PATH} failed: ${await vaultErrors(read)}`);
 	}
