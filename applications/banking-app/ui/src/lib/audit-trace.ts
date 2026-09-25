@@ -262,6 +262,26 @@ export function isCredential(event: AgentEvent): event is AgentCredentialEvent {
 	return event.type === 'agent:credential';
 }
 
+/** The refund tools; a refund tool's result carries the refund's request ID once it bound one. */
+const REFUND_TOOL_NAMES = new Set(['initiate_refund', 'complete_refund']);
+
+/**
+ * The request ID the audit trail files a turn under (Bear's ruling on #68): the audit seed's;
+ * else the one on a refund tool's result; else the first one the turn carried. A refund tool's
+ * in_progress event goes out before the tool binds the refund's ID, so on a turn that listed
+ * transactions first it carries the turn's own (applications/uc3-agent/app/activity.py,
+ * _report_start and _report_finish); only its result names the refund. The Security Flow uses
+ * this too, so the flow and the Audit Trace card name the same request.
+ */
+export function auditRequestId(events: readonly AgentEvent[]): string | undefined {
+	const hasId = (e: AgentEvent) => typeof e.requestId === 'string' && e.requestId !== '';
+	const seed = events.filter((e) => isAuditSeed(e) && hasId(e)).pop();
+	const refundResult = events.find(
+		(e) => e.type === 'tool_call' && e.status !== 'in_progress' && REFUND_TOOL_NAMES.has(e.name) && hasId(e)
+	);
+	return (seed ?? refundResult ?? events.find(hasId))?.requestId;
+}
+
 /**
  * The live facts of a turn: every credential it reported (metadata only — kind, issuer,
  * Vault path, lease, time-to-live, expiry) and every lease in its audit seed that no
@@ -379,11 +399,12 @@ export function turnAuditFacts(turn: Turn | undefined, requestId?: string, turns
 	const saToken = credentials.filter((c) => c.kind === 'k8s_sa_token').pop();
 	const userToken = credentials.filter((c) => c.kind === 'access_token' || c.kind === 'id_token').pop();
 
-	// The audit key is the request ID in the turn's agent:audit_seed, before any other ID
-	// the turn carried: a refund turn that also lists transactions carries two IDs, and
-	// only the refund's is in the audit rows (Bear's ruling on #68).
+	// The audit key is the request ID in the turn's agent:audit_seed, else a refund tool's
+	// result's, before any other ID the turn carried: a refund turn that also lists
+	// transactions carries two IDs, and only the refund's is in the audit rows (Bear's
+	// ruling on #68).
 	const facts: TurnAuditFacts = {
-		requestId: requestId ?? seed?.requestId ?? turn?.requestId,
+		requestId: requestId ?? auditRequestId(events) ?? turn?.requestId,
 		seed,
 		vaultRole: seed?.vaultRole,
 		dbRole: seed?.dbRole

@@ -36,6 +36,7 @@
  */
 
 import type { AgentCredentialEvent, AgentEvent, JsonObject, JsonValue } from './agent-events';
+import { auditRequestId } from './audit-trace';
 
 export type UseCase = 1 | 2 | 3;
 
@@ -238,9 +239,6 @@ interface ToolRun {
 	end?: Seen;
 }
 
-/** The refund tools; the request ID they carry is the refund's own once they bind it. */
-const REFUND_TOOL_NAMES = new Set(['initiate_refund', 'complete_refund']);
-
 class Facts {
 	readonly list: Seen[];
 	readonly tools: ToolRun[] = [];
@@ -266,16 +264,8 @@ class Facts {
 			if (e.status === 'in_progress') run.start ??= seen;
 			else run.end = seen;
 		}
-		// The ID the audit trail files this turn under, the same rule as the Audit Trace card
-		// (audit-trace.ts turnAuditFacts): the audit seed's, else the one a refund tool bound
-		// (initiate_refund binds the refund's ID; a turn that listed transactions first carries
-		// the turn's own ID on its earlier events), else the first one the turn carried.
-		const hasId = (s: Seen) => typeof s.event.requestId === 'string' && s.event.requestId !== '';
-		const seed = this.list.find((s) => s.event.type === 'agent:audit_seed' && hasId(s));
-		const refundTool = this.list.find(
-			(s) => s.event.type === 'tool_call' && REFUND_TOOL_NAMES.has(s.event.name) && hasId(s)
-		);
-		this.requestId = (seed ?? refundTool ?? this.list.find(hasId))?.event.requestId;
+		// The ID the audit trail files this turn under, by the Audit Trace card's own rule.
+		this.requestId = auditRequestId(events);
 	}
 
 	of<T extends AgentEvent['type']>(type: T): (Seen & { event: Extract<AgentEvent, { type: T }> })[] {
