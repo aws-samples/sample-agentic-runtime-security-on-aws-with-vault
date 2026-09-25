@@ -200,7 +200,8 @@ three-plane Athena audit correlation for the refund it just produced:
   N4. IVIA accepted a real RSA-signed user-presence challenge and resolved the
       transaction SUCCESS — read back through the SAME SCIM surface the agent reads
   N5. The agent completed the refund turn (CIBA poll -> RFC 8693 -> Vault JIT creds)
-  N6. The refund row is in banking.refunds under RLS, approved_by=<persona>
+  N6. The refund row is in banking.refunds under RLS, approved_by=<persona>, and is
+      the 0.01 of the named charge the run asked for (see _refund_charge)
   N7. The virtual authenticator was deleted (nothing left enrolled)
   N8. audit_correlation returns the row for this refund's request_id — printed in
       full, every column (the three-plane capstone)
@@ -1263,7 +1264,7 @@ if [ "${NOPHONE_MODE}" = true ]; then
         kubectl run "${np_row_pod}" -n default --restart=Never \
             --image=postgres:17-alpine --env="PGPASSWORD=${np_db_pass}" \
             --command -- psql -h "${np_rds}" -U "${np_db_user}" -d workshop --no-password -A -t -F'|' \
-            -c "SET app.current_user_sub = '${NOPHONE_PERSONA}'; SELECT refund_id, request_id, amount, currency, approved_by, EXTRACT(EPOCH FROM created_at)::bigint FROM banking.refunds WHERE approved_by = '${NOPHONE_PERSONA}' ORDER BY created_at DESC LIMIT 1;" &>/dev/null
+            -c "SET app.current_user_sub = '${NOPHONE_PERSONA}'; SELECT r.refund_id, r.request_id, r.amount, r.currency, r.approved_by, EXTRACT(EPOCH FROM r.created_at)::bigint, t.merchant FROM banking.refunds r JOIN banking.transactions t ON t.id = r.transaction_id WHERE r.approved_by = '${NOPHONE_PERSONA}' ORDER BY r.created_at DESC LIMIT 1;" &>/dev/null
         kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/"${np_row_pod}" -n default --timeout=90s &>/dev/null || true
         np_row=$(kubectl logs "${np_row_pod}" -n default 2>/dev/null | grep '|' | tail -1)
         kubectl delete pod "${np_row_pod}" -n default --ignore-not-found &>/dev/null
@@ -1274,6 +1275,7 @@ if [ "${NOPHONE_MODE}" = true ]; then
         np_currency=$(echo "${np_row}" | cut -d'|' -f4)
         np_approved_by=$(echo "${np_row}" | cut -d'|' -f5)
         np_created=$(echo "${np_row}" | cut -d'|' -f6)
+        np_row_merchant=$(echo "${np_row}" | cut -d'|' -f7)
 
         if [ -z "${np_refund_id}" ]; then
             print_fail "Check N6: no refund row for ${NOPHONE_PERSONA} in banking.refunds" \
@@ -1282,8 +1284,11 @@ if [ "${NOPHONE_MODE}" = true ]; then
             print_fail "Check N6: the newest refund row for ${NOPHONE_PERSONA} predates this run (refund_id=${np_refund_id})" \
                 "This run wrote nothing — the row shown is from an earlier refund. Do NOT read it as a pass. Check: kubectl logs deployment/uc3-agent -n ${BANKING_NAMESPACE} | grep process_refund"
             np_request_id=""
+        elif [ "${np_amount}" != "${UC3_VERIFY_REFUND_AMOUNT}" ] || [ "${np_row_merchant}" != "${np_merchant}" ]; then
+            print_fail "Check N6: this run's refund row is ${np_amount} ${np_currency} of the ${np_row_merchant} charge, not the ${UC3_VERIFY_REFUND_AMOUNT} of the ${np_merchant} charge the run asked for (refund_id=${np_refund_id}, request_id=${np_request_id})" \
+                "The agent wrote a different refund from the one requested. The amount comes from what the model passed to initiate_refund — check its call: kubectl logs deployment/uc3-agent -n ${BANKING_NAMESPACE} | grep initiate_refund_started"
         else
-            print_pass "Check N6: refund row written to RDS under RLS — refund_id=${np_refund_id}, ${np_amount} ${np_currency}, approved_by=${np_approved_by}, request_id=${np_request_id}"
+            print_pass "Check N6: refund row written to RDS under RLS — refund_id=${np_refund_id}, ${np_amount} ${np_currency} of the ${np_row_merchant} charge, approved_by=${np_approved_by}, request_id=${np_request_id}"
         fi
     else
         print_fail "Check N6: could not read banking.refunds (no Vault DB creds or RDS host)" \
