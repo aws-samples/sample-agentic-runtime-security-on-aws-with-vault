@@ -882,10 +882,15 @@ function shortId(id: string | undefined): string {
 	return id ? id.slice(0, 8) : '';
 }
 
+/**
+ * The approval's amount. The refund agent sends it as the checked decimal string, e.g. "65.00"
+ * (applications/uc3-agent/app/agent.py:977); an older agent sent a JSON number.
+ */
 function money(amount: JsonValue | undefined, currency: JsonValue | undefined): string | undefined {
-	if (typeof amount !== 'number') return undefined;
-	if (currency === 'USD') return `$${amount.toFixed(2)}`;
-	return `${amount.toFixed(2)} ${typeof currency === 'string' ? currency : ''}`.trim();
+	const value = typeof amount === 'number' ? amount : typeof amount === 'string' && /^\d+(\.\d+)?$/.test(amount) ? Number(amount) : NaN;
+	if (!Number.isFinite(value)) return undefined;
+	if (currency === 'USD') return `$${value.toFixed(2)}`;
+	return `${value.toFixed(2)} ${typeof currency === 'string' ? currency : ''}`.trim();
 }
 
 function list(items: string[]): string {
