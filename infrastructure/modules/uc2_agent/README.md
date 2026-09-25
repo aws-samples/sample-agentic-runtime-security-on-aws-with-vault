@@ -14,8 +14,8 @@ Internet
 ALB Ingress (internet-facing)
    │  :5173
    ▼
-banking-ui (SvelteKit PKCE)          uc2-ui-sa
-   │  :3002
+banking-ui (SvelteKit PKCE)          uc2-ui-sa     ←→  Vault k8s auth role banking-ui
+   │  :3002                                              → aws/sts/audit-reader → Athena (Audit Trace)
    ▼
 banking-agent (Python Strands)       uc2-agent-sa  ←→  Vault k8s auth (startup)
    │  :3001                                              AWS Bedrock InvokeModel
@@ -30,12 +30,16 @@ PostgreSQL RDS (banking schema, RLS)
 
 | ServiceAccount | Namespace | Vault Binding | Purpose |
 |---|---|---|---|
-| `uc2-ui-sa` | `banking-app` | None | SvelteKit UI — no Vault access |
+| `uc2-ui-sa` | `banking-app` | k8s auth role `banking-ui` (bound SA) | SvelteKit UI. Its Vault policy reads `aws/sts/audit-reader` and nothing else: 15-minute read-only Athena keys for the Audit Trace card's `GET /api/audit-trace` |
 | `uc2-agent-sa` | `banking-app` | k8s auth role `uc2` at startup | Strands agent workload identity |
 | `uc2-mcp-server-sa` | `banking-app` | k8s auth role `uc2` (bound SA) | Issues per-user JWT auth to Vault for DB cred vending |
 
 Only `uc2-mcp-server-sa` is bound to the Vault `uc2` Kubernetes auth role
-(`vault_config` module). The MCP server authenticates to Vault *per user request*
+(`vault_config` module). `uc2-ui-sa` has its own role, `banking-ui`, whose only grant
+is the audit-reader STS path; the UI never sees a user's database credential.
+The keys it gets can read every user's audit rows: the endpoint limits each
+answer to the signed-in user by filtering on the `sub` of the verified id_token
+(`WHERE request_id = ? AND user_approved_sub = ?`). The MCP server authenticates to Vault *per user request*
 using the user's IVIA JWT (`uc2-jwt` role), then fetches `uc2-personal-readonly`
 ephemeral credentials. The agent forwards the user's JWT to the MCP server and
 never touches DB credentials directly.
@@ -52,7 +56,7 @@ policy then opens 53/UDP and 53/TCP to CoreDNS for all pods.
 
 | Pod | Ingress Allowed | Egress Allowed |
 |---|---|---|
-| `banking-ui` | 0.0.0.0/0 :5173 (ALB health + user) | `banking-agent`:3002, :443 (IVIA OIDC) |
+| `banking-ui` | 0.0.0.0/0 :5173 (ALB health + user) | `banking-agent`:3002, :443 (IVIA OIDC; Athena, Glue, S3 for the Audit Trace), `vault` namespace:8200 |
 | `banking-agent` | `banking-ui`:3002 | `banking-mcp-server`:3001, :8200 (Vault), :443 (Bedrock) |
 | `banking-mcp-server` | `banking-agent`:3001 | :8200 (Vault), `rds_cidr`:5432 (RDS), :443 (IVIA) |
 
@@ -105,6 +109,9 @@ runs a disposable `postgres:16-alpine` pod to execute psql against RDS.
 | `bedrock_model_id` | string | `us.amazon.nova-pro-v1:0` | Bedrock CRIS inference profile ID |
 | `ivia_issuer` | string | — | IVIA OIDC issuer URL |
 | `ivia_client_id` | string | `agent-uc2` | IVIA OAuth client ID |
+| `ui_vault_role` | string | — | Vault k8s auth role the UI server logs in with (`banking-ui`) |
+| `athena_workgroup` | string | — | Athena work group for the Audit Trace query (tier-1 `athena_workgroup_name`) |
+| `audit_glue_database` | string | — | Glue database holding `audit_correlation` (tier-1 `glue_database_name`) |
 | `tags` | map(string) | `{}` | Resource tags (informational) |
 
 ## Outputs
@@ -127,12 +134,14 @@ and tier-2 (`infrastructure/services/`), reading their outputs via
 so no `depends_on` is needed. Inputs resolve from:
 
 - `local.infra.*` (tier-1 remote state) → `rds_address`, `rds_port`, `rds_db_name`,
-  `vpc_cidr`, `kb_id`, `region`, `kb_region`, `tls_certificate_arn`
+  `vpc_cidr`, `kb_id`, `region`, `kb_region`, `tls_certificate_arn`,
+  `athena_workgroup_name` (→ `athena_workgroup`), `glue_database_name` (→ `audit_glue_database`)
 - `local.services.*` (tier-2 remote state) → `ivia_ingress_hostname`,
   `ivia_service_endpoint`, `ivia_client_secret`, `ivia_issuer`, `ivia_oidc_ca_pem`
 - Vault addr is the in-cluster service DNS (`http://vault.vault.svc.cluster.local:8200`);
   the agent authenticates at runtime via its SA against the `uc2-agent` k8s role
-  and `uc2-jwt` JWT role created by the `infrastructure/vault-config/` root.
+  and `uc2-jwt` JWT role created by the `infrastructure/vault-config/` root; the UI
+  server logs in as `uc2-ui-sa` against the `banking-ui` k8s role from the same root.
 
 Attendee-supplied image URIs (`banking_app_ui_image`, `banking_app_agent_image`,
 `banking_app_mcp_image`) are set in `infrastructure/workloads/terraform.tfvars`
