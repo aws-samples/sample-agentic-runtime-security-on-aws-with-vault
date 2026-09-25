@@ -1698,7 +1698,11 @@ fi
 # denial itself is reproduced against the 2.1.1 binary outside the cluster.
 #
 # Fail-closed: an unreadable registration, a missing field, or true are all failures.
-uc3_rar_mandatory=$(printf '%s' "${uc3_reg_json}" | jq -r '.data.optional_authorization_details // empty' 2>/dev/null || echo "")
+# has() + tostring, NOT `// empty`: jq's alternative operator treats false as absent,
+# so `.data.optional_authorization_details // empty` returns empty for the very value
+# this check exists to confirm and reports an armed gate as a failure.
+uc3_rar_mandatory=$(printf '%s' "${uc3_reg_json}" \
+    | jq -r 'if (.data | type == "object" and has("optional_authorization_details")) then (.data.optional_authorization_details | tostring) else "" end' 2>/dev/null || echo "")
 if [ "${uc3_rar_mandatory}" = "false" ]; then
     print_pass "UC3 rich authorization requests are MANDATORY: registration 'uc3-actor' has optional_authorization_details=false, so on Vault 2.1.0+ a delegated token carrying no authorization_details is refused the refund-writer credential (issue #74)"
 elif [ -z "${uc3_reg_json}" ]; then
