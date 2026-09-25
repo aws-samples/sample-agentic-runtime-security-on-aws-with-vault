@@ -22,8 +22,12 @@ WRP ALB and the agent's own /chat):
 
 Subcommands:
   run <wrp> <user> <password> <agent_client> <client_secret> <redirect_uri> <op_url>
-      Enroll a virtual device, drive the real /chat refund turns, sign the approval,
-      and report each step as KEY=value lines. Always deletes its own device.
+      <merchant> <refund_amount>
+      Enroll a virtual device, drive the real /chat refund turns for <refund_amount>
+      of the <merchant> charge, sign the approval, and report each step as KEY=value
+      lines. Always deletes its own device.
+  approveonly <same arguments as run>
+      As run, but stop once the approval resolves, leaving the CIBA grant unredeemed.
   cleanup <wrp> <user> <password>
       Delete any device this tool enrolled (matched by key handle). Never touches a
       device it did not create.
@@ -375,8 +379,14 @@ def chat(message, session_id, id_token, timeout):
     return resp.status_code, one_line(" ".join(legacy))
 
 
-def run(wrp, user, password, agent_client, client_secret, redirect_uri, op_url, complete=True):
+def run(wrp, user, password, agent_client, client_secret, redirect_uri, op_url,
+        merchant, refund_amount, complete=True):
     """Drive a real Use Case 3 refund with a virtual authenticator.
+
+    The refund is `refund_amount` of the persona's `merchant` charge, named by
+    merchant because every seeded row for a persona shares one created_at, so a
+    list position is not stable. A small partial amount leaves the charge
+    refundable, so the next run works too.
 
     complete=True  (subcommand `run`)         — approve, then tell the agent to
                                                 finish, so the refund is written.
@@ -433,7 +443,8 @@ def run(wrp, user, password, agent_client, client_secret, redirect_uri, op_url, 
         emit("CHAT1", body)
 
         # --- Turn 2: pick one and authorize it; the agent fires the MMFA push ----
-        status, body = chat("Refund transaction 1", session_id, id_token, 180)
+        emit("REFUND_ASKED", f"{refund_amount} of the {merchant} charge")
+        status, body = chat(f"Refund ${refund_amount} of the {merchant} charge", session_id, id_token, 180)
         emit("CHAT2_STATUS", status)
         emit("CHAT2", body)
 
@@ -496,14 +507,15 @@ if __name__ == "__main__":
     if len(sys.argv) < 2:
         die("usage: uc3-virtual-authenticator.py run|approveonly|cleanup <args>")
     command = sys.argv[1]
+    refund_args = "<wrp> <user> <password> <agent_client> <client_secret> <redirect_uri> <op_url> <merchant> <refund_amount>"
     if command == "run":
-        if len(sys.argv) != 9:
-            die("usage: run <wrp> <user> <password> <agent_client> <client_secret> <redirect_uri> <op_url>")
-        run(*sys.argv[2:9])
+        if len(sys.argv) != 11:
+            die(f"usage: run {refund_args}")
+        run(*sys.argv[2:11])
     elif command == "approveonly":
-        if len(sys.argv) != 9:
-            die("usage: approveonly <wrp> <user> <password> <agent_client> <client_secret> <redirect_uri> <op_url>")
-        run(*sys.argv[2:9], complete=False)
+        if len(sys.argv) != 11:
+            die(f"usage: approveonly {refund_args}")
+        run(*sys.argv[2:11], complete=False)
     elif command == "cleanup":
         if len(sys.argv) != 5:
             die("usage: cleanup <wrp> <user> <password>")

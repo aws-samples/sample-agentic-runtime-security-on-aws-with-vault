@@ -219,9 +219,11 @@ Env-var overrides:
   IVIA_ISSUER             (default: https://iviaop.verify-access.svc.cluster.local:8436/oauth2)
   AWS_REGION              (default: resolved from terraform.tfvars)
   UC3_PERSONA             (--bypass — workshop persona whose APPROVAL mints the delegated
-                           token for; default: oscar. Any user in base_layer.yaml.tftpl)
+                           token for; default: oscar. jaime or oscar — the personas
+                           with a seeded charge to refund)
   UC3_NOPHONE_PERSONA     (--no-phone — persona whose refund is driven end-to-end;
-                           default: jaime, the persona the workshop pages use)
+                           default: jaime, the persona the workshop pages use;
+                           jaime or oscar)
   UC3_VERIFY_CHAT_TOKEN   (optional — bearer captured from a real browser sign-in;
                            enables Checks 12 and 13 against the live /chat endpoint)
   UC3_DELEGATED_TOKEN     (--bypass — OPTIONAL override: a REAL IVIA-issued delegated
@@ -295,6 +297,24 @@ ivia_client_secret() {
     esac
     kubectl get secret -n "${BANKING_NAMESPACE}" "${secret_name}" \
         -o "jsonpath={.data.${key}}" 2>/dev/null | base64 --decode 2>/dev/null
+}
+
+# The refund a verify run asks for: UC3_VERIFY_REFUND_AMOUNT of one seeded charge,
+# named by merchant. The agent refuses any refund larger than what is left on a
+# charge (issue #73), so the run asks for a cent: it leaves the charge refundable
+# and the next run works too. A list position ("transaction 1") is not a stable
+# choice — every seeded row for a persona shares one created_at.
+UC3_VERIFY_REFUND_AMOUNT="0.01"
+
+# _refund_charge <persona> — echoes the merchant of the seeded charge
+# (applications/banking-app/db/seed.sql) the run refunds; non-zero for a persona
+# with no seeded charge.
+_refund_charge() {
+    case "$1" in
+        jaime) echo "United Airlines" ;;
+        oscar) echo "Whole Foods Market" ;;
+        *) return 1 ;;
+    esac
 }
 
 
@@ -588,6 +608,11 @@ _mint_uc3_tokens() {
         MINT_ERR="uc3-virtual-authenticator.py not found at ${helper}"
         return 1
     fi
+    local refund_charge
+    if ! refund_charge=$(_refund_charge "${user}"); then
+        MINT_ERR="persona '${user}' has no seeded charge to refund (jaime and oscar do). Fix: UC3_PERSONA=oscar or UC3_PERSONA=jaime"
+        return 1
+    fi
 
     # Step 1 — a REAL approval. `approveonly` enrols a virtual authenticator, drives
     # the refund turn so the agent fires the MMFA push, signs the user-presence
@@ -598,6 +623,7 @@ _mint_uc3_tokens() {
     kubectl exec -i -n "${BANKING_NAMESPACE}" "${pod}" -- python3 - approveonly \
         "${wrp}" "${user}" "${persona_pw}" "${agent_client}" \
         "${login_secret}" "${ru}" "${op_url}" \
+        "${refund_charge}" "${UC3_VERIFY_REFUND_AMOUNT}" \
         <"${helper}" >"${approve_log}" 2>&1
     if ! grep -q '^APPROVED_NOT_REDEEMED=1' "${approve_log}"; then
         MINT_ERR=$(sed -n 's/^ERR=//p' "${approve_log}" | tail -1)
@@ -1131,6 +1157,11 @@ if [ "${NOPHONE_MODE}" = true ]; then
             "wrp='${np_wrp}' redirect_uri='${np_redirect}' client='${np_client}' secret=$([ -n "${np_secret}" ] && echo set || echo MISSING) password=$([ -n "${np_password}" ] && echo set || echo MISSING) uc3-agent pod='${np_pod}'. Fix: deploy tier 3 and confirm the banking-ui-config ConfigMap and the banking-ui-oidc Secret exist. Check: kubectl get configmap,secret -n ${BANKING_NAMESPACE}"
         exit 0
     fi
+    if ! np_merchant=$(_refund_charge "${NOPHONE_PERSONA}"); then
+        print_fail "Check N1: persona '${NOPHONE_PERSONA}' has no seeded charge to refund" \
+            "The run refunds ${UC3_VERIFY_REFUND_AMOUNT} of one named charge (see _refund_charge). jaime and oscar have one. Fix: UC3_NOPHONE_PERSONA=jaime"
+        exit 0
+    fi
 
     np_log="${TMPDIR:-/tmp}/verify-uc3-no-phone-$$.log"
     np_started=$(date +%s)
@@ -1141,6 +1172,7 @@ if [ "${NOPHONE_MODE}" = true ]; then
     kubectl exec -i -n "${BANKING_NAMESPACE}" "${np_pod}" -- python3 - run \
         "${np_wrp}" "${NOPHONE_PERSONA}" "${np_password}" "${np_client}" \
         "${np_secret}" "${np_redirect}" "${np_op}" \
+        "${np_merchant}" "${UC3_VERIFY_REFUND_AMOUNT}" \
         <"${nophone_helper}" 2>&1 | tee "${np_log}"
     np_rc=${PIPESTATUS[0]}
     echo ""
