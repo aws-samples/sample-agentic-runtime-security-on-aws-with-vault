@@ -492,7 +492,9 @@ resource "vault_kubernetes_auth_backend_role" "uc2_agent" {
 # is reachable only with the delegated OAuth token an approved CIBA request
 # produces, presented as X-Vault-Token and authorized by human baseline ∩ agent
 # ceiling ∩ per-request RAR (uc3-human-baseline, uc3-agent-ceiling below). Granting
-# it here was a standing path to the write with no approval at all (issue #72).
+# it here was a standing path to the write with no approval at all (issue #72 ·
+# Use Case 3: the refund agent's everyday Vault login can get refund-writing
+# database credentials with no approval).
 resource "vault_policy" "uc3_agent" {
   name = "uc3-agent"
 
@@ -623,7 +625,9 @@ resource "vault_policy" "uc2_human_baseline" {
 # entity carries BOTH this and uc2-human-baseline (his max across both UCs); the
 # per-UC agent ceiling intersects it down per request. Starting envelope:
 # 09-DISCOVERY line 206 (uc3 human baseline, taken from the former uc3-refund-writer
-# ACL policy, which was retired in issue #72 — no k8s role grants the refund path).
+# ACL policy, which was retired in issue #72 · Use Case 3: the refund agent's
+# everyday Vault login can get refund-writing database credentials with no
+# approval — no k8s role grants the refund path).
 resource "vault_policy" "uc3_human_baseline" {
   name = "uc3-human-baseline"
 
