@@ -74,8 +74,14 @@
 
 	// Display only: the persona name from the layout's id_token decode.
 	let actingFor = $derived(getPersona(data.sub)?.fullName ?? data.displayName);
+	// The refund chat's approvals go to the member's phone through IBM Verify.
 	let subtitle = $derived(
-		[actingFor ? `Acting for ${actingFor}` : '', 'Amazon Nova Pro', 'Vault-secured'].filter(Boolean).join(' · ')
+		(chatEndpoint === '/api/uc3-chat'
+			? [actingFor ? `Acting for ${actingFor}` : '', 'approvals by IBM Verify']
+			: [actingFor ? `Acting for ${actingFor}` : '', 'Amazon Nova Pro', 'Vault-secured']
+		)
+			.filter(Boolean)
+			.join(' · ')
 	);
 
 	// Consecutive agent-side messages (tool steps, answer, errors) render as one agent turn.
