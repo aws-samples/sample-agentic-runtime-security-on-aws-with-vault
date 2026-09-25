@@ -84,10 +84,12 @@ const MAX_ID_CHARS = 256;
  * IVIA_CLIENT_SECRET all contain "clientsecret". The rules cover the names this
  * repository gives those secrets:
  *   - OAuth client secrets: client_secret, clientSecret, IVIA_CLIENT_SECRET,
- *     IVIA_ACTOR_CLIENT_SECRET, ivia_mmfa_push_client_secret;
- *   - SCIM, admin and LDAP passwords: IVIA_SCIM_PASSWORD, ivia_scim_bind_pwd,
- *     admin_password, admin_pass, ADMIN_PWD, LDAP_ADMIN_PASSWORD,
- *     openldap_admin_pwd;
+ *     IVIA_ACTOR_CLIENT_SECRET, ivia_mmfa_push_client_secret, MMFA_SECRET;
+ *   - SCIM, admin and LDAP passwords: a password-like key (pass, pwd, or a
+ *     trailing pw) that also names the account (DIRECTORY_ACCOUNTS below):
+ *     IVIA_SCIM_PASSWORD, ivia_scim_bind_pwd, bind_pwd, admin_password,
+ *     ADMIN_PWD, LDAP_ADMIN_PASSWORD, openldap_admin_pwd, dn_password,
+ *     config_password, sec_master_password, cfgsvcpw, CONFIG_SERVICE_USER_PWD;
  *   - Vault root and unseal material: root_token, VAULT_ROOT_TOKEN,
  *     RECOVERY_KEYS, recovery_keys_b64, the CLI's unseal_keys_b64, and the
  *     keys_base64 of Vault's sys/init reply.
@@ -96,12 +98,22 @@ const MAX_ID_CHARS = 256;
  */
 function isConfigSecretKey(key: string): boolean {
 	const k = key.toLowerCase().replace(/[^a-z0-9]/g, '');
-	if (k.includes('clientsecret')) return true;
-	if ((k.includes('admin') || k.includes('scim') || k.includes('ldap')) && (k.includes('pass') || k.includes('pwd'))) {
-		return true;
-	}
+	if (k.includes('clientsecret') || (k.includes('mmfa') && k.includes('secret'))) return true;
+	const passwordLike = k.includes('pass') || k.includes('pwd') || k.endsWith('pw');
+	if (passwordLike && DIRECTORY_ACCOUNTS.some((account) => k.includes(account))) return true;
 	return k.includes('roottoken') || k.includes('unsealkey') || k.includes('recoverykey') || k === 'keysbase64';
 }
+
+/**
+ * The accounts whose passwords are configuration: the directory's and IVIA's
+ * administrators, the SCIM and LDAP binds, and the configuration users. Where
+ * this repository defines each (infrastructure/modules/verify_access):
+ * bind_pwd (Secret ivia-scim-bind), dn_password (base_layer.yaml.tftpl, the LDAP
+ * admin bind), config_password (Secret openldap-creds), sec_master_password
+ * (Secret ivia-secauthority-creds), cfgsvcpw and CONFIG_SERVICE_USER_PWD (Secret
+ * configreader, IVIA's admin password).
+ */
+const DIRECTORY_ACCOUNTS: readonly string[] = ['admin', 'scim', 'ldap', 'bind', 'dnpass', 'dnpwd', 'config', 'cfgsvc', 'secmaster'];
 
 /**
  * Keys that change an object's prototype when browser code merges a payload
