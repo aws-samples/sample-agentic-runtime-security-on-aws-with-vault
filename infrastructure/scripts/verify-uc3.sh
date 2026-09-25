@@ -410,7 +410,9 @@ assert_native_allow() {
 # never in any process's argv), logs in with role uc3, reads the two creds paths
 # with the resulting token, and always revokes that token — revoke-self also
 # revokes every lease the token created, so a credential issued here is dropped
-# at once. The Vault token never leaves the pod. A performance standby can answer
+# at once. The token reaches this host only inside the lookup output (its data.id),
+# which is parsed for the policy names and never printed, and it is revoked before
+# the probe ends. A performance standby can answer
 # "412 required index state not present" just after a login, so the lookup and
 # the two reads retry on 412 only. Each result follows a "@@<STEP> <rc>" marker.
 # shellcheck disable=SC2016  # expanded by the pod's sh, not here
