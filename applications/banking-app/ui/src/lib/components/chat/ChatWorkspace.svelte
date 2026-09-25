@@ -252,7 +252,8 @@
 		const first = items[0];
 		const last = items[items.length - 1];
 		const active = document.activeElement;
-		const inside = active instanceof HTMLElement && panel.contains(active);
+		// Focus on the panel itself (a click on plain text inside it) counts as outside its items.
+		const inside = active instanceof HTMLElement && active !== panel && panel.contains(active);
 		if (e.shiftKey && (active === first || !inside)) {
 			e.preventDefault();
 			last.focus();

@@ -148,7 +148,8 @@
 	}
 
 	// Full width. Without a ChatWorkspace around it the panel stays docked and draws no
-	// expand button.
+	// expand button. Floating, the panel takes tabindex -1, so a click on plain text inside it
+	// keeps focus in the dialog instead of handing it to the page's <main>.
 	const float = getPanelFloat();
 	let floating = $derived(float?.floating === id);
 	let dockButton: HTMLButtonElement | undefined = $state();
@@ -317,7 +318,8 @@
 	);
 </script>
 
-<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+<!-- The floating panel is a dialog (role is dynamic, so the checker sees an aside); tabindex -1 keeps a click on its text inside it. -->
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_no_noninteractive_tabindex -->
 <aside
 	{id}
 	class="sf"
@@ -325,6 +327,7 @@
 	role={floating ? 'dialog' : undefined}
 	aria-modal={floating ? 'true' : undefined}
 	aria-label={(mode === 'technical' ? 'Live security flow, technical view' : 'Live security flow') + (floating ? ', full width' : '')}
+	tabindex={floating ? -1 : undefined}
 	{onkeydown}
 >
 	<div class="sf-head">
