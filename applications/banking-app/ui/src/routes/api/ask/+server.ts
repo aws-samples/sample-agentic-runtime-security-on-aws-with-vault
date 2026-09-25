@@ -13,18 +13,33 @@
  * visitor, signed in or not, receives the whole stream: the answer, and each
  * credential the turn uses in full, as the agent sent it.
  *
- * An agent that answers with JSON instead (an image older than the stream) gets
- * the filter's payload structure rules (scrubJson) and nothing else; that reply
- * carries credential metadata, never a credential value.
+ * The stream is the only contract. An agent that answers anything else (an image
+ * older than this UI answers JSON) is not passed through: the browser gets the
+ * legacy `error` frame saying so, then `end`, so the page shows the cause and
+ * unlocks.
  * Cross-namespace egress on port 80 is permitted by the banking-ui-egress
  * NetworkPolicy.
  */
 import { json, type RequestHandler } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
-import { scrubErrorText, scrubJson } from '$lib/server/activity-filter';
+import type { LegacyEndEvent, LegacyErrorEvent } from '$lib/agent-events';
+import { scrubErrorText } from '$lib/server/activity-filter';
 import { AgentCall, agentFailed, streamAgentEvents } from '$lib/server/agent-proxy';
 
 const UC1_AGENT_URL = env.UC1_AGENT_URL ?? 'http://uc1-agent-svc.uc1.svc.cluster.local';
+
+/** The frames that tell the browser the agent answered in the old, non-streaming format. */
+function notAStream(mediaType: string): Response {
+	const error: LegacyErrorEvent = {
+		type: 'error',
+		content: `The Ask agent answered in the old non-streaming format (${mediaType || 'no content type'}) — its image is older than this UI.`
+	};
+	const end: LegacyEndEvent = { type: 'end' };
+	const body = [error, end].map((event) => `data: ${JSON.stringify(event)}\n\n`).join('');
+	return new Response(body, {
+		headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' }
+	});
+}
 
 export const POST: RequestHandler = async ({ request, platform }) => {
 	let query = '';
@@ -71,24 +86,17 @@ export const POST: RequestHandler = async ({ request, platform }) => {
 	}
 
 	// The media type may carry parameters (e.g. "; charset=utf-8").
-	const contentType = (agentRes.headers.get('content-type') ?? '').toLowerCase();
-	if (contentType.startsWith('text/event-stream')) {
-		if (!agentRes.body) {
-			call.end();
-			return json({ error: 'Agent returned no response body' }, { status: 502 });
-		}
-		return streamAgentEvents(call, agentRes.body, 'api/ask', 'Use Case 1');
+	const mediaType = (agentRes.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase();
+	if (mediaType !== 'text/event-stream') {
+		// Nothing of that body reaches the browser: close the call to the agent.
+		call.end();
+		await agentRes.body?.cancel().catch(() => {});
+		console.error(`[api/ask] Use Case 1 agent answered ${mediaType || 'with no content type'}, not text/event-stream`);
+		return notAStream(mediaType);
 	}
-
-	// An agent that does not stream returns JSON { answer, sources, credential_metadata }.
-	// The filter's payload structure rules apply to it before it reaches the browser.
-	let data: unknown;
-	try {
-		data = JSON.parse(await call.readText(agentRes));
-	} catch {
-		return agentFailed(call, 'Use Case 1', 'Use Case 1 agent returned a body that is not JSON');
+	if (!agentRes.body) {
+		call.end();
+		return json({ error: 'Agent returned no response body' }, { status: 502 });
 	}
-	return new Response(JSON.stringify(scrubJson(data) ?? null), {
-		headers: { 'Content-Type': 'application/json' }
-	});
+	return streamAgentEvents(call, agentRes.body, 'api/ask', 'Use Case 1');
 };
