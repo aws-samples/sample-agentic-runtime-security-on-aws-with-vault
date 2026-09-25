@@ -55,6 +55,7 @@
 	const systems = $derived(chatEndpoint === '/api/uc3-chat' ? 'IVIA · Vault · Postgres' : 'IVIA · Vault · MCP');
 	// The chat header names the agent answering: the refund chat's is the Refund Agent.
 	const title = $derived(chatEndpoint === '/api/uc3-chat' ? 'Refund Agent' : 'Banking Agent');
+	const inputLabel = $derived(chatEndpoint === '/api/uc3-chat' ? 'Message the refund agent' : 'Message the banking agent');
 
 	function toggleLog() {
 		openPanel = openPanel === 'log' ? null : 'log';
@@ -225,7 +226,7 @@
 	bind:value={inputMessage}
 	busy={isLoading}
 	inputId="dashboard-message"
-	inputLabel="Message the banking agent"
+	{inputLabel}
 	placeholder="Ask about your accounts, transactions or a refund…"
 	onsend={sendMessage}
 	hint="Enter to send · Shift+Enter for new line · The refund agent keeps this conversation for the session"
