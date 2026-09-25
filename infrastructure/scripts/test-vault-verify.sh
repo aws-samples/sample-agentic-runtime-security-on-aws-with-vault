@@ -11,7 +11,8 @@
 #   6. IVIA OIDC discovery reachable (issuer non-empty)
 #   7. cert-manager pods running
 #   8. AWS Load Balancer Controller running
-#   9. Vault Enterprise edition (native Agent Registry is Enterprise-only)
+#   9. Vault Enterprise edition, 2.1.0+ (Agent Registry is Enterprise-only;
+#      mandatory RAR for on-behalf-of delegation starts at 2.1.0 — issue #74)
 #  10. database/ + aws/ secrets engines mounted (license-module gate)
 #  11. agent-registry responds (uc1-agent registration resolvable by display-name)
 #  12. oauth-resource-server profile 'ivia' responds
@@ -55,7 +56,8 @@ Checks (14 total):
   6. IVIA OIDC discovery: issuer reachable
   7. cert-manager pods running
   8. AWS Load Balancer Controller running
-  9. Vault Enterprise edition (native Agent Registry is Enterprise-only)
+  9. Vault Enterprise edition, 2.1.0+ (Agent Registry is Enterprise-only; mandatory
+     RAR for on-behalf-of delegation starts at 2.1.0)
  10. database/ + aws/ secrets engines mounted (license-module gate)
  11. agent-registry responds (uc1-agent registration by display-name)
  12. oauth-resource-server profile 'ivia' responds
@@ -210,22 +212,47 @@ fi
 VAULT_EXEC="VAULT_TOKEN='${VAULT_ROOT_TOKEN}'"
 
 #-------------------------------------------------------------------------------
-# Check 9 — Vault Enterprise edition
+# Check 9 — Vault Enterprise edition, at or above the mandatory-RAR floor
 #
 # Two independent signals, either of which proves Enterprise:
 #   - the version string carries the '+ent' build suffix, AND/OR
 #   - sys/license/status responds (an Enterprise-only endpoint; OSS 404s /
 #     returns "unsupported path").
+#
+# Enterprise alone is NOT enough. 2.0.x vends the refund-writer credential to a
+# delegated token that asked for NO authorization_details; only 2.1.0 and later
+# refuse it (issue #74). Use Case 3's whole lesson is that refusal, so the floor
+# is asserted here rather than left to whichever image tag happened to land: a
+# cached 2.0.x image, or the chart's OnDelete strategy leaving an old pod running,
+# would otherwise pass every gate while teaching the opposite of what is live.
+#
+# sort -V compares the version without its '+ent' build suffix. Capture first,
+# then read the captured text: `... | sort -V | head -1` makes sort exit 141 on
+# SIGPIPE, which `set -o pipefail` turns into a script-killing failure.
 #-------------------------------------------------------------------------------
+VAULT_RAR_MIN_VERSION="2.1.0"
 vault_version=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
     vault status -format=json 2>/dev/null | jq -r '.version // empty' 2>/dev/null || echo "")
 lic_out=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
     sh -c "${VAULT_EXEC} vault read sys/license/status" 2>&1 || true)
-if echo "${vault_version}" | grep -qi 'ent' \
-    || { [ -n "${lic_out}" ] && ! echo "${lic_out}" | grep -qiE 'unsupported path|not supported|no handler'; }; then
-    print_pass "Vault Enterprise edition (version=${vault_version:-unknown}; sys/license/status responds)"
+vault_semver="${vault_version%%+*}"
+vault_semver="${vault_semver#v}"
+version_sorted=$(printf '%s\n%s\n' "${VAULT_RAR_MIN_VERSION}" "${vault_semver}" | sort -V)
+version_lowest=$(head -1 <<<"${version_sorted}")
+if [ -n "${vault_semver}" ] && [ "${version_lowest}" = "${VAULT_RAR_MIN_VERSION}" ]; then
+    version_ok=true
 else
-    print_fail "Vault Enterprise edition" \
+    version_ok=false
+fi
+if [ "${version_ok}" = true ] \
+    && { echo "${vault_version}" | grep -qi 'ent' \
+        || { [ -n "${lic_out}" ] && ! echo "${lic_out}" | grep -qiE 'unsupported path|not supported|no handler'; }; }; then
+    print_pass "Vault Enterprise edition, ${VAULT_RAR_MIN_VERSION}+ (version=${vault_version:-unknown}; sys/license/status responds)"
+elif [ "${version_ok}" != true ]; then
+    print_fail "Vault Enterprise edition, ${VAULT_RAR_MIN_VERSION}+" \
+        "Vault reports version='${vault_version}', below the ${VAULT_RAR_MIN_VERSION} floor that makes rich authorization requests mandatory for on-behalf-of delegation. On 2.0.x Use Case 3's refund token is granted the refund-writer credential with no authorization_details at all, so the workshop's central lesson does not hold. The vault_server image must be hashicorp/vault-enterprise:2.1.1-ent. Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault status"
+else
+    print_fail "Vault Enterprise edition, ${VAULT_RAR_MIN_VERSION}+" \
         "Vault does NOT report Enterprise (version='${vault_version}', license/status='${lic_out:0:120}'). The native Agent Registry + OAuth resource server are Enterprise-only — the vault_server image must be hashicorp/vault-enterprise:2.1.1-ent with a platform-standard license. Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault status"
 fi
 
@@ -271,7 +298,7 @@ fi
 oauth_out=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
     sh -c "${VAULT_EXEC} vault read sys/config/oauth-resource-server/ivia" 2>&1 || true)
 if [ -n "${oauth_out}" ] && ! echo "${oauth_out}" | grep -qiE 'no value found|unsupported path|not found|error reading'; then
-    print_pass "OAuth resource server profile 'ivia' responds (feature active + profile applied)"
+    print_pass "OAuth resource server profile 'ivia' responds (profile applied)"
 else
     print_fail "OAuth resource server profile 'ivia'" \
         "sys/config/oauth-resource-server/ivia did not return a profile. Confirm the license carries platform-standard and vault_config applied the profile. Got: ${oauth_out:0:160}. Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault read sys/config/oauth-resource-server/ivia"

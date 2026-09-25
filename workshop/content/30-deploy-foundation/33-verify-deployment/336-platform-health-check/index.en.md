@@ -24,10 +24,10 @@ Expected — all 14 checks `PASS`:
   ✓ PASS IVIA OIDC discovery: issuer reachable (https://wrp.<deploy-id>.<alb-ip-dashed>.nip.io)
   ✓ PASS cert-manager pods running (N pod(s))
   ✓ PASS AWS Load Balancer Controller running (N pod(s))
-  ✓ PASS Vault Enterprise edition (version=2.1.1+ent; sys/license/status responds)
-  ✓ PASS Secrets engines mounted: database/ + aws/ (platform-standard license present)
-  ✓ PASS Agent Registry responds — registration 'uc1-agent' resolvable by display-name
-  ✓ PASS OAuth resource server profile 'ivia' responds (feature active + profile applied)
+  ✓ PASS Vault Enterprise edition, 2.1.0+ (version=2.1.1+ent; sys/license/status responds)
+  ✓ PASS Secrets engines mounted: database/ + aws/ (platform-standard license present; pki-only absent)
+  ✓ PASS Agent Registry responds — registration 'uc1-agent' resolvable by display-name (agentic-iam present)
+  ✓ PASS OAuth resource server profile 'ivia' responds (profile applied)
   ✓ PASS jwt/ auth mount is ABSENT — the OAuth access token IS the Vault token; no auth method in the path
   ✓ PASS Issuer coherence: Vault validates against the same issuer iviaop stamps (https://wrp.<deploy-id>.<alb-ip-dashed>.nip.io)
 
@@ -62,10 +62,10 @@ If any check fails, the script prints a `Fix:` hint inline. Address the issue an
 | IVIA OIDC discovery: issuer reachable | `curl -sk https://iviaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration` | `issuer` field non-empty |
 | cert-manager pods running | `kubectl get pods -n cert-manager` | at least 1 pod `Running` |
 | AWS Load Balancer Controller running | `kubectl get pods -n kube-system -l app.kubernetes.io/name=aws-load-balancer-controller` | at least 1 pod `Running` |
-| Vault Enterprise edition | `kubectl exec vault-0 -- vault read sys/license/status` | version carries `+ent` and the endpoint responds |
+| Vault Enterprise edition, 2.1.0+ | `kubectl exec vault-0 -- vault status` | version carries `+ent` and is 2.1.0 or later — mandatory rich authorization requests for on-behalf-of delegation start there |
 | Secrets engines mounted | `kubectl exec vault-0 -- vault secrets list` | `database/` and `aws/` both present |
 | Agent Registry responds | `vault read agent-registry/registration/display-name/uc1-agent` | registration resolves by display-name |
-| OAuth resource server profile `ivia` | `vault read sys/config/oauth-resource-server/ivia` | profile responds (feature active + applied) |
+| OAuth resource server profile `ivia` | `vault read sys/config/oauth-resource-server/ivia` | profile responds |
 | `jwt/` auth mount is ABSENT | `kubectl exec vault-0 -- vault auth list` | **no** `jwt/` row — no Vault auth method in the token path |
 | Issuer coherence | `vault read sys/config/oauth-resource-server/ivia` vs the `issuer` from IVIA's OIDC discovery | the two issuers are identical — or IVIA still advertises the pre-tier-3 `.invalid` placeholder, which passes as *not yet applicable*. Two real issuers that disagree fail. |
 ::::
