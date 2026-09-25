@@ -34,8 +34,13 @@
 
 	let { data }: { data: PageData } = $props();
 
-	type Msg = { role: string; content: string; type?: string };
-	type Turn = { kind: 'user'; msg: Msg } | { kind: 'agent'; msgs: Msg[] };
+	/** The agent that answers on an endpoint: the refund chat (Use Case 3) or the banking chat. */
+	type AgentName = 'Banking Agent' | 'Refund Agent';
+	const agentFor = (endpoint: string): AgentName => (endpoint === '/api/uc3-chat' ? 'Refund Agent' : 'Banking Agent');
+
+	/** `agent` is set on every agent-side message: the agent whose turn it belongs to. */
+	type Msg = { role: string; content: string; type?: string; agent?: AgentName };
+	type Turn = { kind: 'user'; msg: Msg } | { kind: 'agent'; agent: AgentName; msgs: Msg[] };
 
 	// Chat state
 	let messages: Msg[] = $state([]);
@@ -54,13 +59,21 @@
 	// itself; the banking chat (Use Case 2) reaches it through the MCP server.
 	const systems = $derived(chatEndpoint === '/api/uc3-chat' ? 'IVIA · Vault · Postgres' : 'IVIA · Vault · MCP');
 	// The chat header names the agent answering: the refund chat's is the Refund Agent.
-	const title = $derived(chatEndpoint === '/api/uc3-chat' ? 'Refund Agent' : 'Banking Agent');
+	const title = $derived(agentFor(chatEndpoint));
 	const inputLabel = $derived(chatEndpoint === '/api/uc3-chat' ? 'Message the refund agent' : 'Message the banking agent');
 
 	function toggleLog() {
 		openPanel = openPanel === 'log' ? null : 'log';
 	}
-	let pendingConsent: { auth_req_id: string; request_id: string; user_code: string; details: string; consent_url: string } | null = $state(null);
+	/** `agent` is the agent whose turn asked for the consent. */
+	let pendingConsent: {
+		auth_req_id: string;
+		request_id: string;
+		user_code: string;
+		details: string;
+		consent_url: string;
+		agent: AgentName;
+	} | null = $state(null);
 
 	// Auto-scroll the message list to the newest message. The effect re-runs
 	// whenever a message is appended, the "Thinking…" indicator toggles, or the
@@ -85,19 +98,22 @@
 			.join(' · ')
 	);
 
-	// Consecutive agent-side messages (tool steps, answer, errors) render as one agent turn.
+	// Consecutive agent-side messages (tool steps, answer, errors) of the same agent render as
+	// one agent turn, named for that agent: a banking turn stays "Banking Agent" after the chat
+	// moves to the refund agent.
 	let turns = $derived.by(() => {
 		const out: Turn[] = [];
 		for (const msg of messages) {
 			const last = out.at(-1);
+			const agent = msg.agent ?? 'Banking Agent';
 			if (msg.role === 'user') out.push({ kind: 'user', msg });
-			else if (last?.kind === 'agent') last.msgs.push(msg);
-			else out.push({ kind: 'agent', msgs: [msg] });
+			else if (last?.kind === 'agent' && last.agent === agent) last.msgs.push(msg);
+			else out.push({ kind: 'agent', agent, msgs: [msg] });
 		}
 		return out;
 	});
 
-	function extractConsent(text: string) {
+	function extractConsent(text: string, agent: AgentName) {
 		const match = text.match(/CIBA_CONSENT:auth_req_id=([^|]+)\|request_id=([^|]+)\|user_code=([^|]+)\|details=([^|]+)(?:\|consent_url=(\S+))?/);
 		if (match) {
 			pendingConsent = {
@@ -105,7 +121,8 @@
 				request_id: match[2],
 				user_code: match[3],
 				details: match[4].replace(/\*+$/, ''),
-				consent_url: (match[5] ?? '').replace(/\*+$/, '')
+				consent_url: (match[5] ?? '').replace(/\*+$/, ''),
+				agent
 			};
 		}
 	}
@@ -126,15 +143,17 @@
 			...messages,
 			{
 				role: 'ai',
-				content: `On the IVIA consent page that just opened, approve the refund, then reply here (e.g. "I approved") so I can complete request ${pendingConsent.request_id}.`
+				content: `On the IVIA consent page that just opened, approve the refund, then reply here (e.g. "I approved") so I can complete request ${pendingConsent.request_id}.`,
+				agent: pendingConsent.agent
 			}
 		];
 		pendingConsent = null;
 	}
 
 	function denyConsent() {
+		const agent = pendingConsent?.agent;
 		pendingConsent = null;
-		messages = [...messages, { role: 'ai', content: 'Consent denied by user.' }];
+		messages = [...messages, { role: 'ai', content: 'Consent denied by user.', agent }];
 	}
 
 	// Persistent starter prompts. The refund prompt also switches the chat to the
@@ -165,6 +184,7 @@
 
 		const userMsg = inputMessage.trim();
 		const endpoint = chatEndpoint;
+		const agent = agentFor(endpoint);
 		inputMessage = '';
 
 		messages = [...messages, { role: 'user', content: userMsg }];
@@ -181,17 +201,17 @@
 					return;
 				}
 				if (chunk.type === 'error') {
-					messages = [...messages, { role: 'error', content: chunk.content }];
+					messages = [...messages, { role: 'error', content: chunk.content, agent }];
 					isLoading = false;
 					return;
 				}
 				if (chunk.content) {
-					extractConsent(chunk.content);
-					messages = [...messages, { role: chunk.role ?? 'ai', content: chunk.content, type: chunk.type }];
+					extractConsent(chunk.content, agent);
+					messages = [...messages, { role: chunk.role ?? 'ai', content: chunk.content, type: chunk.type, agent }];
 				}
 			},
 			(err) => {
-				messages = [...messages, { role: 'error', content: `Error: ${err}` }];
+				messages = [...messages, { role: 'error', content: `Error: ${err}`, agent }];
 				isLoading = false;
 			},
 			endpoint,
@@ -252,7 +272,7 @@
 		{#if turn.kind === 'user'}
 			<UserMessage>{turn.msg.content}</UserMessage>
 		{:else}
-			<AgentTurn label="Banking Agent" icon={agentIcon}>
+			<AgentTurn label={turn.agent} icon={agentIcon}>
 				{#each turn.msgs as msg}
 					{#if msg.role === 'tool' || msg.type === 'tool_planning'}
 						<ToolChip label={msg.content} />
@@ -270,13 +290,13 @@
 	{/each}
 
 	{#if isLoading && turns.at(-1)?.kind !== 'agent'}
-		<AgentTurn label="Banking Agent" icon={agentIcon}>
+		<AgentTurn label={agentFor(chatEndpoint)} icon={agentIcon}>
 			<AnswerCard pending>Thinking…</AnswerCard>
 		</AgentTurn>
 	{/if}
 
 	{#if pendingConsent}
-		<AgentTurn label="Banking Agent" icon={agentIcon}>
+		<AgentTurn label={pendingConsent.agent} icon={agentIcon}>
 			<div class="approval" role="group" aria-labelledby="consent-title">
 				<span class="approval-icon" aria-hidden="true"><Locked size={16} /></span>
 				<div class="approval-body">
