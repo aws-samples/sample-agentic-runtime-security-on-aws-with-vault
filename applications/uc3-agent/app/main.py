@@ -245,17 +245,24 @@ async def chat(request: Request, body: ChatRequest):
                     break
                 yield f"data: {json.dumps(event, default=str)}\n\n"
 
+            # The turn ends with the contract's frames — the answer, or the
+            # error, then agent:done, all carrying the turn's requestId — and
+            # after them the legacy frames today's dashboard reads, unchanged.
             try:
                 # Already finished (END has arrived); shield so a disconnect
                 # here can never cancel the worker's task.
                 response = await asyncio.shield(task)
                 content = re.sub(r'<thinking>.*?</thinking>\s*', '', str(response), flags=re.DOTALL)
 
+                yield f"data: {json.dumps(sink.stamp({'type': 'agent:text_delta', 'text': content}))}\n\n"
+                yield f"data: {json.dumps(sink.stamp({'type': 'agent:done'}))}\n\n"
                 yield f"data: {json.dumps({'role': 'ai', 'content': content, 'type': 'delta'})}\n\n"
                 yield f"data: {json.dumps({'type': 'end'})}\n\n"
 
             except Exception as exc:
                 logger.error("uc3_agent_error: %s | user_message: %s", str(exc), message)
+                yield f"data: {json.dumps(sink.stamp({'type': 'agent:error', 'message': str(exc)}))}\n\n"
+                yield f"data: {json.dumps(sink.stamp({'type': 'agent:done'}))}\n\n"
                 yield f"data: {json.dumps({'type': 'error', 'content': str(exc)})}\n\n"
                 yield f"data: {json.dumps({'type': 'end'})}\n\n"
         finally:

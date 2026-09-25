@@ -212,6 +212,12 @@ class EventSink:
         """The turn's requestId: the refund's, or the turn's own when no refund bound one."""
         return self._request_id or self._own_request_id
 
+    def stamp(self, event: dict) -> dict:
+        """`event` with the turn's requestId and the time now, for a frame main.py sends itself."""
+        event["requestId"] = self.request_id
+        event["ts"] = int(time.time() * 1000)
+        return event
+
     def offer_credential(self, event: dict, request_id: str | None, digest: str) -> None:
         """Send a credential event once per turn."""
         with self._lock:
