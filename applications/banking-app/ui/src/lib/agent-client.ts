@@ -5,7 +5,18 @@
  * the request (with the user's JWT from httpOnly cookies) to the
  * cluster-internal banking-agent pod. The browser never calls the
  * agent directly — it can't reach cluster-internal services.
+ *
+ * Two kinds of frame arrive (see $lib/agent-events):
+ *   - the legacy frames (tool_planning, delta, end, error) always go to
+ *     `onMessage`, exactly as before;
+ *   - every other event (agent:narration, tool_call, agent:credential, ...) goes
+ *     to `onEvent` when the caller passes one, and to `onMessage` otherwise, so a
+ *     caller that passes no `onEvent` sees what it always saw.
  */
+
+import type { AgentEvent, LegacyAgentEvent } from '$lib/agent-events';
+
+const LEGACY_TYPES: ReadonlySet<string> = new Set<LegacyAgentEvent['type']>(['tool_planning', 'delta', 'end', 'error']);
 
 export interface ChatResponse {
   role: string;
@@ -19,7 +30,8 @@ export async function sendChatMessage(
   sessionId: string,
   onMessage: (chunk: ChatResponse) => void,
   onError: (error: string) => void,
-  endpoint: string = '/api/chat'
+  endpoint: string = '/api/chat',
+  onEvent?: (event: AgentEvent) => void
 ): Promise<void> {
   try {
     const res = await fetch(endpoint, {
@@ -60,7 +72,11 @@ export async function sendChatMessage(
           try {
             const data = JSON.parse(line.substring(6)) as ChatResponse;
             if (data.type === 'end') sawEnd = true;
-            onMessage(data);
+            if (onEvent && typeof data.type === 'string' && !LEGACY_TYPES.has(data.type)) {
+              onEvent(data as unknown as AgentEvent);
+            } else {
+              onMessage(data);
+            }
           } catch {
             // Skip malformed SSE lines
           }
