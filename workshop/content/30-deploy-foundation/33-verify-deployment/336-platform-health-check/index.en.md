@@ -24,7 +24,7 @@ Expected — all 14 checks `PASS`:
   ✓ PASS IVIA OIDC discovery: issuer reachable (https://wrp.<deploy-id>.<alb-ip-dashed>.nip.io)
   ✓ PASS cert-manager pods running (N pod(s))
   ✓ PASS AWS Load Balancer Controller running (N pod(s))
-  ✓ PASS Vault Enterprise edition (version=2.0.3+ent; sys/license/status responds)
+  ✓ PASS Vault Enterprise edition (version=2.1.1+ent; sys/license/status responds)
   ✓ PASS Secrets engines mounted: database/ + aws/ (platform-standard license present)
   ✓ PASS Agent Registry responds — registration 'uc1-agent' resolvable by display-name
   ✓ PASS OAuth resource server profile 'ivia' responds (feature active + profile applied)

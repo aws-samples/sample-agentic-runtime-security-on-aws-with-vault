@@ -101,7 +101,7 @@ kubectl exec -n vault vault-0 -- vault status | grep -i version
 Expected — the `+ent` suffix marks an Enterprise build:
 
 ```
-Version                 2.0.3+ent
+Version                 2.1.1+ent
 ```
 
 **Why:** This confirms the Agent Registry is mounted alongside the engines that vend database and AWS credentials.

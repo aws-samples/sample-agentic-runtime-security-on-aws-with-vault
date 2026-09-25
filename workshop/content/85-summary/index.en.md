@@ -5,7 +5,7 @@ weight: 85
 
 ## What You Built — Vault's Native Agent Identity Model
 
-This workshop deployed **HashiCorp Vault Enterprise 2.0.3** on EKS and wired it to enforce the five control objectives for agentic systems using Vault's **native AI agent primitives** — the first-class agent identity model HashiCorp ships in the product today. You configured the security primitives — Kubernetes auth, the OAuth resource server, the Agent Registry, ceiling-policy intersection, and Vault-side per-request Rich Authorization Requests (RAR) — at the layer where enforcement actually happens.
+This workshop deployed **HashiCorp Vault Enterprise 2.1.1** on EKS and wired it to enforce the five control objectives for agentic systems using Vault's **native AI agent primitives** — the first-class agent identity model HashiCorp ships in the product today. You configured the security primitives — Kubernetes auth, the OAuth resource server, the Agent Registry, ceiling-policy intersection, and Vault-side per-request Rich Authorization Requests (RAR) — at the layer where enforcement actually happens.
 
 ### Vault's Native AI Agent Support Is Deployed Here
 
