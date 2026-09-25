@@ -178,7 +178,8 @@ class TurnActivity:
         """Queue an agent:credential event carrying a credential IN FULL.
 
         Built from these named fields only: showing the credential is the event's
-        purpose. Only credentials issued during the turn come through here.
+        purpose. Only credentials issued during the turn come through here — never
+        a client secret or other configuration.
         """
         event: dict[str, Any] = {"type": "agent:credential", "kind": kind, "label": label, "issuer": issuer}
         if value is not None:

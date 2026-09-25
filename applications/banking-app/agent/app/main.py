@@ -126,8 +126,9 @@ async def chat(request: Request, body: ChatRequest):
     ContextVar before invoking the agent in a worker thread. A per-request agent
     (empty conversation history) plus a request-scoped JWT mean one caller's
     banking data can never reach another caller. The JWT is forwarded to MCP
-    tool calls and never persisted or logged; the only place it is disclosed is
-    this caller's own event stream, as an agent:credential event (activity.py).
+    tool calls and never persisted or logged; it is disclosed only on this
+    caller's own event stream: as an agent:credential event (activity.py), and in
+    any step or error text that quotes it.
     """
     global _model
     if _model is None:
