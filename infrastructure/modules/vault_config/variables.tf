@@ -69,6 +69,16 @@ variable "uc3_logs_role_arn" {
   type        = string
 }
 
+variable "audit_reader_role_arn" {
+  description = "ARN of the assumable IAM role Vault assumes to issue the banking UI's read-only Athena STS credentials (query in work group `workshop`, read the audit_correlation VIEW and the tables and log prefixes it reads, write only the work group's result location). Backs the aws/sts/audit-reader role (issue #68 Audit Trace card)."
+  type        = string
+}
+
+variable "audit_reader_session_policy" {
+  description = "JSON session policy Vault attaches to every aws/sts/audit-reader AssumeRole. Built in tier 1 next to the role's own least-privilege policy; AWS caps it at 2,048 characters."
+  type        = string
+}
+
 variable "region" {
   description = "AWS region — passed to the Vault AWS secrets engine backend configuration."
   type        = string

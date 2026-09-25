@@ -104,5 +104,8 @@ module "vault_config" {
   rds_db_name                = var.rds_db_name
   bedrock_role_arn           = local.root.bedrock_role_arn
   uc3_logs_role_arn          = local.root.uc3_logs_role_arn
-  tags                       = var.tags
+  # Banking UI's read-only Athena credential (issue #68 Audit Trace card).
+  audit_reader_role_arn       = local.root.audit_reader_role_arn
+  audit_reader_session_policy = local.root.audit_reader_session_policy
+  tags                        = var.tags
 }

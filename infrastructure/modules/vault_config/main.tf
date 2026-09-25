@@ -360,6 +360,32 @@ resource "vault_aws_secret_backend_role" "uc3_logs_writer" {
   })
 }
 
+# Audit-reader aws/sts role (issue #68 · Audit Trace card: each answer links to the
+# audit records every system wrote for it). Vended short-lived to the banking UI's
+# own Kubernetes login (vault_kubernetes_auth_backend_role.banking_ui below) so its
+# server can read one refund's rows from the audit_correlation VIEW in Athena with
+# no standing AWS identity. The assumable role's own policy (tier 1) is the
+# least-privilege one; the session policy here is the coarser envelope that fits
+# AWS's 2,048-character limit, and the precondition fails the plan, not the first
+# `vault read`, if it ever outgrows it. 900 s is the shortest STS lifetime AWS allows.
+resource "vault_aws_secret_backend_role" "audit_reader" {
+  backend         = vault_aws_secret_backend.this.path
+  name            = "audit-reader"
+  credential_type = "assumed_role"
+
+  role_arns       = [var.audit_reader_role_arn]
+  policy_document = var.audit_reader_session_policy
+  default_sts_ttl = 900
+  max_sts_ttl     = 900
+
+  lifecycle {
+    precondition {
+      condition     = length(var.audit_reader_session_policy) <= 2048
+      error_message = "The aws/sts/audit-reader session policy is ${length(var.audit_reader_session_policy)} characters; AWS rejects an inline session policy over 2,048. Shorten audit_reader_session_policy in infrastructure/main.tf."
+    }
+  }
+}
+
 ################################################################################
 # Vault policies — one per use case
 ################################################################################
@@ -529,6 +555,36 @@ resource "vault_kubernetes_auth_backend_role" "uc3" {
   token_policies                   = [vault_policy.uc3_agent.name]
   token_ttl                        = 3600
   token_max_ttl                    = 7200
+}
+
+# The banking UI's OWN workload identity (issue #68 · Audit Trace card: each answer
+# links to the audit records every system wrote for it). Its server logs in with the
+# uc2-ui-sa ServiceAccount for exactly one thing: short-lived read-only Athena keys
+# (aws/sts/audit-reader) to fetch the audit_correlation rows of one refund for the
+# signed-in user who made it. Nothing else — no database path, no Bedrock, not even
+# the default policy (it never looks up, renews or revokes its own token: it logs in
+# afresh each time its keys run out). The token outlives the 900 s STS lease it
+# issues, so the lease is never cut short by its parent token.
+resource "vault_policy" "banking_ui" {
+  name = "banking-ui"
+
+  policy = <<-EOT
+    # Banking UI: read-only Athena keys for the Audit Trace card. Nothing else.
+    path "aws/sts/${vault_aws_secret_backend_role.audit_reader.name}" {
+      capabilities = ["read"]
+    }
+  EOT
+}
+
+resource "vault_kubernetes_auth_backend_role" "banking_ui" {
+  backend                          = vault_auth_backend.kubernetes.path
+  role_name                        = "banking-ui"
+  bound_service_account_names      = ["uc2-ui-sa"]
+  bound_service_account_namespaces = ["banking-app"]
+  token_policies                   = [vault_policy.banking_ui.name]
+  token_no_default_policy          = true
+  token_ttl                        = 1200
+  token_max_ttl                    = 1200
 }
 
 ################################################################################
