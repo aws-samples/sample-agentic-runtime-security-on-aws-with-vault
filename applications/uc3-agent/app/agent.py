@@ -25,6 +25,7 @@ Tools:
 import json
 import logging
 import os
+import re
 import secrets
 import time
 import uuid
@@ -36,7 +37,13 @@ import psycopg2
 import psycopg2.extensions
 import psycopg2.extras
 from strands import Agent, ToolContext, tool
-from strands.hooks import AfterToolsEvent, HookProvider, HookRegistry
+from strands.hooks import (
+    AfterToolsEvent,
+    BeforeInvocationEvent,
+    BeforeModelCallEvent,
+    HookProvider,
+    HookRegistry,
+)
 from strands.models import BedrockModel
 from strands.session import FileSessionManager
 
@@ -1475,12 +1482,30 @@ def check_refund_status(refund_id: str) -> dict:
 #
 # The chat shows list_transactions' rows as a card numbered 1, 2, 3... in the
 # order the tool returned them. Asking the model not to repeat the rows under
-# that card is not reliable, so after the first listing of a session no model
-# call is made: the reply is one fixed question.
+# that card, or to count to the row a person picked, is not reliable. So after
+# the first listing of a session no model call is made: the reply is one fixed
+# question. And a reply that is only a row number is resolved here, against
+# that same listing, never counted by the model.
 # ---------------------------------------------------------------------------
 
 # The reply after the first listing of a session.
 FIRST_LISTING_QUESTION = "Which transaction number do you want to refund?"
+
+# A reply that is only a row number: 1 to 3 digits, optionally after one of #,
+# "no.", "number", "transaction", "txn" or "item", and optionally followed by a
+# full stop or exclamation mark ("9", " 9 ", "#9", "Number 9", "no. 9",
+# "item 9!"). Anything else ("9 please", "$9", "Refund $65 of the Equinox
+# charge") goes to the model as typed.
+_ROW_NUMBER = re.compile(r"\s*(?:(?:#|no\.|number|transaction|txn|item)\s*)?(\d{1,3})\s*[.!]?\s*", re.IGNORECASE)
+
+# The fields of the selected row the model is given.
+_SELECTED_FIELDS = ("id", "account_id", "description", "merchant", "amount", "created_at")
+
+
+def row_number(text) -> int | None:
+    """The row number a reply names when the whole reply is a row number, else None."""
+    match = _ROW_NUMBER.fullmatch(text) if isinstance(text, str) else None
+    return int(match.group(1)) if match else None
 
 
 def _tool_names(messages: list) -> dict:
@@ -1534,6 +1559,47 @@ def _latest_listing(messages: list) -> list | None:
     return latest
 
 
+def _row_selection(message, history: list) -> tuple[int, list] | None:
+    """(number, rows) when `message` is only a row number and `history` holds a listing, else None.
+
+    `rows` are the session's most recent successful list_transactions result, in
+    the order returned — the order the card numbers them. They come only from
+    that result, which list_transactions read for the verified sub; nothing the
+    message says is used but the number.
+    """
+    if not isinstance(message, dict) or message.get("role") != "user":
+        return None
+    content = message.get("content") or []
+    if len(content) != 1 or not isinstance(content[0], dict):
+        return None
+    number = row_number(content[0].get("text"))
+    if number is None:
+        return None
+    rows = _latest_listing(history)
+    if rows is None:
+        return None
+    return number, rows
+
+
+def _selection_note(number: int, row: dict) -> str:
+    """The text given to the model, beside the user's own reply, naming the row it selects."""
+    selected = {key: row.get(key) for key in _SELECTED_FIELDS}
+    return (
+        f"[Added by the app, not typed by the user] Transaction {number} is row {number} of the most "
+        f"recent list_transactions result, in the order it was returned: {json.dumps(selected, default=str)}. "
+        "This is the transaction the user selected. Go to step 4: confirm its details and ask 'Shall I proceed?'."
+    )
+
+
+def _out_of_range_reply(number: int, count: int) -> str:
+    """The reply to a row number the listing does not have."""
+    if count == 0:
+        return f"There is no transaction {number} — there are no transactions to pick from."
+    if count == 1:
+        return f"There is no transaction {number} — the list has only transaction 1."
+    return f"There is no transaction {number} — pick a number from 1 to {count}."
+
+
 class RefundReplies(HookProvider):
     """The refund chat's replies that code writes instead of the model.
 
@@ -1545,13 +1611,71 @@ class RefundReplies(HookProvider):
     empty list, or a second listing (the no-phone driver's "Refund $X of the
     {merchant} charge" turn may re-list) — is left to the model.
 
+    A reply that is only a row number (row_number), with a listing in the
+    session, is resolved against the most recent listing:
+      - in range: the row is added to the user's message, beside what they
+        typed, before the message is saved, so the model confirms that row;
+      - out of range: the model is not called; the reply names the valid range.
+    With no listing in the session the message goes to the model untouched.
+
     A failure in a callback is logged without any value and the model writes
     the reply: Strands raises a hook's exception into the turn, and this must
     never break one.
     """
 
     def register_hooks(self, registry: HookRegistry, **kwargs) -> None:
+        registry.add_callback(BeforeInvocationEvent, self._before_invocation)
+        registry.add_callback(BeforeModelCallEvent, self._before_model_call)
         registry.add_callback(AfterToolsEvent, self._after_tools)
+
+    @staticmethod
+    def _before_invocation(event: BeforeInvocationEvent) -> None:
+        """A row number in range: add the row it selects to the user's message."""
+        try:
+            messages = event.messages
+            if not messages or len(messages) != 1:
+                return
+            # event.agent.messages is the session's history before this message.
+            selection = _row_selection(messages[0], event.agent.messages)
+            if selection is None:
+                return
+            number, rows = selection
+            if not 1 <= number <= len(rows):
+                return  # answered without the model: _before_model_call
+            message = messages[0]
+            event.messages = [
+                {**message, "content": [*message["content"], {"text": _selection_note(number, rows[number - 1])}]}
+            ]
+            logger.info("uc3_reply_by_code", extra={"reply": "row_selected", "row": number, "rows": len(rows)})
+        except Exception as exc:  # noqa: BLE001 — the message then goes to the model as typed
+            logger.warning(
+                "uc3_reply_hook_failed", extra={"hook": "before_invocation", "error_type": type(exc).__name__}
+            )
+
+    @staticmethod
+    def _before_model_call(event: BeforeModelCallEvent) -> None:
+        """A row number out of range: reply without calling the model.
+
+        Only the turn's first model call can match: the user's message is then
+        the last one in the history. On any later call the last message is a
+        tool result.
+        """
+        try:
+            history = event.agent.messages
+            if not history:
+                return
+            selection = _row_selection(history[-1], history[:-1])
+            if selection is None:
+                return
+            number, rows = selection
+            if 1 <= number <= len(rows):
+                return
+            event.cancel = _out_of_range_reply(number, len(rows))
+            logger.info("uc3_reply_by_code", extra={"reply": "row_out_of_range", "row": number, "rows": len(rows)})
+        except Exception as exc:  # noqa: BLE001 — the model writes the reply instead
+            logger.warning(
+                "uc3_reply_hook_failed", extra={"hook": "before_model_call", "error_type": type(exc).__name__}
+            )
 
     @staticmethod
     def _after_tools(event: AfterToolsEvent) -> None:
@@ -1620,6 +1744,8 @@ def build_uc3_agent(vault_client=None, session_id: str = "default") -> Agent:
         "   Transaction number N is the Nth transaction in the list_transactions result, in the\n"
         "   order it was returned.\n"
         "4. When the user selects a number, confirm the transaction details and ask 'Shall I proceed?'\n"
+        "   A reply that is only a number arrives with the transaction it selects attached by the\n"
+        "   app; confirm that transaction.\n"
         "5. When the user confirms, call the initiate_refund tool with:\n"
         "   - account_id: the account_id from the selected transaction\n"
         "   - transaction_id: the id from the selected transaction\n"
