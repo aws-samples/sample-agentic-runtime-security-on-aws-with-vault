@@ -65,13 +65,14 @@ export const load: PageServerLoad = async ({ url, cookies }) => {
 
   cookies.delete('pkce', { path: '/' });
 
+  // No fallback for the client ID: it names the OAuth client the code was issued to.
   const baseUrl = env.IVIA_BASE_URL ?? '';
-  const clientId = env.IVIA_CLIENT_ID ?? 'agent-uc2';
+  const clientId = env.IVIA_CLIENT_ID ?? '';
   const clientSecret = env.IVIA_CLIENT_SECRET ?? '';
   const redirectUri = env.REDIRECT_URI ?? '';
 
-  if (!baseUrl || !clientSecret || !redirectUri) {
-    throw error(500, 'IVIA_BASE_URL, IVIA_CLIENT_SECRET, and REDIRECT_URI must be configured');
+  if (!baseUrl || !clientId || !clientSecret || !redirectUri) {
+    throw error(500, 'IVIA_BASE_URL, IVIA_CLIENT_ID, IVIA_CLIENT_SECRET, and REDIRECT_URI must be configured');
   }
 
   let tokens;
