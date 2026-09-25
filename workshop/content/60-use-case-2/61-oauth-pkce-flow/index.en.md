@@ -74,6 +74,7 @@ sequenceDiagram
     User->>UI: "What are my accounts?"
     UI->>Agent: POST /chat + Authorization: Bearer access_token
     Agent->>Agent: Extract JWT from header
+    Agent-->>UI: SSE: each step as it happens, starting with<br/>the agent's own credentials and the caller's token
     Agent->>MCP: JSON-RPC tools/call get_accounts<br/>Authorization: Bearer access_token
     Note over Agent,MCP: The tool takes no arguments —<br/>identity travels in the header alone
     MCP->>MCP: Decode header JWT → read sub claim (for RLS only)
@@ -92,16 +93,18 @@ sequenceDiagram
     RDS-->>MCP: Oscar's accounts only
     end
 
-    MCP-->>Agent: Tool result (accounts JSON)
-    Agent->>Agent: LLM formats response
-    Agent-->>UI: SSE stream with formatted answer
-    UI-->>User: "Checking: $4,250 · Savings: $18,750"
-
     rect rgba(167, 240, 186, 0.3)
-    Note over MCP,RDS: Credential lifecycle
+    Note over MCP,RDS: Credential lifecycle — before the MCP server replies
     MCP->>Vault: POST /v1/sys/leases/revoke<br/>X-Vault-Token: MCP server's own k8s-auth token
     Vault->>RDS: DROP ROLE (immediately, not at TTL)
     end
+
+    MCP-->>Agent: Tool result: accounts, lease and revoke outcome,<br/>the revoked credential, the MCP server's own tokens
+    Agent->>Agent: Take out the credential and tokens<br/>(the model never receives them)
+    Agent-->>UI: SSE: the database credential with its revoke outcome,<br/>and the MCP server's own tokens
+    Agent->>Agent: LLM formats response from the accounts
+    Agent-->>UI: SSE stream with formatted answer
+    UI-->>User: "Checking: $4,250 · Savings: $18,750"
 ```
 
 **Step-by-step breakdown:**
@@ -120,6 +123,7 @@ sequenceDiagram
 12. In that same call Vault issues a JIT Postgres credential with a 15-minute TTL.
 13. The MCP Server opens a Postgres connection, sets `app.current_user_sub` to the JWT's `sub` claim, and executes `SELECT` queries. PostgreSQL Row-Level Security filters results to the authenticated user's rows only.
 14. The MCP Server revokes the lease as soon as the query returns — `POST /v1/sys/leases/revoke`, authenticated with the server's **own** Kubernetes-auth Vault token rather than the caller's, so the revoke still works when the user's JWT has already expired. Vault drops the Postgres role immediately. The 15-minute TTL remains only as a backstop for the case where the server dies mid-request.
+15. Only then does the MCP Server reply: the rows, the lease and whether the revoke succeeded, the credential itself, and the MCP Server's own Vault token and ServiceAccount token. The Banking Agent takes the credential and both tokens out before the model sees the tool result, sends them only on the signed-in user's own activity stream, and gives the model the rows.
 
 The `sub` claim in the `access_token` (e.g. `oscar`) flows to:
 
