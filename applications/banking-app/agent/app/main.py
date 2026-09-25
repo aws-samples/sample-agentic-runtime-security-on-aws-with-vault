@@ -57,6 +57,9 @@ async def lifespan(app: FastAPI):
     # Each time Vault-issued Bedrock keys sign a model call, the running turn is
     # shown them and the login they came from (activity.report_model_credentials).
     _vault_client = build_agent_vault_client(on_keys_used=activity.report_model_credentials)
+    # The policy line shows the agent's ceiling as Vault holds it: the turn reads
+    # the agent's own Agent Registry registration with this client's login.
+    activity.set_agent_registry_reader(_vault_client.read_agent_registration)
     try:
         _vault_client.login()
         logger.info("agent_vault_auth_success", extra={"auth_method": "kubernetes"})

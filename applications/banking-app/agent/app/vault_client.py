@@ -16,6 +16,10 @@ token that login returned, and the Bedrock keys Vault issued with it. This
 client keeps them in memory and hands a turn the keys that signed its model
 calls (on_keys_used), together with the login they were issued under. They are
 never logged here; the caller sends them only on the turn's own event queue.
+
+The same login reads the agent's own Agent Registry registration
+(read_agent_registration), so a turn can show the ceiling Vault intersects
+with the caller's human baseline as Vault holds it, not as a literal.
 """
 
 import logging
@@ -25,6 +29,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 
 import boto3
 import hvac
@@ -235,9 +240,33 @@ class AgentVaultClient:
         if issued is not None:
             self._on_keys_used(dict(issued))
 
+    def read_agent_registration(self, display_name: str) -> dict | None:
+        """Read an Agent Registry registration with this agent's own Vault token.
+
+        GET agent-registry/registration/display-name/<display_name>. The uc2-agent
+        policy grants read on the agent's OWN registration only
+        (infrastructure/modules/vault_config/main.tf), so any other name is refused.
+        Returns the registration's data (ceiling_policies among it), or None when
+        Vault reports no such registration (hvac's read returns None on 404).
+        Raises NotSignedIn before the first login, hvac.exceptions.Forbidden on a
+        403, and whatever hvac raises otherwise. Nothing is logged here.
+        """
+        if self._login is None:
+            raise NotSignedIn("the agent has not signed in to Vault")
+        self.ensure_authenticated()
+        response = self.client.read(f"agent-registry/registration/display-name/{quote(display_name, safe='')}")
+        if response is None:
+            return None
+        data = response.get("data") if isinstance(response, dict) else None
+        return data if isinstance(data, dict) else {}
+
     def is_authenticated(self) -> bool:
         """Return True if the cached Vault token is still valid."""
         return self.client.is_authenticated()
+
+
+class NotSignedIn(RuntimeError):
+    """The agent has no Vault login yet (its startup login failed or never ran)."""
 
 
 def build_agent_vault_client(on_keys_used: Callable[[dict], None] | None = None) -> AgentVaultClient:

@@ -57,7 +57,7 @@ import re
 import threading
 import time
 from datetime import datetime
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Callable
 from urllib.parse import urlsplit
 
 from strands.hooks import (
@@ -204,6 +204,9 @@ class TurnActivity:
         self.claims = claims
         self.db_role: str | None = None
         self.leases: list[dict[str, Any]] = []
+        # The agent's ceiling as Vault holds it, read once per turn (agent_ceiling()).
+        self._ceiling_lock = threading.Lock()
+        self._ceiling: tuple[str | None, list[str] | None, str | None] | None = None
 
     def build(self, event: dict[str, Any]) -> dict[str, Any]:
         """Stamp an event with this turn's requestId and the time, then scrub it."""
@@ -313,6 +316,19 @@ class TurnActivity:
                     lease["ttl_seconds"] = ttl_seconds
                 self.leases.append(lease)
 
+    def agent_ceiling(self) -> tuple[str | None, list[str] | None, str | None]:
+        """(actor, ceiling policies, why not) for this turn, read from Vault once.
+
+        The actor is the act.sub the caller's token names — the agent Vault
+        resolves the request's ceiling from. Its registration is read with the
+        agent's own Vault login (set_agent_registry_reader). Exactly one of the
+        policies and the reason is set. Concurrent tools share one read.
+        """
+        with self._ceiling_lock:
+            if self._ceiling is None:
+                self._ceiling = _read_ceiling(self.claims)
+            return self._ceiling
+
     def audit_seed(self) -> dict[str, Any]:
         """The agent:audit_seed event for everything this turn has observed."""
         with self._lock:
@@ -394,6 +410,44 @@ def _policy_names(value: Any) -> str | None:
     return ", ".join(names) if names else "none"
 
 
+# Reads a registration by display name with the agent's own Vault login
+# (AgentVaultClient.read_agent_registration). main.py wires it at startup.
+_registry_reader: Callable[[str], Any] | None = None
+
+# Why a ceiling read failed, by exception class name, in plain words.
+_CEILING_READ_FAILURES = {
+    "Forbidden": "Vault refused the read (403 permission denied)",
+    "NotSignedIn": "the agent is not signed in to Vault",
+}
+
+
+def set_agent_registry_reader(reader: Callable[[str], Any] | None) -> None:
+    """Give the turn a way to read the agent's own Agent Registry registration."""
+    global _registry_reader
+    _registry_reader = reader
+
+
+def _read_ceiling(claims: dict[str, Any]) -> tuple[str | None, list[str] | None, str | None]:
+    """(actor, ceiling policies, why not): the ceiling as Vault holds it, never a literal."""
+    act = claims.get("act")
+    actor = act.get("sub") if isinstance(act, dict) else None
+    if not isinstance(actor, str) or not actor:
+        return None, None, "the caller's token names no acting agent (act.sub), so there is no registration to read"
+    if _registry_reader is None:
+        return actor, None, "the agent has no Vault client to read it with"
+    try:
+        data = _registry_reader(actor)
+    except Exception as exc:  # noqa: BLE001 — a failed read is reported on the line, never raised into the tool
+        logger.warning("agent_ceiling_read_failed: %s", type(exc).__name__)
+        return actor, None, _CEILING_READ_FAILURES.get(type(exc).__name__, f"the read failed ({type(exc).__name__})")
+    if data is None:
+        return actor, None, "Vault has no registration by that name (404)"
+    policies = data.get("ceiling_policies") if isinstance(data, dict) else None
+    if not isinstance(policies, list) or not all(isinstance(p, str) for p in policies):
+        return actor, None, "the registration Vault returned lists no ceiling_policies"
+    return actor, policies, None
+
+
 def report_mcp_call(tool_name: str, mcp_url: str, jwt: str) -> None:
     """Narrate the MCP call a tool is about to make, and show the token it presents.
 
@@ -434,7 +488,9 @@ def report_credential_metadata(tool_name: str, meta: Any, issued: Any = None) ->
     than lease_revoked / issued_db_credentials still works: the credential is
     then not shown and the revoke is narrated as not observed. Likewise the
     auth-path and policy lines appear only when the server reports
-    vault_auth_header and vault_policies / vault_identity_policies. When the
+    vault_auth_header and vault_policies / vault_identity_policies; the policy
+    line also carries the agent's ceiling as read from Vault, or says plainly
+    why it could not be read. When the
     revoke failed, the credential is still shown, labelled as still live until
     lease_expires_at (or, from a server that does not report it, until its
     lease duration runs out).
@@ -540,9 +596,12 @@ def report_credential_metadata(tool_name: str, meta: Any, issued: Any = None) ->
                 f"{lease_id} itself and does not report the outcome to the agent."
             )
 
-    # Exactly as Vault labels them on the caller's token (auth/token/lookup-self).
-    # Not called "what the agent may do": Vault also bounds the request by the
-    # agent's ceiling, which lookup-self does not list.
+    # The policy line. The caller's policies exactly as Vault labels them on the
+    # caller's token (auth/token/lookup-self, via the MCP server); the identity
+    # policies are the caller's human baseline. lookup-self does not list the
+    # agent's ceiling, so the agent reads that from its own Agent Registry
+    # registration in Vault (agent_ceiling) — never from a literal. What the agent
+    # may do for the caller is the intersection of the two.
     token_policies = _policy_names(reported.get("vault_policies"))
     identity_policies = _policy_names(reported.get("vault_identity_policies"))
     if token_policies is not None or identity_policies is not None:
@@ -550,11 +609,28 @@ def report_credential_metadata(tool_name: str, meta: Any, issued: Any = None) ->
         if token_policies is not None:
             listed.append(f"token policies {token_policies}")
         if identity_policies is not None:
-            listed.append(f"identity policies {identity_policies}")
+            listed.append(f"identity policies (the caller's human baseline) {identity_policies}")
+        actor, ceiling, why_not = turn.agent_ceiling()
+        if ceiling is not None:
+            ceiling_text = (
+                f" The agent's ceiling, read from {actor}'s Agent Registry registration in Vault "
+                f"(the act.sub the caller's token names): {', '.join(ceiling) or 'none'}. "
+                "Vault allows this request only what the human baseline and the ceiling both allow — "
+                "their intersection."
+            )
+        elif actor is None:
+            ceiling_text = f" No agent ceiling could be looked up: {why_not}."
+        else:
+            ceiling_text = (
+                f" The agent's ceiling could NOT be read from {actor}'s Agent Registry registration: {why_not}. "
+                "The line cannot show it; what the agent may do is still the intersection of the human baseline "
+                "and that ceiling."
+            )
         turn.narrate(
             f"The MCP server reports Vault's lookup-self for the caller's token during {tool_name} lists "
             + "; ".join(listed)
             + "."
+            + ceiling_text
         )
 
 
