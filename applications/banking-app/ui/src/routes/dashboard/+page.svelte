@@ -106,13 +106,15 @@
 	} | null = $state(null);
 
 	// Auto-scroll the message list to the newest message. The effect re-runs
-	// whenever a message is appended, the "Thinking…" indicator toggles, or the
-	// consent card appears.
+	// whenever a message is appended, the "Thinking…" indicator toggles, the
+	// consent card appears, or a turn ends and its Audit Trace card mounts under
+	// the answer.
 	let messagesEl: HTMLDivElement | undefined = $state();
 	$effect(() => {
 		messages.length;
 		isLoading;
 		pendingConsent;
+		auditTurnFor.size;
 		messagesEl?.scrollTo({ top: messagesEl.scrollHeight, behavior: 'smooth' });
 	});
 
