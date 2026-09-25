@@ -557,6 +557,7 @@ def _poll_ciba(auth_req_id: str, request_id: str) -> str:
                     f"{_sub_for_label()}'s CIBA token, issued by IBM Verify Identity Access "
                     "after the phone approval",
                     "IBM Verify Identity Access",
+                    reused=False,
                     value=access_token,
                     ttl_seconds=data.get("expires_in"),
                     expires_at=activity.expires_at_ms(data.get("expires_in")),
@@ -1120,6 +1121,7 @@ def complete_refund(auth_req_id: str, request_id: str, tool_context: ToolContext
         "delegated_token",
         f"{_sub_for_label()}'s delegated token from the RFC 8693 exchange",
         "IBM Verify Identity Access",
+        reused=False,
         value=delegated_jwt,
         expires_at=int(delegated_claims["exp"] * 1000)
         if isinstance(delegated_claims.get("exp"), (int, float))

@@ -170,9 +170,11 @@ async def chat(request: Request, body: ChatRequest):
     sink = activity.EventSink(asyncio.get_running_loop(), request_id=str(uuid.uuid4()))
     prep_sink_token = activity.bind_sink(sink)
     try:
+        logged_in_now = False
         if not _vault_client.is_authenticated():
             try:
                 _vault_client.login()
+                logged_in_now = True
                 logger.info("uc3_vault_k8s_reauth_success")
             except Exception as exc:
                 raise HTTPException(status_code=503, detail=f"Vault re-auth failed: {exc}")
@@ -201,10 +203,13 @@ async def chat(request: Request, body: ChatRequest):
             "id_token",
             f"{verified_sub}'s id_token from sign-in, sent by the banking UI as this request's bearer",
             "IBM Verify Identity Access",
+            reused=False,
             value=id_token,
             expires_at=int(id_claims["exp"] * 1000) if isinstance(id_claims.get("exp"), (int, float)) else None,
         )
-        _vault_client.report_vault_token()
+        # Reused unless the login just above made it (login() has then already
+        # shown it, marked new).
+        _vault_client.report_vault_token(reused=not logged_in_now)
 
         agent = build_uc3_agent(vault_client=_vault_client, session_id=body.sessionId)
     finally:

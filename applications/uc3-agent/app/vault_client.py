@@ -110,14 +110,19 @@ class UC3VaultClient:
             "k8s_sa_token",
             "The uc3 agent's Kubernetes service-account token, presented to Vault to log in",
             "Kubernetes",
+            reused=False,
             value=jwt,
             expires_at=int(sa_claims["exp"] * 1000) if isinstance(sa_claims.get("exp"), (int, float)) else None,
         )
-        self.report_vault_token()
+        self.report_vault_token(reused=False)
 
-    def report_vault_token(self) -> None:
+    def report_vault_token(self, *, reused: bool) -> None:
         """Show the agent's current Vault token (from its Kubernetes login) on
-        the current request's activity stream. Sent once per request."""
+        the current request's activity stream. Sent once per request.
+
+        `reused` is True when the token comes from a login made before this
+        request (at pod startup or during an earlier one), False when login()
+        just made it."""
         token = self._client.token
         if not token:
             return
@@ -125,6 +130,7 @@ class UC3VaultClient:
             "vault_token",
             f"The uc3 agent's Vault token from its Kubernetes login (role {self._role})",
             "Vault",
+            reused=reused,
             value=token,
             vault_path="auth/kubernetes/login",
             ttl_seconds=self._login_ttl,
@@ -160,6 +166,7 @@ class UC3VaultClient:
             "db_credentials",
             f"Read-only database credentials Vault issued to the agent's own Vault token ({vault_db_path})",
             "Vault",
+            reused=False,
             fields={"username": data["username"], "password": data["password"]},
             vault_path=vault_db_path,
             lease_id=response.get("lease_id"),
@@ -239,6 +246,7 @@ class UC3VaultClient:
             "Refund-writer database credentials Vault issued to the delegated token "
             f"({vault_db_path})",
             "Vault",
+            reused=False,
             fields={"username": data["username"], "password": data["password"]},
             vault_path=vault_db_path,
             lease_id=db_response.get("lease_id"),
@@ -303,6 +311,7 @@ class UC3VaultClient:
                 "aws_sts_credentials",
                 f"AWS STS keys Vault issued for {_STS_PURPOSE.get(vault_aws_role, vault_aws_role)} ({vault_path})",
                 "AWS STS (via Vault)",
+                reused=False,
                 fields={
                     "access_key_id": data["access_key"],
                     "secret_access_key": data["secret_key"],

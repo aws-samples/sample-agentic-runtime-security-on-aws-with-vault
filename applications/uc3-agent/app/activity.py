@@ -46,7 +46,10 @@ the workshop shows in real time what happens behind each use case). The value
 goes only onto this request's queue: never into a tool's return value (that
 reaches Bedrock and the on-disk session history) and never into a log line.
 OAuth client secrets and the SCIM password are configuration, not issued
-credentials, and are never passed to credential().
+credentials, and are never passed to credential(). Each credential event says
+for itself whether it was reused (`reused`): only the agent's own Vault token,
+when this turn runs on a login made before it, is reused; everything else is
+made or first presented during the turn.
 
 Every OTHER event (narration, tool calls, approvals, the audit seed) is sent
 with every key and value the agent gave it — no key named like a secret is
@@ -401,6 +404,7 @@ def credential(
     label: str,
     issuer: str,
     *,
+    reused: bool,
     value: str | None = None,
     fields: dict | None = None,
     vault_path: str | None = None,
@@ -418,16 +422,29 @@ def credential(
         history) and never into a log line (pod logs are shipped off-cluster);
       - configuration secrets (OAuth client secrets, the SCIM password) are
         never passed here.
+    `reused` is required, with no default: True when the credential was
+    obtained before this turn (or before this tool call) and is used again now,
+    False when it was made or first presented during this turn. The UI's Agent
+    Log reads it to say "reused", "presented" or "issued". A call that leaves it
+    out raises TypeError at the call site, on purpose, so a new call site cannot
+    forget it.
     `value` (a single token) or `fields` (a multi-part credential), never both.
     A JWT value also carries its decoded, unverified payload as `claims`.
-    Each distinct credential is sent once per turn. Never raises; a failure is
-    logged without the value.
+    Each distinct credential is sent once per turn: the first event offered for
+    it wins, whatever its `reused`. Once called with its required arguments it
+    never raises; a failure is logged without the value.
     """
     sink = _EVENT_SINK.get()
     if sink is None or sink.closed:
         return
     try:
-        event: dict[str, Any] = {"type": "agent:credential", "kind": kind, "label": label, "issuer": issuer}
+        event: dict[str, Any] = {
+            "type": "agent:credential",
+            "kind": kind,
+            "label": label,
+            "issuer": issuer,
+            "reused": reused,
+        }
         if value is not None:
             event["value"] = value
             claims = decode_jwt_payload(value)
