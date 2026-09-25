@@ -274,7 +274,7 @@ if [ -n "${oauth_out}" ] && ! echo "${oauth_out}" | grep -qiE 'no value found|un
     print_pass "OAuth resource server profile 'ivia' responds (feature active + profile applied)"
 else
     print_fail "OAuth resource server profile 'ivia'" \
-        "sys/config/oauth-resource-server/ivia did not return a profile. Confirm the oauth-resource-server activation flag is set and vault_config applied the profile. Got: ${oauth_out:0:160}. Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault read sys/config/oauth-resource-server/ivia"
+        "sys/config/oauth-resource-server/ivia did not return a profile. Confirm the license carries platform-standard and vault_config applied the profile. Got: ${oauth_out:0:160}. Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault read sys/config/oauth-resource-server/ivia"
 fi
 
 #-------------------------------------------------------------------------------
