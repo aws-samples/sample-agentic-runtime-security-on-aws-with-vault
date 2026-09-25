@@ -12,6 +12,8 @@
                status (observed, not observed in this flow, pending) — for a refund, the approved
                mockup's rows — and the Evidence list: every event of the turn, each with its raw
                payload in full.
+               Only the Story/Technical control switches the view: nothing inside the panel does,
+               so a presenter who chose Story keeps the plain-English story while reading down.
     Demo pace  replays the turn from its first event, one event at a time, so a presenter can
                talk over each step. Nothing past the replay point is shown or claimed.
     Live       stops the replay and follows the turn as it streams.
@@ -470,12 +472,9 @@
 
 			<div class="card card-signals">
 				<div class="eyebrow eyebrow-dark">Technical signals</div>
-				{#if chips.length > 0 || mode === 'story'}
+				{#if chips.length > 0}
 					<div class="chips">
 						{#each chips as chip (chip)}<span class="chip">{chip}</span>{/each}
-						{#if mode === 'story'}
-							<button type="button" class="chip chip-more" onclick={() => (mode = 'technical')}>+ Details</button>
-						{/if}
 					</div>
 				{/if}
 				{#if focus.ids.length > 0}
@@ -1054,12 +1053,6 @@
 		background: var(--sf-teal-soft);
 		color: var(--ovi-teal-deep);
 		font: 600 13px var(--ovi-font-condensed);
-	}
-
-	.chip-more {
-		background: var(--ovi-neutral-soft);
-		color: var(--ovi-text-strong);
-		cursor: pointer;
 	}
 
 	.ids {
