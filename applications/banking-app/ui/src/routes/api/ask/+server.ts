@@ -14,15 +14,15 @@
  * credential the turn uses in full, as the agent sent it.
  *
  * The stream is the only contract. An agent that answers anything else (an image
- * older than this UI answers JSON) is not passed through: the browser gets the
- * legacy `error` frame saying so, then `end`, so the page shows the cause and
- * unlocks.
+ * older than this UI answers JSON) is not passed through: the browser gets
+ * `agent:error` and `agent:done`, so the Agent Log shows the failed turn, then the
+ * legacy `error` and `end`, so the page shows what went wrong and unlocks.
  * Cross-namespace egress on port 80 is permitted by the banking-ui-egress
  * NetworkPolicy.
  */
 import { json, type RequestHandler } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
-import type { LegacyEndEvent, LegacyErrorEvent } from '$lib/agent-events';
+import type { AgentDoneEvent, AgentErrorEvent, LegacyEndEvent, LegacyErrorEvent } from '$lib/agent-events';
 import { scrubErrorText } from '$lib/server/activity-filter';
 import { AgentCall, agentFailed, streamAgentEvents } from '$lib/server/agent-proxy';
 
@@ -39,11 +39,18 @@ function notAStreamMessage(mediaType: string): string {
 	return `The Ask agent answered ${mediaType || 'with no content type'}, not a stream.`;
 }
 
-/** The frames that tell the browser the agent's answer was not a stream. */
+/**
+ * The frames that tell the browser the agent's answer was not a stream: `agent:error` and
+ * `agent:done` for the Agent Log, which shows the failed turn, then the legacy `error` and
+ * `end` for the page, which shows the error and unlocks.
+ */
 function notAStream(mediaType: string): Response {
-	const error: LegacyErrorEvent = { type: 'error', content: notAStreamMessage(mediaType) };
+	const message = notAStreamMessage(mediaType);
+	const failed: AgentErrorEvent = { type: 'agent:error', message };
+	const done: AgentDoneEvent = { type: 'agent:done' };
+	const error: LegacyErrorEvent = { type: 'error', content: message };
 	const end: LegacyEndEvent = { type: 'end' };
-	const body = [error, end].map((event) => `data: ${JSON.stringify(event)}\n\n`).join('');
+	const body = [failed, done, error, end].map((event) => `data: ${JSON.stringify(event)}\n\n`).join('');
 	return new Response(body, {
 		headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' }
 	});
