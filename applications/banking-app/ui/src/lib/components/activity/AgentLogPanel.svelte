@@ -162,7 +162,7 @@
 					<div class="ln">
 						<span class="glyph-out" aria-hidden="true">⚡&#xFE0E;</span>
 						<span class="out">
-							<span class="lb">Credential {c.verb} · {c.kindLabel}:</span> {c.source}
+							<span class="lb">Credential {c.verb} · {c.kindLabel}:</span> {[c.source, c.label].filter((part) => part !== '').join(' · ')}
 							{#if c.copyText !== undefined}
 								{@const copyText = c.copyText}
 								<button
@@ -174,7 +174,6 @@
 									{copied === key ? 'Copied' : 'Copy'}
 								</button>
 							{/if}
-							{#if c.label}<span class="cred-label">{c.label}</span>{/if}
 							<span class="cred">
 								{#if c.value !== undefined}
 									<span class="cred-value">{c.value}</span>
@@ -369,12 +368,6 @@
 	.chip-button:hover {
 		color: var(--log-title);
 		border-color: var(--log-muted);
-	}
-
-	.cred-label {
-		display: block;
-		margin-top: 2px;
-		color: var(--log-muted);
 	}
 
 	.cred {

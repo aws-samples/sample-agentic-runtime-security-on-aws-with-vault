@@ -13,7 +13,7 @@
  *                        narrated exactly that line just before, as Use Case 2 does)
  *                      ⚡ Tool "<name>" output: <result>  /  Tool "<name>" failed: <result>
  *   agent:hitl_*       ▶ Agent: <text>, then ⚡ Approval details: <details> when present
- *   agent:credential   ⚡ Credential <issued|presented|reused> · <kind>: <issuer · path>
+ *   agent:credential   ⚡ Credential <issued|presented|reused> · <kind>: <issuer · path · the agent's label>
  *                        with the value or its parts in full, and a line of metadata
  *   agent:error        ⚡ Error: <message>
  *
