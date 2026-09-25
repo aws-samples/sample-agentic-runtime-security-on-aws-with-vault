@@ -219,7 +219,7 @@ def _refuse_terms(reason_code: str, reason: str, request_id: str, **log_fields) 
 
 
 def _requested_amount(amount, request_id: str) -> Decimal:
-    """The model's amount as Decimal cents, or a refusal (not a number, <= 0, sub-cent)."""
+    """The model's amount as a Decimal to the cent, or a refusal (not a number, <= 0, sub-cent)."""
     try:
         value = Decimal(str(amount))
     except (InvalidOperation, ValueError, TypeError):
@@ -855,7 +855,8 @@ def initiate_refund(
     Args:
         account_id: Account to credit the refund to.
         transaction_id: Original transaction being refunded.
-        amount: Refund amount (positive, whole cents).
+        amount: Refund amount in the currency's main unit, not in cents
+            (e.g. 34.99 for $34.99). Positive, at most two decimal places.
         currency: ISO 4217 currency code (e.g. "USD"). Must be the account's
             own currency; any other is refused.
 
