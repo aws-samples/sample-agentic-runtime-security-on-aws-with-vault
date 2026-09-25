@@ -1676,14 +1676,37 @@ fi
 # human sub=jaime + the agent act.sub=uc3-actor resolve via the oauth-resource-server
 # profile. Assert the native surfaces + the alias binding.
 #-------------------------------------------------------------------------------
-uc3_reg_name=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
-    sh -c "${VAULT_EXEC} vault read -format=json agent-registry/registration/display-name/uc3-actor" 2>/dev/null \
-    | jq -r '.data.display_name // empty' 2>/dev/null || echo "")
+uc3_reg_json=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
+    sh -c "${VAULT_EXEC} vault read -format=json agent-registry/registration/display-name/uc3-actor" 2>/dev/null || echo "")
+uc3_reg_name=$(printf '%s' "${uc3_reg_json}" | jq -r '.data.display_name // empty' 2>/dev/null || echo "")
 if [ "${uc3_reg_name}" = "uc3-actor" ]; then
     print_pass "UC3 Agent Registry: registration 'uc3-actor' resolvable by display-name (OBO actor)"
 else
     print_fail "UC3 Agent Registry registration (uc3-actor)" \
         "agent-registry/registration/display-name/uc3-actor did not read back (got '${uc3_reg_name}') — reapply vault_config (vault_agent_registration.uc3_actor). Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault read agent-registry/registration/display-name/uc3-actor"
+fi
+
+# Mandatory RAR (issue #74). Vault refuses a delegated token that arrives with no
+# authorization_details ONLY when the registration sets optional_authorization_details
+# = false AND the binary is 2.1.0 or later — 2.0.3 and 2.0.4 vend the refund-writer
+# credential to a no-RAR token regardless of the registration. This asserts the Vault
+# side of that pair; test-vault-verify.sh Check 9 asserts the version floor.
+#
+# It is NOT a behavioural denial and must not be read as one: production IVIA stamps
+# vault:path_access on EVERY token-exchange output (iviaop-config/rules.yaml
+# isvaop_pretoken), so no live token can arrive without a RAR to be refused. The
+# denial itself is reproduced against the 2.1.1 binary outside the cluster.
+#
+# Fail-closed: an unreadable registration, a missing field, or true are all failures.
+uc3_rar_mandatory=$(printf '%s' "${uc3_reg_json}" | jq -r '.data.optional_authorization_details // empty' 2>/dev/null || echo "")
+if [ "${uc3_rar_mandatory}" = "false" ]; then
+    print_pass "UC3 rich authorization requests are MANDATORY: registration 'uc3-actor' has optional_authorization_details=false, so on Vault 2.1.0+ a delegated token carrying no authorization_details is refused the refund-writer credential (issue #74)"
+elif [ -z "${uc3_reg_json}" ]; then
+    print_fail "UC3 mandatory RAR (optional_authorization_details)" \
+        "Could not read agent-registry/registration/display-name/uc3-actor at all, so the mandatory-RAR gate was NOT observed — this is not evidence it is armed. Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault read agent-registry/registration/display-name/uc3-actor"
+else
+    print_fail "UC3 mandatory RAR (optional_authorization_details)" \
+        "Registration 'uc3-actor' reports optional_authorization_details='${uc3_rar_mandatory:-<absent>}' (expected false). With it optional, a delegated token that reaches Vault with NO authorization_details is vended the refund-writer credential and Use Case 3's per-request scoping is not enforced. Fix: reapply vault_config (vault_agent_registration.uc3_actor sets optional_authorization_details = false)."
 fi
 
 uc3_ceiling=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
