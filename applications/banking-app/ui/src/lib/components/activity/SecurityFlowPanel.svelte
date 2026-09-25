@@ -8,9 +8,10 @@
 
     Story      the focus card and "What's happening" in plain English, with the standards the
                current stop uses as chips.
-    Technical  adds the sub-step marks on the line, every signal with its status (observed,
-               not observed in this flow, pending), and the Evidence list: every event of the
-               turn, each with its raw payload in full.
+    Technical  adds the sub-step marks on the line, the turn's Technical signals rows with their
+               status (observed, not observed in this flow, pending) — for a refund, the approved
+               mockup's rows — and the Evidence list: every event of the turn, each with its raw
+               payload in full.
     Demo pace  replays the turn from its first event, one event at a time, so a presenter can
                talk over each step. Nothing past the replay point is shown or claimed.
     Live       stops the replay and follows the turn as it streams.
@@ -114,10 +115,11 @@
 
 	let focus = $derived(flow?.stops.find((s) => s.id === flow?.focus));
 
-	// In a replay a signal the replay has not reached yet is left out rather than called pending.
-	// A flow that is really waiting (an open approval) still shows what it waits for.
+	// The Technical view's rows (for a refund, the approved mockup's rows). In a replay a row the
+	// replay has not reached yet is left out rather than called pending. A flow that is really
+	// waiting (an open approval) still shows what it waits for.
 	let signals = $derived(
-		(flow?.signals ?? []).filter((s) => !(replaying && s.status === 'pending' && s.tone !== 'waiting'))
+		(flow?.technical ?? []).filter((s) => !(replaying && s.status === 'pending' && s.tone !== 'waiting'))
 	);
 
 	let chips = $derived(

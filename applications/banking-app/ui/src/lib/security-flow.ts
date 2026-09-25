@@ -131,7 +131,14 @@ export interface Flow {
 	/** The stop the focus card describes. */
 	focus: StopId;
 	stops: Stop[];
+	/** Every signal of the turn. The stops' statuses are derived from these. */
 	signals: Signal[];
+	/**
+	 * The rows the Technical view lists under "Technical signals". For a refund turn these are
+	 * the approved mockup's rows, in its order (REFUND_TECHNICAL_ROWS); every other turn lists
+	 * all its signals.
+	 */
+	technical: Signal[];
 	evidence: EvidenceRow[];
 }
 
@@ -1170,6 +1177,13 @@ function story(f: Facts, id: StopId, state: StopState, signals: BuiltSignal[]): 
 const REQUEST_LABELS: Record<UseCase, string> = { 1: 'Ask', 2: 'Banking', 3: 'Refund' };
 
 /**
+ * The Technical view's rows for a refund turn: the approved mockup's rows, in its order
+ * (Security Flow · Technical view, complete). A row the turn does not produce is left out,
+ * so a refund waiting for approval lists only "Approval received".
+ */
+const REFUND_TECHNICAL_ROWS = ['approval', 'delegated-token', 'writer-cred', 'refund-row', 'audit-anchor', 'revoked', 'athena'];
+
+/**
  * The five stops, their signals and the evidence for one turn.
  *
  * `events` are the turn's events in the order they arrived. `context` carries what the page
@@ -1310,6 +1324,12 @@ export function buildFlow(useCase: UseCase, events: readonly AgentEvent[], conte
 		if (f.requestId) stop.ids.push({ label: 'request', value: f.requestId });
 	}
 
+	const shown: Signal[] = signals.map(({ id, stop, label, status, tone, note, evidence: ev }) => ({ id, stop, label, status, tone, note, evidence: ev }));
+	const technical =
+		useCase === 3 && refundTurn
+			? REFUND_TECHNICAL_ROWS.flatMap((row) => shown.filter((s) => s.id === row))
+			: shown;
+
 	return {
 		useCase,
 		requestLabel: REQUEST_LABELS[useCase],
@@ -1319,7 +1339,8 @@ export function buildFlow(useCase: UseCase, events: readonly AgentEvent[], conte
 		waiting,
 		focus: STOP_IDS[focusIndex],
 		stops,
-		signals: signals.map(({ id, stop, label, status, tone, note, evidence: ev }) => ({ id, stop, label, status, tone, note, evidence: ev })),
+		signals: shown,
+		technical,
 		evidence
 	};
 }
