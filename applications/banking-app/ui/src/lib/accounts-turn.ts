@@ -3,8 +3,8 @@
  * get_accounts: one chip per tool call, and a "Your accounts" card for each call that
  * returned rows, read from that turn's events ($lib/agent-events) and nothing else.
  *
- * Only a turn with a get_accounts call gets this view; every other banking turn keeps the
- * legacy layout (Bear, 2026-09-25, on #65).
+ * The cards of every other drawn tool, and the order all of them show in, are in
+ * $lib/answer-cards, which uses this module's card for get_accounts unchanged.
  *
  * The card's footer names the database credential the MCP server read the rows with: the
  * db_credentials event sent between the call's start and its result. Tools can run at the
