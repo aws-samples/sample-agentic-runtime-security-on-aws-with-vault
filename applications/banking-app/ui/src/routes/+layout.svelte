@@ -146,7 +146,11 @@
 		<span class="bar-mark" aria-hidden="true">OVI</span>
 		<span class="bar-name">OscarVault</span>
 		{#if signedIn}
-			<span class="bar-avatar" role="img" aria-label={displayName}>{initials}</span>
+			{#if persona}
+				<img class="bar-avatar avatar-photo" src={persona.avatar} alt={displayName} />
+			{:else}
+				<span class="bar-avatar" role="img" aria-label={displayName}>{initials}</span>
+			{/if}
 		{/if}
 	</header>
 
@@ -195,7 +199,12 @@
 		<div class="nav-me">
 			{#if signedIn}
 				<div class="me-row">
-					<span class="me-avatar" aria-hidden="true">{initials}</span>
+					<!-- The name is printed beside the photo, so the photo itself is decorative. -->
+					{#if persona}
+						<img class="me-avatar avatar-photo" src={persona.avatar} alt="" />
+					{:else}
+						<span class="me-avatar" aria-hidden="true">{initials}</span>
+					{/if}
 					<div class="me-text">
 						<p class="me-name">{displayName}</p>
 						{#if persona}
@@ -368,6 +377,12 @@
 	.me-avatar-anon {
 		background: var(--ovi-neutral-soft);
 		color: var(--ovi-text-secondary);
+	}
+
+	/* A persona's photo in the account row or the top bar: the avatar circle's size and
+	   shape, cropped to fill it the way About Me crops the same photo. */
+	.avatar-photo {
+		object-fit: cover;
 	}
 
 	.me-text {
