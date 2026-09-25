@@ -97,7 +97,7 @@ grep -q '^}' "${WORK}/gate.sh" \
     || fatal "extracted assert_oauth_aliases_current() is not closed — extraction is wrong"
 # Prove the extraction stopped where it should: neither body may drag in the
 # next function definition that follows it in the file.
-grep -qE '^(activate_oauth_resource_server|phase_ivia_verify|vault_exec)\(\) \{' "${WORK}/sweep.sh" \
+grep -qE '^(_workshop_oauth_expected_aliases|phase_ivia_verify|vault_exec)\(\) \{' "${WORK}/sweep.sh" \
     && fatal "the extracted sweep ran past its closing brace into the next function"
 grep -qE '^(phase_ivia_verify|vault_exec)\(\) \{' "${WORK}/gate.sh" \
     && fatal "the extracted gate ran past its closing brace into the next function"
