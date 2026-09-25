@@ -204,16 +204,14 @@
 
 <style>
 	/* The design's terminal palette, kept on the panel so it cannot leak into the light UI.
-	   Every text colour here measures at least 4.5:1 on --log-bg (#0f172a). The design's
-	   footer grey (#64748b, 3.75:1) is used only for the close icon, a non-text control
-	   that needs 3:1; the footer text uses --log-muted (6.96:1). */
+	   --log-faint is the design's #64748b: the close icon, the idle dot and the footer text. */
 	.agent-log {
 		--log-bg: #0f172a;
 		--log-line: #334155;
 		--log-title: #cbd5e1;
 		--log-text: #e2e8f0;
 		--log-muted: #94a3b8;
-		--log-icon: #64748b;
+		--log-faint: #64748b;
 		--log-step: #38bdf8;
 		--log-out-glyph: #fbbf24;
 		--log-label: #fb7185;
@@ -256,7 +254,7 @@
 	}
 
 	.live-dot-idle {
-		background: var(--log-icon);
+		background: var(--log-faint);
 	}
 
 	.log-close {
@@ -264,7 +262,7 @@
 		padding: 0;
 		border: 0;
 		background: none;
-		color: var(--log-icon);
+		color: var(--log-faint);
 		cursor: pointer;
 	}
 
@@ -405,7 +403,7 @@
 		padding: 12px 20px;
 		border-top: 1px solid var(--log-line);
 		font: 12px var(--ovi-font-mono);
-		color: var(--log-muted);
+		color: var(--log-faint);
 	}
 
 	.log-footer i {
