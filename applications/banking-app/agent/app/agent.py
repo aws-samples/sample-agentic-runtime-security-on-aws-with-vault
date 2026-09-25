@@ -23,9 +23,11 @@ import contextvars
 import json
 import logging
 import os
+import re
 
 import httpx
-from strands import Agent, tool
+from strands import Agent, ToolContext, tool
+from strands.hooks import AfterToolsEvent, HookProvider, HookRegistry
 from strands.models import BedrockModel
 
 from . import activity
@@ -132,8 +134,8 @@ def get_accounts() -> list[dict]:
     return []
 
 
-@tool
-def get_transactions(account_id: str = "") -> list[dict]:
+@tool(context=True)
+def get_transactions(tool_context: ToolContext, account_id: str = "") -> list[dict]:
     """Retrieve recent transactions for the authenticated user.
 
     Calls the MCP server with the user's JWT. Optionally filters to
@@ -186,9 +188,109 @@ def get_transactions(account_id: str = "") -> list[dict]:
                 "account_filter": account_id or "all",
             },
         )
+        _record_transactions(tool_context, transactions, account_filtered=bool(account_id))
         return transactions
 
     return []
+
+
+# ---------------------------------------------------------------------------
+# The line under the transactions card, written by code
+#
+# The chat shows get_transactions' rows as a card. The line under it is built
+# here from the rows the tool returned in this turn, so the model can neither
+# repeat the rows nor state a count or date the tool did not return: after a
+# batch of exactly one successful get_transactions call the model is not called
+# again (AfterToolsEvent.end_turn).
+# ---------------------------------------------------------------------------
+
+# invocation_state key: toolUseId -> what that get_transactions call returned.
+_TRANSACTIONS_SEEN = "uc2_transactions_seen"
+
+_MONTHS = (
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+)
+_DATE = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
+
+
+def _utc_date(created_at) -> str | None:
+    """The date part of created_at ("2026-09-25T12:48:43.836Z" -> "2026-09-25"), as the card shows it."""
+    match = _DATE.match(created_at) if isinstance(created_at, str) else None
+    if match is None or not 1 <= int(match.group(2)) <= 12:
+        return None
+    return match.group(0)
+
+
+def _record_transactions(tool_context: ToolContext, transactions: list, account_filtered: bool) -> None:
+    """Record, for this call only, how many rows came back and their first and last date."""
+    dates = [_utc_date(row.get("created_at")) if isinstance(row, dict) else None for row in transactions]
+    known = all(dates) and bool(dates)
+    tool_context.invocation_state.setdefault(_TRANSACTIONS_SEEN, {})[tool_context.tool_use["toolUseId"]] = {
+        "count": len(transactions),
+        "first_date": min(dates) if known else None,
+        "last_date": max(dates) if known else None,
+        "account_filtered": account_filtered,
+    }
+
+
+def _long_date(iso_date: str, with_year: bool = True) -> str:
+    year, month, day = iso_date.split("-")
+    text = f"{_MONTHS[int(month) - 1]} {int(day)}"
+    return f"{text}, {year}" if with_year else text
+
+
+def _date_range(first: str, last: str) -> str:
+    """The dates as text: "September 25, 2026", "September 20 to September 25, 2026", or both years."""
+    if first == last:
+        return _long_date(first)
+    if first[:4] == last[:4]:
+        return f"{_long_date(first, with_year=False)} to {_long_date(last)}"
+    return f"{_long_date(first)} to {_long_date(last)}"
+
+
+def transactions_reply(seen: dict) -> str:
+    """The line under the transactions card, from one get_transactions call's record."""
+    count = seen["count"]
+    where = " on that account" if seen.get("account_filtered") else ""
+    if count == 0:
+        return f"You have no recent transactions{where}."
+    text = f"Here is your 1 recent transaction{where}" if count == 1 else f"Here are your {count} recent transactions{where}"
+    if seen.get("first_date") and seen.get("last_date"):
+        text += " from " + _date_range(seen["first_date"], seen["last_date"])
+    return text + "."
+
+
+class TransactionsReply(HookProvider):
+    """Ends the turn with transactions_reply() after a batch of exactly one successful get_transactions.
+
+    Any other batch — get_accounts, get_accounts and get_transactions together,
+    or an error — is left to the model. A failure here is logged without any
+    value and the model writes the reply: Strands raises a hook's exception into
+    the turn, and this must never break one.
+    """
+
+    def register_hooks(self, registry: HookRegistry, **kwargs) -> None:
+        registry.add_callback(AfterToolsEvent, self._after_tools)
+
+    @staticmethod
+    def _after_tools(event: AfterToolsEvent) -> None:
+        try:
+            results = [
+                block["toolResult"]
+                for block in event.message.get("content", [])
+                if isinstance(block, dict) and isinstance(block.get("toolResult"), dict)
+            ]
+            if len(results) != 1 or results[0].get("status") != "success":
+                return
+            # Only get_transactions records here, and only when it returns its rows.
+            seen = event.invocation_state.get(_TRANSACTIONS_SEEN, {}).get(results[0].get("toolUseId"))
+            if seen is None:
+                return
+            event.end_turn = transactions_reply(seen)
+            logger.info("uc2_reply_by_code", extra={"reply": "transactions", "transaction_count": seen["count"]})
+        except Exception as exc:  # noqa: BLE001 — the model writes the reply instead
+            logger.warning("uc2_reply_hook_failed", extra={"hook": "after_tools", "error_type": type(exc).__name__})
 
 
 def build_uc2_model(vault_client=None) -> BedrockModel:
@@ -261,10 +363,8 @@ def build_uc2_agent(model: BedrockModel) -> Agent:
         "\n"
         "RESPONSE STYLE:\n"
         "- Present financial data clearly (format amounts with currency symbol).\n"
-        "- The chat already shows get_transactions results to the user as a table. Do NOT list "
-        "the transactions again in your answer: reply in one or two sentences (for example how "
-        "many transactions there are and their date range), and answer any specific question "
-        "the user asked about them.\n"
+        "- Never state an amount, count, date or transaction that a tool did not return in this "
+        "turn. To answer anything about accounts or transactions, call the tool first.\n"
         "- Do NOT include JWT tokens, Vault lease IDs, or credential metadata in your response.\n"
         "- If a tool call fails, explain what the user can check (session validity, account access).\n"
         "- This is a read-only banking app — if asked to transfer funds or modify data, "
@@ -273,11 +373,12 @@ def build_uc2_agent(model: BedrockModel) -> Agent:
 
     # ActivityHooks reports each tool call and follow-up model call into the
     # current turn's event queue (activity._TURN_ACTIVITY), never into a shared one.
+    # TransactionsReply writes the line under the transactions card (see above).
     agent = Agent(
         model=model,
         tools=[get_accounts, get_transactions],
         system_prompt=system_prompt,
-        hooks=[activity.ActivityHooks()],
+        hooks=[activity.ActivityHooks(), TransactionsReply()],
     )
 
     logger.info(
