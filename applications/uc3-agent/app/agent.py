@@ -188,9 +188,10 @@ _OWNER_CHECK_REFUSED_CONSEQUENCE = {
 # The model proposes a transaction and an amount; nothing it says is trusted as a
 # figure. initiate_refund reads the charge itself and refuses before any approval
 # is requested unless the transaction is a debit on the signed-in user's account,
-# on the account named, and the amount is more than zero and at most the charge
-# minus what is already refunded. The approval then carries the database's
-# merchant, charge and amount. complete_refund re-checks the remaining amount
+# on the account named, the currency asked for is the account's currency, and the
+# amount is more than zero and at most the charge minus what is already refunded.
+# The approval then carries the database's merchant, charge, amount and currency.
+# complete_refund re-checks the remaining amount
 # inside its write transaction, serialised per transaction, so two approvals for
 # one charge can never together refund more than the charge.
 #
@@ -242,6 +243,7 @@ def _check_refund_terms(
     account_id: str,
     transaction_id: str,
     amount,
+    currency,
     authenticated_sub: str,
     request_id: str,
 ) -> dict:
@@ -306,12 +308,26 @@ def _check_refund_terms(
         )
 
     merchant = row["merchant"] or row["description"] or "unnamed"
+    requested_currency = str(currency or "").strip().upper()
     currency = row["currency"]
     if uuid.UUID(row["account_id"]) != uuid.UUID(str(account_id)):
         _refuse_terms(
             "account_mismatch",
             f"the {merchant} charge is on account {row['account_id']}, not on {account_id}.",
             request_id,
+            **log_fields,
+        )
+    # A refund is paid in the account's own currency. A request in any other
+    # currency is refused, not re-labelled, so an approval never names a
+    # different currency from the one the user asked for.
+    if requested_currency != currency:
+        _refuse_terms(
+            "currency_mismatch",
+            f"the refund was asked for in {requested_currency or 'no currency'}, but account "
+            f"{row['account_id']} holds {currency}. A refund is paid in the account's currency.",
+            request_id,
+            requested_currency=requested_currency,
+            account_currency=currency,
             **log_fields,
         )
     if row["transaction_type"] != "debit":
@@ -831,17 +847,17 @@ def initiate_refund(
     Nothing the model passes is trusted as a figure (issue #73). Before any
     approval is requested the transaction is read from the database and the
     refund is refused, with a plain reason, unless the transaction is a debit on
-    the signed-in user's account, on the account named, and the amount is more
-    than zero and at most the charge minus what is already refunded. The
-    approval then carries the database's merchant, charge, amount and the
-    account's currency.
+    the signed-in user's account, on the account named, the currency is the
+    account's own currency, and the amount is more than zero and at most the
+    charge minus what is already refunded. The approval then carries the
+    database's merchant, charge, amount and currency.
 
     Args:
         account_id: Account to credit the refund to.
         transaction_id: Original transaction being refunded.
         amount: Refund amount (positive, whole cents).
-        currency: ISO 4217 currency code (e.g. "USD"). The approval uses the
-            account's own currency from the database.
+        currency: ISO 4217 currency code (e.g. "USD"). Must be the account's
+            own currency; any other is refused.
 
     Returns:
         Dict with auth_req_id, request_id, and consent status.
@@ -856,7 +872,7 @@ def initiate_refund(
     # The owner check and the charge check, on one read-only credential. Either
     # refusal raises here, before IVIA or the phone hears anything.
     checked = _check_refund_terms(
-        account_id, transaction_id, amount, authenticated_sub, request_id
+        account_id, transaction_id, amount, currency, authenticated_sub, request_id
     )
     # From here on every figure is the database's, never the model's.
     account_id = checked["account_id"]
