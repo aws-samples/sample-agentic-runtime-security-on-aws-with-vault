@@ -454,11 +454,12 @@
 		line-height: normal;
 	}
 
-	/* Wide screens: while the persona menu is open, the navigation (and the menu inside it)
-	   sits over the page's own layers (at most 5) and under a floating panel's scrim (20).
-	   The drawer already sits at 20. */
+	/* Wide screens, full or rail: while the persona menu is open, the navigation (and the menu
+	   inside it) sits over the page's own layers (at most 5) and under a floating panel's scrim
+	   (20). The rail's own z-index (2) would otherwise win. The drawer already sits at 20. */
 	@media not all and (max-width: 960px) {
-		.shell-nav.persona-open {
+		.shell-nav.persona-open,
+		:global(html[data-ovi-nav='collapsed']) .shell-nav.persona-open {
 			z-index: 10;
 		}
 	}
