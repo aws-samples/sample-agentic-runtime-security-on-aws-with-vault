@@ -776,6 +776,12 @@ function classify(e: AgentEvent, useCase: UseCase, refundTurn: boolean): { kind:
 			return { kind: `credential.${e.kind}`, status: 'issued', line: e.label, stop: credentialStop(e, useCase, refundTurn) };
 		case 'agent:narration':
 			return classifyLine(e.text, e.accent === 'tool_output', useCase);
+		default: {
+			// A type outside the contract (a newer agent, or a legacy frame passed in by mistake) is
+			// listed as evidence and proves nothing, instead of stopping the whole panel.
+			const type = String((e as unknown as { type?: unknown }).type);
+			return { kind: 'unknown', status: 'unknown', line: `An event this page does not recognise (${type}).`, stop: 'agent' };
+		}
 	}
 }
 
@@ -798,6 +804,9 @@ function credentialStop(e: AgentCredentialEvent, useCase: UseCase, refundTurn: b
 		case 'db_credentials':
 			// In a refund turn the refund agent's read-only credential runs the account owner check.
 			return useCase === 3 && refundTurn && e.vaultPath !== UC3_WRITER_PATH ? 'authorization' : 'execution';
+		default:
+			// A kind outside the contract is still listed, under the agent.
+			return 'agent';
 	}
 }
 
