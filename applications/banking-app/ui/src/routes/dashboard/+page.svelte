@@ -53,6 +53,8 @@
 	// The systems the current chat uses: the refund chat (Use Case 3) writes to Postgres
 	// itself; the banking chat (Use Case 2) reaches it through the MCP server.
 	const systems = $derived(chatEndpoint === '/api/uc3-chat' ? 'IVIA · Vault · Postgres' : 'IVIA · Vault · MCP');
+	// The chat header names the agent answering: the refund chat's is the Refund Agent.
+	const title = $derived(chatEndpoint === '/api/uc3-chat' ? 'Refund Agent' : 'Banking Agent');
 
 	function toggleLog() {
 		openPanel = openPanel === 'log' ? null : 'log';
@@ -204,7 +206,7 @@
 {/snippet}
 
 <ChatWorkspace
-	title="Banking Agent"
+	{title}
 	{subtitle}
 	statusLabel="Identity-bound"
 	agentLogOpen={openPanel === 'log'}
