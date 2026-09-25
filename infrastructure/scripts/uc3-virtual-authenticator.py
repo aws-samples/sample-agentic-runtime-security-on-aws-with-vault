@@ -384,6 +384,20 @@ def chat(message, session_id, id_token, timeout):
     return resp.status_code, one_line(" ".join(legacy)), tools
 
 
+def reply_text(frames):
+    """The agent's own words in a turn's legacy frames (chat()'s text): its delta
+    contents joined. Falls back to the frames when none parse."""
+    words = []
+    for frame in re.findall(r"data: (\{.*?\})(?= data: |$)", frames):
+        try:
+            event = json.loads(frame)
+        except ValueError:
+            continue
+        if event.get("type") == "delta":
+            words.append(event.get("content", ""))
+    return " ".join("".join(words).split()) or frames
+
+
 def wait_for_new_pending(device, wrp, bearer, before, timeout):
     """Pending MMFA transactions that were not pending before, after `timeout` seconds."""
     deadline = time.time() + timeout
@@ -467,20 +481,30 @@ def run(wrp, user, password, agent_client, client_secret, redirect_uri, op_url,
 
         # --- Turn 2: pick one and authorize it; the agent fires the MMFA push ----
         emit("REFUND_ASKED", f"{refund_amount} of the {merchant} charge")
-        status, body, _ = chat(f"Refund ${refund_amount} of the {merchant} charge", session_id, id_token, 180)
+        status, body, tools = chat(f"Refund ${refund_amount} of the {merchant} charge", session_id, id_token, 180)
         emit("CHAT2_STATUS", status)
         emit("CHAT2", body)
+        # An initiate_refund that errors sends no push. Keep the reply from that turn:
+        # the agent relays why (a refused refund, or a failed approval request).
+        failed_reply = body if any(t.startswith("initiate_refund:error:") for t in tools) else ""
 
         txn, pending_count = wait_for_pending(device, wrp, bearer, 25)
         if txn is None:
             # The agent usually confirms before initiating — confirm, then wait again.
-            status, body, _ = chat(
+            status, body, tools = chat(
                 "Yes, send it now — I authorize this refund.", session_id, id_token, 180
             )
             emit("CHAT2B_STATUS", status)
             emit("CHAT2B", body)
+            if any(t.startswith("initiate_refund:error:") for t in tools):
+                failed_reply = body
             txn, pending_count = wait_for_pending(device, wrp, bearer, 90)
         if txn is None:
+            if failed_reply:
+                die(
+                    f"the agent's initiate_refund call for {refund_amount} of the {merchant} charge failed "
+                    f"before any approval was pushed — the agent replied: {reply_text(failed_reply)}"
+                )
             die("the agent never fired an MMFA push — no pending transaction appeared (initiate_refund not reached)")
         emit("PENDING_COUNT", pending_count)
         emit("TXN_ID", txn["transactionId"])

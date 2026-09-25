@@ -1223,8 +1223,8 @@ if [ "${NOPHONE_MODE}" = true ]; then
     if [ -n "${np_txn}" ]; then
         print_pass "Check N3: the agent fired a real MMFA push at initiate_refund (transaction ${np_txn}) — this is the approval an attendee would see on their phone"
     else
-        print_fail "Check N3: no MMFA transaction appeared — the agent never reached initiate_refund" \
-            "Detail: ${np_err:-see ${np_log}}. The refund turn is: '$(_np CHAT2)'. Check: kubectl logs deployment/uc3-agent -n ${BANKING_NAMESPACE} | grep ciba"
+        print_fail "Check N3: no MMFA transaction appeared — the agent sent no approval push" \
+            "Detail: ${np_err:-see ${np_log}}. The refund turn is: '$(_np CHAT2)'. A refund_terms_refused line means the agent refused the refund before any approval, and its reason_code says why (exceeds_refundable: the charge has less left to refund than the run asks for). Check: kubectl logs deployment/uc3-agent -n ${BANKING_NAMESPACE} | grep -E 'refund_terms_refused|ciba'"
     fi
 
     #---------------------------------------------------------------------------
