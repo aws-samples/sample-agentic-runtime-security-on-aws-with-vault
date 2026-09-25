@@ -1418,9 +1418,12 @@ if [ "${NOPHONE_MODE}" = true ]; then
     # refundable, so the agent must refuse it (issue #73). The proof is the agent's
     # own record, request by request: every initiate_refund call in that turn
     # failed, each one's request_id has a refund_terms_refused line with
-    # reason_code exceeds_refundable and no ciba_mobile_push_sent line, and no new
-    # approval reached the device. No push on its own proves nothing — the model
-    # may never have called the tool — so a turn with no initiate_refund FAILS.
+    # reason_code exceeds_refundable for exactly the whole charge, and no
+    # ciba_mobile_push_sent line, and no new approval reached the device. No push
+    # on its own proves nothing — the model may never have called the tool — so a
+    # turn with no initiate_refund FAILS. A refusal of any other amount FAILS too:
+    # an amount above the whole charge is refused whether or not this run's refund
+    # counted, so only the whole charge proves that what is already refunded counts.
     #---------------------------------------------------------------------------
     np_neg_skipped=$(_np NEG_SKIPPED)
     np_neg_initiate=$(_np NEG_INITIATE)
@@ -1436,8 +1439,19 @@ if [ "${NOPHONE_MODE}" = true ]; then
     else
         np_agent_log="${TMPDIR:-/tmp}/verify-uc3-agent-log-$$.log"
         kubectl logs -n "${BANKING_NAMESPACE}" "${np_pod}" --tail=-1 >"${np_agent_log}" 2>/dev/null
-        np_neg_verdict=$(python3 - "${np_agent_log}" "${np_neg_initiate}" <<'PYEOF'
+        np_neg_verdict=$(python3 - "${np_agent_log}" "${np_neg_initiate}" "${np_charge_amount}" <<'PYEOF'
 import json, sys
+from decimal import Decimal, InvalidOperation
+
+
+def money(value):
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+
+
+asked = money(sys.argv[3])
 refused, pushed = {}, set()
 with open(sys.argv[1]) as log:
     for line in log:
@@ -1448,24 +1462,27 @@ with open(sys.argv[1]) as log:
         if not isinstance(rec, dict):
             continue
         if rec.get("event") == "refund_terms_refused":
-            refused[rec.get("request_id")] = rec.get("reason_code")
+            refused[rec.get("request_id")] = (rec.get("reason_code"), rec.get("requested_amount"))
         elif rec.get("event") == "ciba_mobile_push_sent":
             pushed.add(rec.get("request_id"))
 bad, ok = [], []
 for call in [c for c in sys.argv[2].split(",") if c]:
     name, status, rid = (call.split(":") + ["", "", ""])[:3]
+    reason, requested = refused.get(rid, (None, None))
     if status != "error":
         bad.append(f"initiate_refund {status} for request_id {rid}")
     elif rid in pushed:
         bad.append(f"a push was sent for request_id {rid}")
-    elif refused.get(rid) != "exceeds_refundable":
-        bad.append(f"request_id {rid} logged refusal reason {refused.get(rid) or 'none'}")
+    elif reason != "exceeds_refundable":
+        bad.append(f"request_id {rid} logged refusal reason {reason or 'none'}")
+    elif asked is None or money(requested) != asked:
+        bad.append(f"request_id {rid} was refused for {requested or 'no amount'}, not the whole charge {sys.argv[3]}")
     else:
         ok.append(rid)
 if bad:
     print("NOT_REFUSED " + "; ".join(bad))
 else:
-    print("REFUSED request_id " + ", ".join(ok) + " logged refund_terms_refused (exceeds_refundable) and no push")
+    print("REFUSED request_id " + ", ".join(ok) + f" logged refund_terms_refused (exceeds_refundable) for {sys.argv[3]} and no push")
 PYEOF
 )
         rm -f "${np_agent_log}"
