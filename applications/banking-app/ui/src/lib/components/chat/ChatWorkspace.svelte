@@ -20,7 +20,11 @@
         {#if openPanel === 'log'}<AgentLogPanel id="agent-log" turns={log.turns} systems="..." onclose={...} />{/if}
       {/snippet}
 
-    The panel component sets its own width and landmark (<aside aria-label="...">).
+    The panel component sets its own landmark (<aside aria-label="...">) and takes its width
+    from --ovi-panel-width, which this workspace sets: 420px, or 520px while the left
+    navigation is collapsed to its rail on a wide screen (the rail frees 208px; the panel
+    takes 100 of them and the chat the rest). A new panel reads it the same way:
+    width: var(--ovi-panel-width, 420px).
 -->
 <script module lang="ts">
 	export interface Suggestion {
@@ -215,11 +219,20 @@
 	/* Carbon's body type sets 0.16px tracking; the design sets chat text in the font's normal
 	   letter spacing. Text that sets its own tracking (the uppercase pills) keeps it. */
 	.workspace {
+		--ovi-panel-width: 420px;
 		display: flex;
 		height: 100vh;
 		height: 100dvh;
 		min-height: 0;
 		letter-spacing: normal;
+	}
+
+	/* The left navigation is the 72px rail ($lib/nav-rail, +layout.svelte): the panel widens.
+	   Wide screens only, the exact complement of the narrow query below. */
+	@media not all and (max-width: 960px) {
+		:global(html[data-ovi-nav='collapsed']) .workspace {
+			--ovi-panel-width: 520px;
+		}
 	}
 
 	.chat {

@@ -15,8 +15,10 @@
   `id` must match the Agent log button's aria-controls: closing the panel (the X or Escape)
   returns focus to that button. `systems` is the footer's list of the systems the chat uses.
 
-  Wider than 960px the panel sits beside the chat, 420px wide. At 960px and narrower it
-  covers the chat from the right, under the top bar, and the navigation drawer opens over it.
+  Wider than 960px the panel sits beside the chat, 420px wide, or 520px while the left
+  navigation is collapsed to its rail (ChatWorkspace sets --ovi-panel-width). At 960px and
+  narrower it covers the chat from the right, under the top bar, and the navigation drawer
+  opens over it.
 -->
 <script lang="ts">
 	import { tick, untrack } from 'svelte';
@@ -222,7 +224,7 @@
 		--log-key: #67e8f9;
 		--log-live: #34d399;
 
-		width: 420px;
+		width: var(--ovi-panel-width, 420px);
 		flex-shrink: 0;
 		min-height: 0;
 		display: flex;
