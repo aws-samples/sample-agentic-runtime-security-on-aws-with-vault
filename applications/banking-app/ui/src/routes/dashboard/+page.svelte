@@ -10,6 +10,10 @@
   Authorization: Bearer. The agent never stores tokens — each request is
   independently authenticated.
 
+  Every agent event of each turn is kept per turn ($lib/turn-events.svelte) and
+  printed by the Agent Log; the chat bubbles still come from the legacy frames
+  only, so an agent event never becomes a bubble.
+
   Test users: Oscar and Jaime
 -->
 <script lang="ts">
@@ -24,6 +28,9 @@
 	import AgentTurn from '$lib/components/chat/AgentTurn.svelte';
 	import ToolChip from '$lib/components/chat/ToolChip.svelte';
 	import AnswerCard from '$lib/components/chat/AnswerCard.svelte';
+	import AgentLogPanel from '$lib/components/activity/AgentLogPanel.svelte';
+	import { countEntries } from '$lib/agent-log';
+	import { createTurnLog } from '$lib/turn-events.svelte';
 
 	let { data }: { data: PageData } = $props();
 
@@ -37,6 +44,19 @@
 	let sessionId = $state(`session-${Date.now()}`);
 
 	let chatEndpoint = $state('/api/chat');
+
+	// Every agent event of each turn, for the Agent Log.
+	const log = createTurnLog();
+	/** Which right-hand panel is open. Shared convention with the other chat pages. */
+	let openPanel = $state<'log' | 'flow' | null>(null);
+	const entryCount = $derived(countEntries(log.turns));
+	// The systems the current chat uses: the refund chat (Use Case 3) writes to Postgres
+	// itself; the banking chat (Use Case 2) reaches it through the MCP server.
+	const systems = $derived(chatEndpoint === '/api/uc3-chat' ? 'IVIA · Vault · Postgres' : 'IVIA · Vault · MCP');
+
+	function toggleLog() {
+		openPanel = openPanel === 'log' ? null : 'log';
+	}
 	let pendingConsent: { auth_req_id: string; request_id: string; user_code: string; details: string; consent_url: string } | null = $state(null);
 
 	// Auto-scroll the message list to the newest message. The effect re-runs
@@ -140,6 +160,7 @@
 
 		messages = [...messages, { role: 'user', content: userMsg }];
 		isLoading = true;
+		const turn = log.begin(userMsg);
 
 		await sendChatMessage(
 			userMsg,
@@ -164,8 +185,10 @@
 				messages = [...messages, { role: 'error', content: `Error: ${err}` }];
 				isLoading = false;
 			},
-			endpoint
+			endpoint,
+			(event) => log.push(event, turn)
 		);
+		log.end(turn);
 	}
 </script>
 
@@ -184,6 +207,11 @@
 	title="Banking Agent"
 	{subtitle}
 	statusLabel="Identity-bound"
+	agentLogOpen={openPanel === 'log'}
+	agentLogCount={entryCount}
+	agentLogControls="agent-log"
+	onAgentLogToggle={toggleLog}
+	securityFlowOpen={openPanel === 'flow'}
 	bind:messagesEl
 	{suggestions}
 	bind:value={inputMessage}
@@ -199,6 +227,12 @@
 			<rect x="3" y="4" width="14" height="10" rx="2"></rect>
 			<path d="M7 17h6M10 14v3"></path>
 		</svg>
+	{/snippet}
+
+	{#snippet panel()}
+		{#if openPanel === 'log'}
+			<AgentLogPanel id="agent-log" turns={log.turns} {systems} onclose={() => (openPanel = null)} />
+		{/if}
 	{/snippet}
 
 	{#if messages.length === 0}

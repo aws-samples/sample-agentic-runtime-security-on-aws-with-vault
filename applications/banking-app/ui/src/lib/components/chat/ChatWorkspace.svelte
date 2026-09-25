@@ -17,7 +17,7 @@
     page decides which panel is open and renders it here, for example:
 
       {#snippet panel()}
-        {#if agentLogOpen}<AgentLogPanel id="agent-log" entries={...} onclose={...} />{/if}
+        {#if openPanel === 'log'}<AgentLogPanel id="agent-log" turns={log.turns} systems="..." onclose={...} />{/if}
       {/snippet}
 
     The panel component sets its own width and landmark (<aside aria-label="...">).
