@@ -423,12 +423,21 @@ _run_subscript() {
     return 0
 }
 
+# Waits for a Vault port-forward to pass traffic. standbyok/perfstandbyok are
+# NOT optional: `kubectl port-forward svc/vault` binds whichever endpoint the
+# service picks, and a standby's bare /v1/sys/health answers 429 (standby) or
+# 473 (performance standby) — which `curl -sf` treats as a failure. Without
+# them this probe only passes when the service happens to pick the active node,
+# so any leadership move (a pod restart, a node recycle) made the tier-2 exit
+# gate fail and blame the tunnel. Same reasoning, same fix as
+# vault-configure.sh's connectivity probe. Reads still return current data: a
+# standby answered the gate's own issuer_id read with the active node's value.
 _wait_for_port() {
     local port="$1"
     local timeout="${2:-30}"
     local elapsed=0
     while [[ $elapsed -lt $timeout ]]; do
-        if curl -sf "http://localhost:${port}/v1/sys/health" >/dev/null 2>&1; then
+        if curl -sf "http://localhost:${port}/v1/sys/health?standbyok=true&perfstandbyok=true" >/dev/null 2>&1; then
             return 0
         fi
         sleep 2
@@ -1737,7 +1746,7 @@ _tier2_exit_gate() {
         kill "$VAULT_PF_PID" 2>/dev/null || true
         VAULT_PF_PID=""
         _die "Gate: Tier-2 exit contract" \
-            "Could not port-forward to Vault on :8200. Check: kubectl --context workshop get pods -n vault"
+            "Vault did not answer /v1/sys/health on :8200 within 30s (standby answers accepted). Check the pods are Running and unsealed: kubectl --context workshop get pods -n vault && kubectl --context workshop exec -n vault vault-0 -- vault status"
     fi
 
     # Same endpoint vault-configure.sh verifies against (reference contract).
