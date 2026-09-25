@@ -91,7 +91,7 @@ Body: `{"query": "<question>"}`. The `Accept` header picks the reply format.
 | `tool_planning` (legacy) | "Processing your request..." — always first |
 | `agent:thinking` | the agent starts reasoning |
 | `agent:narration` | no user is signed in; the agent either signs in to Vault as itself (Kubernetes auth, with the service account and Vault role Vault reports) or reuses its current login; then it reuses (or refreshes) its AWS keys for calling the model |
-| `tool_call` | each tool call, `in_progress` then `success` or `error`, with `args`, `result` and `durationMs`. A `retrieve_from_knowledge_base` result carries `sources`: `document` (S3 URI), `score`, `text`. A `query_database` result carries `row_count` and up to 50 `rows` when the rows are JSON; rows with values JSON cannot hold (dates, decimals) arrive as text in `output` |
+| `tool_call` | each tool call, `in_progress` then `success` or `error`, with `args`, `result` and `durationMs`. A `retrieve_from_knowledge_base` result carries `sources`: `document` (S3 URI), `score`, `text`. A `query_database` result carries `row_count` (every row) and the first `rows`, up to 50 and up to 256 KiB of JSON, so the frame stays under the UI filter's 1 MiB limit, when the rows are JSON; rows with values JSON cannot hold (dates, decimals) arrive as text in `output` |
 | `agent:narration` | during a tool call: Vault issued short-lived AWS credentials for the Knowledge Base (`aws/sts/bedrock-reader`, TTL), or a database credential (`database/creds/uc1-readonly`, lease id, TTL); at any point: Vault issued fresh keys for calling the model |
 | `agent:credential` | each credential the turn used, in full (see below) |
 | `agent:audit_seed` | `requestId`, `vaultRole`, `leases` — the same leases as the JSON reply |
