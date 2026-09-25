@@ -136,10 +136,6 @@ When the lease expires the PostgreSQL role is dropped. Reusing the credentials a
 The `vault_config` Terraform module configures the OAuth resource server, the agent registration + ceiling, and the human/agent identity aliases (provider `hashicorp/vault >= 5.10.1`):
 
 ```hcl
-resource "vault_activation_flags" "oauth_resource_server" {
-  feature = "oauth-resource-server"
-}
-
 resource "vault_agent_registration" "uc3_actor" {
   entity_id                      = vault_identity_entity.uc3_actor.id
   display_name                   = "uc3-actor"

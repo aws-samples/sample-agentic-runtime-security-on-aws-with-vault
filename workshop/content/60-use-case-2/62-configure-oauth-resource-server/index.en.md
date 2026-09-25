@@ -229,11 +229,6 @@ There is no `vault write auth/jwt/login` in that sequence. Vault validated the O
 The native model is configured by the `vault_config` Terraform module using Vault Enterprise identity primitives (provider `hashicorp/vault >= 5.10.1`):
 
 ```hcl
-# Activate the Enterprise feature (idempotent)
-resource "vault_activation_flags" "oauth_resource_server" {
-  feature = "oauth-resource-server"
-}
-
 # One OAuth resource server profile — IVIA issuer + JWKS. user_claim = sub for all OAuth Use Cases.
 resource "vault_oauth_resource_server_config_profile" "ivia" {
   # issuer_id / jwks_url resolved from IVIA's OAuth provider
