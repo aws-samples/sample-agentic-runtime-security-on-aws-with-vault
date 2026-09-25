@@ -36,6 +36,7 @@ import psycopg2
 import psycopg2.extensions
 import psycopg2.extras
 from strands import Agent, ToolContext, tool
+from strands.hooks import AfterToolsEvent, HookProvider, HookRegistry
 from strands.models import BedrockModel
 from strands.session import FileSessionManager
 
@@ -1469,6 +1470,114 @@ def check_refund_status(refund_id: str) -> dict:
     return result
 
 
+# ---------------------------------------------------------------------------
+# Replies written by code, not by the model
+#
+# The chat shows list_transactions' rows as a card numbered 1, 2, 3... in the
+# order the tool returned them. Asking the model not to repeat the rows under
+# that card is not reliable, so after the first listing of a session no model
+# call is made: the reply is one fixed question.
+# ---------------------------------------------------------------------------
+
+# The reply after the first listing of a session.
+FIRST_LISTING_QUESTION = "Which transaction number do you want to refund?"
+
+
+def _tool_names(messages: list) -> dict:
+    """toolUseId -> tool name, from every toolUse block in messages."""
+    names = {}
+    for message in messages:
+        for block in message.get("content", []):
+            tool_use = block.get("toolUse") if isinstance(block, dict) else None
+            if isinstance(tool_use, dict):
+                names[tool_use.get("toolUseId")] = tool_use.get("name")
+    return names
+
+
+def _listing_rows(tool_result: dict) -> list | None:
+    """The rows of a successful list_transactions result, in the order returned, or None.
+
+    Read from the same text the card is drawn from (activity._tool_result_payload):
+    one JSON array of objects. Anything else is not a listing the card shows.
+    """
+    if tool_result.get("status") != "success":
+        return None
+    texts = [
+        block["text"]
+        for block in tool_result.get("content", [])
+        if isinstance(block, dict) and isinstance(block.get("text"), str)
+    ]
+    if len(texts) != 1:
+        return None
+    try:
+        rows = json.loads(texts[0])
+    except ValueError:
+        return None
+    if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+        return None
+    return rows
+
+
+def _latest_listing(messages: list) -> list | None:
+    """The rows of the most recent successful list_transactions result in messages, or None."""
+    names = _tool_names(messages)
+    latest = None
+    for message in messages:
+        if message.get("role") != "user":
+            continue
+        for block in message.get("content", []):
+            tool_result = block.get("toolResult") if isinstance(block, dict) else None
+            if isinstance(tool_result, dict) and names.get(tool_result.get("toolUseId")) == "list_transactions":
+                rows = _listing_rows(tool_result)
+                if rows is not None:
+                    latest = rows
+    return latest
+
+
+class RefundReplies(HookProvider):
+    """The refund chat's replies that code writes instead of the model.
+
+    After a session's first transaction list the turn ends with
+    FIRST_LISTING_QUESTION and the model is not called again. That fires only
+    when the tool batch is exactly one list_transactions result that succeeded
+    with at least one row, and no earlier successful list_transactions result
+    is in the session's history. Any other batch — an error, several tools, an
+    empty list, or a second listing (the no-phone driver's "Refund $X of the
+    {merchant} charge" turn may re-list) — is left to the model.
+
+    A failure in a callback is logged without any value and the model writes
+    the reply: Strands raises a hook's exception into the turn, and this must
+    never break one.
+    """
+
+    def register_hooks(self, registry: HookRegistry, **kwargs) -> None:
+        registry.add_callback(AfterToolsEvent, self._after_tools)
+
+    @staticmethod
+    def _after_tools(event: AfterToolsEvent) -> None:
+        try:
+            results = [
+                block["toolResult"]
+                for block in event.message.get("content", [])
+                if isinstance(block, dict) and isinstance(block.get("toolResult"), dict)
+            ]
+            if len(results) != 1:
+                return
+            # The assistant message that asked for this batch is already in the
+            # history; this batch's result is not yet.
+            history = event.agent.messages
+            if _tool_names(history).get(results[0].get("toolUseId")) != "list_transactions":
+                return
+            if not _listing_rows(results[0]):
+                return
+            if _latest_listing(history) is not None:
+                return
+            event.end_turn = FIRST_LISTING_QUESTION
+            logger.info("uc3_reply_by_code", extra={"reply": "first_listing_question"})
+        except Exception as exc:  # noqa: BLE001 — the model writes the reply instead
+            logger.warning("uc3_reply_hook_failed", extra={"hook": "after_tools", "error_type": type(exc).__name__})
+
+
 def build_uc3_agent(vault_client=None, session_id: str = "default") -> Agent:
     """Construct a fresh UC3 Strands Agent with new STS creds and session history.
 
@@ -1505,7 +1614,9 @@ def build_uc3_agent(vault_client=None, session_id: str = "default") -> Agent:
         "1. When the user asks for a refund, call the list_transactions tool.\n"
         "2. Do NOT list the transactions in your reply. The chat already shows them to the user\n"
         "   as a table numbered 1, 2, 3... in the exact order list_transactions returned them.\n"
-        "3. Reply with one sentence asking which transaction number they want to refund.\n"
+        "3. After the first list_transactions call of a conversation, the app itself asks the user\n"
+        "   which transaction number they want to refund. If you call list_transactions again\n"
+        "   later, do not list the transactions in your reply either; go on with the user's request.\n"
         "   Transaction number N is the Nth transaction in the list_transactions result, in the\n"
         "   order it was returned.\n"
         "4. When the user selects a number, confirm the transaction details and ask 'Shall I proceed?'\n"
@@ -1543,7 +1654,11 @@ def build_uc3_agent(vault_client=None, session_id: str = "default") -> Agent:
         session_manager=session_manager,
         # Reports every tool call's start and finish to this request's activity
         # stream (see activity.py); the tools add the steps inside each call.
-        hooks=[activity.ToolActivityHooks(refund_tools=frozenset({"initiate_refund", "complete_refund"}))],
+        # RefundReplies writes the replies code owns (see above).
+        hooks=[
+            activity.ToolActivityHooks(refund_tools=frozenset({"initiate_refund", "complete_refund"})),
+            RefundReplies(),
+        ],
     )
 
     logger.info(
