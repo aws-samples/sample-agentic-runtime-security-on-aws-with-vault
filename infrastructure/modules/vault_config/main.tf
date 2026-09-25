@@ -880,13 +880,15 @@ resource "vault_agent_registration" "uc3_actor" {
 # UC2/UC3 = OAuth-resource-server aliases (subject + actor). These carry an
 # `issuer` binding that the OAuth resource server REQUIRES (09-DISCOVERY: an alias
 # without it validates but then fails JWT auth — issuer is part of the anti-spoof
-# actor binding, threat T-09-05-01). The provider resource
+# actor binding, threat T-09-05-01). In the pinned provider (5.10.1, lock file)
 # vault_identity_entity_alias exposes ONLY name/mount_accessor/canonical_id — it
-# has NO `issuer` field (confirmed against the 5.10.1 schema + provider docs; no
-# later 5.x adds it). So the oauth aliases are written via vault_generic_endpoint
+# has NO `issuer` field. Provider 5.11.0 added `external_id` and `issuer`
+# (Enterprise-only, provider CHANGELOG #2994); the workshop does not take that
+# upgrade here. So the oauth aliases are written via vault_generic_endpoint
 # to identity/entity-alias, faithfully replaying the raw write the 09-DISCOVERY
 # probe confirmed on the live 2.0.3-ent binary (name=<claim value>, canonical_id,
-# mount_accessor, issuer). See 09-05-SUMMARY "Deviations".
+# mount_accessor, issuer); the re-check on 2.1.1-ent is pending. See 09-05-SUMMARY
+# "Deviations".
 #
 # mount_accessor is PROVIDED as the synthetic string oauth-resource-server_root_
 # <config_id> (09-DISCOVERY MOUNT_ACCESSOR_FORM; the config_id is this profile's
