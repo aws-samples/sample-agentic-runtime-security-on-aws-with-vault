@@ -1,13 +1,19 @@
 /**
  * answer-format.ts — the small part of Markdown a model answer uses, turned into plain data
- * that a component renders as text nodes: paragraphs, bulleted and numbered lists (nested by
- * indentation), and **bold**. Nothing here produces HTML, so nothing the model writes can
- * become an element: a "<b>" or "<img …>" in the answer stays the characters it is.
+ * that a component renders as text nodes: headings ("#", "##", "###" lines), paragraphs,
+ * bulleted and numbered lists (nested by indentation), and **bold**. Nothing here produces
+ * HTML, so nothing the model writes can become an element: a "<b>" or "<img …>" in the answer
+ * stays the characters it is.
  *
  * On top of the model's own bold, every account number (OVI-XXX-NNNNNN) and every dollar
  * amount ($ then digits, with optional thousands separators and cents) is bold, as the
  * approved board draws the answer. Text the model already bolded is left as it is, so
  * nothing is bolded twice. A "**" with no partner is dropped rather than shown.
+ *
+ * A heading is a line of one to six "#" followed by a space (or nothing), indented at most
+ * three spaces, as in CommonMark: its "#" marks, and any closing run of "#", are removed.
+ * "#hashtag" and "transaction #9" are not headings and stay text. A line of "#" alone is an
+ * empty heading and shows nothing.
  */
 
 export interface Piece {
@@ -38,9 +44,17 @@ export interface List {
 	items: ListItem[];
 }
 
-export type Block = Paragraph | List;
+export interface Heading {
+	kind: 'heading';
+	/** How many "#" marked it: 1 to 6. */
+	level: number;
+	line: Line;
+}
+
+export type Block = Heading | Paragraph | List;
 
 const ITEM = /^(\s*)([-*•]|\d{1,9}[.)])\s+(.*)$/;
+const HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*))?$/;
 /** Deeper by this many columns makes an item a child of the one above it. */
 const NEST = 2;
 const HIGHLIGHT = /OVI-[A-Z]{3}-\d{6}(?!\d)|\$\d+(?:,\d{3})*(?:\.\d{2})?/g;
@@ -98,6 +112,16 @@ export function formatAnswer(text: string): Block[] {
 		if (raw.trim() === '') {
 			paragraph = null;
 			blankBefore = true;
+			continue;
+		}
+		const heading = HEADING.exec(raw);
+		if (heading) {
+			// A heading ends the paragraph or list above it, and stands on its own.
+			paragraph = null;
+			open = [];
+			blankBefore = false;
+			const text = (heading[2] ?? '').replace(/(?:^|[ \t]+)#+[ \t]*$/, '').trim();
+			if (text !== '') blocks.push({ kind: 'heading', level: heading[1].length, line: formatLine(text) });
 			continue;
 		}
 		const item = ITEM.exec(raw);
