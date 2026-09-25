@@ -164,6 +164,8 @@ const UC1_NO_USER = 'No user is signed in.';
 const UC1_KB_KEYS_LABEL = 'Short-lived AWS keys Vault issued for reading the knowledge base';
 /** infrastructure/modules/uc1_agent/agent/app/agent.py:200 and :524 */
 const UC1_MODEL_KEYS_LABEL = 'Short-lived AWS keys Vault issued for calling the model';
+/** infrastructure/modules/uc1_agent/agent/app/agent.py:110 — the login was made on an earlier turn */
+const UC1_SA_REUSED = 'not presented again';
 
 /** applications/banking-app/agent/app/activity.py:532 (followed by "... as X-Vault-Token") */
 const UC2_X_VAULT_TOKEN = 'The MCP server reports it read';
@@ -372,6 +374,8 @@ function useCase1Signals(f: Facts): SignalSpec[] {
 	const dbRan = f.ran('query_database');
 	const kbRan = f.ran('retrieve_from_knowledge_base');
 	const db = f.creds('db_credentials', (e) => e.issuer === 'Vault');
+	const sa = f.creds('k8s_sa_token', (e) => e.issuer === 'Kubernetes');
+	const saReused = sa.some((s) => s.event.type === 'agent:credential' && s.event.label.includes(UC1_SA_REUSED));
 	const specs: SignalSpec[] = [
 		{
 			id: 'request-id',
@@ -394,8 +398,10 @@ function useCase1Signals(f: Facts): SignalSpec[] {
 		{
 			id: 'sa-token',
 			stop: 'authorization',
-			label: 'Kubernetes service-account token presented to Vault',
-			seen: f.creds('k8s_sa_token', (e) => e.issuer === 'Kubernetes'),
+			label: saReused
+				? "Vault login reused, made earlier with the agent's Kubernetes service-account token"
+				: 'Kubernetes service-account token presented to Vault',
+			seen: sa,
 			chips: ['Kubernetes auth']
 		},
 		{
@@ -988,7 +994,7 @@ function story(f: Facts, id: StopId, state: StopState, signals: BuiltSignal[]): 
 				if (state === 'active') {
 					return { ...base, title: 'Signing in to Vault', line: 'Kubernetes service account → Vault.', heading: 'The agent proves who it is.', body: 'Its Vault login has not been reported yet.' };
 				}
-				const reused = f.creds('k8s_sa_token').some((s) => s.event.type === 'agent:credential' && s.event.label.includes('reused'));
+				const reused = f.creds('k8s_sa_token').some((s) => s.event.type === 'agent:credential' && s.event.label.includes(UC1_SA_REUSED));
 				return {
 					...base,
 					title: 'Signed in to Vault as itself',
