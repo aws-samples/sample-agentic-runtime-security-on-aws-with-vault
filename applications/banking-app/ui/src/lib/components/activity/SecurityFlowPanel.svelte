@@ -1,0 +1,1037 @@
+<!--
+  SecurityFlowPanel — the Security Flow: one chat turn walked through five stops,
+  Request → Agent → Authorization → Secure execution → Result.
+
+  Everything on it comes from buildFlow() in $lib/security-flow, which reads only the events
+  the turn actually streamed. A stop or signal the stream never reported says "not observed in
+  this flow"; nothing is timed or scripted.
+
+    Story      the focus card and "What's happening" in plain English, with the standards the
+               current stop uses as chips.
+    Technical  adds the sub-step marks on the line, every signal with its status (observed,
+               not observed in this flow, pending), and the Evidence list: every event of the
+               turn, each with its raw payload in full.
+    Demo pace  replays the turn from its first event, one event at a time, so a presenter can
+               talk over each step. Nothing past the replay point is shown or claimed.
+    Live       stops the replay and follows the turn as it streams.
+
+  Props
+    id       the panel's element id (the header button's aria-controls).
+    useCase  1 Ask page, 2 Banking Agent, 3 Refund Agent.
+    turn     the turn to show; undefined before the first question.
+    onclose  closes the panel (the close button and Escape).
+
+  Width and landmark follow the ChatWorkspace panel contract: the panel is an <aside> beside the
+  chat column, 520px wide on a desktop and full width under the chat on screens 960px and
+  narrower.
+-->
+<script module lang="ts">
+	import type { AgentEvent } from '$lib/agent-events';
+
+	/**
+	 * One chat turn. Structurally the same as the Turn Task 10 exports from
+	 * $lib/turn-events.svelte; replace this with that import when it lands.
+	 * `answer` is optional and not part of that shape: the refund agent sends its answer only as
+	 * the legacy `delta` frame, so the page passes it here when it has it.
+	 */
+	export interface Turn {
+		id: string;
+		question: string;
+		startedAt: number;
+		requestId?: string;
+		events: AgentEvent[];
+		done: boolean;
+		answer?: string;
+	}
+</script>
+
+<script lang="ts">
+	import {
+		buildFlow,
+		chipsUpTo,
+		NOT_OBSERVED_TEXT,
+		STOP_IDS,
+		type EvidenceRow,
+		type Flow,
+		type Signal,
+		type Stop,
+		type UseCase
+	} from '$lib/security-flow';
+
+	interface Props {
+		id: string;
+		useCase: UseCase;
+		turn: Turn | undefined;
+		onclose: () => void;
+	}
+
+	let { id, useCase, turn, onclose }: Props = $props();
+
+	/** How long each event stays on screen before the next one appears in a Demo pace replay. */
+	const PACE_MS = 1200;
+
+	let mode = $state<'story' | 'technical'>('story');
+	let demoPace = $state(false);
+	/** Events shown so far in a Demo pace replay. */
+	let revealed = $state(0);
+	let evidenceOpen = $state(true);
+	let rawOpen = $state<Record<number, boolean>>({});
+	let replayTurnId: string | undefined;
+
+	// A new turn ends any replay of the previous one.
+	$effect(() => {
+		const current = turn?.id;
+		if (current !== replayTurnId) {
+			replayTurnId = current;
+			demoPace = false;
+			revealed = 0;
+			rawOpen = {};
+		}
+	});
+
+	// Demo pace: reveal the next event every PACE_MS. While the turn is still streaming the
+	// replay catches up with it and then waits for the next event.
+	$effect(() => {
+		if (!demoPace || !turn) return;
+		if (revealed >= turn.events.length) return;
+		const timer = setTimeout(() => (revealed += 1), PACE_MS);
+		return () => clearTimeout(timer);
+	});
+
+	let replaying = $derived(demoPace && !!turn && (revealed < turn.events.length || !turn.done));
+
+	let flow = $derived.by((): Flow | undefined => {
+		if (!turn) return undefined;
+		const events = demoPace ? turn.events.slice(0, revealed) : turn.events;
+		const done = demoPace ? turn.done && revealed >= turn.events.length : turn.done;
+		return buildFlow(useCase, events, {
+			question: turn.question,
+			startedAt: turn.startedAt,
+			done,
+			answer: done ? turn.answer : undefined
+		});
+	});
+
+	let focus = $derived(flow?.stops.find((s) => s.id === flow?.focus));
+
+	// In a replay a signal the replay has not reached yet is left out rather than called pending.
+	// A flow that is really waiting (an open approval) still shows what it waits for.
+	let signals = $derived(
+		(flow?.signals ?? []).filter((s) => !(replaying && s.status === 'pending' && s.tone !== 'waiting'))
+	);
+
+	let chips = $derived(
+		!flow || !focus ? [] : mode === 'technical' ? chipsUpTo(flow, focus.id) : focus.chips
+	);
+
+	function toggleDemoPace() {
+		if (demoPace) {
+			demoPace = false;
+		} else {
+			revealed = 0;
+			demoPace = true;
+		}
+	}
+
+	function goLive() {
+		demoPace = false;
+	}
+
+	function onkeydown(e: KeyboardEvent) {
+		if (e.key === 'Escape') {
+			e.stopPropagation();
+			onclose();
+		}
+	}
+
+	// ---- The line: node positions, segment paths and sub-step marks from the approved mockup.
+	const NODES = [
+		{ x: 30, y: 118 },
+		{ x: 135, y: 76 },
+		{ x: 240, y: 102 },
+		{ x: 345, y: 70 },
+		{ x: 440, y: 84 }
+	];
+	const SEGMENTS = [
+		'M30 118 C 70 98, 95 78, 135 76',
+		'M135 76 C 175 74, 200 102, 240 102',
+		'M240 102 C 280 102, 305 70, 345 70',
+		'M345 70 C 385 70, 410 84, 440 84'
+	];
+	const SUBSTEPS = [
+		['M78 92 l6 10', 'M104 80 l4 11'],
+		['M170 78 l-3 11', 'M196 88 l-6 9'],
+		['M276 96 l6 9', 'M302 80 l5 10'],
+		['M384 66 l-1 11', 'M410 72 l-2 11']
+	];
+	/** Label baseline below each node: small nodes, and the large focus node. */
+	const LABEL_GAP = [40, 42, 40, 38, 38];
+
+	type NodeLook = 'done' | 'active' | 'final' | 'failed' | 'not-observed' | 'future';
+
+	function look(stop: Stop, f: Flow): NodeLook {
+		const isFocus = stop.id === f.focus;
+		if (stop.tone === 'failed') return 'failed';
+		if (stop.status === 'observed') return isFocus && f.done ? 'final' : 'done';
+		if (isFocus && stop.status === 'pending') return 'active';
+		if (stop.status === 'not observed') return 'not-observed';
+		return 'future';
+	}
+
+	function reached(l: NodeLook): boolean {
+		return l === 'done' || l === 'active' || l === 'final' || l === 'failed';
+	}
+
+	function labelY(i: number, l: NodeLook): number {
+		const big = l === 'active' || l === 'final';
+		return Math.min(NODES[i].y + (big ? (i === 4 ? 56 : 58) : LABEL_GAP[i]), 172);
+	}
+
+	const LOOK_WORDS: Record<NodeLook, string> = {
+		done: 'complete',
+		final: 'complete',
+		active: 'in progress',
+		failed: 'stopped',
+		'not-observed': NOT_OBSERVED_TEXT,
+		future: 'not started'
+	};
+
+	function lineLabel(f: Flow, looks: NodeLook[]): string {
+		if (looks.every((l) => l === 'done' || l === 'final')) {
+			return 'All five stages complete' + (mode === 'technical' ? ', with sub-steps marked between them' : '');
+		}
+		const words = looks.map((l, i) =>
+			l === 'active' && f.stops[i].tone === 'waiting' ? 'waiting for approval' : LOOK_WORDS[l]
+		);
+		const parts: string[] = [];
+		let start = 0;
+		for (let i = 1; i <= words.length; i++) {
+			if (i === words.length || words[i] !== words[start]) {
+				const names = f.stops.slice(start, i).map((s) => s.label);
+				const joined = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names[0];
+				parts.push(`${joined} ${words[start]}`);
+				start = i;
+			}
+		}
+		return parts.join(', ');
+	}
+
+	let looks = $derived(flow ? flow.stops.map((s) => look(s, flow)) : []);
+
+	function statusText(s: Signal): string {
+		if (s.status === 'not observed') return NOT_OBSERVED_TEXT;
+		return s.note ? `${s.status} · ${s.note}` : s.status;
+	}
+
+	function rowTone(r: EvidenceRow): string {
+		if (r.status === 'error' || r.status === 'denied') return 'bad';
+		if (r.status === 'waiting' || r.status === 'timeout') return 'wait';
+		return 'ok';
+	}
+
+	let announcement = $derived(
+		focus ? `${focus.label}: ${focus.story.eyebrow}. ${focus.story.title}. ${focus.story.line}` : ''
+	);
+</script>
+
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+<aside
+	{id}
+	class="sf"
+	aria-label={mode === 'technical' ? 'Live security flow, technical view' : 'Live security flow'}
+	{onkeydown}
+>
+	<div class="sf-head">
+		<div class="eyebrow">Live security flow</div>
+		<h2 class="sf-title">See the trust decision unfold</h2>
+		<p class="sf-sub">A guided view of the identity, authorization, and agent actions behind this request.</p>
+		<div class="sf-controls">
+			<div class="seg" role="group" aria-label="Detail level">
+				<button type="button" class:on={mode === 'story'} aria-pressed={mode === 'story'} onclick={() => (mode = 'story')}>
+					Story
+				</button>
+				<button
+					type="button"
+					class:on={mode === 'technical'}
+					aria-pressed={mode === 'technical'}
+					onclick={() => (mode = 'technical')}
+				>
+					Technical
+				</button>
+			</div>
+			<button type="button" class="pace" aria-pressed={demoPace} disabled={!turn} onclick={toggleDemoPace}>Demo pace</button>
+			<button
+				type="button"
+				class="live"
+				class:live-off={demoPace}
+				aria-pressed={!demoPace}
+				title={demoPace ? 'Stop the replay and follow the turn live' : 'Following the turn live'}
+				onclick={goLive}
+			>
+				<span class="live-dot" aria-hidden="true"></span>Live
+			</button>
+			<button type="button" class="close" aria-label="Close security flow" onclick={onclose}>
+				<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+					<path d="M3 3l8 8M11 3l-8 8"></path>
+				</svg>
+			</button>
+		</div>
+	</div>
+
+	<div class="sf-body">
+		{#if !turn || !flow || !focus}
+			<div class="card">
+				<div class="eyebrow">What's happening</div>
+				<div class="card-title">Nothing to show yet.</div>
+				<p class="card-body">Ask a question. The flow follows the latest answer, one stop at a time.</p>
+			</div>
+		{:else}
+			<div class="request">
+				<span class="request-dot" aria-hidden="true"></span>
+				<div>
+					<b>{flow.requestLabel}</b><span class="request-q">“{turn.question}”</span>
+				</div>
+			</div>
+
+			<svg class="line" viewBox="0 0 468 176" role="img" aria-label={lineLabel(flow, looks)}>
+				{#each SEGMENTS as d, i (i)}
+					<path {d} class="seg-path" class:seg-reached={reached(looks[i + 1])} stroke-width="7" fill="none" stroke-linecap="round"></path>
+				{/each}
+				{#if mode === 'technical'}
+					<g class="substeps" stroke-width="2" stroke-linecap="round">
+						{#each SUBSTEPS as marks, i (i)}
+							{#if reached(looks[i + 1])}
+								{#each marks as d (d)}<path {d}></path>{/each}
+							{/if}
+						{/each}
+					</g>
+				{/if}
+				{#each flow.stops as stop, i (stop.id)}
+					{@const n = NODES[i]}
+					{@const l = looks[i]}
+					{#if l === 'done'}
+						<circle cx={n.x} cy={n.y} r="16" class="node-done"></circle>
+						<path d="M{n.x - 7} {n.y}l5 5 9-9" class="tick" stroke-width="2.2"></path>
+					{:else if l === 'final'}
+						<circle cx={n.x} cy={n.y} r="38" class="halo"></circle>
+						<circle cx={n.x} cy={n.y} r="24" class="node-final"></circle>
+						<path d="M{n.x - 10} {n.y}l7 7 12-12" class="tick-white" stroke-width="3"></path>
+					{:else if l === 'active'}
+						<circle cx={n.x} cy={n.y} r="36" class="halo"></circle>
+						<circle cx={n.x} cy={n.y} r="20" class="node-active"></circle>
+						<circle cx={n.x} cy={n.y} r="8" class="node-core"></circle>
+					{:else if l === 'failed'}
+						<circle cx={n.x} cy={n.y} r="16" class="node-failed"></circle>
+						<path d="M{n.x - 5} {n.y - 5}l10 10M{n.x + 5} {n.y - 5}l-10 10" class="cross" stroke-width="2.2"></path>
+					{:else}
+						<circle cx={n.x} cy={n.y} r="12" class="node-future" class:node-unseen={l === 'not-observed'}></circle>
+					{/if}
+					<text
+						x={n.x}
+						y={labelY(i, l)}
+						text-anchor="middle"
+						class="stop-label"
+						class:label-active={l === 'active'}
+						class:label-strong={l === 'final' || l === 'failed'}
+						class:label-failed={l === 'failed'}
+						class:label-quiet={l === 'future' || l === 'not-observed'}>{stop.label}</text
+					>
+				{/each}
+			</svg>
+
+			<div class="focus" class:focus-wait={focus.tone === 'waiting'} class:focus-bad={focus.tone === 'failed'} class:focus-quiet={focus.status === 'not observed'}>
+				<div class="focus-eyebrow">{focus.story.eyebrow}</div>
+				<div class="focus-title">{focus.story.title}</div>
+				<p class="focus-line">{focus.story.line}</p>
+				<span class="focus-chip"><i aria-hidden="true"></i>{focus.story.chip}</span>
+			</div>
+			<p class="visually-hidden" aria-live="polite">{announcement}</p>
+
+			<div class="card">
+				<div class="eyebrow">What's happening</div>
+				<div class="card-title">{focus.story.heading}</div>
+				<p class="card-body">{focus.story.body}</p>
+				{#if focus.story.note}<p class="card-note">{focus.story.note}</p>{/if}
+			</div>
+
+			<div class="card">
+				<div class="eyebrow eyebrow-dark">Technical signals</div>
+				{#if chips.length > 0 || mode === 'story'}
+					<div class="chips">
+						{#each chips as chip (chip)}<span class="chip">{chip}</span>{/each}
+						{#if mode === 'story'}
+							<button type="button" class="chip chip-more" onclick={() => (mode = 'technical')}>+ Details</button>
+						{/if}
+					</div>
+				{/if}
+				{#if focus.ids.length > 0}
+					<div class="ids">{focus.ids.map((i) => `${i.label} ${i.value}`).join(' · ')}</div>
+				{/if}
+				{#if mode === 'technical'}
+					<div class="divider"></div>
+					<div class="signals">
+						{#each signals as s (s.id)}
+							<span
+								class:sig-quiet={s.status === 'not observed'}
+								class:sig-wait={s.status === 'pending'}
+								class:sig-bad={s.tone === 'failed'}>{s.label}</span
+							>
+							<span
+								class="sig-status"
+								class:sig-quiet={s.status === 'not observed'}
+								class:sig-wait={s.status === 'pending'}
+								class:sig-bad={s.tone === 'failed'}>{statusText(s)}</span
+							>
+						{/each}
+					</div>
+				{/if}
+			</div>
+
+			{#if mode === 'technical'}
+				<div class="card evidence">
+					<button
+						type="button"
+						class="evidence-head"
+						aria-expanded={evidenceOpen}
+						aria-controls="{id}-evidence"
+						onclick={() => (evidenceOpen = !evidenceOpen)}
+					>
+						{evidenceOpen ? '▾' : '▸'} Evidence · {flow.evidence.length} normalized events
+					</button>
+					{#if evidenceOpen}
+						<ol class="evidence-list" id="{id}-evidence">
+							{#each flow.evidence as row (row.index)}
+								<li class="evidence-row">
+									<span class="ev-t">{row.t}</span>
+									<span class="ev-main">
+										<span class="ev-src">{row.src}</span><br />
+										<b class="ev-kind">{row.kind}</b>
+										<span class="ev-status ev-{rowTone(row)}">· {row.status}</span><br />
+										<span class="ev-line">{row.line}</span>
+									</span>
+									<button
+										type="button"
+										class="ev-raw"
+										aria-expanded={!!rawOpen[row.index]}
+										aria-label="Raw event {row.index + 1}"
+										onclick={() => (rawOpen[row.index] = !rawOpen[row.index])}>raw</button
+									>
+									{#if rawOpen[row.index]}
+										<pre class="ev-json">{JSON.stringify(row.raw, null, 2)}</pre>
+									{/if}
+								</li>
+							{/each}
+						</ol>
+					{/if}
+				</div>
+			{/if}
+		{/if}
+	</div>
+</aside>
+
+<style>
+	/* Colours are the theme's security-flow palette (app.css). The three literals below have no
+	   theme token: the sub-step marks, the dashed divider and the Live dot, as the mockup sets them. */
+	.sf {
+		--sf-mark: #a8b3bf;
+		--sf-divider: #c6cdd5;
+		--sf-live: #34d399;
+		--sf-teal-soft: rgba(0, 157, 154, 0.1);
+		--sf-halo: rgba(0, 157, 154, 0.16);
+
+		width: 520px;
+		flex-shrink: 0;
+		display: flex;
+		flex-direction: column;
+		min-height: 0;
+		overflow: hidden;
+		background: var(--ovi-card);
+		border-left: 1px solid var(--ovi-hairline);
+		color: var(--ovi-text-primary);
+		font-family: var(--ovi-font-sans);
+		letter-spacing: normal;
+	}
+
+	/* ---- Header ------------------------------------------------------------------ */
+	.sf-head {
+		padding: 20px 26px 16px;
+		border-bottom: 1px solid var(--ovi-hairline);
+	}
+
+	.eyebrow {
+		font: 600 12px var(--ovi-font-condensed);
+		letter-spacing: 0.12em;
+		text-transform: uppercase;
+		color: var(--ovi-teal-deep);
+	}
+
+	.eyebrow-dark {
+		color: var(--ovi-text-strong);
+	}
+
+	.sf-title {
+		margin: 4px 0;
+		font-weight: 600;
+		font-size: 24px;
+		line-height: 1.25;
+	}
+
+	.sf-sub {
+		margin: 0;
+		font-size: 14.5px;
+		line-height: 1.45;
+		color: var(--ovi-text-secondary);
+	}
+
+	.sf-controls {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		margin-top: 14px;
+		flex-wrap: wrap;
+	}
+
+	.seg {
+		display: flex;
+		padding: 3px;
+		border-radius: var(--ovi-radius-pill);
+		background: var(--ovi-control-bg);
+	}
+
+	.seg button {
+		border: 0;
+		background: none;
+		border-radius: var(--ovi-radius-pill);
+		padding: 8px 16px;
+		font: 500 14px var(--ovi-font-sans);
+		color: var(--ovi-text-secondary);
+		cursor: pointer;
+	}
+
+	.seg button.on {
+		background: var(--ovi-card);
+		color: var(--ovi-text-primary);
+		box-shadow: 0 1px 2px rgba(22, 22, 22, 0.14);
+	}
+
+	.pace {
+		border: 0;
+		border-radius: var(--ovi-radius-pill);
+		padding: 10px 16px;
+		background: var(--ovi-control-bg);
+		font: 500 14px var(--ovi-font-sans);
+		color: var(--ovi-text-strong);
+		cursor: pointer;
+	}
+
+	.pace[aria-pressed='true'] {
+		background: var(--ovi-teal-deep);
+		color: #ffffff;
+	}
+
+	.pace:disabled {
+		cursor: not-allowed;
+		opacity: 0.55;
+	}
+
+	.live {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		border: 0;
+		border-radius: var(--ovi-radius-pill);
+		padding: 9px 16px;
+		background: var(--ovi-text-primary);
+		color: #ffffff;
+		font: 500 14px var(--ovi-font-sans);
+		cursor: pointer;
+	}
+
+	.live-dot {
+		width: 8px;
+		height: 8px;
+		border-radius: 50%;
+		background: var(--sf-live);
+	}
+
+	.live-off .live-dot {
+		background: var(--ovi-text-muted);
+	}
+
+	.close {
+		width: 38px;
+		height: 38px;
+		margin-left: auto;
+		border: 0;
+		border-radius: 50%;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		background: var(--ovi-control-bg);
+		color: var(--ovi-text-strong);
+		cursor: pointer;
+	}
+
+	.sf button:focus-visible {
+		outline: var(--ovi-focus-ring);
+		outline-offset: 2px;
+	}
+
+	/* ---- Body -------------------------------------------------------------------- */
+	.sf-body {
+		flex: 1;
+		min-height: 0;
+		overflow-y: auto;
+		padding: 16px 26px;
+		display: flex;
+		flex-direction: column;
+		gap: 12px;
+	}
+
+	.request {
+		display: flex;
+		align-items: center;
+		gap: 12px;
+		padding: 11px 16px;
+		border-radius: var(--ovi-radius-card);
+		background: var(--ovi-surface-bg);
+	}
+
+	.request-dot {
+		width: 10px;
+		height: 10px;
+		flex-shrink: 0;
+		border-radius: 50%;
+		background: var(--ovi-teal);
+	}
+
+	.request b {
+		display: block;
+		font-size: 15px;
+	}
+
+	.request-q {
+		font-size: 14.5px;
+		color: var(--ovi-text-strong);
+		overflow-wrap: anywhere;
+	}
+
+	/* ---- The line ---------------------------------------------------------------- */
+	.line {
+		width: 100%;
+		max-width: 468px;
+		height: auto;
+		flex-shrink: 0;
+		overflow: visible;
+	}
+
+	.seg-path {
+		stroke: var(--ovi-rail);
+		transition: stroke 0.4s ease;
+	}
+
+	.seg-path.seg-reached {
+		stroke: var(--ovi-teal);
+	}
+
+	.substeps {
+		stroke: var(--sf-mark);
+	}
+
+	.node-done,
+	.node-failed {
+		fill: #ffffff;
+		stroke-width: 2.5;
+	}
+
+	.node-done {
+		stroke: var(--ovi-teal);
+	}
+
+	.node-failed {
+		stroke: var(--ovi-red);
+	}
+
+	.halo {
+		fill: var(--sf-halo);
+	}
+
+	.node-final {
+		fill: var(--ovi-teal-deep);
+	}
+
+	.node-active {
+		fill: #ffffff;
+		stroke: var(--ovi-teal);
+		stroke-width: 3;
+	}
+
+	.node-core {
+		fill: var(--ovi-teal);
+	}
+
+	.node-future {
+		fill: #ffffff;
+		stroke: var(--ovi-rail);
+		stroke-width: 2.5;
+	}
+
+	.node-unseen {
+		stroke: var(--ovi-text-muted);
+		stroke-dasharray: 4 3;
+	}
+
+	.tick,
+	.tick-white,
+	.cross {
+		fill: none;
+		stroke-linecap: round;
+		stroke-linejoin: round;
+	}
+
+	.tick {
+		stroke: var(--ovi-teal-deep);
+	}
+
+	.tick-white {
+		stroke: #ffffff;
+	}
+
+	.cross {
+		stroke: var(--ovi-red);
+	}
+
+	.stop-label {
+		font-family: var(--ovi-font-sans);
+		font-size: 14px;
+		font-weight: 600;
+		fill: var(--ovi-text-primary);
+	}
+
+	.stop-label.label-strong {
+		font-weight: 700;
+	}
+
+	.stop-label.label-active {
+		font-weight: 700;
+		fill: var(--ovi-teal-deep);
+	}
+
+	.stop-label.label-failed {
+		fill: var(--ovi-red);
+	}
+
+	.stop-label.label-quiet {
+		font-weight: 400;
+		fill: var(--ovi-text-helper);
+	}
+
+	/* ---- Focus card -------------------------------------------------------------- */
+	.focus {
+		align-self: center;
+		box-sizing: border-box;
+		width: 340px;
+		max-width: 100%;
+		padding: 12px 24px;
+		border-radius: var(--ovi-radius-card-lg);
+		border: 1px solid var(--ovi-hairline);
+		background: var(--ovi-card);
+		box-shadow: 0 6px 24px rgba(22, 22, 22, 0.08);
+		text-align: center;
+	}
+
+	.focus-eyebrow {
+		font: 600 12px var(--ovi-font-condensed);
+		letter-spacing: 0.12em;
+		text-transform: uppercase;
+		color: var(--ovi-teal-deep);
+	}
+
+	.focus-title {
+		margin: 3px 0;
+		font-weight: 600;
+		font-size: 21px;
+		line-height: 1.3;
+	}
+
+	.focus-line {
+		margin: 0 0 8px;
+		font-size: 14px;
+		color: var(--ovi-text-secondary);
+	}
+
+	.focus-chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 7px;
+		padding: 5px 12px;
+		border-radius: var(--ovi-radius-pill);
+		background: var(--sf-teal-soft);
+		color: var(--ovi-teal-deep);
+		font: 500 13.5px var(--ovi-font-sans);
+	}
+
+	.focus-chip i {
+		width: 7px;
+		height: 7px;
+		border-radius: 50%;
+		background: currentColor;
+		display: inline-block;
+	}
+
+	.focus-wait .focus-eyebrow {
+		color: var(--ovi-amber);
+	}
+
+	.focus-wait .focus-chip {
+		background: var(--ovi-amber-soft);
+		color: var(--ovi-amber);
+	}
+
+	.focus-bad .focus-eyebrow {
+		color: var(--ovi-red);
+	}
+
+	.focus-bad .focus-chip {
+		background: var(--ovi-red-soft);
+		color: var(--ovi-red);
+	}
+
+	.focus-quiet .focus-eyebrow,
+	.focus-quiet .focus-chip {
+		color: var(--ovi-text-helper);
+	}
+
+	.focus-quiet .focus-chip {
+		background: var(--ovi-control-bg);
+	}
+
+	/* ---- Cards ------------------------------------------------------------------- */
+	.card {
+		padding: 14px 20px;
+		border-radius: var(--ovi-radius-card);
+		background: var(--ovi-surface-bg);
+	}
+
+	.card-title {
+		margin: 5px 0 4px;
+		font-weight: 600;
+		font-size: 16.5px;
+		line-height: 1.35;
+	}
+
+	.card-body {
+		margin: 0;
+		font-size: 14px;
+		line-height: 1.5;
+		color: var(--ovi-text-strong);
+	}
+
+	.card-note {
+		margin: 6px 0 0;
+		font-size: 12.5px;
+		line-height: 1.45;
+		color: var(--ovi-text-helper);
+	}
+
+	.chips {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px;
+		margin-top: 9px;
+	}
+
+	.chip {
+		border: 0;
+		border-radius: var(--ovi-radius-pill);
+		padding: 5px 12px;
+		background: var(--sf-teal-soft);
+		color: var(--ovi-teal-deep);
+		font: 600 13px var(--ovi-font-condensed);
+	}
+
+	.chip-more {
+		background: var(--ovi-neutral-soft);
+		color: var(--ovi-text-strong);
+		cursor: pointer;
+	}
+
+	.ids {
+		margin-top: 8px;
+		font: 13px var(--ovi-font-mono);
+		color: var(--ovi-text-strong);
+		overflow-wrap: anywhere;
+	}
+
+	.divider {
+		margin: 12px 0 8px;
+		border-top: 1px dashed var(--sf-divider);
+	}
+
+	.signals {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto;
+		gap: 7px 14px;
+		font: 13px/1.45 var(--ovi-font-mono);
+		color: var(--ovi-text-primary);
+	}
+
+	.sig-status {
+		color: var(--ovi-teal-deep);
+		text-align: right;
+	}
+
+	.sig-quiet,
+	.sig-status.sig-quiet {
+		color: var(--ovi-text-helper);
+	}
+
+	.sig-wait,
+	.sig-status.sig-wait {
+		color: var(--ovi-amber);
+	}
+
+	.sig-bad,
+	.sig-status.sig-bad {
+		color: var(--ovi-red);
+	}
+
+	/* ---- Evidence ---------------------------------------------------------------- */
+	.evidence {
+		background: var(--ovi-card);
+		border: 1px solid var(--ovi-hairline-strong);
+	}
+
+	.evidence-head {
+		padding: 0;
+		border: 0;
+		background: none;
+		font: 600 12px var(--ovi-font-mono);
+		letter-spacing: 0.1em;
+		text-transform: uppercase;
+		color: var(--ovi-text-strong);
+		cursor: pointer;
+		text-align: left;
+	}
+
+	.evidence-list {
+		margin: 8px 0 0;
+		padding: 0;
+		list-style: none;
+		display: flex;
+		flex-direction: column;
+		font: 12px/1.45 var(--ovi-font-mono);
+	}
+
+	.evidence-row {
+		display: grid;
+		grid-template-columns: 58px minmax(0, 1fr) auto;
+		gap: 10px;
+		align-items: start;
+		padding: 7px 0;
+		border-top: 1px solid var(--ovi-hairline);
+	}
+
+	.ev-t {
+		color: var(--ovi-text-helper);
+	}
+
+	.ev-main {
+		min-width: 0;
+		overflow-wrap: anywhere;
+	}
+
+	.ev-src {
+		color: var(--ovi-text-strong);
+	}
+
+	.ev-kind {
+		font-weight: 500;
+		color: var(--ovi-text-primary);
+	}
+
+	.ev-ok {
+		color: var(--ovi-teal-deep);
+	}
+
+	.ev-wait {
+		color: var(--ovi-amber);
+	}
+
+	.ev-bad {
+		color: var(--ovi-red);
+	}
+
+	.ev-line {
+		font-family: var(--ovi-font-sans);
+		font-size: 13px;
+		color: var(--ovi-text-secondary);
+	}
+
+	.ev-raw {
+		border: 0;
+		border-radius: 6px;
+		padding: 2px 8px;
+		background: var(--ovi-control-bg);
+		font: 12px var(--ovi-font-mono);
+		color: var(--ovi-text-strong);
+		cursor: pointer;
+	}
+
+	.ev-json {
+		grid-column: 1 / -1;
+		margin: 4px 0 0;
+		padding: 10px 12px;
+		max-height: 320px;
+		overflow: auto;
+		border-radius: 8px;
+		background: var(--ovi-surface-bg);
+		font: 11.5px/1.5 var(--ovi-font-mono);
+		color: var(--ovi-text-primary);
+		white-space: pre-wrap;
+		word-break: break-all;
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.seg-path {
+			transition: none;
+		}
+	}
+
+	/* Screens 960px and narrower: the panel sits under the chat, full width (ChatWorkspace). */
+	@media (max-width: 960px) {
+		/* ChatWorkspace stacks the chat and the panel in one window-high column here. The panel
+		   takes an equal share of that height and scrolls as one piece, header included, so the
+		   chat above it keeps its own share instead of being pushed under the panel. */
+		.sf {
+			flex: 1 1 0;
+			width: 100%;
+			overflow-y: auto;
+			border-left: 0;
+			border-top: 1px solid var(--ovi-hairline);
+		}
+
+		.sf-head {
+			padding: 16px 16px 12px;
+		}
+
+		.sf-title {
+			font-size: 21px;
+		}
+
+		.sf-body {
+			flex: none;
+			overflow: visible;
+			padding: 12px 16px;
+		}
+
+		.card {
+			padding: 12px 16px;
+		}
+
+		/* A long status ("not observed in this flow") wraps instead of squeezing every label. */
+		.signals {
+			grid-template-columns: minmax(0, 1fr) fit-content(9em);
+		}
+	}
+</style>
