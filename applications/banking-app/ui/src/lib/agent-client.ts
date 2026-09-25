@@ -18,6 +18,20 @@ import type { AgentEvent, LegacyAgentEvent } from '$lib/agent-events';
 
 const LEGACY_TYPES: ReadonlySet<string> = new Set<LegacyAgentEvent['type']>(['tool_planning', 'delta', 'end', 'error']);
 
+/** The `error` sentence of a chat route's JSON failure body, or undefined for any other body. */
+function routeError(body: string): string | undefined {
+  try {
+    const parsed: unknown = JSON.parse(body);
+    if (parsed && typeof parsed === 'object' && 'error' in parsed) {
+      const error = (parsed as { error: unknown }).error;
+      if (typeof error === 'string' && error !== '') return error;
+    }
+  } catch {
+    // Not JSON: the caller shows the body as it came.
+  }
+  return undefined;
+}
+
 export interface ChatResponse {
   role: string;
   content: string;
@@ -41,8 +55,10 @@ export async function sendChatMessage(
     });
 
     if (!res.ok) {
+      // The chat routes answer a failure with JSON { error }, a sentence written for the
+      // person reading the chat; show that sentence. Any other body is shown as it came.
       const text = await res.text();
-      onError(`Agent request failed [${res.status}]: ${text}`);
+      onError(routeError(text) ?? `Agent request failed [${res.status}]: ${text}`);
       return;
     }
 
