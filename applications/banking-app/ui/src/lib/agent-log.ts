@@ -20,6 +20,10 @@
  *
  * agent:text_delta (the answer, shown in the chat), agent:audit_seed (the Audit
  * Trace's key) and agent:done carry no step of their own and print nothing.
+ *
+ * turnState(turn) is what the header of the turn's fold shows: running (●) until
+ * the turn is over, then failed (✕) when it holds an agent:error, including the one
+ * the page adds with TurnLog.fail(), and finished (✓) otherwise.
  */
 
 import type { AgentCredentialEvent, AgentEvent, CredentialKind, JsonValue } from '$lib/agent-events';
@@ -201,6 +205,18 @@ export function logLines(turn: Pick<Turn, 'events'>): LogLine[] {
 		previous = event;
 	}
 	return lines;
+}
+
+/** Where a turn stands, as its fold's header shows it. */
+export type TurnState = 'running' | 'failed' | 'finished';
+
+/**
+ * running while the turn's stream is not over; once it is, failed when the turn holds
+ * an agent:error (the agent's own, or the one TurnLog.fail() adds), otherwise finished.
+ */
+export function turnState(turn: Pick<Turn, 'events' | 'done'>): TurnState {
+	if (!turn.done) return 'running';
+	return turn.events.some((event) => event.type === 'agent:error') ? 'failed' : 'finished';
 }
 
 /** How many lines the Agent Log shows for all of `turns`: the badge and footer count. */

@@ -15,6 +15,14 @@
   `id` must match the Agent log button's aria-controls: closing the panel (the X or Escape)
   returns focus to that button. `systems` is the footer's list of the systems the chat uses.
 
+  Each question is one fold. Its header is a button that shows when the question was asked,
+  the question on one line, its state (● running, ✓ finished, ✕ failed) and how many entries
+  it holds; clicking it opens or closes that request's lines. A new question opens its own
+  fold and closes every earlier one; several folds can be open at once after that. Folded
+  lines are not drawn, but nothing is lost: what a line had expanded ("Show all") is kept,
+  and a credential's Copy works again as soon as its fold is open. The footer counts
+  requests and entries.
+
   Wider than 960px the panel sits beside the chat, 420px wide, or 520px while the left
   navigation is collapsed to its rail (ChatWorkspace sets --ovi-panel-width). At 960px and
   narrower it covers the chat from the right, under the top bar, and the navigation drawer
@@ -23,7 +31,7 @@
 <script lang="ts">
 	import { tick, untrack } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
-	import { logLines } from '$lib/agent-log';
+	import { clockTime, logLines, turnState, type TurnState } from '$lib/agent-log';
 	import type { Turn } from '$lib/turn-events.svelte';
 
 	interface Props {
@@ -39,7 +47,18 @@
 	/** Tool output longer than this is cut, with "Show all" to see the rest. */
 	const OUTPUT_PREVIEW_CHARS = 600;
 
-	const view = $derived(turns.map((turn) => ({ id: turn.id, question: turn.question, lines: logLines(turn) })));
+	/** The glyph a fold's header shows for each state. A screen reader hears the state's name. */
+	const STATE_GLYPH: Record<TurnState, string> = { running: '●', finished: '✓', failed: '✕' };
+
+	const view = $derived(
+		turns.map((turn) => ({
+			id: turn.id,
+			question: turn.question,
+			time: clockTime(turn.startedAt),
+			state: turnState(turn),
+			lines: logLines(turn)
+		}))
+	);
 	const entries = $derived(view.reduce((sum, turn) => sum + turn.lines.length, 0));
 	const live = $derived(turns.length > 0 && !turns[turns.length - 1].done);
 
@@ -47,14 +66,39 @@
 	let copied = $state<string | null>(null);
 	let announcement = $state('');
 
-	// Follow new lines, unless the reader has scrolled up to read an earlier one.
+	// Which folds are open. The choice is kept with the latest turn it was made for: once a
+	// newer question exists it no longer applies, and only that newest fold is open. So a new
+	// question folds every earlier request, and the panel opens with only the latest one open.
+	const latestId = $derived(turns.at(-1)?.id);
+	let folds = $state<{ latest: string | undefined; open: string[] }>({ latest: undefined, open: [] });
+	const openFolds = $derived(
+		folds.latest === latestId ? folds.open : latestId === undefined ? [] : [latestId]
+	);
+
+	async function toggleFold(turnId: string) {
+		const open = openFolds.includes(turnId) ? openFolds.filter((id) => id !== turnId) : [...openFolds, turnId];
+		folds = { latest: latestId, open };
+		// Opening or closing a fold moves the tail without a scroll event: measure again, so
+		// a request opened above the tail is not scrolled away when the next line arrives.
+		await tick();
+		onScroll();
+	}
+
+	// Follow new lines, unless the reader has scrolled up to read an earlier one. A new
+	// question is followed again: its fold is the one that just opened.
 	let bodyEl: HTMLDivElement | undefined = $state();
 	let followTail = true;
+	let followedTurn: string | undefined;
 	function onScroll() {
 		if (bodyEl) followTail = bodyEl.scrollHeight - bodyEl.scrollTop - bodyEl.clientHeight < 32;
 	}
 	$effect(() => {
 		void entries;
+		const latest = latestId;
+		if (latest !== followedTurn) {
+			followedTurn = latest;
+			followTail = true;
+		}
 		if (bodyEl && followTail) bodyEl.scrollTop = bodyEl.scrollHeight;
 	});
 
@@ -127,81 +171,99 @@
 		aria-label="Agent activity lines"
 		tabindex="0"
 	>
-		{#if entries === 0}
-			<p class="log-empty">
-				{live ? 'Waiting for the agent…' : 'No activity yet. Ask a question and every step the agent takes appears here.'}
-			</p>
+		{#if view.length === 0}
+			<p class="log-empty">No activity yet. Ask a question and every step the agent takes appears here.</p>
 		{/if}
 
-		{#each view as turn, turnIndex (turn.id)}
-			{#if turnIndex > 0}
-				<p class="turn-divider"><span class="visually-hidden">Next question: </span>{turn.question}</p>
-			{/if}
-			{#each turn.lines as line, lineIndex (lineIndex)}
-				{@const key = `${turn.id}:${lineIndex}`}
-				{#if line.kind === 'step'}
-					<div class="ln">
-						<span class="glyph-step" aria-hidden="true">▶</span>
-						<span><span class="lb">Agent:</span> {line.text}</span>
-					</div>
-				{:else if line.kind === 'output' || line.kind === 'error'}
-					{@const long = line.text.length > OUTPUT_PREVIEW_CHARS}
-					{@const open = expanded.has(key)}
-					<div class="ln">
-						{#if line.kind === 'error'}
-							<span class="glyph-error" aria-hidden="true">✕</span>
-						{:else}
-							<span class="glyph-out" aria-hidden="true">⚡&#xFE0E;</span>
+		{#each view as turn (turn.id)}
+			{@const foldOpen = openFolds.includes(turn.id)}
+			<div class="rq">
+				<button type="button" class="rqh" aria-expanded={foldOpen} onclick={() => toggleFold(turn.id)}>
+					<span class="chev" aria-hidden="true">{foldOpen ? '▾' : '▸'}</span>
+					<span class="rqt">{turn.time}</span>
+					<span class="rqq">{turn.question}</span>
+					<span class="rqs">
+						<span
+							class:st-run={turn.state === 'running'}
+							class:st-ok={turn.state === 'finished'}
+							class:st-bad={turn.state === 'failed'}
+							aria-hidden="true">{STATE_GLYPH[turn.state]}</span
+						><span class="visually-hidden">{turn.state},</span> {turn.lines.length} {turn.lines.length === 1 ? 'entry' : 'entries'}
+					</span>
+				</button>
+				{#if foldOpen}
+					<div class="rqb">
+						{#if turn.lines.length === 0 && turn.state === 'running'}
+							<p class="log-empty">Waiting for the agent…</p>
 						{/if}
-						<span class="out" class:out-error={line.kind === 'error'}>
-							<span class="lb">{line.label}</span>{long && !open ? `${line.text.slice(0, OUTPUT_PREVIEW_CHARS)}…` : line.text}
-							{#if long}
-								<button type="button" class="chip-button" aria-expanded={open} onclick={() => toggleExpanded(key)}>
-									{open ? 'Show less' : `Show all ${line.text.length} characters`}
-								</button>
-							{/if}
-						</span>
-					</div>
-				{:else}
-					{@const c = line.credential}
-					<div class="ln">
-						<span class="glyph-out" aria-hidden="true">⚡&#xFE0E;</span>
-						<span class="out">
-							<span class="lb">Credential {c.verb} · {c.kindLabel}:</span> {[c.source, c.label].filter((part) => part !== '').join(' · ')}
-							{#if c.copyText !== undefined}
-								{@const copyText = c.copyText}
-								<button
-									type="button"
-									class="chip-button"
-									aria-label="Copy the {c.kindLabel}"
-									onclick={() => copy(key, copyText, c.kindLabel)}
-								>
-									{copied === key ? 'Copied' : 'Copy'}
-								</button>
-							{/if}
-							<span class="cred">
-								{#if c.value !== undefined}
-									<span class="cred-value">{c.value}</span>
-								{:else if c.fields}
-									<span class="cred-value">
-										{#each c.fields as [name, part], partIndex (name)}
-											{#if partIndex > 0}{' '}{/if}<span class="cred-part"><span class="cred-key">{name}</span> {part}</span>
-										{/each}
+						{#each turn.lines as line, lineIndex (lineIndex)}
+							{@const key = `${turn.id}:${lineIndex}`}
+							{#if line.kind === 'step'}
+								<div class="ln">
+									<span class="glyph-step" aria-hidden="true">▶</span>
+									<span><span class="lb">Agent:</span> {line.text}</span>
+								</div>
+							{:else if line.kind === 'output' || line.kind === 'error'}
+								{@const long = line.text.length > OUTPUT_PREVIEW_CHARS}
+								{@const open = expanded.has(key)}
+								<div class="ln">
+									{#if line.kind === 'error'}
+										<span class="glyph-error" aria-hidden="true">✕</span>
+									{:else}
+										<span class="glyph-out" aria-hidden="true">⚡&#xFE0E;</span>
+									{/if}
+									<span class="out" class:out-error={line.kind === 'error'}>
+										<span class="lb">{line.label}</span>{long && !open ? `${line.text.slice(0, OUTPUT_PREVIEW_CHARS)}…` : line.text}
+										{#if long}
+											<button type="button" class="chip-button" aria-expanded={open} onclick={() => toggleExpanded(key)}>
+												{open ? 'Show less' : `Show all ${line.text.length} characters`}
+											</button>
+										{/if}
 									</span>
-								{/if}
-								{#if c.meta.length > 0}
-									<span class="cred-meta">{c.meta.join(' · ')}</span>
-								{/if}
-							</span>
-						</span>
+								</div>
+							{:else}
+								{@const c = line.credential}
+								<div class="ln">
+									<span class="glyph-out" aria-hidden="true">⚡&#xFE0E;</span>
+									<span class="out">
+										<span class="lb">Credential {c.verb} · {c.kindLabel}:</span> {[c.source, c.label].filter((part) => part !== '').join(' · ')}
+										{#if c.copyText !== undefined}
+											{@const copyText = c.copyText}
+											<button
+												type="button"
+												class="chip-button"
+												aria-label="Copy the {c.kindLabel}"
+												onclick={() => copy(key, copyText, c.kindLabel)}
+											>
+												{copied === key ? 'Copied' : 'Copy'}
+											</button>
+										{/if}
+										<span class="cred">
+											{#if c.value !== undefined}
+												<span class="cred-value">{c.value}</span>
+											{:else if c.fields}
+												<span class="cred-value">
+													{#each c.fields as [name, part], partIndex (name)}
+														{#if partIndex > 0}{' '}{/if}<span class="cred-part"><span class="cred-key">{name}</span> {part}</span>
+													{/each}
+												</span>
+											{/if}
+											{#if c.meta.length > 0}
+												<span class="cred-meta">{c.meta.join(' · ')}</span>
+											{/if}
+										</span>
+									</span>
+								</div>
+							{/if}
+						{/each}
 					</div>
 				{/if}
-			{/each}
+			</div>
 		{/each}
 	</div>
 
 	<footer class="log-footer">
-		<span>{entries} {entries === 1 ? 'entry' : 'entries'}</span>
+		<span>{view.length} {view.length === 1 ? 'request' : 'requests'} · {entries} {entries === 1 ? 'entry' : 'entries'}</span>
 		<i>{systems}</i>
 	</footer>
 	<p class="visually-hidden" role="status">{announcement}</p>
@@ -276,6 +338,7 @@
 	}
 
 	.log-close:focus-visible,
+	.rqh:focus-visible,
 	.chip-button:focus-visible {
 		outline: 2px solid var(--log-step);
 		outline-offset: 2px;
@@ -287,7 +350,6 @@
 		overflow-y: auto;
 		display: flex;
 		flex-direction: column;
-		gap: 4px;
 		padding: 12px 16px;
 		font: 12.5px/1.65 var(--ovi-font-mono);
 		color: var(--log-text);
@@ -305,13 +367,79 @@
 		color: var(--log-muted);
 	}
 
-	.turn-divider {
-		margin: 8px 0 2px;
-		padding-top: 8px;
+	/* One fold per request: a rule between folds, the header on one line, the lines indented. */
+	.rq {
 		border-top: 1px solid var(--log-line);
-		color: var(--log-muted);
+	}
+
+	.rq:first-child {
+		border-top: 0;
+	}
+
+	.rqh {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		width: 100%;
+		padding: 10px 0;
+		border: 0;
+		background: none;
+		color: var(--log-title);
+		font: 12px var(--ovi-font-mono);
+		text-align: left;
+		cursor: pointer;
+	}
+
+	.rqh:hover .rqq {
+		color: #fff;
+	}
+
+	.chev {
+		display: inline-block;
+		flex-shrink: 0;
+		width: 12px;
+		color: var(--log-faint);
+	}
+
+	.rqt {
+		flex-shrink: 0;
+		color: var(--log-faint);
+	}
+
+	.rqq {
+		flex: 1;
+		min-width: 0;
+		overflow: hidden;
+		color: var(--log-text);
+		font: 500 13px var(--ovi-font-sans);
+		white-space: nowrap;
+		text-overflow: ellipsis;
+	}
+
+	.rqs {
+		flex-shrink: 0;
+		color: var(--log-faint);
 		font-size: 11.5px;
-		overflow-wrap: anywhere;
+		white-space: nowrap;
+	}
+
+	.st-ok {
+		color: var(--log-live);
+	}
+
+	.st-bad {
+		color: var(--log-label);
+	}
+
+	.st-run {
+		color: var(--log-step);
+	}
+
+	.rqb {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		padding: 0 0 10px 22px;
 	}
 
 	.ln {
