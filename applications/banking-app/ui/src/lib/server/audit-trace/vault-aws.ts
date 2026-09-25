@@ -7,7 +7,8 @@
  *      role VAULT_ROLE = banking-ui, auth/kubernetes/login);
  *   2. reads aws/sts/audit-reader with that Vault token — the only path its policy
  *      allows — and gets STS keys for the audit-reader IAM role, limited to Athena
- *      in work group `workshop` and the audit tables (infrastructure/main.tf);
+ *      in work group `workshop` and the audit tables (infrastructure/main.tf). A 412
+ *      from a performance standby is retried twice (READ_RETRY_WAITS_MS);
  *   3. keeps those keys until five minutes before they expire (900 s), then does
  *      1-2 again. The Vault token is not kept: every refresh is a fresh login.
  *
@@ -35,6 +36,24 @@ const DEFAULT_SA_TOKEN_PATH = '/var/run/secrets/kubernetes.io/serviceaccount/tok
  * only hand the SDK the same keys again.
  */
 const REFRESH_MARGIN_MS = 300_000;
+
+/**
+ * The read of aws/sts/audit-reader is retried when Vault answers HTTP 412, at most
+ * READ_RETRY_WAITS_MS.length times (2), waiting 1000 ms and then 1500 ms: three attempts
+ * in all, about 2.5 s of waiting, then the 412's own error is reported.
+ *
+ * Why: the read uses a token Vault issued a moment earlier. The Vault service balances
+ * across the active node and its performance standbys, and a standby that has not yet
+ * replicated the token answers 412 "required index state not present" (seen on the
+ * workshop cluster, 2026-09-25). HashiCorp's answer is that the client retries: "This
+ * tells the client that it should retry the request"
+ * (developer.hashicorp.com/vault/docs/enterprise/consistency). The bound and the waits
+ * are the Vault Go client's own defaults (api/client.go: MaxRetries 2, MinRetryWait
+ * 1000 ms, MaxRetryWait 1500 ms; DefaultRetryPolicy retries 412).
+ *
+ * The login is not retried: it is a write, which a standby forwards to the active node.
+ */
+const READ_RETRY_WAITS_MS = [1_000, 1_500] as const;
 
 export interface AuditReaderCredentials {
 	accessKeyId: string;
@@ -115,14 +134,22 @@ async function issue(): Promise<AuditReaderCredentials> {
 		throw new VaultCredentialError(`Vault login as ${role} returned no token`);
 	}
 
-	const read = await vaultFetch(
-		`${vaultAddr}/v1/${AUDIT_READER_STS_PATH}`,
-		{
-			headers: { 'X-Vault-Token': vaultToken },
-			signal: AbortSignal.timeout(15_000)
-		},
-		`the read of ${AUDIT_READER_STS_PATH}`
-	);
+	const readOnce = () =>
+		vaultFetch(
+			`${vaultAddr}/v1/${AUDIT_READER_STS_PATH}`,
+			{
+				headers: { 'X-Vault-Token': vaultToken },
+				signal: AbortSignal.timeout(15_000)
+			},
+			`the read of ${AUDIT_READER_STS_PATH}`
+		);
+	let read = await readOnce();
+	for (const wait of READ_RETRY_WAITS_MS) {
+		if (read.status !== 412) break;
+		await read.body?.cancel();
+		await new Promise((resolve) => setTimeout(resolve, wait));
+		read = await readOnce();
+	}
 	if (!read.ok) {
 		throw new VaultCredentialError(`Vault read of ${AUDIT_READER_STS_PATH} failed: ${await vaultErrors(read)}`);
 	}
