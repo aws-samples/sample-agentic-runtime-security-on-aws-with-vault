@@ -1484,14 +1484,24 @@ def check_refund_status(refund_id: str) -> dict:
 # order the tool returned them. Asking the model not to repeat the rows under
 # that card, or to count to the row a person picked, is not reliable. So after
 # the first listing of a session no model call is made: the reply is one fixed
-# question. And a reply that is only a row number, sent right after that
-# question or after the code's own out-of-range reply, is resolved here against
-# the listing, never counted by the model. A number sent after a reply the
-# model wrote goes to the model as typed.
+# question. When initiate_refund refuses the terms (_refuse_terms), the reply
+# is that refusal as worded, followed by a fixed question asking for another
+# transaction number. And a reply that is only a row number, sent right after
+# one of those questions or after the code's own out-of-range reply, is
+# resolved here against the listing, never counted by the model. A number sent
+# after a reply the model wrote goes to the model as typed.
 # ---------------------------------------------------------------------------
 
 # The reply after the first listing of a session.
 FIRST_LISTING_QUESTION = "Which transaction number do you want to refund?"
+
+# Added after initiate_refund's terms refusal, which ends that reply.
+REFUSAL_FOLLOW_UP = " Which transaction number do you want to refund instead?"
+
+# How Strands reports a RefundRefusedError raised by a tool, and the start of
+# every refusal _refuse_terms words: the tool result's text starts with both.
+_REFUSED_ERROR_PREFIX = "Error: RefundRefusedError - "
+_TERMS_REFUSAL_RESULT = _REFUSED_ERROR_PREFIX + "Refund refused: "
 
 # A reply that is only a row number: 1 to 3 digits, optionally after one of #,
 # "no.", "number", "transaction", "txn" or "item", and optionally followed by a
@@ -1549,6 +1559,23 @@ def _listing_rows(tool_result: dict) -> list | None:
     return rows
 
 
+def _terms_refusal(tool_result: dict) -> str | None:
+    """The refusal as _refuse_terms worded it, when an initiate_refund result is one, else None.
+
+    Only a RefundRefusedError reaches the result as _TERMS_REFUSAL_RESULT; the
+    owner check (RefundAuthorizationError), CIBA and network failures do not.
+    """
+    if tool_result.get("status") != "error":
+        return None
+    content = tool_result.get("content") or []
+    if len(content) != 1 or not isinstance(content[0], dict):
+        return None
+    text = content[0].get("text")
+    if not isinstance(text, str) or not text.startswith(_TERMS_REFUSAL_RESULT):
+        return None
+    return text[len(_REFUSED_ERROR_PREFIX):]
+
+
 def _latest_listing(messages: list) -> list | None:
     """The rows of the most recent successful list_transactions result in messages, or None."""
     names = _tool_names(messages)
@@ -1568,11 +1595,12 @@ def _latest_listing(messages: list) -> list | None:
 def _row_pick_due(history: list) -> bool:
     """True when the session's last reply is one the code wrote to ask for a row number.
 
-    That is exactly FIRST_LISTING_QUESTION, or the code's own "There is no
-    transaction N — " reply (_out_of_range_reply). The model's own wording is
-    never read: after any reply the model wrote — asking how much to refund,
-    or confirming a charge — a bare number goes to the model as typed, since
-    "5" there may mean $5.
+    That is exactly FIRST_LISTING_QUESTION, the code's terms-refusal reply
+    (one text block ending with REFUSAL_FOLLOW_UP), or the code's own "There
+    is no transaction N — " reply (_out_of_range_reply). The model's own
+    wording is never read: after any reply the model wrote — asking how much
+    to refund, or confirming a charge — a bare number goes to the model as
+    typed, since "5" there may mean $5.
     """
     if not history or history[-1].get("role") != "assistant":
         return False
@@ -1583,7 +1611,11 @@ def _row_pick_due(history: list) -> bool:
     ]
     if len(texts) != 1 or not isinstance(texts[0], str):
         return False
-    return texts[0] == FIRST_LISTING_QUESTION or _OUT_OF_RANGE_REPLY.match(texts[0]) is not None
+    return (
+        texts[0] == FIRST_LISTING_QUESTION
+        or texts[0].endswith(REFUSAL_FOLLOW_UP)
+        or _OUT_OF_RANGE_REPLY.match(texts[0]) is not None
+    )
 
 
 def _row_selection(message, history: list) -> tuple[int, list] | None:
@@ -1639,9 +1671,16 @@ class RefundReplies(HookProvider):
     empty list, or a second listing (the no-phone driver's "Refund $X of the
     {merchant} charge" turn may re-list) — is left to the model.
 
+    When the tool batch is exactly one initiate_refund result that is a terms
+    refusal (_refuse_terms, read by _terms_refusal), the turn ends with that
+    refusal as worded plus REFUSAL_FOLLOW_UP. Any other initiate_refund error —
+    the owner check, CIBA, the network — and any batch of several tools is
+    left to the model.
+
     A reply that is only a row number (row_number), sent right after a reply
-    the code wrote — FIRST_LISTING_QUESTION or the out-of-range reply
-    (_row_pick_due) — is resolved against the most recent listing:
+    the code wrote — FIRST_LISTING_QUESTION, the terms-refusal reply or the
+    out-of-range reply (_row_pick_due) — is resolved against the most recent
+    listing:
       - in range: the row is added to the user's message, beside what they
         typed, before the message is saved, so the model confirms that row;
       - out of range: the model is not called; the reply names the valid range.
@@ -1720,7 +1759,16 @@ class RefundReplies(HookProvider):
             # The assistant message that asked for this batch is already in the
             # history; this batch's result is not yet.
             history = event.agent.messages
-            if _tool_names(history).get(results[0].get("toolUseId")) != "list_transactions":
+            tool_name = _tool_names(history).get(results[0].get("toolUseId"))
+            if tool_name == "initiate_refund":
+                refusal = _terms_refusal(results[0])
+                if refusal is None:
+                    return
+                event.end_turn = refusal + REFUSAL_FOLLOW_UP
+                # The refusal can hold figures the model supplied; none are logged.
+                logger.info("uc3_reply_by_code", extra={"reply": "terms_refused"})
+                return
+            if tool_name != "list_transactions":
                 return
             if not _listing_rows(results[0]):
                 return
