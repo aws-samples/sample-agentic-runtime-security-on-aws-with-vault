@@ -55,8 +55,12 @@ export function hasAccountsCall(events: AgentEvent[]): boolean {
  * One view per tool call, in the order the calls started, at their latest status. The
  * duration is the one the agent reported; without it, the time between the call's first
  * event and its result.
+ *
+ * `done` is whether the turn has ended. A call with no result on an ended turn never
+ * finished — the stream stopped under it — so it shows as failed, with no duration, the
+ * same as the Agent Log's fold for that turn; never as still running.
  */
-export function toolCallsOf(events: AgentEvent[]): ToolCallView[] {
+export function toolCallsOf(events: AgentEvent[], done = false): ToolCallView[] {
 	const byId = new Map<string, ToolCallView & { startedTs?: number }>();
 	for (const event of events) {
 		if (event.type !== 'tool_call') continue;
@@ -68,7 +72,9 @@ export function toolCallsOf(events: AgentEvent[]): ToolCallView[] {
 		}
 		byId.set(event.toolCallId, { id: event.toolCallId, name: event.name, status: event.status, durationMs, startedTs });
 	}
-	return [...byId.values()].map(({ id, name, status, durationMs }) => ({ id, name, status, durationMs }));
+	return [...byId.values()].map(({ id, name, status, durationMs }) =>
+		done && status === 'in_progress' ? { id, name, status: 'error' } : { id, name, status, durationMs }
+	);
 }
 
 function isObject(value: JsonValue | undefined): value is { [key: string]: JsonValue } {

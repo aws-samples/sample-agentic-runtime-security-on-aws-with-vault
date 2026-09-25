@@ -155,7 +155,7 @@
 		if (!turnId || turn.msgs.some((msg) => msg.turnId !== turnId)) return null;
 		const logTurn = log.turns.find((t) => t.id === turnId);
 		if (!logTurn || !hasAccountsCall(logTurn.events)) return null;
-		return { tools: toolCallsOf(logTurn.events), cards: accountsCardsOf(logTurn.events) };
+		return { tools: toolCallsOf(logTurn.events, logTurn.done), cards: accountsCardsOf(logTurn.events) };
 	}
 
 	function extractConsent(text: string, agent: AgentName) {
