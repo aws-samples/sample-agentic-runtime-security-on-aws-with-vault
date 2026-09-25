@@ -607,9 +607,11 @@
 		background: var(--ovi-teal);
 	}
 
+	/* Bold as on the approved boards; the app's reset sets <b> to inherit its weight. */
 	.request b {
 		display: block;
 		font-size: 15px;
+		font-weight: 700;
 	}
 
 	.request-q {
