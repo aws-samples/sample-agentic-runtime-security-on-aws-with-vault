@@ -27,12 +27,20 @@
   navigation is collapsed to its rail (ChatWorkspace sets --ovi-panel-width). At 960px and
   narrower it covers the chat from the right, under the top bar, and the navigation drawer
   opens over it.
+
+  Full width: wider than 960px the header carries an expand button (before the close
+  button) that floats the panel over the whole window, a modal dialog 24px inside it, with the
+  page behind dimmed and inert (ChatWorkspace's float contract). Floating, the header shows
+  "Dock beside chat" instead. The first Escape docks it and returns focus to the expand
+  button; the next one closes it. A click on the scrim docks it too. Floating and docked are
+  the same component: open requests, expanded output and the live stream carry over.
 -->
 <script lang="ts">
-	import { tick, untrack } from 'svelte';
+	import { onDestroy, tick, untrack } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
 	import { clockTime, logLines, turnState, type TurnState } from '$lib/agent-log';
 	import type { Turn } from '$lib/turn-events.svelte';
+	import { getPanelFloat } from '$lib/components/chat/ChatWorkspace.svelte';
 
 	interface Props {
 		id: string;
@@ -114,17 +122,41 @@
 		wasLive = now;
 	});
 
+	// Full width. Without a ChatWorkspace around it the panel stays docked and draws no
+	// expand button.
+	const float = getPanelFloat();
+	const floating = $derived(float?.floating === id);
+	let dockButton: HTMLButtonElement | undefined = $state();
+
+	async function expand() {
+		float?.expand(id);
+		await tick();
+		dockButton?.focus();
+	}
+
+	// Floating: the page behind is inert, so the float ends before the panel closes and focus
+	// can go back to the header button.
+	onDestroy(() => float?.release(id));
+
 	async function close() {
 		const toggle = document.querySelector<HTMLElement>(`[aria-controls="${id}"]`);
+		float?.release(id);
 		onclose();
 		await tick();
 		toggle?.focus();
 	}
 
+	// Escape docks a floating panel (ChatWorkspace returns focus to the expand button) and
+	// closes a docked one.
 	function onKeydown(event: KeyboardEvent) {
 		if (event.key === 'Escape') {
 			event.stopPropagation();
-			close();
+			if (floating) {
+				event.preventDefault();
+				float?.dock();
+			} else {
+				close();
+			}
 		}
 	}
 
@@ -149,10 +181,38 @@
 </script>
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-<aside {id} class="agent-log" aria-labelledby="{id}-title" onkeydown={onKeydown}>
+<aside
+	{id}
+	class="agent-log"
+	class:floating
+	role={floating ? 'dialog' : undefined}
+	aria-modal={floating ? 'true' : undefined}
+	aria-label={floating ? 'Agent activity, full width' : undefined}
+	aria-labelledby={floating ? undefined : `${id}-title`}
+	onkeydown={onKeydown}
+>
 	<header class="log-header">
 		<h2 id="{id}-title" class="log-title">Agent activity</h2>
 		<span class="live-dot" class:live-dot-idle={!live} role="img" aria-label={live ? 'Streaming' : 'Idle'}></span>
+		{#if float && floating}
+			<button type="button" class="dock" bind:this={dockButton} onclick={() => float.dock()}>
+				<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+					<rect x="1.5" y="2.5" width="11" height="9" rx="1.5"></rect>
+					<path d="M8.5 2.5v9"></path>
+				</svg>
+				Dock beside chat
+			</button>
+		{:else if float}
+			<!-- The tooltip repeats the button's name for sighted pointer and keyboard users. -->
+			<span class="xpw">
+				<button type="button" class="xp" data-panel-expand aria-label="Expand to full width" onclick={expand}>
+					<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+						<path d="M1.5 3v8M12.5 3v8M4 7h6M5.8 5.2L4 7l1.8 1.8M8.2 5.2L10 7 8.2 8.8"></path>
+					</svg>
+				</button>
+				<span class="xtip" aria-hidden="true">Expand to full width</span>
+			</span>
+		{/if}
 		<button type="button" class="log-close" aria-label="Close agent activity" onclick={close}>
 			<svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
 				<path d="M4 4l10 10M14 4L4 14"></path>
@@ -338,10 +398,111 @@
 	}
 
 	.log-close:focus-visible,
+	.xp:focus-visible,
+	.dock:focus-visible,
 	.rqh:focus-visible,
 	.chip-button:focus-visible {
 		outline: 2px solid var(--log-step);
 		outline-offset: 2px;
+	}
+
+	/* ---- Full width (the approved expand-control and floating boards) --------------- */
+	/* The expand button, before the close button. On the dark header its tooltip is the
+	   inverse of the surface (light), the Carbon tooltip rule. */
+	.xpw {
+		position: relative;
+		display: flex;
+	}
+
+	.xp {
+		display: flex;
+		margin: -4px 0;
+		padding: 4px;
+		border: 0;
+		border-radius: 6px;
+		background: none;
+		color: var(--log-faint);
+		cursor: pointer;
+	}
+
+	.xp:hover,
+	.xp:focus-visible {
+		color: var(--log-text);
+		background: rgba(148, 163, 184, 0.16);
+	}
+
+	.xtip {
+		display: none;
+		position: absolute;
+		top: calc(100% + 12px);
+		right: -10px;
+		z-index: 2;
+		padding: 6px 10px;
+		border-radius: 6px;
+		background: #f4f4f4;
+		color: var(--ovi-text-primary);
+		font: 500 13px var(--ovi-font-sans);
+		white-space: nowrap;
+		box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+	}
+
+	.xtip::before {
+		content: '';
+		position: absolute;
+		top: -4px;
+		right: 18px;
+		width: 8px;
+		height: 8px;
+		background: #f4f4f4;
+		transform: rotate(45deg);
+	}
+
+	.xpw:hover .xtip,
+	.xp:focus-visible + .xtip {
+		display: block;
+	}
+
+	/* Floating: fixed 24px inside the window, over ChatWorkspace's scrim (z-index 20). */
+	.agent-log.floating {
+		position: fixed;
+		inset: 24px;
+		z-index: 21;
+		width: auto;
+		border: 1px solid var(--log-line);
+		border-radius: 12px;
+		overflow: hidden;
+		box-shadow: 0 24px 64px rgba(0, 0, 0, 0.35);
+	}
+
+	.floating .log-header {
+		padding: 14px 24px;
+	}
+
+	.floating .log-body {
+		padding: 8px 24px;
+	}
+
+	.floating .log-footer {
+		padding: 12px 24px;
+	}
+
+	.dock {
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+		margin: -6px 0;
+		padding: 6px 12px;
+		border: 1px solid var(--log-line);
+		border-radius: var(--ovi-radius-pill);
+		background: rgba(148, 163, 184, 0.08);
+		color: var(--log-title);
+		font: 500 13px var(--ovi-font-sans);
+		cursor: pointer;
+	}
+
+	.dock:hover {
+		color: #fff;
+		background: rgba(148, 163, 184, 0.16);
 	}
 
 	.log-body {
@@ -556,6 +717,11 @@
 			width: min(100%, 420px);
 			box-sizing: border-box;
 			box-shadow: -4px 0 24px rgba(22, 22, 22, 0.28);
+		}
+
+		/* The panel already covers the chat here: no full-width control. */
+		.xpw {
+			display: none;
 		}
 	}
 </style>

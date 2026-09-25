@@ -25,18 +25,51 @@
     navigation is collapsed to its rail on a wide screen (the rail frees 208px; the panel
     takes 100 of them and the chat the rest). A new panel reads it the same way:
     width: var(--ovi-panel-width, 420px).
+
+  Floating a panel full width (wider than 960px only)
+    A presenter can float the open panel over the whole window and dock it back. The state is
+    kept here, so pages pass nothing: a panel reads it with getPanelFloat() (below) and draws
+    an expand button, or a "Dock beside chat" button while it floats.
+      - expand(id) floats the panel whose element has that id: it is fixed 24px inside the
+        window over the scrim (--ovi-scrim), and every element outside it is made inert.
+        Tab and Shift+Tab wrap inside the panel.
+      - dock() puts it back beside the chat and focuses the panel's expand button, which
+        carries the attribute data-panel-expand. Escape (the panel handles it; this workspace
+        catches it too when focus is outside the panel) and a click on the scrim dock it.
+      - release(id) drops the float without moving focus. A panel calls it before it closes
+        and when it unmounts, so the page behind is never left inert.
+    Floating is not kept across a reload, and ends by itself when the window narrows to
+    960px or less, where the panel already covers the chat.
 -->
 <script module lang="ts">
+	import { getContext } from 'svelte';
+
 	export interface Suggestion {
 		label: string;
 		/** 'warn' renders the red chip used for the refund prompt. */
 		tone?: 'default' | 'warn';
 		onselect: () => void;
 	}
+
+	/** The float contract a panel in the `panel` slot uses. See the header comment. */
+	export interface PanelFloat {
+		/** The id of the panel floating full width, or null while it is docked. */
+		readonly floating: string | null;
+		expand(id: string): void;
+		dock(): void;
+		release(id: string): void;
+	}
+
+	const PANEL_FLOAT = Symbol('ovi-panel-float');
+
+	/** The workspace's float state, for a panel rendered in its `panel` slot. Undefined elsewhere. */
+	export function getPanelFloat(): PanelFloat | undefined {
+		return getContext<PanelFloat | undefined>(PANEL_FLOAT);
+	}
 </script>
 
 <script lang="ts">
-	import type { Snippet } from 'svelte';
+	import { setContext, tick, type Snippet } from 'svelte';
 	import { TextArea } from 'carbon-components-svelte';
 
 	interface Props {
@@ -112,7 +145,125 @@
 			onsend();
 		}
 	}
+
+	// ---- Floating a panel full width ---------------------------------------------------
+	// Must match the max-width media query below: the panel already covers the chat there.
+	const NARROW = '(max-width: 960px)';
+
+	let floating = $state<string | null>(null);
+
+	/** The elements this workspace made inert, so docking restores exactly those. */
+	let madeInert: Element[] = [];
+	/** Elements that draw nothing: left as they are. */
+	const INERT_SKIP = new Set(['SCRIPT', 'STYLE', 'LINK', 'META', 'TEMPLATE', 'NOSCRIPT']);
+
+	// Everything outside the panel, up to <body>, except the scrim (a click on it docks) and
+	// anything already inert (the page left that as it was, so it stays as it was).
+	function makeOthersInert(panel: HTMLElement) {
+		restoreInert();
+		for (let node: HTMLElement | null = panel; node && node !== document.body; node = node.parentElement) {
+			for (const sibling of node.parentElement?.children ?? []) {
+				if (sibling === node || INERT_SKIP.has(sibling.tagName) || sibling.hasAttribute('data-panel-scrim')) continue;
+				if (sibling.hasAttribute('inert')) continue;
+				sibling.setAttribute('inert', '');
+				madeInert.push(sibling);
+			}
+		}
+	}
+
+	function restoreInert() {
+		for (const el of madeInert) el.removeAttribute('inert');
+		madeInert = [];
+	}
+
+	function expand(id: string) {
+		if (window.matchMedia(NARROW).matches) return;
+		floating = id;
+	}
+
+	async function dock() {
+		const id = floating;
+		if (!id) return;
+		floating = null;
+		restoreInert();
+		await tick();
+		document.getElementById(id)?.querySelector<HTMLElement>('[data-panel-expand]')?.focus();
+	}
+
+	function release(id: string) {
+		if (floating !== id) return;
+		floating = null;
+		restoreInert();
+	}
+
+	setContext<PanelFloat>(PANEL_FLOAT, {
+		get floating() {
+			return floating;
+		},
+		expand,
+		dock,
+		release
+	});
+
+	// After the DOM shows the panel floating (and the scrim), the rest of the page goes inert.
+	$effect(() => {
+		const id = floating;
+		const panel = id ? document.getElementById(id) : null;
+		if (!panel) return;
+		makeOthersInert(panel);
+		return restoreInert;
+	});
+
+	// Narrowing the window to 960px or less ends the float: the panel covers the chat there.
+	$effect(() => {
+		const query = window.matchMedia(NARROW);
+		const onChange = () => {
+			if (query.matches && floating) release(floating);
+		};
+		query.addEventListener('change', onChange);
+		return () => query.removeEventListener('change', onChange);
+	});
+
+	/** What Tab reaches inside the floating panel, in document order. */
+	function focusables(panel: HTMLElement): HTMLElement[] {
+		return [
+			...panel.querySelectorAll<HTMLElement>(
+				'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+			)
+		].filter((el) => el.getClientRects().length > 0);
+	}
+
+	// While a panel floats: Tab and Shift+Tab wrap inside it, and Escape docks it when focus
+	// is not in the panel (the panel handles its own Escape and stops it there).
+	function onWindowKeydown(e: KeyboardEvent) {
+		const panel = floating ? document.getElementById(floating) : null;
+		if (!panel) return;
+		if (e.key === 'Escape') {
+			e.preventDefault();
+			dock();
+			return;
+		}
+		if (e.key !== 'Tab') return;
+		const items = focusables(panel);
+		if (items.length === 0) {
+			e.preventDefault();
+			return;
+		}
+		const first = items[0];
+		const last = items[items.length - 1];
+		const active = document.activeElement;
+		const inside = active instanceof HTMLElement && panel.contains(active);
+		if (e.shiftKey && (active === first || !inside)) {
+			e.preventDefault();
+			last.focus();
+		} else if (!e.shiftKey && (active === last || !inside)) {
+			e.preventDefault();
+			first.focus();
+		}
+	}
 </script>
+
+<svelte:window onkeydown={onWindowKeydown} />
 
 <div class="workspace">
 	<section class="chat" aria-labelledby="chat-title">
@@ -211,6 +362,12 @@
 		</div>
 		<p class="chat-hint">{hint}</p>
 	</section>
+
+	{#if floating}
+		<!-- Pointer users dock the floating panel on the scrim; keyboard users have Escape. -->
+		<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+		<div class="panel-scrim" data-panel-scrim aria-hidden="true" onclick={() => dock()}></div>
+	{/if}
 
 	{@render panel?.()}
 </div>
@@ -510,6 +667,15 @@
 		text-align: center;
 		font-size: 12.5px;
 		color: var(--ovi-text-helper);
+	}
+
+	/* ---- Floating panel ------------------------------------------------------------ */
+	/* Under the floating panel (z-index 21, set by the panel) and over the navigation. */
+	.panel-scrim {
+		position: fixed;
+		inset: 0;
+		z-index: 20;
+		background: var(--ovi-scrim);
 	}
 
 	/* Screens 960px and narrower: the navigation is a drawer behind a top bar
