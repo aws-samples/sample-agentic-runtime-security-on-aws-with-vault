@@ -136,6 +136,14 @@
 		!flow || !focus ? [] : mode === 'technical' ? chipsUpTo(flow, focus.id) : focus.chips
 	);
 
+	/** The steps list's mark for a stop, matching what the line draws at that node. */
+	function stopMark(look: NodeLook): string {
+		if (look === 'done' || look === 'final') return '✓';
+		if (look === 'active') return '●';
+		if (look === 'failed') return '✕';
+		return '○';
+	}
+
 	function toggleDemoPace() {
 		if (demoPace) {
 			demoPace = false;
@@ -325,6 +333,7 @@
 <aside
 	{id}
 	class="sf"
+	class:story={mode === 'story'}
 	class:floating
 	role={floating ? 'dialog' : undefined}
 	aria-modal={floating ? 'true' : undefined}
@@ -463,12 +472,39 @@
 			</div>
 			<p class="visually-hidden" aria-live="polite">{announcement}</p>
 
-			<div class="card card-whats">
-				<div class="eyebrow">What's happening</div>
-				<div class="card-title">{focus.story.heading}</div>
-				<p class="card-body">{focus.story.body}</p>
-				{#if focus.story.note}<p class="card-note">{focus.story.note}</p>{/if}
-			</div>
+			{#if mode === 'story'}
+				<!-- Every stop, not just the one in focus: a presenter reading down gets the whole
+				     turn in plain English. The marks are the line's own node states, so the list and
+				     the drawing never disagree. A stop the stream never reported says so. -->
+				<div class="card card-steps">
+					<div class="eyebrow">What happened, step by step</div>
+					<ol class="steps">
+						{#each flow.stops as stop, i (stop.id)}
+							<li
+								class="step"
+								class:step-now={stop.id === flow.focus}
+								class:step-quiet={looks[i] === 'future' || looks[i] === 'not-observed'}
+								class:step-bad={looks[i] === 'failed'}
+							>
+								<span class="step-mark" aria-hidden="true">{stopMark(looks[i])}</span>
+								<div class="step-text">
+									<div class="step-label">{stop.label}</div>
+									<div class="step-head">{stop.story.heading}</div>
+									<p class="step-body">{stop.story.body}</p>
+									{#if stop.story.note}<p class="step-note">{stop.story.note}</p>{/if}
+								</div>
+							</li>
+						{/each}
+					</ol>
+				</div>
+			{:else}
+				<div class="card card-whats">
+					<div class="eyebrow">What's happening</div>
+					<div class="card-title">{focus.story.heading}</div>
+					<p class="card-body">{focus.story.body}</p>
+					{#if focus.story.note}<p class="card-note">{focus.story.note}</p>{/if}
+				</div>
+			{/if}
 
 			<div class="card card-signals">
 				<div class="eyebrow eyebrow-dark">Technical signals</div>
@@ -1046,6 +1082,79 @@
 		margin-top: 9px;
 	}
 
+	/* ---- Story: the steps ------------------------------------------------------------ */
+	.steps {
+		margin: 6px 0 0;
+		padding: 0;
+		list-style: none;
+	}
+
+	.step {
+		display: grid;
+		grid-template-columns: 18px minmax(0, 1fr);
+		gap: 10px;
+		padding: 9px 0;
+		border-top: 1px dashed var(--sf-divider);
+	}
+
+	.step:first-child {
+		padding-top: 2px;
+		border-top: 0;
+	}
+
+	.step-mark {
+		margin-top: 1px;
+		color: var(--ovi-teal-deep);
+		font-size: 12px;
+		line-height: 1.5;
+		text-align: center;
+	}
+
+	.step-label {
+		font: 600 10.5px/1.4 var(--ovi-font-condensed);
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		color: var(--ovi-text-helper);
+	}
+
+	.step-head {
+		font-weight: 600;
+		font-size: 14.5px;
+		line-height: 1.35;
+	}
+
+	/* line-height as drawn; Carbon sets 1.5 on every <p>. */
+	.step-body {
+		margin: 2px 0 0;
+		font-size: 13.5px;
+		line-height: 1.45;
+		color: var(--ovi-text-strong);
+	}
+
+	.step-note {
+		margin: 3px 0 0;
+		font-size: 12.5px;
+		line-height: 1.4;
+		color: var(--ovi-text-helper);
+	}
+
+	/* The stop the flow is on reads as the headline; the ones still ahead stay quiet so the
+	   list never suggests something happened that the stream has not reported. */
+	.step-now .step-head {
+		color: var(--ovi-teal-deep);
+	}
+
+	.step-quiet .step-mark,
+	.step-quiet .step-head,
+	.step-quiet .step-body {
+		color: var(--ovi-text-helper);
+	}
+
+	.step-bad .step-mark,
+	.step-bad .step-head {
+		color: var(--ovi-red);
+	}
+
 	.chip {
 		border: 0;
 		border-radius: var(--ovi-radius-pill);
@@ -1261,6 +1370,20 @@
 		grid-column: 1 / 3;
 		grid-row: 3;
 		align-self: start;
+	}
+
+	/* Story draws no Evidence column, so the steps take the space it would have used and
+	   scroll on their own; the chips drop back under the result card. */
+	.floating.story .sf-body > .card-steps {
+		grid-column: 2 / -1;
+		grid-row: 2 / 4;
+		min-height: 0;
+		overflow: auto;
+	}
+
+	.floating.story .sf-body > .card-signals {
+		grid-column: 1;
+		grid-row: 3;
 	}
 
 	.floating .sf-body > .evidence {
