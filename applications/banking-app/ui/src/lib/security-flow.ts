@@ -17,11 +17,12 @@
  * -----------------------
  * Signals are matched on structured fields first — the event type, a credential's `kind`,
  * `issuer` and `vaultPath`, a tool call's `name` and `status`, the HITL event types. Never on
- * whether a credential's `value` or `fields` is present: the UI server removes those for an
- * anonymous visitor, and the flow must read the same for them. Where the only evidence of a
- * fact is an Agent Log line, the line's opening words are matched; each of those is a named
- * constant below with the agent source line that writes it. Each signal lists the events
- * that prove it; remove them from a turn and the signal turns back to not observed.
+ * whether a credential's `value`, `fields` or `claims` is present: the UI server's activity
+ * filter decides which of those reach the browser, and the flow must read the same whichever
+ * it passes. Where the only evidence of a fact is an Agent Log line, the line's opening words
+ * are matched; each of those is a named constant below with the agent source line that writes
+ * it. Each signal lists the events that prove it; remove them from a turn and the signal turns
+ * back to not observed.
  *
  * Arrival order
  * -------------
@@ -623,10 +624,14 @@ function useCase3Signals(f: Facts): SignalSpec[] {
 	}
 	if (complete) {
 		const delegated = f.creds('delegated_token', (e) => e.issuer === 'IBM Verify Identity Access');
-		const rar = delegated.some((s) => {
-			const claims = s.event.type === 'agent:credential' ? s.event.claims : undefined;
-			return Array.isArray(claims?.authorization_details);
-		});
+		// RAR is shown when the delegated token's claims carry authorization_details, or when the
+		// agent's exchange line lists them (applications/uc3-agent/app/agent.py:519-521), so the
+		// chip survives a filter that drops a credential's claims.
+		const rar =
+			delegated.some((s) => {
+				const claims = s.event.type === 'agent:credential' ? s.event.claims : undefined;
+				return Array.isArray(claims?.authorization_details);
+			}) || f.lines(UC3_TOKEN_EXCHANGED, (t) => t.includes(' authorization_details ')).length > 0;
 		specs.push(
 			{
 				id: 'delegated-token',
