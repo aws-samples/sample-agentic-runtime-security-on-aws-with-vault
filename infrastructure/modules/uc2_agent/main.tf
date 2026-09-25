@@ -871,7 +871,8 @@ resource "kubernetes_network_policy" "banking_ui_egress" {
 
     # To Vault (vault namespace) on 8200 — the UI server's own Kubernetes login
     # and its aws/sts/audit-reader read for the Audit Trace card (issue #68). The
-    # Athena, Glue and S3 calls those keys make leave on the 443 rule above.
+    # pod's only AWS call with those keys is to the Athena API, on the 443 rule
+    # above; Athena itself reads Glue and S3 server-side.
     egress {
       to {
         namespace_selector {
