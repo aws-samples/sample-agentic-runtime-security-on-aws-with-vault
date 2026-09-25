@@ -24,10 +24,10 @@ import json
 import logging
 import os
 import re
+from decimal import Decimal, InvalidOperation
 
 import httpx
 from strands import Agent, ToolContext, tool
-from strands.hooks import AfterToolsEvent, HookProvider, HookRegistry
 from strands.models import BedrockModel
 
 from . import activity
@@ -195,16 +195,20 @@ def get_transactions(tool_context: ToolContext, account_id: str = "") -> list[di
 
 
 # ---------------------------------------------------------------------------
-# The line under the transactions card, written by code
+# The reply under the transactions card, checked by code
 #
-# The chat shows get_transactions' rows as a card. The line under it is built
-# here from the rows the tool returned in this turn, so the model can neither
-# repeat the rows nor state a count or date the tool did not return: after a
-# batch of exactly one successful get_transactions call the model is not called
-# again (AfterToolsEvent.end_turn).
+# The chat shows get_transactions' rows as a card. The model writes the reply,
+# so a specific question ("How much did I spend at Equinox?") still gets its
+# answer. After the turn, checked_reply() compares that reply with the rows
+# this turn's get_transactions calls returned. A reply that lists them again —
+# a list or table whose items name those rows, or prose naming three or more
+# of them — is replaced by a line built from the rows themselves ("Here are
+# your 9 recent transactions from September 25, 2026."). get_accounts is not
+# checked: an answer may name the accounts.
 # ---------------------------------------------------------------------------
 
 # invocation_state key: toolUseId -> what that get_transactions call returned.
+# main.py passes each turn its own invocation_state and reads it back.
 _TRANSACTIONS_SEEN = "uc2_transactions_seen"
 
 _MONTHS = (
@@ -222,8 +226,17 @@ def _utc_date(created_at) -> str | None:
     return match.group(0)
 
 
+def _plain_amount(value) -> str | None:
+    """An amount as unsigned two-decimal text ("-88.30" -> "88.30"), or None when it is not a number."""
+    try:
+        amount = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
+    return str(abs(amount).quantize(Decimal("0.01"))) if amount.is_finite() else None
+
+
 def _record_transactions(tool_context: ToolContext, transactions: list, account_filtered: bool) -> None:
-    """Record, for this call only, how many rows came back and their first and last date."""
+    """Record, for this call only, the rows it returned: count, first and last date, and what names each row."""
     dates = [_utc_date(row.get("created_at")) if isinstance(row, dict) else None for row in transactions]
     known = all(dates) and bool(dates)
     tool_context.invocation_state.setdefault(_TRANSACTIONS_SEEN, {})[tool_context.tool_use["toolUseId"]] = {
@@ -231,6 +244,11 @@ def _record_transactions(tool_context: ToolContext, transactions: list, account_
         "first_date": min(dates) if known else None,
         "last_date": max(dates) if known else None,
         "account_filtered": account_filtered,
+        "rows": [
+            {"description": row.get("description"), "amount": _plain_amount(row.get("amount"))}
+            for row in transactions
+            if isinstance(row, dict)
+        ],
     }
 
 
@@ -261,36 +279,74 @@ def transactions_reply(seen: dict) -> str:
     return text + "."
 
 
-class TransactionsReply(HookProvider):
-    """Ends the turn with transactions_reply() after a batch of exactly one successful get_transactions.
+# A line that is a markdown list item or table row: "- x", "* x", "• x", "1. x", "2) x", "| x |".
+_LIST_LINE = re.compile(r"^[ \t]*(?:[-*•+]|\d{1,3}[.)]|\|)[ \t]*\S.*$", re.MULTILINE)
+# A money figure in a line: "$4,200.00" -> "4,200.00".
+_MONEY = re.compile(r"\d[\d,]*\.\d{2}(?!\d)")
 
-    Any other batch — get_accounts, get_accounts and get_transactions together,
-    or an error — is left to the model. A failure here is logged without any
-    value and the model writes the reply: Strands raises a hook's exception into
-    the turn, and this must never break one.
+
+def _mentions(text: str, phrase) -> bool:
+    """True when `phrase` appears in `text` as whole words, ignoring case."""
+    if not isinstance(phrase, str) or not phrase.strip():
+        return False
+    return re.search(r"(?<!\w)" + re.escape(phrase.strip()) + r"(?!\w)", text, re.IGNORECASE) is not None
+
+
+def _line_names_row(line: str, row: dict) -> bool:
+    """True when a list line names a transaction row, by its description or its amount."""
+    if _mentions(line, row.get("description")):
+        return True
+    amounts = {_plain_amount(figure.replace(",", "")) for figure in _MONEY.findall(line)}
+    return row.get("amount") is not None and row["amount"] in amounts
+
+
+def reply_problem(text: str, invocation_state: dict) -> str | None:
+    """Why the reply repeats this turn's transaction rows ("list" or "names_rows"), or None."""
+    rows = [row for seen in invocation_state.get(_TRANSACTIONS_SEEN, {}).values() for row in seen["rows"]]
+    if not rows:
+        return None
+    for line in _LIST_LINE.findall(text):
+        if any(_line_names_row(line, row) for row in rows):
+            return "list"
+    named = {row["description"].strip().lower() for row in rows if _mentions(text, row.get("description"))}
+    return "names_rows" if len(named) >= 3 else None
+
+
+def _all_calls(seen: list) -> dict:
+    """One record for every get_transactions call of the turn, for the replacement line."""
+    if len(seen) == 1:
+        return seen[0]
+    dates = [date for record in seen for date in (record["first_date"], record["last_date"])]
+    known = all(dates)
+    return {
+        "count": sum(record["count"] for record in seen),
+        "first_date": min(dates) if known else None,
+        "last_date": max(dates) if known else None,
+        "account_filtered": False,
+    }
+
+
+def checked_reply(text: str, invocation_state: dict) -> str:
+    """The model's reply, or — when it repeats this turn's transaction rows — the line built from them.
+
+    main.py calls this on the text it sends as the answer, so the answer frames
+    keep their shape and order. Never raises: on a failure the model's reply
+    stands and the failure is logged without any value.
     """
-
-    def register_hooks(self, registry: HookRegistry, **kwargs) -> None:
-        registry.add_callback(AfterToolsEvent, self._after_tools)
-
-    @staticmethod
-    def _after_tools(event: AfterToolsEvent) -> None:
-        try:
-            results = [
-                block["toolResult"]
-                for block in event.message.get("content", [])
-                if isinstance(block, dict) and isinstance(block.get("toolResult"), dict)
-            ]
-            if len(results) != 1 or results[0].get("status") != "success":
-                return
-            # Only get_transactions records here, and only when it returns its rows.
-            seen = event.invocation_state.get(_TRANSACTIONS_SEEN, {}).get(results[0].get("toolUseId"))
-            if seen is None:
-                return
-            event.end_turn = transactions_reply(seen)
-            logger.info("uc2_reply_by_code", extra={"reply": "transactions", "transaction_count": seen["count"]})
-        except Exception as exc:  # noqa: BLE001 — the model writes the reply instead
-            logger.warning("uc2_reply_hook_failed", extra={"hook": "after_tools", "error_type": type(exc).__name__})
+    try:
+        problem = reply_problem(text, invocation_state)
+        if problem is None:
+            return text
+        seen = list(invocation_state[_TRANSACTIONS_SEEN].values())
+        replacement = transactions_reply(_all_calls(seen))
+        logger.info(
+            "uc2_reply_replaced",
+            extra={"reason": problem, "transaction_calls": len(seen), "transaction_count": sum(s["count"] for s in seen)},
+        )
+        return replacement
+    except Exception as exc:  # noqa: BLE001 — the model's reply stands
+        logger.warning("uc2_reply_check_failed", extra={"error_type": type(exc).__name__})
+        return text
 
 
 def build_uc2_model(vault_client=None) -> BedrockModel:
@@ -363,6 +419,8 @@ def build_uc2_agent(model: BedrockModel) -> Agent:
         "\n"
         "RESPONSE STYLE:\n"
         "- Present financial data clearly (format amounts with currency symbol).\n"
+        "- After get_transactions, reply in one or two sentences and answer the user's question; "
+        "do not list the transactions.\n"
         "- Never state an amount, count, date or transaction that a tool did not return in this "
         "turn. To answer anything about accounts or transactions, call the tool first.\n"
         "- Do NOT include JWT tokens, Vault lease IDs, or credential metadata in your response.\n"
@@ -373,12 +431,11 @@ def build_uc2_agent(model: BedrockModel) -> Agent:
 
     # ActivityHooks reports each tool call and follow-up model call into the
     # current turn's event queue (activity._TURN_ACTIVITY), never into a shared one.
-    # TransactionsReply writes the line under the transactions card (see above).
     agent = Agent(
         model=model,
         tools=[get_accounts, get_transactions],
         system_prompt=system_prompt,
-        hooks=[activity.ActivityHooks(), TransactionsReply()],
+        hooks=[activity.ActivityHooks()],
     )
 
     logger.info(

@@ -35,7 +35,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from . import activity
-from .agent import build_uc2_agent, build_uc2_model, _REQUEST_JWT
+from .agent import build_uc2_agent, build_uc2_model, checked_reply, _REQUEST_JWT
 from .vault_client import build_agent_vault_client
 
 logging.basicConfig(
@@ -98,10 +98,14 @@ def _sse(event: dict) -> str:
     return f"data: {json.dumps(event)}\n\n"
 
 
-def _run_agent(agent, message: str, turn: activity.TurnActivity):
-    """Run the agent on a worker thread, and always tell the stream when it is done."""
+def _run_agent(agent, message: str, turn: activity.TurnActivity, state: dict):
+    """Run the agent on a worker thread, and always tell the stream when it is done.
+
+    `state` is this turn's own invocation_state: the tools record in it what
+    they returned, and checked_reply reads it once the agent has finished.
+    """
     try:
-        return agent(message)
+        return agent(message, invocation_state=state)
     finally:
         turn.close()
 
@@ -178,7 +182,8 @@ async def chat(request: Request, body: ChatRequest):
             # Invoke the Strands agent off the event loop; to_thread copies the
             # current context, so _REQUEST_JWT and the turn are visible to the
             # hooks and tools it runs. Each step streams as soon as it is reported.
-            worker = asyncio.ensure_future(asyncio.to_thread(_run_agent, agent, message, turn))
+            state: dict = {}
+            worker = asyncio.ensure_future(asyncio.to_thread(_run_agent, agent, message, turn, state))
             async for event in turn.events():
                 yield _sse(event)
             response = await worker
@@ -186,6 +191,10 @@ async def chat(request: Request, body: ChatRequest):
             # Stream the response. Strip any <thinking>...</thinking> chain-of-thought
             # the model emits so it never leaks into the chat UI (mirrors uc3-agent).
             content = re.sub(r'<thinking>.*?</thinking>\s*', '', str(response), flags=re.DOTALL)
+            # A reply that lists this turn's transaction rows again becomes the line
+            # built from those rows (agent.checked_reply); both answer frames below
+            # carry the checked text.
+            content = checked_reply(content, state)
             yield _sse(turn.audit_seed())
             yield _sse(turn.build({"type": "agent:narration", "glyph": "▶", "text": "Writing the answer."}))
             yield _sse(turn.build({"type": "agent:text_delta", "text": content}))
