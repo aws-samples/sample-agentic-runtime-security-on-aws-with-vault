@@ -50,9 +50,12 @@ _ISSUED_CREDENTIALS: ContextVar[list[dict] | None] = ContextVar(
 def _record_issuance(vault_path: str, creds: dict) -> None:
     """Record one Vault credential issuance for the in-flight request.
 
-    Captures only audit-correlatable metadata: the lease id exactly as Vault
-    spelled it, and its TTL. NEVER the username or password — this record is
-    serialized into the /query response body and the streamed events.
+    The lease record appended to the sink holds only audit-correlatable
+    metadata: the lease id exactly as Vault spelled it, and its TTL. NEVER the
+    username or password — that record is serialized into the /query JSON
+    reply and the stream's agent:audit_seed. The login itself (username and
+    password) goes only to a streamed request's own event queue, as one
+    agent:credential event; it is never logged and never returned to the model.
     """
     lease = {
         "vault_path": vault_path,
