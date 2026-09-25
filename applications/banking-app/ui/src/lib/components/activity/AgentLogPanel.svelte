@@ -179,8 +179,8 @@
 									<span class="cred-value">{c.value}</span>
 								{:else if c.fields}
 									<span class="cred-value">
-										{#each c.fields as [name, part] (name)}
-											<span class="cred-part"><span class="cred-key">{name}</span> {part}</span>
+										{#each c.fields as [name, part], partIndex (name)}
+											{#if partIndex > 0}{' '}{/if}<span class="cred-part"><span class="cred-key">{name}</span> {part}</span>
 										{/each}
 									</span>
 								{/if}
@@ -385,11 +385,8 @@
 		word-break: break-all;
 	}
 
-	/* One part per line: an AWS session token alone fills several. */
-	.cred-part {
-		display: block;
-	}
-
+	/* The parts run on inline, one after another, as the design shows. The key never breaks
+	   mid-word; the value wraps anywhere. */
 	.cred-key {
 		color: var(--log-key);
 		white-space: nowrap;
