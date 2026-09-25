@@ -92,7 +92,7 @@ function literal(value: string): string {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** AWS rejected the keys themselves (expired, revoked): drop them so the next call issues fresh ones. */
+/** AWS rejected the keys themselves (expired, revoked): drop them and the client holding them, so the next call issues fresh ones. */
 function isCredentialRejection(err: unknown): boolean {
 	const name = (err as { name?: unknown })?.name;
 	return (
@@ -110,7 +110,12 @@ function classify(err: unknown): AuditQueryError {
 		return new AuditQueryError('credentials', (err as Error).message);
 	}
 	if (isCredentialRejection(err)) {
+		// The SDK client keeps the keys it was handed until five minutes before they
+		// expire and does not ask again on a rejection, so forgetting them here alone
+		// would leave it sending the rejected keys for about ten more minutes. A new
+		// client asks auditReaderCredentials() on its first call, which issues fresh ones.
 		forgetAuditReaderCredentials();
+		client = null;
 		return new AuditQueryError('credentials', `AWS rejected the audit-reader keys (${String(name)})`);
 	}
 	if (name === 'AccessDeniedException') {
