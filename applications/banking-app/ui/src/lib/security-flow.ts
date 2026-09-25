@@ -602,13 +602,21 @@ function useCase3Signals(f: Facts): SignalSpec[] {
 		}
 	];
 
+	// The turn's requestId is the refund's only once a refund tool bound it: initiate_refund
+	// does so first thing (applications/uc3-agent/app/agent.py:871), complete_refund only after
+	// its three checks pass (:1083). A refusal before that carries the turn's own id instead
+	// (applications/uc3-agent/app/activity.py:213), so a completion needs a step that runs after
+	// the bind: the owner check, the approval poll, or the approval's outcome.
+	const refundIdBound =
+		initiate ||
+		[...f.lines(UC3_OWNER_OK), ...f.lines(UC3_OWNER_REFUSED), ...f.lines(UC3_APPROVAL_POLL), ...approved, ...denied, ...timedOut].length > 0;
 	if (refundTurn) {
 		specs.push(
 			{
 				id: 'request-id',
 				stop: 'request',
 				label: 'Request ID bound to the refund',
-				seen: f.list.filter((s) => s.event.requestId).slice(0, 1),
+				seen: refundIdBound ? f.list.filter((s) => s.event.requestId).slice(0, 1) : [],
 				chips: ['request_id']
 			},
 			{
