@@ -3,6 +3,7 @@
  *
  * The answers to "has this sign-in expired?" and "which cookies hold it, with which
  * attributes?" live here, so no two parts of the UI can answer differently:
+ *   - hooks.server.ts: is this request still signed in? If not, which cookies to clear.
  *   - lib/server/audit-trace/session.ts: has the Audit Trace caller's sign-in expired?
  *   - routes/callback/+page.server.ts: how long each session cookie lives.
  *   - routes/logout/+server.ts: which cookies to clear, and with which attributes.

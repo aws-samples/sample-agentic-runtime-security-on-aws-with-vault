@@ -2,7 +2,8 @@
  * Root landing — server-side OAuth Authorization Code + PKCE initiator.
  *
  * Behavior:
- *   - If the user already has a session (access_token cookie) → /dashboard.
+ *   - If the request is signed in (locals.accessToken, which hooks.server.ts
+ *     sets only while the id_token has not expired) → /dashboard.
  *   - Otherwise → generate PKCE state, store it in a short-lived httpOnly
  *     cookie, and 302 the browser to IVIA /oauth2/authorize. The browser
  *     never sees a banking-ui login form; WebSEAL (the IVIA WRP) serves
