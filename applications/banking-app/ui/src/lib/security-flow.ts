@@ -706,15 +706,15 @@ function useCase3Signals(f: Facts): SignalSpec[] {
 		specs.push(
 			{ id: 'audit-seed', stop: 'result', label: "Refund's request ID handed to the audit trail", seen: seed, chips: ['request_id'] },
 			// Firehose delivers the audit rows to Athena about 60 s after the request
-			// (infrastructure/modules/observability/main.tf, buffering_interval = 60). The stream
-			// cannot see Athena, so once the seed has arrived this stays pending.
+			// (infrastructure/modules/observability/main.tf, buffering_interval = 60), so the
+			// correlation happens AFTER this turn and the stream can never report it. Calling it
+			// "pending" left a finished refund showing a step that waits for ever; it is a later
+			// workshop step, and the flow simply does not claim it.
 			{
 				id: 'athena',
 				stop: 'result',
-				label: 'Audit rows correlated in Athena',
-				seen: [],
-				waiting: seed.length > 0,
-				note: seed.length > 0 ? 'about 60 s' : undefined
+				label: 'Audit rows correlated in Athena — about 60 s after this turn',
+				seen: []
 			}
 		);
 	}
