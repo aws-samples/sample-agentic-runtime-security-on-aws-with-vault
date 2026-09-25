@@ -19,6 +19,9 @@ Terraform module that provisions all Vault configuration required by the three a
 | K8s role: uc1 | `kubernetes/role/uc1` | CONF-01 |
 | K8s role: uc2 | `kubernetes/role/uc2` | CONF-01 |
 | K8s role: uc3 | `kubernetes/role/uc3` | CONF-01 |
+| AWS STS role `audit-reader` (assumed_role, 900 s; session policy from tier 1, plan fails if over AWS's 2,048-character limit) | `aws/sts/audit-reader` | #68 · Audit Trace card |
+| Policy: banking-ui (read on `aws/sts/audit-reader`, nothing else, no default policy) | — | #68 · Audit Trace card |
+| K8s role: banking-ui (bound to `uc2-ui-sa` in `banking-app`, 1,200 s token) | `kubernetes/role/banking-ui` | #68 · Audit Trace card |
 | Agent Registry: entity + registration `uc1-agent` (inert ceiling) | `identity/entity` + `agent-registry/registration/display-name/uc1-agent` | VNAI-03 |
 | Agent Registry: entity + registration `agent-uc2` (UC2 ceiling; RAR optional) | `agent-registry/registration/display-name/agent-uc2` | VNAI-03 |
 | Agent Registry: entity + registration `uc3-actor` (UC3 ceiling; RAR mandatory) | `agent-registry/registration/display-name/uc3-actor` | VNAI-03 |
@@ -101,6 +104,7 @@ The **UC3 agent as itself** row is **pending live proof**: it is confirmed once
 | **UC1** | ONE | k8s `uc1-readonly` floor bound to the `uc1` role. The `uc1-ceiling` is INERT — k8s tokens carry no `act.sub`, so the ceiling never self-applies. |
 | **UC2** | THREE | human baseline (`uc2-human-baseline`, resolved from `sub`) ∩ agent ceiling (`uc2-agent-ceiling`, resolved from `act.sub`) ∩ per-request `vault:path_access` RAR (optional for UC2). |
 | **UC3** | THREE | human baseline (`uc3-human-baseline`, `sub=jaime`) ∩ agent ceiling (`uc3-agent-ceiling`, `act.sub=uc3-actor`) ∩ per-request `vault:path_access` RAR (**mandatory**). |
+| **Banking UI server as itself** | ONE | k8s `banking-ui` policy bound to the `banking-ui` role (`uc2-ui-sa`): read on `aws/sts/audit-reader`, nothing else — not even `default`, so it cannot look up or renew its own token; it logs in afresh whenever its keys run out. The keys it gets can read **every** user's audit rows; per-user isolation is the endpoint's `WHERE request_id = ? AND user_approved_sub = ?` on the `sub` of the caller's verified id_token (`applications/banking-app/ui/src/lib/server/audit-trace/`). |
 | **UC3 agent as itself** | ONE | k8s `uc3-agent` policy bound to the `uc3` role (the pod's own login, held for its lifetime): `database/creds/uc3-readonly`, `aws/sts/bedrock-reader`, `aws/sts/uc3-logs-writer`, own-token lookup and lease renewal. It has **no** `database/creds/uc3-refund-writer`: the refund writer is reachable only through the three-layer UC3 row above. `verify-uc3.sh` Check 21, in both normal mode and `--bypass`, logs in as this role and asserts the denial. |
 
 The ceiling is **restrict-only** — it can only shrink the human baseline, never grant
@@ -175,6 +179,8 @@ Vault writes one JSON object per API call to pod stdout. The fluent-bit DaemonSe
 | `rds_master_user_secret_arn` | `string` | — | Secrets Manager ARN for RDS master password (sensitive) |
 | `rds_db_name` | `string` | `workshop` | Database name |
 | `bedrock_role_arn` | `string` | — | IAM role ARN Vault assumes for scoped Bedrock STS credentials |
+| `audit_reader_role_arn` | `string` | — | IAM role ARN Vault assumes for `aws/sts/audit-reader` (tier-1 `audit_reader_role_arn`) |
+| `audit_reader_session_policy` | `string` | — | Inline session policy for that role, ≤ 2,048 characters (tier-1 `audit_reader_session_policy`) |
 | `region` | `string` | — | AWS region for the AWS secrets engine |
 | `tags` | `map(string)` | `{}` | Resource tags |
 
@@ -189,6 +195,8 @@ Vault writes one JSON object per API call to pod stdout. The fluent-bit DaemonSe
 | `uc1_role_name` | K8s auth role name for Use Case 1 (`uc1`) |
 | `uc2_role_name` | K8s auth role name for Use Case 2 (`uc2`) |
 | `uc3_role_name` | K8s auth role name for Use Case 3 (`uc3`) |
+| `banking_ui_role_name` | K8s auth role name for the banking UI server (`banking-ui`) |
+| `audit_reader_sts_path` | Vault path the banking UI reads for audit-reader keys (`aws/sts/audit-reader`) |
 
 ## Root module wiring
 
