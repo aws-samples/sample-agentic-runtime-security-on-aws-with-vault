@@ -361,10 +361,26 @@ def init_uc1_model() -> None:
     )
 
 
-# A query_database result can be any number of rows; the event that reports it
-# carries at most this many, so one frame never outgrows what the UI's filter
-# accepts. row_count still reports the full number.
+# A query_database result can be any number of rows of any width; the event that
+# reports it carries at most this many rows, and at most this many characters of
+# them (as JSON), so one frame never outgrows what the UI's filter accepts
+# (MAX_EVENT_CHARS, 1 MiB, in applications/banking-app/ui/src/lib/server/
+# activity-filter.ts — a larger frame is dropped whole and the tool call would
+# look stuck). row_count still reports the full number.
 _MAX_ROWS_IN_EVENT = 50
+_MAX_ROW_CHARS_IN_EVENT = 256 * 1024
+
+
+def _rows_for_event(rows: list) -> list:
+    """The leading rows that fit both limits above, in order."""
+    kept: list = []
+    size = 0
+    for row in rows[:_MAX_ROWS_IN_EVENT]:
+        size += len(json.dumps(row, ensure_ascii=False, default=str))
+        if size > _MAX_ROW_CHARS_IN_EVENT:
+            break
+        kept.append(row)
+    return kept
 
 
 def _tool_output_text(result: dict | None) -> str:
@@ -424,7 +440,7 @@ class _ActivityHooks(HookProvider):
             except ValueError:
                 output = text[:4000]
             if tool_use["name"] == "query_database" and isinstance(output, list):
-                result = {"row_count": len(output), "rows": output[:_MAX_ROWS_IN_EVENT]}
+                result = {"row_count": len(output), "rows": _rows_for_event(output)}
             else:
                 result = {"output": output}
 
