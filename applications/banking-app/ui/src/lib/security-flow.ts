@@ -196,6 +196,11 @@ const UC3_OWNER_OK = 'Account owner check passed:';
 const UC3_OWNER_REFUSED = 'Account owner check refused:';
 /** applications/uc3-agent/app/agent.py:789, :804, :816 and :954 */
 const UC3_REFUSED = 'Refused:';
+/**
+ * applications/uc3-agent/app/agent.py:216 (the refund terms checked before any approval is
+ * requested) and :1226-1232 (the refundable amount re-checked inside the write)
+ */
+const UC3_TERMS_REFUSED = 'Refund refused:';
 /** applications/uc3-agent/app/agent.py:671 */
 const UC3_CIBA_SENT = 'Backchannel sign-in request (CIBA) sent';
 /** applications/uc3-agent/app/agent.py:845 */
@@ -570,7 +575,7 @@ function useCase3Signals(f: Facts): SignalSpec[] {
 	const denied = f.of('agent:hitl_denied');
 	const timedOut = f.of('agent:hitl_timeout');
 	const open = required.length > 0 && approved.length + denied.length + timedOut.length === 0;
-	const refused = [...f.lines(UC3_OWNER_REFUSED), ...f.lines(UC3_REFUSED)];
+	const refused = [...f.lines(UC3_OWNER_REFUSED), ...f.lines(UC3_REFUSED), ...f.lines(UC3_TERMS_REFUSED)];
 
 	const specs: SignalSpec[] = [
 		{
@@ -805,6 +810,7 @@ const LINE_KINDS: { prefix: string; kind: string; status: string; stop: StopId }
 	{ prefix: UC3_OWNER_OK, kind: 'account.owner_check', status: 'success', stop: 'authorization' },
 	{ prefix: UC3_OWNER_REFUSED, kind: 'account.owner_check', status: 'denied', stop: 'authorization' },
 	{ prefix: UC3_REFUSED, kind: 'authz.refused', status: 'denied', stop: 'authorization' },
+	{ prefix: UC3_TERMS_REFUSED, kind: 'authz.refused', status: 'denied', stop: 'authorization' },
 	{ prefix: UC3_CIBA_SENT, kind: 'ciba.initiated', status: 'success', stop: 'authorization' },
 	{ prefix: UC3_APPROVAL_POLL, kind: 'approval.poll', status: 'active', stop: 'authorization' },
 	{ prefix: UC3_TOKEN_EXCHANGED, kind: 'token.exchange', status: 'success', stop: 'authorization' },
