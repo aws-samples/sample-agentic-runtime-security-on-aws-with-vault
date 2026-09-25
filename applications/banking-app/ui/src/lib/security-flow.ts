@@ -20,8 +20,11 @@
  * whether a credential's `value`, `fields` or `claims` is present: the UI server's activity
  * filter decides which of those reach the browser, and the flow must read the same whichever
  * it passes. Where the only evidence of a fact is an Agent Log line, the line's opening words
- * are matched; each of those is a named constant below with the agent source line that writes
- * it. Each signal lists the events that prove it; remove them from a turn and the signal turns
+ * are matched, and where two credentials share a `vaultPath` (Use Case 1's model keys and
+ * knowledge-base keys), the credential label's opening words tell them apart; each of those is
+ * a named constant below with the agent source line that writes it. So a filter may remove
+ * values, but must pass a credential's `label` and a narration's `text` through unchanged.
+ * Each signal lists the events that prove it; remove them from a turn and the signal turns
  * back to not observed.
  *
  * Arrival order
