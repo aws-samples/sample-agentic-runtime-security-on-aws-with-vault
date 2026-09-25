@@ -1580,7 +1580,9 @@ _step08_relogin_uc3_agent() {
         return 1
     fi
     if kubectl --context workshop rollout status "deploy/${dep}" -n "$ns" --timeout=300s >/dev/null 2>&1; then
-        print_pass "Step 8: ${ns}/${dep} restarted and Ready (the new pod logs in to Vault under role uc3 as configured now)"
+        # Ready is all this observes: /health answers 200 whether or not the
+        # startup Vault login worked, so the line claims only the replacement.
+        print_pass "Step 8: ${ns}/${dep} restarted and Ready (its pods were replaced by ones started after this apply)"
     else
         print_fail "Step 8: ${ns}/${dep} did not become Ready within 300s after the Vault re-login restart" \
             "Inspect: kubectl --context workshop get pods -n ${ns} -l app=${dep} && kubectl --context workshop logs deploy/${dep} -n ${ns} --tail=50"
