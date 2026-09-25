@@ -57,7 +57,7 @@ Your IDs, amount, and timestamp will differ. What matters is that the chat retur
 
 **Why:** The agent is an LLM, and occasionally it *says* it sent the push without calling the tool that fires one. Nothing reaches your phone, and the chat looks like it worked.
 
-First read the agent's last reply. If it says the refund was **refused**, no push was sent on purpose: the charge you picked is not refundable. Pick a different charge instead of forcing the push.
+First read the agent's last reply. If it says the refund was **refused**, no push was sent on purpose, and the reply says why: most often the charge you picked is a deposit, or part or all of it has already been refunded. Pick a different charge instead of forcing the push.
 
 Force it to actually send. Reply in the chat:
 
