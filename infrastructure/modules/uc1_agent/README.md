@@ -101,15 +101,15 @@ Body: `{"query": "<question>"}`. The `Accept` header picks the reply format.
 
 Tool, narration and credential events arrive in the order they happen. On failure the stream ends `agent:error` → `error` (legacy) → `end` → `agent:done`. Every current event carries `requestId` (a UUID per turn, also written to the agent's `query_received` / `query_complete` log lines) and `ts` (epoch milliseconds). A client that disconnects stops the agent at its next checkpoint.
 
-`agent:credential` events show the credentials in full, for the workshop's live view of what happens behind each answer:
+`agent:credential` events show the credentials in full, for the workshop's live view of what happens behind each answer. Every one carries `reused` (a boolean): `true` when the credential was obtained before this turn and is used again now, `false` when it was made or first presented during the turn. The Agent Log reads this flag, not the label, to print "reused", "presented" or "issued".
 
-| `kind` | Credential | When |
-|---|---|---|
-| `k8s_sa_token` | the service-account JWT the agent presented to Vault, with its decoded (unverified) `claims` | each turn whose Vault login check succeeds, and again whenever the agent signs in mid-turn; the label says when the turn reused an earlier login |
-| `vault_token` | the Vault token that login returned, with `ttlSeconds` | with each `k8s_sa_token` |
-| `aws_sts_credentials` | `fields.access_key_id`, `secret_access_key`, `session_token` from `aws/sts/bedrock-reader` | each Knowledge Base call |
-| `aws_sts_credentials` | the model's own keys from the same path, read live from the credentials the model signs with; the label says they are for calling the model | every streamed turn: labelled reused at the start of the turn, or refreshed during this answer when botocore refreshes them (within 15 minutes of expiry, at the turn's first read of them or on the Bedrock call that needs them) |
-| `db_credentials` | `fields.username`, `password` from `database/creds/uc1-readonly`, with `leaseId` | each `query_database` call |
+| `kind` | Credential | When | `reused` |
+|---|---|---|---|
+| `k8s_sa_token` | the service-account JWT the agent presented to Vault, with its decoded (unverified) `claims` | each turn whose Vault login check succeeds, and again whenever the agent signs in mid-turn | `true` when the turn reuses an earlier login, `false` when the agent signs in during the turn |
+| `vault_token` | the Vault token that login returned, with `ttlSeconds` | with each `k8s_sa_token` | the same as that `k8s_sa_token` |
+| `aws_sts_credentials` | `fields.access_key_id`, `secret_access_key`, `session_token` from `aws/sts/bedrock-reader` | each Knowledge Base call | `false` |
+| `aws_sts_credentials` | the model's own keys from the same path, read live from the credentials the model signs with; the label says they are for calling the model | every streamed turn: at the start of the turn, or when botocore refreshes them during this answer (within 15 minutes of expiry, at the turn's first read of them or on the Bedrock call that needs them) | `true` at the start of the turn, `false` when refreshed during this answer |
+| `db_credentials` | `fields.username`, `password` from `database/creds/uc1-readonly`, with `leaseId` | each `query_database` call | `false` |
 
 These values go only onto the requesting visitor's stream. They are never written to the pod log, never returned from a tool (tool results go to Bedrock), and never added to the JSON reply. The knowledge-base keys and the database login are issued per request. The model's keys are shared by every request, so every visitor sees the same ones until they are refreshed; the refresh appears on the stream of the turn that triggered it. The service-account JWT and the Vault token are the agent's own login, so every visitor sees the same ones until the agent signs in again.
 
