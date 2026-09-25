@@ -33,7 +33,7 @@ tier 1 (infrastructure/)
 |------|-------------|
 | `vault_unseal_kms_key_arn` | ARN of the dedicated KMS unseal key. |
 | `vault_unseal_kms_key_id` | Key ID of the unseal key. Read by `vault_server` (tier 2) to render the Vault `seal "awskms"` stanza. |
-| `vault_iam_role_arn` | ARN of the Vault Pod Identity role. Trusted by the KB role / uc3-logs-writer trust policies. |
+| `vault_iam_role_arn` | ARN of the Vault Pod Identity role. Trusted by the KB role / uc3-logs-writer / audit-reader trust policies. |
 | `vault_iam_role_id` | ID of the Vault Pod Identity role. Used to attach the vault-assume policies in tier 1. |
 
 ## Root module wiring (tier 1)
@@ -54,6 +54,8 @@ No `depends_on` is needed — the module only creates IAM + KMS + a Pod Identity
 - `aws_iam_role_policy.vault_assume_bedrock` — `role = module.vault_iam.vault_iam_role_id`.
 - `aws_iam_role.uc3_logs_writer` — trust policy names `module.vault_iam.vault_iam_role_arn`.
 - `aws_iam_role_policy.vault_assume_uc3_logs` — `role = module.vault_iam.vault_iam_role_id`.
+- `aws_iam_role.audit_reader` — trust policy names `module.vault_iam.vault_iam_role_arn` (read-only Athena keys Vault vends as `aws/sts/audit-reader` to the banking UI for the Audit Trace card).
+- `aws_iam_role_policy.vault_assume_audit_reader` — `role = module.vault_iam.vault_iam_role_id`.
 - `module.vault_server` (tier 2, via remote_state) — `kms_key_id = ...vault_unseal_kms_key_id`.
 
 ## Known Pitfalls
