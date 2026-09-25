@@ -222,7 +222,7 @@
 </script>
 
 <svelte:head>
-	<title>Banking Agent — OscarVault International</title>
+	<title>{title} — OscarVault International</title>
 </svelte:head>
 
 {#snippet agentIcon()}
