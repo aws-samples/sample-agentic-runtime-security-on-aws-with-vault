@@ -1484,8 +1484,10 @@ def check_refund_status(refund_id: str) -> dict:
 # order the tool returned them. Asking the model not to repeat the rows under
 # that card, or to count to the row a person picked, is not reliable. So after
 # the first listing of a session no model call is made: the reply is one fixed
-# question. And a reply that is only a row number, sent when a row pick is due,
-# is resolved here against that same listing, never counted by the model.
+# question. And a reply that is only a row number, sent right after that
+# question or after the code's own out-of-range reply, is resolved here against
+# the listing, never counted by the model. A number sent after a reply the
+# model wrote goes to the model as typed.
 # ---------------------------------------------------------------------------
 
 # The reply after the first listing of a session.
@@ -1564,43 +1566,34 @@ def _latest_listing(messages: list) -> list | None:
 
 
 def _row_pick_due(history: list) -> bool:
-    """True when the session's last reply is waiting for a row number.
+    """True when the session's last reply is one the code wrote to ask for a row number.
 
-    That reply came straight after a successful list_transactions result (the
-    app's own question, or the model's reply after a re-list), or it is the
-    code's own "There is no transaction N" reply. After any other reply — the
-    model asking how much to refund, or confirming a charge — a bare number is
-    not a row: "5" there may mean $5.
+    That is exactly FIRST_LISTING_QUESTION, or the code's own "There is no
+    transaction N — " reply (_out_of_range_reply). The model's own wording is
+    never read: after any reply the model wrote — asking how much to refund,
+    or confirming a charge — a bare number goes to the model as typed, since
+    "5" there may mean $5.
     """
-    if len(history) < 2 or history[-1].get("role") != "assistant":
+    if not history or history[-1].get("role") != "assistant":
         return False
-    for block in history[-1].get("content", []):
-        text = block.get("text") if isinstance(block, dict) else None
-        if isinstance(text, str) and _OUT_OF_RANGE_REPLY.match(text):
-            return True
-    before = history[-2]
-    if before.get("role") != "user":
+    texts = [
+        block.get("text")
+        for block in history[-1].get("content", [])
+        if isinstance(block, dict) and "text" in block
+    ]
+    if len(texts) != 1 or not isinstance(texts[0], str):
         return False
-    names = _tool_names(history)
-    for block in before.get("content", []):
-        tool_result = block.get("toolResult") if isinstance(block, dict) else None
-        if (
-            isinstance(tool_result, dict)
-            and names.get(tool_result.get("toolUseId")) == "list_transactions"
-            and _listing_rows(tool_result) is not None
-        ):
-            return True
-    return False
+    return texts[0] == FIRST_LISTING_QUESTION or _OUT_OF_RANGE_REPLY.match(texts[0]) is not None
 
 
 def _row_selection(message, history: list) -> tuple[int, list] | None:
     """(number, rows) when `message` is only a row number sent when a row pick is due, else None.
 
-    A row pick is due when the session's last reply is waiting for one
-    (_row_pick_due). `rows` are the session's most recent successful
-    list_transactions result, in the order returned — the order the card
-    numbers them. They come only from that result, which list_transactions read
-    for the verified sub; nothing the message says is used but the number.
+    A row pick is due when the session's last reply is the code's own question
+    or out-of-range reply (_row_pick_due). `rows` are the session's most recent
+    successful list_transactions result, in the order returned — the order the
+    card numbers them. They come only from that result, which list_transactions
+    read for the verified sub; nothing the message says is used but the number.
     """
     if not isinstance(message, dict) or message.get("role") != "user":
         return None
@@ -1646,15 +1639,14 @@ class RefundReplies(HookProvider):
     empty list, or a second listing (the no-phone driver's "Refund $X of the
     {merchant} charge" turn may re-list) — is left to the model.
 
-    A reply that is only a row number (row_number), sent when a row pick is due
-    (_row_pick_due: the last reply came straight after a successful listing, or
-    was the code's own out-of-range reply), is resolved against the most recent
-    listing:
+    A reply that is only a row number (row_number), sent right after a reply
+    the code wrote — FIRST_LISTING_QUESTION or the out-of-range reply
+    (_row_pick_due) — is resolved against the most recent listing:
       - in range: the row is added to the user's message, beside what they
         typed, before the message is saved, so the model confirms that row;
       - out of range: the model is not called; the reply names the valid range.
-    Otherwise — no listing, or the model last asked something else, such as how
-    much to refund — the message goes to the model untouched.
+    A number sent after a reply the model wrote, such as its question about how
+    much to refund, goes to the model untouched.
 
     A failure in a callback is logged without any value and the model writes
     the reply: Strands raises a hook's exception into the turn, and this must
