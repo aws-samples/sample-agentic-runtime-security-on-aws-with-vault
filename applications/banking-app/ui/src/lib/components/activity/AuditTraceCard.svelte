@@ -10,7 +10,8 @@
     the audit stream — the audit_correlation rows Athena holds for that request ID, fetched
     from GET /api/audit-trace. The records land about 60 s after the refund, so while the
     card is open it asks again every 10 s until all three planes (agent, Vault, Postgres)
-    are in, for at most 4 minutes; Retry starts again.
+    are in, for at most 4 minutes; Retry starts again. If the route answers that the
+    sign-in has ended ($lib/session-ended), the browser goes to sign-in instead.
   - Every other turn (Use Case 1, Use Case 2, a Use Case 3 turn with no refund): the live
     facts the turn's own events reported — credential kinds, Vault paths, leases,
     time-to-live. Nothing is queried.
@@ -37,6 +38,7 @@
 		type AuditTraceTurn,
 		type AuditUseCase
 	} from '$lib/audit-trace';
+	import { goToSignIn, isSessionEnded } from '$lib/session-ended';
 
 	interface Props {
 		useCase: AuditUseCase;
@@ -124,6 +126,10 @@
 				});
 				const parsed = (await res.json().catch(() => null)) as AuditTraceResponse | AuditTraceErrorResponse | null;
 				if (cancelled) return;
+				if (isSessionEnded(res.status, parsed)) {
+					goToSignIn();
+					return;
+				}
 				if (!res.ok || parsed === null || 'error' in parsed) {
 					error =
 						parsed !== null && 'error' in parsed ? parsed.error : `The audit query failed (HTTP ${res.status})`;

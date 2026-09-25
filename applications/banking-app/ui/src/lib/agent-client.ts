@@ -15,6 +15,7 @@
  */
 
 import type { AgentEvent, LegacyAgentEvent } from '$lib/agent-events';
+import { goToSignIn, isSessionEnded } from '$lib/session-ended';
 
 const LEGACY_TYPES: ReadonlySet<string> = new Set<LegacyAgentEvent['type']>(['tool_planning', 'delta', 'end', 'error']);
 
@@ -55,9 +56,15 @@ export async function sendChatMessage(
     });
 
     if (!res.ok) {
+      const text = await res.text();
+      // The sign-in has ended (hooks.server.ts): go and sign in again, rather than leave
+      // a page that looks signed in showing an error. See $lib/session-ended.
+      if (isSessionEnded(res.status, text)) {
+        goToSignIn();
+        return;
+      }
       // The chat routes answer a failure with JSON { error }, a sentence written for the
       // person reading the chat; show that sentence. Any other body is shown as it came.
-      const text = await res.text();
       onError(routeError(text) ?? `Agent request failed [${res.status}]: ${text}`);
       return;
     }
