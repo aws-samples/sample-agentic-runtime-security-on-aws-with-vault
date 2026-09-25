@@ -10,6 +10,7 @@
 	import { page } from '$app/state';
 	import { getPersona } from '$lib/personas';
 	import { HEAD_SCRIPT, isMarkedCollapsed, setCollapsed } from '$lib/nav-rail';
+	import PersonaMenu from '$lib/components/nav/PersonaMenu.svelte';
 	import type { LayoutData } from './$types';
 
 	let { data, children }: { data: LayoutData; children: import('svelte').Snippet } = $props();
@@ -66,6 +67,13 @@
 	let menuButton: HTMLButtonElement | undefined = $state();
 	let nav: HTMLElement | undefined = $state();
 
+	// ---- The persona menu: the account button at the foot of the navigation ---------
+	// Opens above the account block ($lib/components/nav/PersonaMenu). Escape reaches it
+	// through the one window key handler below, before the drawer's own Escape.
+	let personaOpen = $state(false);
+	let personaMenu: ReturnType<typeof PersonaMenu> | undefined = $state();
+	let meBlock: HTMLElement | undefined = $state();
+
 	// Opening moves focus to the drawer's first link. It runs after the DOM update, when the
 	// drawer is no longer visibility: hidden and can take focus.
 	async function openMenu() {
@@ -79,6 +87,7 @@
 	function closeMenu({ returnFocus = true } = {}) {
 		if (!menuOpen) return;
 		menuOpen = false;
+		personaOpen = false;
 		if (returnFocus) menuButton?.focus();
 	}
 
@@ -97,13 +106,14 @@
 		return () => query.removeEventListener('change', onChange);
 	});
 
-	// The drawer's links. The desktop brand link stays in the DOM but is display: none here,
-	// and an element with no layout box has no client rects.
+	// The drawer's links and controls, including the persona menu's scrolling claims tables
+	// (tabindex="0"). The desktop brand link stays in the DOM but is display: none here, and
+	// an element with no layout box has no client rects.
 	function drawerLinks(): HTMLElement[] {
 		if (!nav) return [];
-		return [...nav.querySelectorAll<HTMLElement>('a[href], button:not([disabled])')].filter(
-			(el) => el.getClientRects().length > 0
-		);
+		return [
+			...nav.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])')
+		].filter((el) => el.getClientRects().length > 0);
 	}
 
 	// What Tab reaches while the drawer is open: the menu button, which closes it, then the
@@ -113,9 +123,15 @@
 		return menuButton ? [menuButton, ...links] : links;
 	}
 
+	// An open persona menu takes Escape first: it closes, and a drawer around it stays open.
 	// While the drawer is open: Escape closes it, and Tab / Shift+Tab wrap through the menu
 	// button and the drawer.
 	function onWindowKeydown(e: KeyboardEvent) {
+		if (personaOpen && e.key === 'Escape') {
+			e.preventDefault();
+			personaMenu?.close();
+			return;
+		}
 		if (!menuOpen) {
 			if (e.key === 'Escape' && collapsed && !window.matchMedia(NARROW).matches && showingTip()) {
 				tipsDismissed = true;
@@ -193,7 +209,14 @@
 	{/if}
 
 	<!-- The left navigation on wide screens; the drawer on narrow ones. -->
-	<nav id="main-nav" class="shell-nav" class:tips-dismissed={tipsDismissed} aria-label="Main" bind:this={nav}>
+	<nav
+		id="main-nav"
+		class="shell-nav"
+		class:tips-dismissed={tipsDismissed}
+		class:persona-open={personaOpen}
+		aria-label="Main"
+		bind:this={nav}
+	>
 		{#if signedIn}
 			<a class="brand" href="/dashboard" data-sveltekit-reload>
 				<span class="brand-mark" aria-hidden="true">OVI</span>
@@ -246,27 +269,21 @@
 			{/each}
 		</ul>
 
-		<div class="nav-me">
-			{#if signedIn}
-				<div class="me-row">
-					<!-- The name is printed beside the photo, so the photo itself is decorative. -->
-					{#if persona}
-						<img class="me-avatar avatar-photo" src={persona.avatar} alt="" />
-					{:else}
-						<span class="me-avatar" aria-hidden="true">{initials}</span>
-					{/if}
-					<div class="me-text">
-						<p class="me-name">{displayName}</p>
-						{#if persona}
-							<p class="me-role">{persona.role}</p>
-						{/if}
-					</div>
-				</div>
+		<div class="nav-me" class:nav-me-signed-in={signedIn} bind:this={meBlock}>
+			{#if signedIn && data.signInClaims}
+				<!-- The photo and name open the persona menu: the sign-in tokens' claims, and Log out. -->
+				<PersonaMenu
+					bind:this={personaMenu}
+					bind:open={personaOpen}
+					{displayName}
+					role={persona?.role}
+					avatar={persona?.avatar}
+					{initials}
+					claims={data.signInClaims}
+					anchor={meBlock}
+					onnavigate={() => closeMenu({ returnFocus: false })}
+				/>
 				<p class="me-note">Signed in with IBM Verify Identity Access</p>
-				<!-- GET /logout clears the session cookies and ends the IVIA WebSEAL session.
-				     data-sveltekit-reload makes this a full navigation that SvelteKit never
-				     preloads, so hovering the link cannot sign anyone out. -->
-				<a class="me-action" href="/logout" data-sveltekit-reload onclick={() => closeMenu({ returnFocus: false })}>Log out</a>
 			{:else}
 				<div class="me-row">
 					<span class="me-avatar me-avatar-anon" aria-hidden="true">—</span>
@@ -424,6 +441,26 @@
 		gap: 12px;
 		padding: 18px 24px 22px;
 		border-top: 1px solid var(--ovi-hairline-strong);
+	}
+
+	/* Signed in, the account is a button (PersonaMenu) and the note lines up with its text. */
+	.nav-me-signed-in {
+		padding: 14px 16px 18px;
+	}
+
+	/* line-height: normal, as drawn; Carbon sets 1.5 on every <p>. */
+	.nav-me-signed-in .me-note {
+		padding: 0 8px;
+		line-height: normal;
+	}
+
+	/* Wide screens: while the persona menu is open, the navigation (and the menu inside it)
+	   sits over the page's own layers (at most 5) and under a floating panel's scrim (20).
+	   The drawer already sits at 20. */
+	@media not all and (max-width: 960px) {
+		.shell-nav.persona-open {
+			z-index: 10;
+		}
 	}
 
 	.me-row {
