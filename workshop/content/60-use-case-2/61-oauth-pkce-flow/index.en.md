@@ -362,11 +362,12 @@ export async function getDbCreds(
   oauthJwt: string,
   role: string = 'uc2-personal-readonly'
 ): Promise<DbCredentials> {
-  const url = `${VAULT_ADDR}/v1/database/creds/${role}`;
+  const vaultPath = `database/creds/${role}`;
+  const url = `${VAULT_ADDR}/v1/${vaultPath}`;
 
   const res = await fetch(url, {
     method: 'GET',
-    headers: { 'X-Vault-Token': oauthJwt },   // the IVIA OAuth JWT, presented directly
+    headers: { 'X-Vault-Token': oauthJwt },
   });
 
   if (!res.ok) {
@@ -379,9 +380,29 @@ export async function getDbCreds(
     lease_id?: string;
     lease_duration?: number;
   };
-  // ... returns { username, password, leaseId, leaseDuration }
+  const receivedAt = Date.now();
+
+  const username = data?.data?.username;
+  const password = data?.data?.password;
+
+  if (!username || !password) {
+    throw new Error('Vault DB creds response missing data.username or data.password');
+  }
+
+  const leaseDuration = data.lease_duration ?? 0;
+  return {
+    username,
+    password,
+    leaseId: data.lease_id ?? 'unknown',
+    leaseDuration,
+    vaultPath,
+    dbRole: role,
+    leaseExpiresAt: leaseDuration > 0 ? new Date(receivedAt + leaseDuration * 1000).toISOString() : null,
+  };
 }
 ```
+
+The `oauthJwt` in the `X-Vault-Token` header is the caller's IVIA OAuth JWT, presented as-is. Besides the database username and password, `getDbCreds` returns the lease that governs them (`leaseId`, `leaseDuration`, `leaseExpiresAt`) and where they came from (`vaultPath`, `dbRole`), which is what lets the agent show the credential and its revocation during the turn.
 
 Vault's OAuth resource server validates the JWT against IVIA's JWKS endpoint (the signing CA pinned in the `ivia` profile), resolves the human `sub` and the agent actor `act.sub = agent-uc2` (against the Agent Registry), and applies the On-Behalf-Of intersection `uc2-human-baseline ∩ uc2-agent-ceiling` — all in that one `database/creds` read.
 
