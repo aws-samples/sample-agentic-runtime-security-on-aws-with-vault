@@ -196,26 +196,26 @@ const UC2_MCP_OWN = "The MCP server's own";
 const UC3_OWNER_OK = 'Account owner check passed:';
 /** applications/uc3-agent/app/agent.py:164 */
 const UC3_OWNER_REFUSED = 'Account owner check refused:';
-/** applications/uc3-agent/app/agent.py:1049, :1064, :1076 and :1275 */
+/** applications/uc3-agent/app/agent.py:1050, :1065, :1077 and :1276 */
 const UC3_REFUSED = 'Refused:';
 /**
  * applications/uc3-agent/app/agent.py:216 (the refund terms checked before any approval is
- * requested) and :1226-1232 (the refundable amount re-checked inside the write)
+ * requested) and :1227-1233 (the refundable amount re-checked inside the write)
  */
 const UC3_TERMS_REFUSED = 'Refund refused:';
 /** applications/uc3-agent/app/agent.py:920 */
 const UC3_CIBA_SENT = 'Backchannel sign-in request (CIBA) sent';
-/** applications/uc3-agent/app/agent.py:1107 */
+/** applications/uc3-agent/app/agent.py:1108 */
 const UC3_APPROVAL_POLL = "Checking IBM Verify Identity Access for the user's approval";
-/** applications/uc3-agent/app/agent.py:748, narrated at :1117 */
+/** applications/uc3-agent/app/agent.py:748, narrated at :1118 */
 const UC3_TOKEN_EXCHANGED = 'Token exchanged (RFC 8693)';
-/** applications/uc3-agent/app/agent.py:1139 */
+/** applications/uc3-agent/app/agent.py:1140 */
 const UC3_WRITER_ISSUED = 'Vault issued a uc3-refund-writer database credential';
-/** applications/uc3-agent/app/agent.py:1282 */
+/** applications/uc3-agent/app/agent.py:1283 */
 const UC3_REFUND_WRITTEN = 'Refund written: INSERT into banking.refunds';
-/** applications/uc3-agent/app/agent.py:1348 */
+/** applications/uc3-agent/app/agent.py:1349 */
 const UC3_ANCHOR_OK = 'Audit anchor written to CloudWatch Logs';
-/** applications/uc3-agent/app/agent.py:1357 */
+/** applications/uc3-agent/app/agent.py:1358 */
 const UC3_ANCHOR_FAILED = 'The audit anchor could not be written to CloudWatch Logs';
 /** applications/uc3-agent/app/vault_client.py:221, the writer credential's vaultPath (sent at :243) */
 const UC3_WRITER_PATH = 'database/creds/uc3-refund-writer';
@@ -907,7 +907,7 @@ function list(items: string[]): string {
  * A failed tool call's reason, in the shape each agent sends it: `{"error": "<text>"}` from the
  * Use Case 1 agent (infrastructure/modules/uc1_agent/agent/app/agent.py:434) and the banking
  * agent (applications/banking-app/agent/app/activity.py:852); the bare text from the refund
- * agent (applications/uc3-agent/app/activity.py:511, via _tool_result_payload at :431).
+ * agent (applications/uc3-agent/app/activity.py:551, via _tool_result_payload at :466).
  */
 function toolError(result: JsonValue | undefined): string | undefined {
 	if (typeof result === 'string') return result;
