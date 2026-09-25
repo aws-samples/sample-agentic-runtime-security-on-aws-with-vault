@@ -8,6 +8,12 @@
  *    AGENT_IDLE_TIMEOUT_SECONDS, the call is closed and the browser is told —
  *    a JSON 504 when the answer had not started, or the legacy `error` frame
  *    followed by `end` when an event stream had.
+ * 3. The browser's connection must not look idle: while an agent's event
+ *    stream is open, the browser gets an SSE comment line every
+ *    HEARTBEAT_INTERVAL_SECONDS, so the load balancer in front of the UI
+ *    server does not close a chat whose agent is quietly waiting (Use Case 3
+ *    waiting for the user's phone approval). The comment only goes to the
+ *    browser: it does not restart the idle clock of point 2.
  *
  * A route creates one AgentCall per request, passes `call.signal` to fetch(),
  * calls `call.touch()` when the agent's headers arrive, and reads the agent's
@@ -39,6 +45,15 @@ import { createActivityFilter } from '$lib/server/activity-filter';
  * applies its 30 s to each phase of a request separately — plus a 30 s margin.
  */
 export const AGENT_IDLE_TIMEOUT_SECONDS = 120 + 30 + 10 + 30;
+
+/**
+ * How often the UI server writes `: keepalive` to the browser while an agent's
+ * event stream is open. A load balancer closes a connection on which no byte
+ * has moved for its idle timeout: the workshop's shared ALB does so after 60 s,
+ * while an agent can be silent for up to AGENT_IDLE_TIMEOUT_SECONDS. This must
+ * stay well below 60; 15 leaves room for a timer that fires late.
+ */
+export const HEARTBEAT_INTERVAL_SECONDS = 15;
 
 export type AgentCallStop = 'browser_left' | 'agent_idle';
 
@@ -180,8 +195,9 @@ function sseFrame(event: LegacyErrorEvent | LegacyEndEvent): string {
 /**
  * The Response a route returns for an agent's event stream: the body piped
  * through the activity filter, with headers that stop proxies from buffering
- * it. If the agent goes quiet part-way, the browser gets the legacy `error`
- * frame and then `end`, so the chat unlocks and says why.
+ * it, and a `: keepalive` comment every HEARTBEAT_INTERVAL_SECONDS. If the
+ * agent goes quiet part-way, the browser gets the legacy `error` frame and
+ * then `end`, so the chat unlocks and says why.
  */
 export function streamAgentEvents(
 	call: AgentCall,
@@ -191,13 +207,34 @@ export function streamAgentEvents(
 ): Response {
 	const filtered = call.watch(body).pipeThrough(createActivityFilter(label)).getReader();
 	const encoder = new TextEncoder();
+	// Written to the browser only. It never calls call.touch(): an agent that
+	// sends nothing is still stopped after AGENT_IDLE_TIMEOUT_SECONDS. The filter
+	// hands over whole frames, so a comment never lands inside one.
+	let heartbeat: ReturnType<typeof setInterval> | undefined;
+	const stopHeartbeat = () => {
+		clearInterval(heartbeat);
+		heartbeat = undefined;
+	};
 	const stream = new ReadableStream<Uint8Array>({
+		start(controller) {
+			heartbeat = setInterval(() => {
+				try {
+					controller.enqueue(encoder.encode(': keepalive\n\n'));
+				} catch {
+					// The stream is already closed or failed.
+					stopHeartbeat();
+				}
+			}, HEARTBEAT_INTERVAL_SECONDS * 1000);
+		},
 		async pull(controller) {
 			try {
 				const { value, done } = await filtered.read();
-				if (done) controller.close();
-				else controller.enqueue(value);
+				if (done) {
+					stopHeartbeat();
+					controller.close();
+				} else controller.enqueue(value);
 			} catch (err) {
+				stopHeartbeat();
 				if (call.stopped !== 'agent_idle') {
 					controller.error(err);
 					return;
@@ -208,6 +245,7 @@ export function streamAgentEvents(
 			}
 		},
 		cancel(reason) {
+			stopHeartbeat();
 			return filtered.cancel(reason);
 		}
 	});
