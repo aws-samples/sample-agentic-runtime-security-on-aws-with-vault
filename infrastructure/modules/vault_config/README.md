@@ -8,7 +8,6 @@ Terraform module that provisions all Vault configuration required by the three a
 |---|---|---|
 | Audit device (file → stdout, json) | — | PLAT-05 |
 | Kubernetes auth backend | `kubernetes/` | CONF-01 |
-| OAuth resource server activation flag | `sys/activation-flags/oauth-resource-server` | CONF-02 |
 | OAuth resource server profile (IVIA) | `sys/config/oauth-resource-server/...` | CONF-02 |
 | PostgreSQL secrets engine | `database/` | CONF-03 |
 | AWS secrets engine (STS assumed_role) | `aws/` | CONF-04 |
@@ -42,7 +41,7 @@ Terraform module that provisions all Vault configuration required by the three a
 
 ## Agent Registry + three-layer policy model (Phase 9)
 
-Vault Enterprise `2.0.3-ent` exposes the native Agent Registry + OAuth resource
+Vault Enterprise `2.1.1-ent` exposes the native Agent Registry + OAuth resource
 server primitives (license module `platform-standard` → `agentic-iam`; see the
 [`vault_server`](../vault_server/README.md) README). This module registers every
 agent as a first-class identity and layers policy natively instead of the retired
@@ -95,7 +94,10 @@ registry. No other policy in this module grants any path under
 
 ### Enforcement layers
 
-The **UC1**, **UC2** and **UC3** rows were probe-confirmed on the live 2.0.3-ent binary.
+The **UC1**, **UC2** and **UC3** rows were probe-confirmed on the live 2.0.3-ent binary; the
+re-check on 2.1.1-ent is pending. One behaviour is known to differ: on 2.0.3 a UC3 delegated
+token with no `authorization_details` was still vended the refund-writer credential, and
+2.1.x refuses it (`RAR_MISSING`), which is why the workshop moved to 2.1.1 (issue #74).
 The **UC3 agent as itself** row is **pending live proof**: it is confirmed once
 `verify-uc3.sh` Check 21 passes against a stack deployed with the `uc3-agent` policy.
 
@@ -148,10 +150,22 @@ extracts the **subject**, never the agent — the AGENT is resolved by Vault's n
 On-Behalf-Of handling of the RFC 8693 `act.sub` claim (IVIA emits it in Plan 04; Plan 05's
 actor alias binds it). `optional_authorization_details` is deliberately NOT set on the
 profile: it is a per-registration field (`OPT_AUTH_DETAILS_LEVEL=registration`), set by
-Plan 05 (UC3 `false` = RAR mandatory; UC1/UC2 `true` = RAR optional). The
-`vault_activation_flags` resource activates the `oauth-resource-server` feature first; the
-profile `depends_on` it. The profile's server-assigned identifier is exported as
+Plan 05 (UC3 `false` = RAR mandatory; UC1/UC2 `true` = RAR optional). The profile's
+server-assigned identifier is exported as
 `oauth_resource_server_config_id` (the provider exposes it as the resource `id`).
+
+### Retired: the `oauth-resource-server` activation flag
+
+On 2.0.3 the feature had to be switched on through `sys/activation-flags/oauth-resource-server`
+(`vault_activation_flags.oauth_resource_server`), and the profile and every identity entity
+were ordered after it. Vault 2.1.0 removed that step ("The Agentic IAM no longer requires an
+activation flag to use", [2.1.0 release notes](https://developer.hashicorp.com/vault/docs/updates/release-notes)),
+and on 2.1.1 the activate call answers 404 unsupported path. The module now carries a
+`removed` block (`lifecycle { destroy = false }`), so a vault-config state from a 2.0.3 deploy
+forgets the flag on its next apply without any call to Vault; a fresh state is unaffected.
+This is why the module and the `vault-config` root require Terraform `>= 1.10` (`removed`
+needs 1.7). No depends_on on the flag remains; the entities need no ordering edge because
+nothing activates mid-apply any more.
 
 ## Audit device
 
