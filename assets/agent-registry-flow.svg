@@ -115,6 +115,6 @@
   <text x="52" y="522" fill="#8b949e" font-size="11">• Enforcement happens <tspan fill="#60a5fa">inside Vault</tspan>: human baseline ∩ agent ceiling ∩ per-request <tspan fill="#bfdbfe">vault:path_access</tspan> RAR.</text>
   <text x="52" y="546" fill="#8b949e" font-size="11">• A token whose RAR names a different path is denied <tspan fill="#f87171">even when baseline and ceiling both permit the target</tspan>.</text>
   <text x="52" y="570" fill="#8b949e" font-size="11">• UC1 is unaffected — it uses Kubernetes workload identity only (one layer: the uc1-readonly floor); registry ceiling is inert.</text>
-  <text x="52" y="592" fill="#6b7280" font-size="10">Vault Enterprise 2.0.3 — Agent Registry + OAuth resource server + RAR type vault:path_access.</text>
+  <text x="52" y="592" fill="#6b7280" font-size="10">Vault Enterprise 2.1.1 — Agent Registry + OAuth resource server + RAR type vault:path_access.</text>
 
 </svg>
