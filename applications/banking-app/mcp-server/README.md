@@ -124,7 +124,9 @@ The server never logs any of them.
 
 The database credential belongs to one caller and one call. The other two do
 not: they are the server's standing credentials, so every caller's stream shows
-the same values while the server reuses its login. Whoever sees the Vault token
+the same values while the server reuses its login. The agent marks their
+credential events `reused: true` unless `logged_in_for_this_call` is `true`,
+and marks the database credential `reused: false`. Whoever sees the Vault token
 holds its policies (`default`, `uc2-personal`) until it expires — among other
 things, they can revoke any lease whose id they know. Whoever sees the
 ServiceAccount token can present it to Vault's Kubernetes login as role `uc2`
