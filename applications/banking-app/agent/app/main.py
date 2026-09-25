@@ -194,8 +194,8 @@ async def chat(request: Request, body: ChatRequest):
 
         except Exception as exc:
             logger.error("agent_error: %s | user_message: %s", str(exc), message)
-            # An upstream error body can echo a token; it is redacted before it leaves the agent.
-            error_text = activity.scrub_text(str(exc))
+            # The stream carries the error text exactly as it was raised.
+            error_text = str(exc)
             yield f"data: {json.dumps({'type': 'error', 'content': error_text})}\n\n"
             yield _sse(turn.audit_seed())
             yield _sse(turn.build({"type": "agent:error", "message": error_text}))

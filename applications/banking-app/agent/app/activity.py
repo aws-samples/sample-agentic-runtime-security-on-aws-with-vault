@@ -39,10 +39,10 @@ and database credential,
 these are standing: every turn that runs while they are current shows the
 same values.
 
-Every OTHER event is scrubbed with the UI filter's rules before it is queued:
-keys named like a secret are removed, and JWTs and Vault tokens in any string are
-replaced. So narration, tool calls and the audit seed never carry a credential;
-the one place a credential appears is the event whose job is to show it.
+Every OTHER event (narration, tool calls, the audit seed, errors) is sent with
+every key and value the agent gave it — nothing is removed or replaced (Bear,
+2026-09-25: the workshop shows attendees everything as it happens). It is only
+copied into plain JSON values when it is built (_json_safe).
 """
 
 from __future__ import annotations
@@ -53,7 +53,6 @@ import contextvars
 import hashlib
 import json
 import logging
-import re
 import threading
 import time
 from datetime import datetime
@@ -71,86 +70,26 @@ from strands.hooks import (
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Scrubbing — the same rules as the UI's activity-filter.ts
+# Events as plain JSON
 # ---------------------------------------------------------------------------
 
-REDACTED_TOKEN = "[token redacted]"
 
-# A key is secret-named when, lowercased with non-alphanumerics removed, it
-# CONTAINS one of these, or equals one of the credential header names.
-_SECRET_KEY_SUBSTRINGS = ("password", "passwd", "passphrase", "secret", "token", "privatekey", "apikey")
-_SECRET_KEY_NAMES = frozenset({"authorization", "proxyauthorization", "cookie", "setcookie"})
+def _json_safe(value: Any) -> Any:
+    """A copy of `value` made of plain JSON values, with every key and value kept.
 
-# Correlation keys the audit story depends on: always kept, values still scrubbed.
-_CORRELATION_KEYS = frozenset(
-    {
-        "lease_id",
-        "lease_duration_seconds",
-        "ttl_seconds",
-        "vault_path",
-        "vault_role",
-        "db_role",
-        "user_sub",
-        "sub",
-        "scope",
-        "jti",
-        "request_id",
-        "iss",
-        "aud",
-        "exp",
-        "act",
-    }
-)
-
-# Runs of the characters a compact JWT is made of. Tokens are found run by run
-# rather than with one backtracking regex over the whole string.
-_TOKEN_CHAR_RUN = re.compile(r"[A-Za-z0-9_.-]+")
-# Vault tokens (1.10+): hvs. service, hvb. batch, hvr. recovery.
-_VAULT_TOKEN = re.compile(r"hv[sbr]\.[A-Za-z0-9_-]{24,}")
-
-
-def _is_secret_key(key: str) -> bool:
-    normalized = re.sub(r"[^a-z0-9]", "", key.lower())
-    if normalized in _SECRET_KEY_NAMES:
-        return True
-    return any(term in normalized for term in _SECRET_KEY_SUBSTRINGS)
-
-
-def _redact_run(match: re.Match[str]) -> str:
-    run = match.group(0)
-    start = run.find("eyJ")
-    # A JWT starts at "eyJ" and has at least two more dot-separated parts.
-    if start != -1 and run[start:].count(".") >= 2:
-        run = run[:start] + REDACTED_TOKEN
-    if "hv" in run:
-        run = _VAULT_TOKEN.sub(REDACTED_TOKEN, run)
-    return run
-
-
-def scrub_text(value: str) -> str:
-    """Replace every JWT and Vault token in `value` with REDACTED_TOKEN."""
-    if "eyJ" not in value and "hv" not in value:
-        return value
-    return _TOKEN_CHAR_RUN.sub(_redact_run, value)
-
-
-def scrub(value: Any) -> Any:
-    """Return a copy of `value` with secret-named keys removed and tokens redacted."""
-    if isinstance(value, str):
-        return scrub_text(value)
+    Keys become strings, tuples become lists, and a value JSON has no type for
+    (Decimal, datetime, ...) becomes its text. Nothing is removed or replaced.
+    The copy is taken when the event is built, so the event on the queue does
+    not change if the worker changes the objects it came from before main.py
+    serialises it.
+    """
     if isinstance(value, dict):
-        out = {}
-        for key, item in value.items():
-            key = str(key)
-            if key not in _CORRELATION_KEYS and (_is_secret_key(key) or scrub_text(key) != key):
-                continue
-            out[key] = scrub(item)
-        return out
+        return {str(key): _json_safe(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
-        return [scrub(item) for item in value]
-    if value is None or isinstance(value, (bool, int, float)):
+        return [_json_safe(item) for item in value]
+    if value is None or isinstance(value, (str, bool, int, float)):
         return value
-    return scrub_text(str(value))
+    return str(value)
 
 
 def decode_payload(jwt: str) -> dict[str, Any]:
@@ -209,8 +148,8 @@ class TurnActivity:
         self._ceiling: tuple[str | None, list[str] | None, str | None] | None = None
 
     def build(self, event: dict[str, Any]) -> dict[str, Any]:
-        """Stamp an event with this turn's requestId and the time, then scrub it."""
-        return scrub({**event, "requestId": self.request_id, "ts": int(time.time() * 1000)})
+        """Stamp an event with this turn's requestId and the time, as plain JSON values."""
+        return _json_safe({**event, "requestId": self.request_id, "ts": int(time.time() * 1000)})
 
     def emit(self, event: dict[str, Any]) -> None:
         """Queue an event for the SSE stream. Safe to call from any thread."""
@@ -238,9 +177,8 @@ class TurnActivity:
     ) -> None:
         """Queue an agent:credential event carrying a credential IN FULL.
 
-        Built from these named fields only, and deliberately NOT scrubbed: showing
-        the credential is the event's purpose. Only credentials issued during the
-        turn come through here — never a client secret or other configuration.
+        Built from these named fields only: showing the credential is the event's
+        purpose. Only credentials issued during the turn come through here.
         """
         event: dict[str, Any] = {"type": "agent:credential", "kind": kind, "label": label, "issuer": issuer}
         if value is not None:
@@ -365,8 +303,7 @@ def current() -> TurnActivity | None:
 # ---------------------------------------------------------------------------
 
 # The credential_metadata keys the MCP server returns (mcp-server/src/tools.ts).
-# Narration text is built from THESE keys only, never by dumping the dict, because
-# free text is not key-scrubbed by the UI filter.
+# Narration text is built from THESE keys only, never by dumping the dict.
 #
 # vault_role is deliberately NOT read. The MCP server labels every credential
 # "uc2-jwt", a JWT auth role that was retired with the native cutover
