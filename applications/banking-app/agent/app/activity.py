@@ -114,7 +114,7 @@ _AUDIT_CLAIMS = ("sub", "scope", "jti", "iss", "aud", "exp", "act")
 
 
 def decode_claims(jwt: str) -> dict[str, Any]:
-    """The non-secret claims of the caller's token that label the turn (unverified)."""
+    """The caller's token claims that agent:audit_seed carries (_AUDIT_CLAIMS), decoded but not verified."""
     data = decode_payload(jwt)
     return {key: data[key] for key in _AUDIT_CLAIMS if key in data}
 
