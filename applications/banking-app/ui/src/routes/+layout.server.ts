@@ -11,10 +11,15 @@
  * Decodes displayName and sub from the id_token cookie for DISPLAY-ONLY use
  * in the header user menu. This does NOT affect auth gating (hooks.server.ts
  * controls that via locals.accessToken).
+ *
+ * While signed in, also sends the decoded claims of the id_token and
+ * access_token cookies for the persona menu (lib/server/sign-in-claims.ts):
+ * the claims only, never the token strings. Signed out, there are none.
  */
 
 import { redirect } from '@sveltejs/kit';
 import type { LayoutServerLoad } from './$types';
+import { readSignInClaims } from '$lib/server/sign-in-claims';
 
 // Pages that do NOT require a banking-ui session cookie. The root path
 // is public because the load() function on / handles the redirect to
@@ -50,5 +55,6 @@ export const load: LayoutServerLoad = async ({ locals, cookies, url }) => {
     accessToken: locals.accessToken ?? null,
     displayName,
     sub,
+    signInClaims: locals.accessToken ? readSignInClaims(cookies) : null,
   };
 };
