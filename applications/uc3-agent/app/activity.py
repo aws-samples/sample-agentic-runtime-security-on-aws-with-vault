@@ -33,7 +33,7 @@ the workshop shows in real time what happens behind each use case). The value
 goes only onto this request's queue: never into a tool's return value (that
 reaches Bedrock and the on-disk session history) and never into a log line.
 OAuth client secrets and the SCIM password are configuration, not issued
-credentials, and are never sent.
+credentials, and are never passed to credential().
 
 Every OTHER event (narration, tool calls, approvals, the audit seed) is sent
 with every key and value the agent gave it — no key named like a secret is

@@ -1110,7 +1110,7 @@ def complete_refund(auth_req_id: str, request_id: str, tool_context: ToolContext
     )
     ciba_token = _poll_ciba(auth_req_id, request_id)
     delegated_jwt = _token_exchange(ciba_token, request_id)
-    # The narration and the audit seed carry decoded, non-secret claims only; the
+    # The narration and the audit seed carry the token's decoded claims; the
     # token itself is shown once, as a credential event, and is never part of
     # this tool's return value.
     delegated_claims = activity.delegated_token_claims(delegated_jwt)
