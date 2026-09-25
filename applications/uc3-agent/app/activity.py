@@ -4,9 +4,7 @@ Every step the refund agent takes — each tool call, the account-owner check, t
 CIBA approval request and its outcome, the token exchange, the Vault credential,
 the database write and the audit anchor — is reported to the browser as it
 happens, as one Server-Sent Event per step. The event shapes are the banking UI's
-contract, applications/banking-app/ui/src/lib/agent-events.ts. `agent:credential`
-is the one type not in it yet: the filter task adds it, and until then the UI's
-activity filter drops it.
+contract, applications/banking-app/ui/src/lib/agent-events.ts.
 
 Isolation
 ---------
@@ -37,13 +35,12 @@ reaches Bedrock and the on-disk session history) and never into a log line.
 OAuth client secrets and the SCIM password are configuration, not issued
 credentials, and are never sent.
 
-Every OTHER event is scrubbed at the source with the same rules as the banking
-UI's activity filter, so a tool result or narration line can never carry a
-credential by accident:
-  - payload keys named like a secret (password, secret, token, private key,
-    api key, credential headers) are removed at any depth, except the
-    correlation keys the audit story needs (lease_id, request_id, sub, ...);
-  - every string has JWTs and Vault tokens replaced by "[token redacted]".
+Every OTHER event (narration, tool calls, approvals, the audit seed) is sent
+with every key and value the agent gave it — no key named like a secret is
+removed and no JWT or Vault token is replaced (Bear, 2026-09-25: the workshop
+shows attendees everything as it happens). Payload fields are only copied into
+plain JSON values (_json_safe), which leaves out prototype keys, nesting deeper
+than 32 levels, numbers JSON cannot carry, and null values.
 
 An emit never raises into the tool that called it, and a tool-call hook never
 raises into the tool call it reports: reporting a step must not be able to
@@ -56,7 +53,6 @@ import hashlib
 import json
 import logging
 import math
-import re
 import threading
 import time
 from contextvars import ContextVar, Token
@@ -69,76 +65,29 @@ logger = logging.getLogger(__name__)
 # Placed on the queue after the agent's worker has finished; never sent.
 END = object()
 
-REDACTED_TOKEN = "[token redacted]"
-
-# Event fields that carry arbitrary data and are deep-scrubbed.
+# Event fields that carry arbitrary data and are copied into plain JSON values.
 _PAYLOAD_FIELDS = frozenset({"args", "result", "details", "leases", "claims"})
 
-# Same rules as applications/banking-app/ui/src/lib/server/activity-filter.ts.
-_SECRET_KEY_SUBSTRINGS = ("password", "passwd", "passphrase", "secret", "token", "privatekey", "apikey")
-_SECRET_KEY_NAMES = frozenset({"authorization", "proxyauthorization", "cookie", "setcookie"})
-_CORRELATION_KEYS = frozenset(
-    {
-        "lease_id",
-        "lease_duration_seconds",
-        "ttl_seconds",
-        "vault_path",
-        "vault_role",
-        "db_role",
-        "user_sub",
-        "sub",
-        "scope",
-        "jti",
-        "request_id",
-        "iss",
-        "aud",
-        "exp",
-        "act",
-    }
-)
 _PROTOTYPE_KEYS = frozenset({"__proto__", "constructor", "prototype"})
 _MAX_DEPTH = 32
-
-_TOKEN_CHAR_RUN = re.compile(r"[A-Za-z0-9_.-]+")
-_VAULT_TOKEN = re.compile(r"hv[sbr]\.[A-Za-z0-9_-]{24,}")
 
 # The delegated-token claims worth showing. Everything else is left out.
 _CLAIMS_SHOWN = ("sub", "scope", "jti", "iss", "aud", "exp", "act", "may_act")
 
 
 # ---------------------------------------------------------------------------
-# Scrubbing
+# Events as plain JSON
 # ---------------------------------------------------------------------------
 
 
-def _is_secret_key(key: str) -> bool:
-    normalized = re.sub(r"[^a-z0-9]", "", key.lower())
-    if normalized in _SECRET_KEY_NAMES:
-        return True
-    return any(term in normalized for term in _SECRET_KEY_SUBSTRINGS)
+def _json_safe(value: Any, depth: int = 0) -> Any:
+    """A plain-JSON copy of value with every key and value kept, or None if it is left out.
 
-
-def _redact_run(match: re.Match) -> str:
-    run = match.group(0)
-    start = run.find("eyJ")
-    if start != -1 and run[start:].count(".") >= 2:
-        run = run[:start] + REDACTED_TOKEN
-    if "hv" in run:
-        run = _VAULT_TOKEN.sub(REDACTED_TOKEN, run)
-    return run
-
-
-def scrub_text(value: str) -> str:
-    """Replace JWTs and Vault tokens inside a string with REDACTED_TOKEN."""
-    if "eyJ" not in value and "hv" not in value:
-        return value
-    return _TOKEN_CHAR_RUN.sub(_redact_run, value)
-
-
-def _scrub(value: Any, depth: int = 0) -> Any:
-    """Return a JSON-safe, scrubbed copy of value (None when nothing may pass)."""
+    Nothing is removed or replaced for being secret. Left out: prototype keys,
+    nesting deeper than _MAX_DEPTH, numbers JSON cannot carry, and null values.
+    """
     if isinstance(value, str):
-        return scrub_text(value)
+        return value
     if isinstance(value, bool) or value is None:
         return value
     if isinstance(value, (int, float)):
@@ -148,9 +97,9 @@ def _scrub(value: Any, depth: int = 0) -> Any:
     if isinstance(value, (list, tuple)):
         out = []
         for item in value:
-            scrubbed = _scrub(item, depth + 1)
-            if scrubbed is not None:
-                out.append(scrubbed)
+            copied = _json_safe(item, depth + 1)
+            if copied is not None:
+                out.append(copied)
         return out
     if isinstance(value, dict):
         out = {}
@@ -158,14 +107,12 @@ def _scrub(value: Any, depth: int = 0) -> Any:
             key = str(key)
             if key in _PROTOTYPE_KEYS:
                 continue
-            if key not in _CORRELATION_KEYS and (_is_secret_key(key) or scrub_text(key) != key):
-                continue
-            scrubbed = _scrub(item, depth + 1)
-            if scrubbed is not None:
-                out[key] = scrubbed
+            copied = _json_safe(item, depth + 1)
+            if copied is not None:
+                out[key] = copied
         return out
     # Anything else (Decimal, datetime, ...) is reported as its text.
-    return scrub_text(str(value))
+    return str(value)
 
 
 # ---------------------------------------------------------------------------
@@ -291,8 +238,8 @@ def reset_sink(token: Token) -> None:
 def emit(event_type: str, **fields: Any) -> None:
     """Send one contract event on the current request's stream.
 
-    Fields set to None are left out. Payload fields are deep-scrubbed and every
-    other string field is token-scrubbed. Never raises.
+    Fields set to None are left out. Payload fields are copied into plain JSON
+    values; every other field is sent as given. Never raises.
     """
     sink = _EVENT_SINK.get()
     if sink is None or sink.closed:
@@ -303,11 +250,9 @@ def emit(event_type: str, **fields: Any) -> None:
             if value is None:
                 continue
             if name in _PAYLOAD_FIELDS:
-                value = _scrub(value)
+                value = _json_safe(value)
                 if value is None:
                     continue
-            elif isinstance(value, str):
-                value = scrub_text(value)
             event[name] = value
         event["ts"] = int(time.time() * 1000)
         sink.push(event)
@@ -393,7 +338,7 @@ def decode_jwt_payload(token: str) -> dict | None:
 
 
 def delegated_token_claims(token: str) -> dict:
-    """Decode a JWT's payload and keep only the non-secret claims worth showing.
+    """Decode a JWT's payload and keep the claims the narration and audit seed show.
 
     The signature is NOT checked here — Vault verifies the token against IVIA's
     JWKS when the agent presents it. This is display only, and the token itself
@@ -408,7 +353,7 @@ def delegated_token_claims(token: str) -> dict:
         claims["authorization_details"] = [
             {"type": entry["type"]} for entry in details if isinstance(entry, dict) and "type" in entry
         ]
-    return _scrub(claims) or {}
+    return _json_safe(claims)
 
 
 # ---------------------------------------------------------------------------
