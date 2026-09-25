@@ -168,7 +168,9 @@
 			'/api/ask',
 			(event) => log.push(event, turn)
 		);
-		log.end(turn);
+		// A turn that failed shows its error in the Agent Log too.
+		if (reply.error === undefined) log.end(turn);
+		else log.fail(reply.error, turn);
 		isLoading = false;
 	}
 </script>

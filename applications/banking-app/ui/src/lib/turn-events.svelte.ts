@@ -7,18 +7,24 @@
  * Flow and the Audit Trace all read the same Turns:
  *
  *   const log = createTurnLog();
- *   const turn = log.begin(question);                 // when the question is sent
- *   sendChatMessage(..., (e) => log.push(e, turn));   // each agent event
- *   log.end(turn);                                    // when its stream is over
+ *   const turn = log.begin(question);                       // when the question is sent
+ *   await sendChatMessage(..., (e) => log.push(e, turn));   // each agent event
+ *   if (failure === undefined) log.end(turn);               // when its stream is over,
+ *   else log.fail(failure, turn);                           // or when the page showed an error
  *
- * `push` and `end` take the Turn they belong to, so a late frame from a finished
+ * `fail` ends a turn that failed and records that error as one `agent:error` event,
+ * so the Agent Log shows the failure, unless the stream already carried an
+ * `agent:error` of its own. Call it once the stream is over, never as an error
+ * frame arrives: an agent can send its legacy `error` frame before its `agent:error`.
+ *
+ * `push`, `end` and `fail` take the Turn they belong to, so a late frame from a finished
  * stream can never land in a newer Turn. Without one they act on the latest Turn.
  *
  * `turns` is reactive state: read it in a component or a $derived and the reader
  * updates as events arrive. It is only ever appended to, never replaced.
  */
 
-import type { AgentEvent } from '$lib/agent-events';
+import type { AgentErrorEvent, AgentEvent } from '$lib/agent-events';
 
 export interface Turn {
 	/** Unique within the page. */
@@ -44,6 +50,11 @@ export interface TurnLog {
 	push(event: AgentEvent, turn?: Turn): void;
 	/** Marks `turn` (default: the latest turn) as over. */
 	end(turn?: Turn): void;
+	/**
+	 * Marks `turn` (default: the latest turn) as over because it failed, first adding
+	 * `{ type: 'agent:error', message }` unless the turn already holds an `agent:error`.
+	 */
+	fail(message: string, turn?: Turn): void;
 }
 
 export function createTurnLog(): TurnLog {
@@ -70,6 +81,16 @@ export function createTurnLog(): TurnLog {
 		},
 		end(turn: Turn | undefined = turns.at(-1)): void {
 			if (turn) turn.done = true;
+		},
+		fail(message: string, turn: Turn | undefined = turns.at(-1)): void {
+			if (!turn) return;
+			if (!turn.events.some((event) => event.type === 'agent:error')) {
+				const failed: AgentErrorEvent = { type: 'agent:error', message };
+				turn.events.push(failed);
+			}
+			// Added before the turn is marked over: a reader that counts the turn's
+			// lines when it ends (the Agent Log's announcement) counts this one too.
+			turn.done = true;
 		}
 	};
 }

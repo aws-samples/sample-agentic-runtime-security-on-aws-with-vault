@@ -190,6 +190,9 @@
 		messages = [...messages, { role: 'user', content: userMsg }];
 		isLoading = true;
 		const turn = log.begin(userMsg);
+		// The first error the page shows for this turn, without the "Error: " the
+		// notification puts in front of it: the Agent Log line has its own label.
+		let failure: string | undefined;
 
 		await sendChatMessage(
 			userMsg,
@@ -201,6 +204,7 @@
 					return;
 				}
 				if (chunk.type === 'error') {
+					failure ??= chunk.content;
 					messages = [...messages, { role: 'error', content: chunk.content, agent }];
 					isLoading = false;
 					return;
@@ -211,13 +215,16 @@
 				}
 			},
 			(err) => {
+				failure ??= err;
 				messages = [...messages, { role: 'error', content: `Error: ${err}`, agent }];
 				isLoading = false;
 			},
 			endpoint,
 			(event) => log.push(event, turn)
 		);
-		log.end(turn);
+		// A turn that failed shows its error in the Agent Log too.
+		if (failure === undefined) log.end(turn);
+		else log.fail(failure, turn);
 	}
 </script>
 
