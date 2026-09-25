@@ -878,9 +878,9 @@
 		color: var(--ovi-text-primary);
 	}
 
+	/* Left-aligned in its own column, as the approved Technical board sets it. */
 	.sig-status {
 		color: var(--ovi-teal-deep);
-		text-align: right;
 	}
 
 	.sig-quiet,
