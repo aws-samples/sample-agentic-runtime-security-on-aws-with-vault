@@ -28,11 +28,15 @@
 	import AgentTurn from '$lib/components/chat/AgentTurn.svelte';
 	import ToolChip from '$lib/components/chat/ToolChip.svelte';
 	import AnswerCard from '$lib/components/chat/AnswerCard.svelte';
+	import ToolCallChip from '$lib/components/chat/ToolCallChip.svelte';
+	import AccountsCard from '$lib/components/chat/AccountsCard.svelte';
+	import FormattedAnswer from '$lib/components/chat/FormattedAnswer.svelte';
 	import AgentLogPanel from '$lib/components/activity/AgentLogPanel.svelte';
 	import SecurityFlowPanel from '$lib/components/activity/SecurityFlowPanel.svelte';
 	import AuditTraceCard from '$lib/components/activity/AuditTraceCard.svelte';
 	import { countEntries } from '$lib/agent-log';
 	import { createTurnLog } from '$lib/turn-events.svelte';
+	import { accountsCardsOf, hasAccountsCall, toolCallsOf } from '$lib/accounts-turn';
 
 	let { data }: { data: PageData } = $props();
 
@@ -138,6 +142,21 @@
 		}
 		return out;
 	});
+
+	/**
+	 * A banking turn in which the agent called get_accounts is drawn as the approved #65 board
+	 * draws it: a chip per tool call in place of the "Processing your request..." pill, a "Your
+	 * accounts" card, then the Audit Trace card and the formatted answer. Every other turn keeps
+	 * its layout (Bear, 2026-09-25). Null for any other turn.
+	 */
+	function accountsViewOf(turn: Turn) {
+		if (turn.kind !== 'agent' || turn.agent !== 'Banking Agent') return null;
+		const turnId = turn.msgs[0]?.turnId;
+		if (!turnId || turn.msgs.some((msg) => msg.turnId !== turnId)) return null;
+		const logTurn = log.turns.find((t) => t.id === turnId);
+		if (!logTurn || !hasAccountsCall(logTurn.events)) return null;
+		return { tools: toolCallsOf(logTurn.events), cards: accountsCardsOf(logTurn.events) };
+	}
 
 	function extractConsent(text: string, agent: AgentName) {
 		const match = text.match(/CIBA_CONSENT:auth_req_id=([^|]+)\|request_id=([^|]+)\|user_code=([^|]+)\|details=([^|]+)(?:\|consent_url=(\S+))?/);
@@ -315,8 +334,36 @@
 	{/if}
 
 	{#each turns as turn, i}
+		{@const accounts = accountsViewOf(turn)}
 		{#if turn.kind === 'user'}
 			<UserMessage>{turn.msg.content}</UserMessage>
+		{:else if accounts}
+			<AgentTurn label={turn.agent} icon={agentIcon}>
+				{#each accounts.tools as tool (tool.id)}
+					<ToolCallChip name={tool.name} status={tool.status} durationMs={tool.durationMs} />
+				{/each}
+				{#each accounts.cards as card (card.key)}
+					<AccountsCard accounts={card.accounts} credential={card.credential} owner={actingFor || undefined} />
+				{/each}
+				{#each turn.msgs as msg}
+					{#if msg.type === 'tool_planning'}
+						<!-- The tool chips above stand in for the "Processing your request..." pill. -->
+					{:else if msg.role === 'tool'}
+						<ToolChip label={msg.content} />
+					{:else if msg.role === 'error'}
+						<InlineNotification kind="error" lowContrast hideCloseButton title="Error" subtitle={msg.content} />
+					{:else}
+						{@const auditTurn = auditTurnFor.get(msg)}
+						{#if auditTurn}
+							<AuditTraceCard useCase={2} turn={auditTurn} turns={log.turns} />
+						{/if}
+						<FormattedAnswer text={msg.content} />
+					{/if}
+				{/each}
+				{#if isLoading && i === turns.length - 1}
+					<AnswerCard pending>Thinking…</AnswerCard>
+				{/if}
+			</AgentTurn>
 		{:else}
 			<AgentTurn label={turn.agent} icon={agentIcon}>
 				{#each turn.msgs as msg}
