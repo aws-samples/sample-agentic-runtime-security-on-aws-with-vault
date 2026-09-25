@@ -88,11 +88,16 @@ keep the old image until each one is deleted. HashiCorp's documented order
 
 1. Take a Raft snapshot first (`vault operator raft snapshot save`). Rolling back means the old
    version plus that snapshot ([rollback](https://developer.hashicorp.com/vault/docs/upgrade/rollback)).
-2. Turn off autopilot's automated upgrade migration
+2. Record the current `disable_upgrade_migration` value (`vault operator raft autopilot
+   get-config`), then turn automated upgrade migration off
    (`vault operator raft autopilot set-config -disable-upgrade-migration=true`). The HA upgrade
-   guide requires this for an in-place upgrade of Enterprise Integrated Storage.
-3. Delete each standby pod, one at a time, and wait until it is Ready, unsealed, on the new
-   version, and autopilot reports healthy with three voters.
+   guide requires this for an in-place upgrade of Enterprise Integrated Storage. Restore the
+   recorded value once every pod runs the new version.
+3. Delete each standby pod, one at a time, and wait until it is Ready and unsealed, and until
+   autopilot's own entry for that node (`vault operator raft autopilot state`, `Servers.<pod>`)
+   shows the new `Version` and `Healthy`, with three voters. The cluster-level `Healthy` flag
+   alone can pass before autopilot has seen the restart: a local 2.0.3 to 2.1.1 rehearsal showed
+   it `true` while the just-restarted node was still listed at 2.0.3.
 4. Delete the active pod last. `kubectl delete pod` is a graceful shutdown (the chart's preStop
    hook sends Vault SIGTERM), which hands leadership to an upgraded standby. Do not run
    `vault operator step-down`: the HA guide says "DO NOT attempt to issue a step-down operation at
