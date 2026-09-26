@@ -61,10 +61,16 @@ kubectl logs -n verify-access -l app.kubernetes.io/name=ivia-autoconf --tail=-1
 `--tail=-1` is required: with a label selector (`-l`) `kubectl logs` defaults to showing only the last **10** lines, which is not enough to read the summary block. Look for the `API FAILURE SUMMARY` at the bottom of the output. To retry, remove the failed Job from Terraform state and re-apply:
 
 ```bash
-terraform -chdir=infrastructure state rm 'module.ivia.kubernetes_job_v1.ivia_autoconf'
+terraform -chdir=infrastructure/services state rm 'module.ivia.kubernetes_job_v1.ivia_autoconf'
 kubectl delete job -n verify-access -l app.kubernetes.io/name=ivia-autoconf
-terraform -chdir=infrastructure apply
+bash infrastructure/scripts/deploy-workshop.sh --tier 2 --skip-vault-init
 ```
+
+IVIA is a **tier-2** module (`infrastructure/services`), not tier 1 — running these against
+`infrastructure` finds no such resource and then re-applies the VPC/EKS/RDS foundation instead.
+Re-apply through the deploy script rather than a bare `terraform apply`, so the ACME and IVIA
+re-apply steps that follow the Job run too. `--skip-vault-init` because Vault is already
+initialized.
 :::
 
 ## Step 2 — Confirm the WRP ALB Ingress
