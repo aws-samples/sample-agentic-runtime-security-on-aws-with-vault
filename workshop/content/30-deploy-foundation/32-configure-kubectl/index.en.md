@@ -14,11 +14,11 @@ kubectl get nodes
 
 ```
 NAME                                       STATUS   ROLES    AGE   VERSION
-ip-10-1-1-xxx.<region>.compute.internal    Ready    <none>   5m    v1.34.x-eks-xxxx
-ip-10-1-2-xxx.<region>.compute.internal    Ready    <none>   5m    v1.34.x-eks-xxxx
-ip-10-1-3-xxx.<region>.compute.internal    Ready    <none>   5m    v1.34.x-eks-xxxx
-ip-10-1-4-xxx.<region>.compute.internal    Ready    <none>   5m    v1.34.x-eks-xxxx
-ip-10-1-5-xxx.<region>.compute.internal    Ready    <none>   5m    v1.34.x-eks-xxxx
+ip-10-1-1-xxx.ec2.internal     Ready    <none>   5m    v1.34.x-eks-xxxx
+ip-10-1-10-xxx.ec2.internal    Ready    <none>   5m    v1.34.x-eks-xxxx
+ip-10-1-30-xxx.ec2.internal    Ready    <none>   5m    v1.34.x-eks-xxxx
+ip-10-1-31-xxx.ec2.internal    Ready    <none>   5m    v1.34.x-eks-xxxx
+ip-10-1-41-xxx.ec2.internal    Ready    <none>   5m    v1.34.x-eks-xxxx
 ```
 
 EKS authorization is separate from the kubeconfig this command writes. **Self-paced:** you created the cluster, so you already hold `cluster-admin`. **At an event:** the cluster was provisioned for you by the account setup, which granted `cluster-admin` to your `WSParticipantRole` — so `kubectl` works with the identity Workshop Studio gave you.
