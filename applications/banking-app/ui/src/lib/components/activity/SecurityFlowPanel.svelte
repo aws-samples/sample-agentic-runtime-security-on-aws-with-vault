@@ -380,16 +380,19 @@
 		popup = undefined;
 	}
 
-	// The line's own box, with room under the labels for the stop chips when floating.
-	const STOP_OBJ_ROOM = 110;
 	let box = $derived(geo.viewBox.split(' ').map(Number));
-	let lineViewBox = $derived(floating ? `0 0 ${box[2]} ${box[3] + STOP_OBJ_ROOM}` : geo.viewBox);
+
+	// The chips are HTML over a drawing that scales with the panel, so they do not shrink with
+	// it. Below roughly 1035px of line the five stops are closer together than a titled chip is
+	// wide, and the chip drops to its code alone — the title is then one hover or tab away, and
+	// the Technical rows still carry it in full. Compact until measured, so nothing reflows.
+	let lineW = $state(0);
+	let compactObjs = $derived(lineW === 0 || lineW * 0.225 < 235);
 
 	// Percentages of the drawing, not pixels: the svg is width:100% with height:auto, so the
 	// overlay tracks it at any window size.
 	let clusters = $derived.by(() => {
 		if (!floating || !flow) return [];
-		const h = box[3] + STOP_OBJ_ROOM;
 		return flow.stops
 			.map((stop, i) => ({
 				id: stop.id,
@@ -399,7 +402,7 @@
 				// rather than hanging off it.
 				edge: i === 0 ? 'start' : i === flow.stops.length - 1 ? 'end' : 'centre',
 				style:
-					`top:${((labelY(i, looks[i]) + 14) / h) * 100}%;` +
+					`top:${((labelY(i, looks[i]) + 8) / box[3]) * 100}%;` +
 					(i === 0
 						? 'left:0'
 						: i === flow.stops.length - 1
@@ -407,6 +410,14 @@
 							: `left:${(geo.nodes[i].x / box[2]) * 100}%`)
 			}))
 			.filter((c) => c.objectives.length > 0);
+	});
+
+	// The chips hang below the drawing, so the line reserves real pixels for the deepest stack.
+	let objRoom = $derived.by(() => {
+		const deepest = Math.max(0, ...clusters.map((c) => c.objectives.length));
+		if (deepest === 0) return 0;
+		const chip = compactObjs ? 24 : 28;
+		return deepest * chip + (deepest - 1) * 4 + 6;
 	});
 
 	let announcement = $derived(
@@ -419,10 +430,11 @@
 	{@const o = OBJECTIVES[oid]}
 	{@const m = marks.get(oid)}
 	{@const state = objClass(m)}
+	{@const compact = where === 'stop' && compactObjs}
 	<button
 		type="button"
 		class="objchip objchip-{state}"
-		class:objchip-row={where === 'row'}
+		class:objchip-row={where === 'row' || compact}
 		aria-expanded={popup?.id === oid}
 		aria-describedby={popup?.id === oid ? `${id}-objpop` : undefined}
 		onmouseenter={(e) => openPop(oid, e)}
@@ -431,8 +443,8 @@
 		onblur={closePop}
 		onclick={(e) => (popup?.id === oid ? closePop() : openPop(oid, e))}
 	>
-		<span class="objdot" aria-hidden="true"></span>{o.code} · {o.title}<span class="visually-hidden"
-			>, {OBJ_WORDS[state]}</span
+		<span class="objdot" aria-hidden="true"></span>{compact ? o.code : `${o.code} · ${o.title}`}<span
+			class="visually-hidden">{compact ? `, ${o.title}` : ''}, {OBJ_WORDS[state]}</span
 		>
 	</button>
 {/snippet}
@@ -529,8 +541,9 @@
 				</div>
 
 				<!-- Docked the wrapper lays out nothing; floating it is what the stop chips sit on. -->
-				<div class="linewrap">
-				<svg class="line" viewBox={lineViewBox} role="img" aria-label={lineLabel(flow, looks)}>
+				<div class="linewrap" bind:clientWidth={lineW} style={objRoom ? `padding-bottom:${objRoom}px` : undefined}>
+				<div class="linebox">
+				<svg class="line" viewBox={geo.viewBox} role="img" aria-label={lineLabel(flow, looks)}>
 					{#each geo.segments as d, i (i)}
 						<path {d} class="seg-path" class:seg-reached={reached(looks[i + 1])} stroke-width="7" fill="none" stroke-linecap="round"></path>
 					{/each}
@@ -584,6 +597,7 @@
 						{/each}
 					</div>
 				{/if}
+				</div>
 				</div>
 			</div>
 
@@ -1556,14 +1570,22 @@
 	}
 
 	/* ---- Objective chips under the stops on the line ---------------------------------- */
-	.linewrap {
+	/* Docked, neither wrapper lays out anything: the line stays a row of the body. */
+	.linewrap,
+	.linebox {
 		display: contents;
 	}
 
 	.floating .linewrap {
 		display: block;
-		position: relative;
 		min-width: 0;
+	}
+
+	/* Exactly the drawing's box, so a cluster's top is a percentage of the line itself. The
+	   chips hang below it, into the room the wrapper reserves. */
+	.floating .linebox {
+		display: block;
+		position: relative;
 	}
 
 	/* Percentages of the drawing, so the chips follow the line at any window width. */
