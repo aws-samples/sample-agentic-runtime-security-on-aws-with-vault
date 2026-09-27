@@ -126,6 +126,7 @@ export const OBJECTIVES: Record<ObjectiveId, Objective> = {
 const OBJECTIVES_BY_SIGNAL: Record<UseCase, Record<string, ObjectiveId[]>> = {
 	1: {
 		'request-id': [5],
+		'no-user': [1],
 		'sa-token': [1],
 		'vault-token': [1],
 		'model-keys': [2],
@@ -160,7 +161,8 @@ const OBJECTIVES_BY_SIGNAL: Record<UseCase, Record<string, ObjectiveId[]>> = {
 		'refund-row': [4],
 		revoked: [2],
 		'audit-anchor': [5],
-		athena: [5]
+		athena: [5],
+		'audit-seed': [5]
 	}
 };
 
