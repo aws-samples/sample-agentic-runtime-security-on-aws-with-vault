@@ -61,9 +61,12 @@
 		buildFlow,
 		chipsUpTo,
 		NOT_OBSERVED_TEXT,
+		OBJECTIVES,
 		STOP_IDS,
 		type EvidenceRow,
 		type Flow,
+		type ObjectiveId,
+		type ObjectiveMark,
 		type Signal,
 		type Stop,
 		type UseCase
@@ -188,6 +191,12 @@
 	function onkeydown(e: KeyboardEvent) {
 		if (e.key === 'Escape') {
 			e.stopPropagation();
+			// An open objective popup takes the first Escape, before the panel docks or closes.
+			if (popup) {
+				e.preventDefault();
+				closePop();
+				return;
+			}
 			if (floating) {
 				e.preventDefault();
 				float?.dock();
@@ -323,16 +332,117 @@
 		return 'ok';
 	}
 
+	// ---- Control objectives -------------------------------------------------------------
+	// Every step the flow draws carries the objectives it proves (security-flow.ts). Their state
+	// is turn-wide — `flow.objectives` — so the same objective never reads "proven" under one stop
+	// and "partly" under another. Chips sit on the Technical signal rows, and under the stops on
+	// the line when the panel is floating: docked, the line is 468px wide and a titled chip is
+	// most of that.
+	let marks = $derived(new Map<ObjectiveId, ObjectiveMark>((flow?.objectives ?? []).map((m) => [m.id, m])));
+
+	function objClass(m: ObjectiveMark | undefined): string {
+		if (!m) return 'off';
+		if (m.tone === 'failed') return 'bad';
+		if (m.status === 'observed') return 'on';
+		if (m.status === 'pending') return 'part';
+		return 'off';
+	}
+
+	const OBJ_WORDS: Record<string, string> = {
+		on: 'proven by evidence in this turn',
+		part: 'partly — some evidence still outstanding',
+		bad: 'not proven — a step in this turn was refused',
+		off: NOT_OBSERVED_TEXT
+	};
+
+	// One popup for the whole panel, positioned against the chip that opened it. It is fixed, so
+	// it escapes the panel's own overflow without the body having to stop clipping — the Technical
+	// view is taller than the window and that clipping is what makes the body scroll.
+	const POP_W = 330;
+	let panelEl = $state<HTMLElement>();
+	let popup = $state<{ id: ObjectiveId; x: number; y: number; above: boolean } | undefined>();
+
+	function openPop(oid: ObjectiveId, e: Event) {
+		const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+		const b = panelEl?.getBoundingClientRect();
+		const left = b ? b.left + 12 : 12;
+		const right = b ? b.right - 12 : window.innerWidth - 12;
+		const above = window.innerHeight - r.bottom < 260;
+		popup = {
+			id: oid,
+			x: Math.min(Math.max(r.left + r.width / 2 - POP_W / 2, left), Math.max(left, right - POP_W)),
+			y: above ? window.innerHeight - r.top + 9 : r.bottom + 9,
+			above
+		};
+	}
+
+	function closePop() {
+		popup = undefined;
+	}
+
+	// The line's own box, with room under the labels for the stop chips when floating.
+	const STOP_OBJ_ROOM = 110;
+	let box = $derived(geo.viewBox.split(' ').map(Number));
+	let lineViewBox = $derived(floating ? `0 0 ${box[2]} ${box[3] + STOP_OBJ_ROOM}` : geo.viewBox);
+
+	// Percentages of the drawing, not pixels: the svg is width:100% with height:auto, so the
+	// overlay tracks it at any window size.
+	let clusters = $derived.by(() => {
+		if (!floating || !flow) return [];
+		const h = box[3] + STOP_OBJ_ROOM;
+		return flow.stops
+			.map((stop, i) => ({
+				id: stop.id,
+				label: stop.label,
+				objectives: stop.objectives,
+				// The first and last stops sit at the edges of the drawing: their chips align inwards
+				// rather than hanging off it.
+				edge: i === 0 ? 'start' : i === flow.stops.length - 1 ? 'end' : 'centre',
+				style:
+					`top:${((labelY(i, looks[i]) + 14) / h) * 100}%;` +
+					(i === 0
+						? 'left:0'
+						: i === flow.stops.length - 1
+							? 'right:0'
+							: `left:${(geo.nodes[i].x / box[2]) * 100}%`)
+			}))
+			.filter((c) => c.objectives.length > 0);
+	});
+
 	let announcement = $derived(
 		focus ? `${focus.label}: ${focus.story.eyebrow}. ${focus.story.title}. ${focus.story.line}` : ''
 	);
 </script>
+
+<!-- One objective chip. `where` only changes its size: the rows carry more of them. -->
+{#snippet objChip(oid: ObjectiveId, where: 'row' | 'stop')}
+	{@const o = OBJECTIVES[oid]}
+	{@const m = marks.get(oid)}
+	{@const state = objClass(m)}
+	<button
+		type="button"
+		class="objchip objchip-{state}"
+		class:objchip-row={where === 'row'}
+		aria-expanded={popup?.id === oid}
+		aria-describedby={popup?.id === oid ? `${id}-objpop` : undefined}
+		onmouseenter={(e) => openPop(oid, e)}
+		onmouseleave={closePop}
+		onfocus={(e) => openPop(oid, e)}
+		onblur={closePop}
+		onclick={(e) => (popup?.id === oid ? closePop() : openPop(oid, e))}
+	>
+		<span class="objdot" aria-hidden="true"></span>{o.code} · {o.title}<span class="visually-hidden"
+			>, {OBJ_WORDS[state]}</span
+		>
+	</button>
+{/snippet}
 
 <!-- The floating panel is a dialog (role is dynamic, so the checker sees an aside); tabindex -1 keeps a click on its text inside it. -->
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_no_noninteractive_tabindex -->
 <aside
 	{id}
 	class="sf"
+	bind:this={panelEl}
 	class:story={mode === 'story'}
 	class:floating
 	role={floating ? 'dialog' : undefined}
@@ -399,7 +509,8 @@
 		</div>
 	</div>
 
-	<div class="sf-body">
+	<!-- The popup is fixed to the chip that opened it: a scroll under it would leave it stranded. -->
+	<div class="sf-body" onscroll={closePop}>
 		{#if !turn || !flow || !focus}
 			<div class="card card-empty">
 				<div class="eyebrow">What's happening</div>
@@ -417,7 +528,9 @@
 					</div>
 				</div>
 
-				<svg class="line" viewBox={geo.viewBox} role="img" aria-label={lineLabel(flow, looks)}>
+				<!-- Docked the wrapper lays out nothing; floating it is what the stop chips sit on. -->
+				<div class="linewrap">
+				<svg class="line" viewBox={lineViewBox} role="img" aria-label={lineLabel(flow, looks)}>
 					{#each geo.segments as d, i (i)}
 						<path {d} class="seg-path" class:seg-reached={reached(looks[i + 1])} stroke-width="7" fill="none" stroke-linecap="round"></path>
 					{/each}
@@ -462,6 +575,16 @@
 						>
 					{/each}
 				</svg>
+				{#if clusters.length > 0}
+					<div class="stopobjs">
+						{#each clusters as c (c.id)}
+							<div class="stopcluster stopcluster-{c.edge}" style={c.style}>
+								{#each c.objectives as oid (oid)}{@render objChip(oid, 'stop')}{/each}
+							</div>
+						{/each}
+					</div>
+				{/if}
+				</div>
 			</div>
 
 			<div class="focus" class:focus-wait={focus.tone === 'waiting'} class:focus-bad={focus.tone === 'failed'} class:focus-quiet={focus.status === 'not observed'}>
@@ -521,10 +644,14 @@
 					<div class="signals">
 						{#each signals as s (s.id)}
 							<span
+								class="sig-label"
 								class:sig-quiet={s.status === 'not observed'}
 								class:sig-wait={s.status === 'pending'}
 								class:sig-bad={s.tone === 'failed'}>{s.label}</span
 							>
+							<span class="sig-objs" class:sig-none={s.objectives.length === 0}>
+								{#each s.objectives as oid (oid)}{@render objChip(oid, 'row')}{/each}
+							</span>
 							<span
 								class="sig-status"
 								class:sig-quiet={s.status === 'not observed'}
@@ -577,6 +704,37 @@
 			{/if}
 		{/if}
 	</div>
+
+	<!-- What the objective is, and the turn's own evidence for it. One popup for the panel: the
+	     chip that is hovered or focused says where it goes. -->
+	{#if popup && flow}
+		{@const o = OBJECTIVES[popup.id]}
+		{@const m = marks.get(popup.id)}
+		<div
+			id="{id}-objpop"
+			class="objpop"
+			role="tooltip"
+			style="left:{popup.x}px;{popup.above ? 'bottom' : 'top'}:{popup.y}px"
+		>
+			<div class="objpop-head">
+				<span class="objdot objdot-{objClass(m)}" aria-hidden="true"></span>
+				<b>{o.code} · {o.title}</b>
+			</div>
+			<p class="objpop-detail">{o.detail}</p>
+			{#if m && m.proof.length > 0}
+				<div class="objpop-eyebrow">Proved here by</div>
+				<ul class="objpop-proof">
+					{#each m.proof as pr (pr.label)}
+						<li class:objpop-quiet={pr.status === 'not observed'} class:objpop-wait={pr.status === 'pending'}>
+							{pr.label}<span>{pr.status === 'not observed' ? NOT_OBSERVED_TEXT : pr.status}</span>
+						</li>
+					{/each}
+				</ul>
+			{:else}
+				<div class="objpop-eyebrow">{NOT_OBSERVED_TEXT}</div>
+			{/if}
+		</div>
+	{/if}
 </aside>
 
 <style>
@@ -1179,6 +1337,7 @@
 	.signals {
 		display: grid;
 		grid-template-columns: minmax(0, 1fr) auto;
+		align-items: center;
 		gap: 7px 14px;
 		font: 13px/1.45 var(--ovi-font-mono);
 		color: var(--ovi-text-primary);
@@ -1300,6 +1459,206 @@
 		word-break: break-all;
 	}
 
+	/* ---- Control objectives ---------------------------------------------------------- */
+	/* Filled = proven, half = partly, hollow = not observed: the state is told by the shape as
+	   well as the colour. The chip carries the objective's title because nobody remembers what
+	   OBJ-2 is; the popup carries the objective in full and the turn's own evidence for it. */
+	.objchip {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		min-height: 28px;
+		padding: 5px 11px 5px 9px;
+		border-radius: 999px;
+		font: 500 12px var(--ovi-font-sans);
+		white-space: nowrap;
+		cursor: pointer;
+	}
+
+	.objchip-row {
+		min-height: 24px;
+		padding: 3px 9px 3px 7px;
+		font-size: 11.5px;
+	}
+
+	.objchip-on {
+		background: var(--ovi-ok-bg);
+		border: 1px solid var(--ovi-ok-border);
+		color: var(--ovi-ok-text);
+	}
+
+	.objchip-part {
+		background: var(--ovi-amber-soft);
+		border: 1px solid var(--ovi-amber-border);
+		color: var(--ovi-amber);
+	}
+
+	.objchip-bad {
+		background: #ffffff;
+		border: 1px solid var(--ovi-red);
+		color: var(--ovi-red);
+	}
+
+	.objchip-off {
+		background: var(--ovi-card);
+		border: 1px solid var(--ovi-hairline-strong);
+		color: var(--ovi-text-helper);
+	}
+
+	.objdot {
+		width: 11px;
+		height: 11px;
+		flex-shrink: 0;
+		border-radius: 50%;
+		border: 1.5px solid currentColor;
+	}
+
+	.objchip-on .objdot,
+	.objdot-on {
+		background: var(--ovi-teal-deep);
+		border-color: var(--ovi-teal-deep);
+	}
+
+	/* Half filled: partly proven, told apart from the filled dot without colour. */
+	.objchip-part .objdot,
+	.objdot-part,
+	.objchip-bad .objdot,
+	.objdot-bad {
+		background: linear-gradient(to right, transparent 50%, currentColor 50%);
+	}
+
+	.objchip-off .objdot,
+	.objdot-off {
+		border-color: var(--sf-mark);
+	}
+
+	/* Technical signal rows: the chips take their own column when there is room for one. */
+	.sig-objs {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 4px;
+	}
+
+	/* Docked the panel is 520px wide, so the chips drop to a full-width row under the label
+	   rather than taking width off it. Dense packing is what lets a full-width cell sit between
+	   two rows without pushing the status out of its column. */
+	.sf:not(.floating) .signals {
+		grid-auto-flow: dense;
+	}
+
+	.sf:not(.floating) .sig-objs {
+		grid-column: 1 / -1;
+		margin: -2px 0 3px;
+	}
+
+	.sf:not(.floating) .sig-none {
+		display: none;
+	}
+
+	/* ---- Objective chips under the stops on the line ---------------------------------- */
+	.linewrap {
+		display: contents;
+	}
+
+	.floating .linewrap {
+		display: block;
+		position: relative;
+		min-width: 0;
+	}
+
+	/* Percentages of the drawing, so the chips follow the line at any window width. */
+	.stopobjs {
+		position: absolute;
+		inset: 0;
+		pointer-events: none;
+	}
+
+	.stopcluster {
+		position: absolute;
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		align-items: center;
+		transform: translateX(-50%);
+		pointer-events: auto;
+	}
+
+	.stopcluster-start {
+		transform: none;
+		align-items: flex-start;
+	}
+
+	.stopcluster-end {
+		transform: none;
+		align-items: flex-end;
+	}
+
+	/* ---- The objective popup ---------------------------------------------------------- */
+	/* Fixed, so it is not clipped by the body's scroll: the panel positions it against the chip. */
+	.objpop {
+		position: fixed;
+		z-index: 40;
+		width: 330px;
+		padding: 13px 15px 14px;
+		border: 1px solid var(--ovi-hairline-strong);
+		border-radius: 10px;
+		background: var(--ovi-card);
+		box-shadow: 0 10px 28px rgba(22, 22, 22, 0.16);
+		cursor: default;
+	}
+
+	.objpop-head {
+		display: flex;
+		align-items: center;
+		gap: 7px;
+		font: 600 13.5px var(--ovi-font-sans);
+		color: var(--ovi-text-primary);
+	}
+
+	.objpop-detail {
+		margin: 7px 0 0;
+		font: 13px/1.5 var(--ovi-font-sans);
+		color: var(--ovi-text-secondary);
+	}
+
+	.objpop-eyebrow {
+		margin-top: 11px;
+		font: 600 11px var(--ovi-font-condensed);
+		letter-spacing: 0.12em;
+		text-transform: uppercase;
+		color: var(--ovi-text-helper);
+	}
+
+	.objpop-proof {
+		margin: 6px 0 0;
+		padding: 0;
+		list-style: none;
+		font: 12px/1.45 var(--ovi-font-mono);
+		color: var(--ovi-text-primary);
+	}
+
+	.objpop-proof li {
+		display: flex;
+		justify-content: space-between;
+		gap: 12px;
+		padding: 2px 0;
+	}
+
+	.objpop-proof span {
+		flex-shrink: 0;
+		color: var(--ovi-teal-deep);
+	}
+
+	.objpop-quiet,
+	.objpop-quiet span {
+		color: var(--ovi-text-helper);
+	}
+
+	.objpop-wait,
+	.objpop-wait span {
+		color: var(--ovi-amber);
+	}
+
 	/* ---- Floating, full width (the approved floating board) -------------------------- */
 	/* Fixed 24px inside the window, over ChatWorkspace's scrim (z-index 20). */
 	.sf.floating {
@@ -1348,6 +1707,16 @@
 	.floating .line {
 		display: block;
 		max-width: none;
+	}
+
+	/* The label keeps 280px whatever the chips do: it is the content that matters here. */
+	.floating .signals {
+		grid-template-columns: minmax(280px, 1fr) minmax(0, auto) auto;
+	}
+
+	.floating .sig-objs {
+		max-width: 272px;
+		justify-content: flex-end;
 	}
 
 	.floating .sf-body > .focus {

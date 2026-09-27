@@ -59,6 +59,152 @@ export const STOP_LABELS: Record<StopId, string> = {
 /** The status line shown for a signal that never arrived. */
 export const NOT_OBSERVED_TEXT = 'not observed in this flow';
 
+// ---------------------------------------------------------------------------
+// The five control objectives, and which signal proves which.
+//
+// The workshop teaches five control objectives
+// (workshop/content/10-introduction/11-five-control-objectives/index.en.md) and its use-case
+// landing pages file each one under an OBJ-N id. The flow tags its own steps with the same ids
+// so a presenter can point at a step and name the objective it proves.
+//
+// The mapping is a static lookup on (use case, signal id): no event carries an objective and
+// nothing is inferred from timing. A chip's state comes from the status of the signals that
+// carry it, so it lights up because the evidence arrived — the same rule as every other status
+// in this file.
+
+export type ObjectiveId = 1 | 2 | 3 | 4 | 5;
+
+export const OBJECTIVE_IDS: readonly ObjectiveId[] = [1, 2, 3, 4, 5];
+
+export interface Objective {
+	/** The id as the workshop's Objectives Covered tables write it, e.g. "OBJ-3". */
+	code: string;
+	/** Short enough to sit on a chip beside the code. */
+	title: string;
+	/** The objective in the workshop's own words. */
+	detail: string;
+}
+
+export const OBJECTIVES: Record<ObjectiveId, Objective> = {
+	1: {
+		code: 'OBJ-1',
+		title: 'Verifiable identity',
+		detail:
+			"Every agent ties back to a cryptographically verifiable identity — a workload ServiceAccount, a user OAuth flow, or both — and is registered in Vault's Agent Registry as a first-class identity, distinct from human users."
+	},
+	2: {
+		code: 'OBJ-2',
+		title: 'No standing privileges',
+		detail:
+			'Credentials are issued just-in-time and scoped to the request. Each registered agent also carries a ceiling_policies envelope bounding the most it can ever hold when acting for a human.'
+	},
+	3: {
+		code: 'OBJ-3',
+		title: 'Actions tied to user intent',
+		detail:
+			'Privileged actions require demonstrable user consent — OAuth Authorization Code + PKCE for read access, CIBA out-of-band approval for writes.'
+	},
+	4: {
+		code: 'OBJ-4',
+		title: 'Enforcement at the point of use',
+		detail:
+			'Vault is the decision point. The IVIA-issued OAuth JWT authorizes Vault directly, and Vault narrows the token per request through authorization_details of type vault:path_access. Database GRANTs and Kubernetes NetworkPolicy layer underneath.'
+	},
+	5: {
+		code: 'OBJ-5',
+		title: 'Correlated audit evidence',
+		detail:
+			'One request_id runs through all three planes — the IVIA decision log, the Vault audit log and the RDS pgaudit log — and Athena stitches them into a single row.'
+	}
+};
+
+/**
+ * Which objectives each signal proves, by use case. A signal absent from the table proves none:
+ * the agent reasoning, the question the page sent and the answer it received are steps of the
+ * turn, not evidence of a control.
+ */
+const OBJECTIVES_BY_SIGNAL: Record<UseCase, Record<string, ObjectiveId[]>> = {
+	1: {
+		'request-id': [5],
+		'sa-token': [1],
+		'vault-token': [1],
+		'model-keys': [2],
+		'kb-keys': [2],
+		'db-cred': [2],
+		revoked: [2],
+		'audit-seed': [5]
+	},
+	2: {
+		'request-id': [5],
+		'agent-login': [1],
+		'access-token': [1, 3],
+		'model-keys': [2],
+		'x-vault-token': [4],
+		policies: [4],
+		ceiling: [2, 4],
+		'db-cred': [2],
+		revoked: [2],
+		'audit-seed': [5]
+	},
+	3: {
+		'request-id': [5],
+		'id-token': [1],
+		'agent-login': [1],
+		'model-keys': [2],
+		'owner-check': [3],
+		'approval-requested': [3],
+		approval: [3],
+		'delegated-token': [1, 4],
+		'readonly-cred': [2],
+		'writer-cred': [2, 4],
+		'refund-row': [4],
+		revoked: [2],
+		'audit-anchor': [5],
+		athena: [5]
+	}
+};
+
+/** The objectives this signal proves, or an empty list. */
+export function objectivesOf(useCase: UseCase, signalId: string): ObjectiveId[] {
+	return OBJECTIVES_BY_SIGNAL[useCase][signalId] ?? [];
+}
+
+/**
+ * One objective's standing across the whole turn. Turn-wide on purpose: the same objective must
+ * never read "proven" under one stop and "partly" under another.
+ *
+ *   observed      every signal that carries it reported;
+ *   pending       some reported and some have not, or one is still waiting — partly proven;
+ *   not observed  none reported, or this use case never exercises it.
+ */
+export interface ObjectiveMark {
+	id: ObjectiveId;
+	status: FlowStatus;
+	tone: FlowTone;
+	/** The turn's signals that carry this objective, in flow order. */
+	proof: { label: string; status: FlowStatus }[];
+}
+
+function objectiveMarks(signals: Signal[]): ObjectiveMark[] {
+	return OBJECTIVE_IDS.map((id) => {
+		const carriers = signals.filter((s) => s.objectives.includes(id));
+		// A signal that reported a denial is 'observed' with a failed tone: the event arrived, the
+		// control did not hold. It never counts towards proving the objective.
+		const proven = carriers.filter((s) => s.status === 'observed' && s.tone === 'ok').length;
+		const waiting = carriers.some((s) => s.status === 'pending');
+		let status: FlowStatus;
+		if (carriers.length > 0 && proven === carriers.length) status = 'observed';
+		else if (proven > 0 || waiting) status = 'pending';
+		else status = 'not observed';
+		const tone: FlowTone = carriers.some((s) => s.tone === 'failed')
+			? 'failed'
+			: carriers.some((s) => s.tone === 'waiting')
+				? 'waiting'
+				: 'ok';
+		return { id, status, tone, proof: carriers.map((s) => ({ label: s.label, status: s.status })) };
+	});
+}
+
 /** What the focus card and the "What's happening" card say about one stop. */
 export interface StopStory {
 	/** Focus card eyebrow, e.g. "Complete", "In progress". */
@@ -87,6 +233,8 @@ export interface Stop {
 	chips: string[];
 	/** Identifiers to show under the chips, e.g. auth_req_id and request. */
 	ids: { label: string; value: string }[];
+	/** The objectives this stop's signals prove. Their state is turn-wide, in `Flow.objectives`. */
+	objectives: ObjectiveId[];
 }
 
 export interface Signal {
@@ -99,6 +247,8 @@ export interface Signal {
 	note?: string;
 	/** Indexes into `evidence` of the rows that prove this signal. */
 	evidence: number[];
+	/** The objectives this signal proves. Their state is turn-wide, in `Flow.objectives`. */
+	objectives: ObjectiveId[];
 }
 
 export interface EvidenceRow {
@@ -141,6 +291,8 @@ export interface Flow {
 	 */
 	technical: Signal[];
 	evidence: EvidenceRow[];
+	/** One mark per control objective, for the whole turn. Always all five, in order. */
+	objectives: ObjectiveMark[];
 }
 
 /** What the page itself knows about the turn, beyond its events. All optional. */
@@ -341,6 +493,7 @@ function toSignal(spec: SignalSpec, done: boolean): BuiltSignal {
 	return {
 		id: spec.id,
 		stop: spec.stop,
+		objectives: [],
 		label,
 		status,
 		tone,
@@ -1300,7 +1453,10 @@ export function buildFlow(useCase: UseCase, events: readonly AgentEvent[], conte
 
 	const specs = useCase === 1 ? useCase1Signals(f) : useCase === 2 ? useCase2Signals(f) : useCase3Signals(f);
 	const signals = specs.map((spec) => toSignal(spec, done));
-	for (const s of signals) s.evidence = s.seenAt.map((at) => rowOf.get(at)).filter((i): i is number => i !== undefined);
+	for (const s of signals) {
+		s.evidence = s.seenAt.map((at) => rowOf.get(at)).filter((i): i is number => i !== undefined);
+		s.objectives = objectivesOf(useCase, s.id);
+	}
 	const answer = sig(signals, 'answer');
 	if (useCase === 3 && answer && answerRow >= 0) {
 		answer.status = 'observed';
@@ -1312,6 +1468,7 @@ export function buildFlow(useCase: UseCase, events: readonly AgentEvent[], conte
 		signals.unshift({
 			id: 'question',
 			stop: 'request',
+			objectives: [],
 			label: 'Question sent by the page',
 			status: 'observed',
 			tone: 'ok',
@@ -1343,7 +1500,16 @@ export function buildFlow(useCase: UseCase, events: readonly AgentEvent[], conte
 		} else {
 			status = done ? 'not observed' : 'pending';
 		}
-		return { id, label: STOP_LABELS[id], status, tone, story: undefined as unknown as StopStory, chips: [], ids: [] };
+		return {
+			id,
+			label: STOP_LABELS[id],
+			status,
+			tone,
+			story: undefined as unknown as StopStory,
+			chips: [],
+			ids: [],
+			objectives: []
+		};
 	});
 
 	// Signals after an open approval wait with it: they are pending, not "not observed".
@@ -1375,11 +1541,23 @@ export function buildFlow(useCase: UseCase, events: readonly AgentEvent[], conte
 	for (const stop of stops) {
 		stop.story = story(f, stop.id, stateOf(stop), signals);
 		stop.chips = [...new Set(signals.filter((s) => s.stop === stop.id).flatMap((s) => s.chips))];
+		stop.objectives = [...new Set(signals.filter((s) => s.stop === stop.id).flatMap((s) => s.objectives))].sort();
 		if (stop.id === 'authorization' && authReqId) stop.ids.push({ label: 'auth_req_id', value: authReqId });
 		if (f.requestId) stop.ids.push({ label: 'request', value: f.requestId });
 	}
 
-	const shown: Signal[] = signals.map(({ id, stop, label, status, tone, note, evidence: ev }) => ({ id, stop, label, status, tone, note, evidence: ev }));
+	const shown: Signal[] = signals.map(
+		({ id, stop, label, status, tone, note, evidence: ev, objectives: objs }) => ({
+			id,
+			stop,
+			label,
+			status,
+			tone,
+			note,
+			evidence: ev,
+			objectives: objs
+		})
+	);
 	const technical =
 		useCase === 3 && refundTurn
 			? REFUND_TECHNICAL_ROWS.flatMap((row) => shown.filter((s) => s.id === row))
@@ -1396,7 +1574,8 @@ export function buildFlow(useCase: UseCase, events: readonly AgentEvent[], conte
 		stops,
 		signals: shown,
 		technical,
-		evidence
+		evidence,
+		objectives: objectiveMarks(shown)
 	};
 }
 
