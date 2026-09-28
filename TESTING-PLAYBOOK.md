@@ -8,6 +8,13 @@ The single document for testing this workshop. It covers both audiences (at an e
 
 ## Pick your cell before you start
 
+**ALWAYS ASK. This is a gate, not a preference.** The workshop has four paths, and the
+first thing any test run does — before Phase 0, before the log, before the dashboard — is
+put the four to Bear with `AskUserQuestion` and wait for his answer. Never infer the cell
+from a previous run, a skill argument, a compacted summary, or what was standing in the
+account. A run started on the wrong cell measures the wrong workshop and has to be thrown
+away.
+
 Four combinations. They diverge in three places and rejoin at **Configure kubectl**.
 
 |                  | **CloudShell** | **Your own terminal / IDE** |
@@ -28,6 +35,13 @@ Credentials are the first thing to get right in every cell — the pre-flight ch
 `30-deploy-foundation` — **Deploy Foundation** is a two-button chooser; pick the button matching your audience.
 
 Everything from `30-deploy-foundation/32-configure-kubectl` — **Configure kubectl** onward is one shared path through `80-cleanup` — **Cleanup**.
+
+**Two more forks to settle in the same question**, because they change which commands run:
+
+| Fork | Values | Where it bites |
+|---|---|---|
+| Image source | `ecr` (default — build the five images and push to your own ECR; needs a container runtime) · `ghcr` (`--image-source=ghcr`, pre-built public images, no build) | Pre-flight and Tier 1 |
+| Use Case 3 enrollment | real phone (scan the QR, tap Approve on the CIBA push) · `--no-phone` substitute | The six Use Case 3 pages |
 
 **The environment tabs sync.** Pre-flight uses `groupId="workshop-env"`, so picking CloudShell on one tab block selects it on the other. A page you tested on one tab is half tested — say which tab you were on.
 
