@@ -287,16 +287,28 @@ tier-2 output missing), the script says which, and stops rather than reporting a
 clean pass. Recover manually, then re-run:
 
 ```bash
+# The Vault CLI inside the pod needs a token, or every read below 403s.
+VT=$(jq -r .root_token ~/vault-init.json)
+
 # What terraform already tracks
 terraform -chdir=infrastructure/vault-config state list
 
 # What Vault actually has
-kubectl exec -n vault vault-0 -- vault secrets list
-kubectl exec -n vault vault-0 -- vault auth list
-kubectl exec -n vault vault-0 -- vault read identity/entity/name/<name>   # -> id
+kubectl exec -n vault vault-0 -- sh -c "VAULT_TOKEN=$VT vault secrets list"
+kubectl exec -n vault vault-0 -- sh -c "VAULT_TOKEN=$VT vault auth list"
+kubectl exec -n vault vault-0 -- sh -c "VAULT_TOKEN=$VT vault audit list"
+kubectl exec -n vault vault-0 -- sh -c "VAULT_TOKEN=$VT vault read identity/entity/name/<name>"
 
-# Adopt it. Mounts, auth backends and audit devices import by PATH;
-# identity entities and aliases import by UUID.
+# Adopt it. Import ids differ by kind:
+#   mounts / auth backends / audit devices  -> the PATH        (database, kubernetes, file)
+#   agent registrations                     -> display_name    (uc1-agent, agent-uc2, uc3-actor)
+#   oauth resource-server profile           -> profile_name    (ivia)
+#   identity entities                       -> the entity UUID (.data.id above)
+#   entity aliases                          -> the alias UUID, which has no
+#     read-by-name endpoint — look the entity up BY the alias instead:
+#       kubectl exec -n vault vault-0 -- sh -c "VAULT_TOKEN=$VT vault write \
+#         identity/lookup/entity alias_name=uc1/uc1-retriever-sa \
+#         alias_mount_accessor=<the kubernetes/ accessor from 'vault auth list'>"
 terraform -chdir=infrastructure/vault-config import <address> <id>
 
 # Re-run Tier 2 (Vault already initialized, cert already valid)
