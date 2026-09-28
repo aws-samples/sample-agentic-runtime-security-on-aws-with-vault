@@ -233,11 +233,18 @@ _vault_orphan_fix_hint() {
   info "     an object in Vault that is absent from this workspace's terraform state."
   info "     Adopt it by IMPORT — never by deleting the live object, which revokes"
   info "     every token issued through it, including the ones tier-3 pods hold:"
+  info "       VT=\$(jq -r .root_token ~/vault-init.json)"
   info "       terraform -chdir=${VAULT_CONFIG_DIR} state list"
-  info "       kubectl exec -n vault vault-0 -- vault secrets list     # and: vault auth list"
+  info "       kubectl exec -n vault vault-0 -- sh -c \"VAULT_TOKEN=\$VT vault secrets list\""
+  info "       kubectl exec -n vault vault-0 -- sh -c \"VAULT_TOKEN=\$VT vault auth list\""
   info "       terraform -chdir=${VAULT_CONFIG_DIR} import <address> <id>"
-  info "     Mounts, auth backends and audit devices import by PATH; identity"
-  info "     entities import by UUID (vault read identity/entity/name/<name>)."
+  info "     Import ids by kind — mounts, auth backends and audit devices by PATH;"
+  info "     agent registrations by display_name; the OAuth profile by profile_name;"
+  info "     identity entities by UUID:"
+  info "       vault read identity/entity/name/<name>              # -> .data.id"
+  info "     and an entity ALIAS has no read-by-name endpoint, so look it up by alias:"
+  info "       vault write identity/lookup/entity alias_name=<name> \\"
+  info "            alias_mount_accessor=\$(vault auth list -format=json | jq -r '.\"kubernetes/\".accessor')"
   info "     Then re-run: bash infrastructure/scripts/deploy-workshop.sh --tier 2 --skip-vault-init --skip-acme"
   info "Fix: 'alias already exists for issuer and external_id' means a previous TLS"
   info "     host left OAuth entity aliases behind and one of them squats the issuer"
@@ -288,6 +295,8 @@ _obo_human_names() {
 #   secrets mount  POST /v1/sys/mounts/database   -> "path is already in use"
 #   identity entity                               -> "Identity Entity ... already exists"
 #   entity alias                                  -> "entity alias ... already exists"
+#   agent registration                            -> display_name already in use
+#   oauth resource-server profile                 -> profile_name already in use
 # Everything else the module writes (policies, database/aws/kubernetes roles, the
 # database connection, the audit request-header allowlist, the generic_endpoint
 # OAuth aliases) is an upsert, so a second create overwrites and never fails —
@@ -323,6 +332,26 @@ _vault_reconcile_table() {
     || { warn "tier-2 output uc3_agent_identity is unreadable in ${SERVICES_STATE}" >&2; return 1; }
   printf '%s\t%s\t%s\n' 'module.vault_config.vault_identity_entity.uc3_actor' entity "$n"
 
+  # Agent Registry records. display_name is required, unique and IMMUTABLE, so a
+  # second create is an error — orphan-able. A registration is created strictly
+  # AFTER its entity (entity_id references it), so any apply that orphans one has
+  # already orphaned the entity: adopting the entity alone leaves the retry to
+  # collide on the registration, which is the failure this reconcile promises to
+  # remove. The provider imports these by display_name.
+  printf '%s\t%s\t%s\n' 'module.vault_config.vault_agent_registration.uc1_agent' agent_reg uc1-agent
+  n="$(_services_output uc2_agent_identity)" \
+    || { warn "tier-2 output uc2_agent_identity is unreadable in ${SERVICES_STATE}" >&2; return 1; }
+  printf '%s\t%s\t%s\n' 'module.vault_config.vault_agent_registration.agent_uc2' agent_reg "$n"
+  n="$(_services_output uc3_agent_identity)" \
+    || { warn "tier-2 output uc3_agent_identity is unreadable in ${SERVICES_STATE}" >&2; return 1; }
+  printf '%s\t%s\t%s\n' 'module.vault_config.vault_agent_registration.uc3_actor' agent_reg "$n"
+
+  # The OAuth resource-server profile. profile_name names it and a second create
+  # collides; the provider imports it by profile_name. Deliberately listed even
+  # though main sweeps stale entity ALIASES before the apply — the sweep clears
+  # aliases on a dead profile, it does not adopt the profile itself.
+  printf '%s\t%s\t%s\n' 'module.vault_config.vault_oauth_resource_server_config_profile.ivia' oauth_profile ivia
+
   # vault_identity_entity.human is for_each over toset(obo_human_subs), so each
   # instance address carries the sub as its key AND its name (name = each.value on
   # a set => key == value). Enumerate the same set tier 2 publishes.
@@ -353,6 +382,11 @@ VAULT_TBL_AUTH=""
 VAULT_TBL_MOUNTS=""
 VAULT_TBL_AUDIT=""
 
+# `vault audit list -format=json` exits 0 and prints {} when no device is enabled
+# (measured against Vault 1.20.4), so the hard-fail below fires on a genuine read
+# failure only. That is also why the emptiness check that follows deliberately
+# omits VAULT_TBL_AUDIT: an empty audit table is legitimate, an empty auth or
+# mount table is not.
 _vault_load_mount_tables() {
   VAULT_TBL_AUTH="$(vault_exec "vault auth list -format=json" 2>/dev/null)"   || return 1
   VAULT_TBL_MOUNTS="$(vault_exec "vault secrets list -format=json" 2>/dev/null)" || return 1
@@ -372,6 +406,16 @@ _vault_path_mounted() {
   esac
   [[ -n "$tbl" ]] || return 1
   jq -e --arg k "${p}/" 'has($k)' <<<"$tbl" >/dev/null 2>&1
+}
+
+# Does <path> read back? 0 = yes, 2 = no such object, 1 = Vault itself could not
+# be read. The caller must treat 1 as "abort", never as "absent" — the whole
+# reason this pass exists is that state and Vault disagree, and a read that did
+# not happen is not evidence about either.
+_vault_read_exists() {
+  vault_exec "vault read -format=json '$1'" >/dev/null 2>&1 && return 0
+  vault_exec "vault auth list -format=json" >/dev/null 2>&1 || return 1
+  return 2
 }
 
 # Vault's UUID for an identity entity name. Echoes nothing when the entity does
@@ -452,7 +496,16 @@ reconcile_orphaned_vault_resources() {
     return 1
   fi
 
-  state_list="$(terraform -chdir="${VAULT_CONFIG_DIR}" state list 2>/dev/null || true)"
+  # State is the other half of this comparison, and gets the same treatment as an
+  # unreadable Vault. `state list` exits 0 with no output on a genuinely empty
+  # state, so a non-zero exit means lock contention or a damaged state file — and
+  # swallowing it would make every row look orphaned, writing import blocks for
+  # resources terraform already manages.
+  if ! state_list="$(terraform -chdir="${VAULT_CONFIG_DIR}" state list 2>&1)"; then
+    fail "Cannot read terraform state — not reconciling:"
+    printf '%s\n' "$state_list" | head -5 | while IFS= read -r line; do fail "  ${line}"; done
+    return 1
+  fi
 
   while IFS=$'\t' read -r addr kind vid; do
     [[ -z "$addr" || -z "$kind" || -z "$vid" ]] && continue
@@ -472,6 +525,11 @@ reconcile_orphaned_vault_resources() {
       auth|mount|audit) _vault_path_mounted "$kind" "$vid" && import_id="$vid" ;;
       entity)           import_id="$(_vault_entity_id "$vid")" || rc=$? ;;        # adopts by UUID
       entity_alias)     import_id="$(_vault_entity_alias_id "$vid")" || rc=$? ;;  # adopts by UUID
+      # These two adopt by NAME, so existence is the only question.
+      agent_reg)     _vault_read_exists "agent-registry/registration/display-name/${vid}"
+                     case "$?" in 0) import_id="$vid" ;; 1) rc=1 ;; esac ;;
+      oauth_profile) _vault_read_exists "sys/config/oauth-resource-server/${vid}"
+                     case "$?" in 0) import_id="$vid" ;; 1) rc=1 ;; esac ;;
       *) warn "Reconcile row '${addr}' has unknown kind '${kind}' — skipped"; continue ;;
     esac
     if (( rc != 0 )); then
@@ -1040,16 +1098,28 @@ TFVARS
   # ahead of the license gate below, which is the real diagnosis.
   elif ! grep -q 'not supported by license' "$apply_log" && reconcile_orphaned_vault_resources; then
     info "Retrying terraform apply — adopting the orphans and creating the rest..."
-    if terraform -chdir="${VAULT_CONFIG_DIR}" apply -auto-approve -input=false 2>&1; then
+    # Captured like the first apply. The retry now fires on ANY non-license
+    # failure, so it can get further than apply 1 did and hit a license refusal
+    # that apply 1 never reached — and an attendee on a pki-only license must get
+    # the licence remediation, not the orphan-import hint.
+    local retry_log
+    retry_log="$(mktemp)"
+    if terraform -chdir="${VAULT_CONFIG_DIR}" apply -auto-approve -input=false 2>&1 | tee "$retry_log"; then
       # Belt two: the file has done its job the instant the apply lands, and is
       # removed on BOTH paths out of the retry, not just the happy one.
       rm -f "${ORPHAN_IMPORT_TF}"
       ok "Vault configuration applied successfully (orphans adopted by import)"
+      rm -f "$retry_log"
     else
       rm -f "${ORPHAN_IMPORT_TF}"
       fail "terraform apply still failing after reconciliation"
-      _vault_orphan_fix_hint
-      rm -f "$apply_log"
+      if grep -q 'not supported by license' "$retry_log"; then
+        fail "Vault refused a secret-engine mount — the license appears to be pki-only (or lacks platform-standard)."
+        fail "  ${LICENSE_REMEDIATION}"
+      else
+        _vault_orphan_fix_hint
+      fi
+      rm -f "$retry_log" "$apply_log"
       record "vault_config" "FAIL"
       return 1
     fi
