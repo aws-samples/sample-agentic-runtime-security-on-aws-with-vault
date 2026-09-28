@@ -116,6 +116,104 @@ _result_get() {
   return 1
 }
 
+#--- Local port 8200 -----------------------------------------------------------
+# Phase 2 needs local port 8200 for its own `kubectl port-forward`. A listener
+# left over from a walkthrough step holds it, and the previous implementation
+# fired `kill` at whatever lsof reported, slept one second and bound regardless:
+# a socket still in the kernel's hands after a second, or a holder that ignores
+# SIGTERM, took the whole step down with a bare "failed to start" (#84).
+
+# True when something answers on 8200, whether or not lsof can see it.
+_port_8200_occupied() {
+  (exec 3<>/dev/tcp/127.0.0.1/8200) 2>/dev/null
+}
+
+# PIDs listening on 8200, empty when lsof is absent or sees nothing.
+_port_8200_pids() {
+  lsof -tiTCP:8200 -sTCP:LISTEN 2>/dev/null || true
+}
+
+# The port is free only when BOTH agree: nothing listed AND nothing answering.
+# Either alone is a lie in one direction — lsof misses what it cannot see, and a
+# socket in the kernel's hands can still answer after its owner is gone.
+_port_8200_free() {
+  [[ -z "$(_port_8200_pids)" ]] && ! _port_8200_occupied
+}
+
+# Say what is known about the current holder of 8200. lsof may have nothing to
+# say — not installed, or another user's socket — so say THAT rather than print
+# an empty list under a "here is what is holding it" heading.
+_port_8200_report_holder() {
+  local listing line
+  listing="$(lsof -nP -iTCP:8200 -sTCP:LISTEN 2>/dev/null | tail -n +2)"
+  if [[ -n "$listing" ]]; then
+    while IFS= read -r line; do fail "  ${line}"; done <<< "$listing"
+    return 0
+  fi
+  if command -v lsof >/dev/null 2>&1; then
+    fail "  the port answers connections but lsof cannot name the process — it is"
+    fail "  most likely owned by another user. Try: sudo lsof -nP -iTCP:8200 -sTCP:LISTEN"
+  else
+    fail "  'lsof' is not installed, so this script cannot name the holder."
+    fail "  Install lsof, or stop whatever is on port 8200 yourself."
+  fi
+}
+
+# Free local port 8200 so our own port-forward can bind it. Polls until the port
+# is genuinely free, escalates to SIGKILL when it is not, and — when it still
+# cannot be freed — names the PID and command actually holding it, so the
+# attendee is told what to close instead of reading a generic start failure.
+#
+# Every decision is driven by _port_8200_free (lsof AND the probe), never by the
+# lsof list alone: lsof can stop reporting a LISTEN entry while the socket still
+# answers, and keying off the list alone skips the escalation and prints an empty
+# holder listing — the exact dead end #84 exists to remove.
+#
+# Returns 0 when the port is free, including when it was never held.
+_free_local_port_8200() {
+  local pids i
+
+  _port_8200_free && return 0
+
+  pids="$(_port_8200_pids)"
+  if [[ -z "$pids" ]]; then
+    # Occupied, but nothing lsof can see: there is nothing to signal, only to report.
+    fail "Port 8200 is in use, but the process holding it could not be identified:"
+    _port_8200_report_holder
+    info "Fix: stop whatever is on port 8200, confirm with"
+    info "     'lsof -nP -iTCP:8200 -sTCP:LISTEN', then re-run this script."
+    return 1
+  fi
+
+  info "Port 8200 already bound (PID(s): $(echo "$pids" | tr '\n' ' ')) — clearing"
+  # shellcheck disable=SC2086
+  kill $pids 2>/dev/null || true
+
+  for i in $(seq 1 10); do
+    _port_8200_free && { ok "Port 8200 released"; return 0; }
+    sleep 1
+  done
+
+  pids="$(_port_8200_pids)"
+  if [[ -n "$pids" ]]; then
+    warn "Port 8200 still held after SIGTERM — escalating to SIGKILL"
+    # shellcheck disable=SC2086
+    kill -9 $pids 2>/dev/null || true
+    for i in $(seq 1 5); do
+      _port_8200_free && { ok "Port 8200 released"; return 0; }
+      sleep 1
+    done
+  else
+    warn "Port 8200 still answers, but no listening process can be identified"
+  fi
+
+  fail "Port 8200 could not be freed — a process is holding it that this script cannot stop:"
+  _port_8200_report_holder
+  info "Fix: stop that process (it is usually a manual 'kubectl port-forward ... 8200'),"
+  info "     confirm with 'lsof -nP -iTCP:8200 -sTCP:LISTEN', then re-run this script."
+  return 1
+}
+
 # Recovery hint printed when a terraform apply fails on an orphaned Vault mount
 # and self-heal could not clear it (or the conflict was not an auth backend).
 _vault_orphan_fix_hint() {
@@ -572,22 +670,34 @@ TFVARS
   # Port-forward
   # Idempotency: a stale or manual `kubectl port-forward ... 8200` (e.g. left
   # running from a workshop walkthrough step) holds the port and makes our
-  # forward fail to bind. Kill any existing listener on 8200, then start fresh.
-  STALE_PF=$(lsof -tiTCP:8200 -sTCP:LISTEN 2>/dev/null || true)
-  if [[ -n "$STALE_PF" ]]; then
-    info "Port 8200 already bound (PID(s): $(echo "$STALE_PF" | tr '\n' ' ')) — killing stale port-forward"
-    # shellcheck disable=SC2086
-    kill $STALE_PF 2>/dev/null || true
-    sleep 1
+  # forward fail to bind. Free it first, and VERIFY it is actually free — the
+  # unverified kill+sleep this replaces is #84.
+  if ! _free_local_port_8200; then
+    record "vault_config" "FAIL"
+    return 1
   fi
 
+  # Bind with retries. `kubectl port-forward` can also exit immediately on a
+  # transient API-server hiccup, which is not a reason to fail the deploy, and a
+  # single attempt made that indistinguishable from an occupied port.
   info "Starting port-forward to Vault (8200)..."
-  kubectl port-forward svc/vault 8200:8200 -n vault &>/dev/null &
-  VAULT_PF_PID=$!
-  sleep 2
+  local pf_attempt
+  VAULT_PF_PID=""
+  for pf_attempt in 1 2 3; do
+    kubectl port-forward svc/vault 8200:8200 -n vault &>/dev/null &
+    VAULT_PF_PID=$!
+    sleep 2
+    kill -0 "$VAULT_PF_PID" 2>/dev/null && break
+    VAULT_PF_PID=""
+    warn "Port-forward attempt ${pf_attempt}/3 exited immediately — retrying"
+    _free_local_port_8200 || true
+    sleep 2
+  done
 
-  if ! kill -0 "$VAULT_PF_PID" 2>/dev/null; then
-    fail "Port-forward to Vault failed to start"
+  if [[ -z "$VAULT_PF_PID" ]]; then
+    fail "Port-forward to Vault failed to start after 3 attempts. Check both:"
+    fail "  port 8200 is free      — lsof -nP -iTCP:8200 -sTCP:LISTEN"
+    fail "  the cluster is reachable — kubectl get pods -n vault"
     record "vault_config" "FAIL"
     return 1
   fi
