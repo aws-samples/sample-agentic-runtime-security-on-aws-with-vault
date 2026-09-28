@@ -19,7 +19,7 @@
 #   14. kubernetes_network_policy   "default_deny"         (zero-trust baseline)
 #   15. kubernetes_network_policy   "allow_dns"            (53/UDP+TCP namespace-wide)
 #   16. kubernetes_network_policy   "banking_ui_ingress"   (ALB health + user traffic)
-#   17. kubernetes_network_policy   "banking_ui_egress"    (→ agent:3002, IVIA:443)
+#   17. kubernetes_network_policy   "banking_ui_egress"    (→ agent:3002, IVIA:443, Vault:8200)
 #   18. kubernetes_network_policy   "banking_agent_ingress"(← UI:3002)
 #   19. kubernetes_network_policy   "banking_agent_egress" (→ MCP:3001, Vault:8200, Bedrock:443)
 #   20. kubernetes_network_policy   "banking_mcp_ingress"  (← agent:3001)
@@ -59,7 +59,9 @@ resource "kubernetes_namespace" "banking_app" {
 ################################################################################
 # 2–4. ServiceAccounts
 #
-# uc2-ui-sa       — SvelteKit UI; no Vault access (public OAuth client)
+# uc2-ui-sa       — SvelteKit UI; Vault k8s auth role banking-ui, which reads
+#                   aws/sts/audit-reader only (read-only Athena keys for the
+#                   Audit Trace card, issue #68)
 # uc2-agent-sa    — Strands agent; uses SA JWT for its own Vault k8s auth
 # uc2-mcp-server-sa — MCP server; bound to Vault uc2 k8s auth role; issues
 #                     per-user JWT auth to Vault for DB credential vending
@@ -148,6 +150,15 @@ locals {
     UC1_AGENT_URL = "http://uc1-agent-svc.uc1.svc.cluster.local"
     # SvelteKit CSRF protection: ORIGIN must match the browser's Origin header
     ORIGIN = local.banking_ui_external_url
+    # /api/audit-trace (issue #68 Audit Trace card): the server logs in to Vault
+    # as uc2-ui-sa (role VAULT_ROLE), reads short-lived read-only Athena keys from
+    # aws/sts/audit-reader, and queries the audit_correlation VIEW in this work
+    # group and database. No AWS key is configured anywhere: Vault issues them.
+    VAULT_ADDR          = var.vault_addr
+    VAULT_ROLE          = var.ui_vault_role
+    AWS_REGION          = var.region
+    ATHENA_WORKGROUP    = var.athena_workgroup
+    AUDIT_GLUE_DATABASE = var.audit_glue_database
   }
 }
 
@@ -759,6 +770,7 @@ resource "kubernetes_network_policy" "banking_ui_ingress" {
 #   - IVIA:443                     (OIDC discovery + JWKS via internal service)
 #   - IVIA:9443                    (WRP ClusterIP + ISVAOP backchannel on actual container port)
 #   - verify-access namespace:9443 (CIBA bc-authorize, token poll, consent redirect)
+#   - vault namespace:8200         (the UI server's own Vault login + Audit Trace keys)
 ################################################################################
 
 resource "kubernetes_network_policy" "banking_ui_egress" {
@@ -853,6 +865,25 @@ resource "kubernetes_network_policy" "banking_ui_egress" {
 
       ports {
         port     = "8436"
+        protocol = "TCP"
+      }
+    }
+
+    # To Vault (vault namespace) on 8200 — the UI server's own Kubernetes login
+    # and its aws/sts/audit-reader read for the Audit Trace card (issue #68). The
+    # pod's only AWS call with those keys is to the Athena API, on the 443 rule
+    # above; Athena itself reads Glue and S3 server-side.
+    egress {
+      to {
+        namespace_selector {
+          match_labels = {
+            "kubernetes.io/metadata.name" = "vault"
+          }
+        }
+      }
+
+      ports {
+        port     = "8200"
         protocol = "TCP"
       }
     }

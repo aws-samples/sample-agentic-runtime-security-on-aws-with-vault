@@ -259,11 +259,20 @@ fi
 if kubectl get pod -n "$VAULT_NAMESPACE" "$VAULT_POD" &>/dev/null; then
     vault_version=$(kubectl exec -n "$VAULT_NAMESPACE" "$VAULT_POD" -- \
         vault status -format=json 2>/dev/null | jq -r '.version // empty' 2>/dev/null || echo "")
-    if echo "$vault_version" | grep -qi 'ent'; then
-        print_pass "Vault Enterprise edition (version=${vault_version})"
+    # Enterprise AND 2.1.0+: on 2.0.x a Use Case 3 refund token with no
+    # authorization_details is vended the refund-writer credential anyway, so the
+    # lesson does not hold (issue #74). sort -V compares without the '+ent' suffix;
+    # the result is captured before it is read, because `| sort -V | head -1` makes
+    # sort exit 141 on SIGPIPE and pipefail turns that into a script-killing failure.
+    vault_semver="${vault_version%%+*}"
+    vault_semver="${vault_semver#v}"
+    version_sorted=$(printf '%s\n%s\n' "2.1.0" "$vault_semver" | sort -V)
+    version_lowest=$(head -1 <<<"$version_sorted")
+    if echo "$vault_version" | grep -qi 'ent' && [ -n "$vault_semver" ] && [ "$version_lowest" = "2.1.0" ]; then
+        print_pass "Vault Enterprise edition, 2.1.0+ (version=${vault_version})"
     else
-        print_fail "Vault Enterprise edition" \
-            "Vault does not report the '+ent' build (version='${vault_version}'). Native Agent Registry is Enterprise-only — the vault_server image must be hashicorp/vault-enterprise:2.0.3-ent. Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault status"
+        print_fail "Vault Enterprise edition, 2.1.0+" \
+            "Vault does not report a '+ent' build at 2.1.0 or later (version='${vault_version}'). Native Agent Registry is Enterprise-only, and mandatory rich authorization requests for on-behalf-of delegation start at 2.1.0 — the vault_server image must be hashicorp/vault-enterprise:2.1.1-ent. Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault status"
         failures=$((failures + 1))
     fi
 

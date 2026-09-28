@@ -12,16 +12,47 @@
  *      filters out ALL rows — queries return empty results.
  *   5. Run the SELECT query.
  *   6. Close the connection AND revoke the Vault lease, so the ephemeral Postgres
- *      role is dropped now rather than lingering until its TTL expires.
- *   7. Return results + credential metadata for OBJ-5 audit correlation.
+ *      role is dropped now rather than lingering until its TTL expires. Steps 3-6
+ *      share one guard: once Vault has issued the credential, a failure at any
+ *      later step still revokes it.
+ *   7. Ask Vault which policies it attaches to the caller's token
+ *      (lookupCallerPolicies — auth/token/lookup-self, best-effort).
+ *   8. Return results + credential metadata for OBJ-5 audit correlation, the
+ *      revoke outcome (lease_revoked), the credential itself
+ *      (issued_db_credentials), the MCP server's own Vault token that the
+ *      revoke presented (mcp_vault_token), and the Kubernetes ServiceAccount
+ *      token the server's Vault login presented (mcp_service_account_token).
  *
- * The agent never sees DB credentials. Only JWTs cross the agent→MCP boundary,
- * and the jwt each tool receives is the one index.ts read from the request's
+ * credential_metadata reports only what this code did or Vault returned: the
+ * header the credential read authenticated with (the caller's OAuth JWT as
+ * X-Vault-Token, no Vault login), the database role and path it read, the lease,
+ * the revoke outcome, and the policies lookup-self reported. There is no Vault
+ * auth role on this path — the uc2-jwt JWT role was retired with the native
+ * cutover (infrastructure/modules/vault_config/main.tf) — so none is reported.
+ *
+ * Why the credential is returned: the workshop shows attendees, in full, every
+ * credential issued during a turn (Bear, 2026-09-24). The agent takes
+ * issued_db_credentials out of this response before anything reaches the model
+ * and sends it only on its per-request event stream. By the time it is returned
+ * the revoke has already run, and lease_revoked says whether Vault confirmed it.
+ * mcp_vault_token and mcp_service_account_token travel the same way: the agent
+ * takes them out and shows them only on the turn's event stream. They are the
+ * server's standing credentials, reused across calls and callers until the
+ * Vault token nears expiry. None of these is ever logged here.
+ *
+ * The jwt each tool receives is the one index.ts read from the request's
  * Authorization header — never a value taken from the tool arguments.
  */
 
 import { Client as PgClient } from 'pg';
-import { getDbCreds, revokeLease, type DbCredentials } from './vault-client.js';
+import {
+  getDbCreds,
+  lookupCallerPolicies,
+  revokeLease,
+  type CallerPolicies,
+  type DbCredentials,
+  type RevokeOutcome,
+} from './vault-client.js';
 
 const DB_HOST = process.env.RDS_ADDRESS ?? process.env.DB_HOST ?? 'localhost';
 const DB_PORT = parseInt(process.env.RDS_PORT ?? process.env.DB_PORT ?? '5432', 10);
@@ -63,20 +94,29 @@ function extractSubFromJwt(jwt: string): string {
   return sub;
 }
 
+interface UserQueryResult {
+  rows: Record<string, unknown>[];
+  creds: DbCredentials;
+  sub: string;
+  revoke: RevokeOutcome;
+  callerPolicies: CallerPolicies | null;
+}
+
 /**
- * Build a pg.Client authenticated with Vault-vended credentials and
- * activate PostgreSQL RLS by setting app.current_user_sub on the connection.
+ * Run one query as the calling user, with a database credential that exists
+ * only for this query.
  *
- * Returns { client, creds } — caller is responsible for calling client.end().
+ * Gets the credential from Vault, connects with it, activates PostgreSQL RLS by
+ * setting app.current_user_sub, runs the query, then closes the connection and
+ * revokes the lease — all before returning, so the revoke outcome is known.
  */
-async function buildRlsClient(jwt: string): Promise<{ client: PgClient; creds: DbCredentials; sub: string }> {
+async function queryAsUser(jwt: string, sql: string, params: string[]): Promise<UserQueryResult> {
   const sub = extractSubFromJwt(jwt);
 
-  // Step 1: Get ephemeral DB credentials from Vault by presenting the user
-  // OAuth JWT directly as the X-Vault-Token (no login round-trip).
+  // Get ephemeral DB credentials from Vault by presenting the user OAuth JWT
+  // directly as the X-Vault-Token (no login round-trip).
   const creds = await getDbCreds(jwt);
 
-  // Step 2: Create pg client with Vault-vended credentials
   const client = new PgClient({
     host: DB_HOST,
     port: DB_PORT,
@@ -86,97 +126,148 @@ async function buildRlsClient(jwt: string): Promise<{ client: PgClient; creds: D
     ssl: { rejectUnauthorized: false },
   });
 
-  await client.connect();
+  let rows: Record<string, unknown>[] = [];
+  let revoke: RevokeOutcome = { revoked: false, serviceLogin: null, freshLogin: false };
+  try {
+    await client.connect();
 
-  // Step 3: CRITICAL — activate PostgreSQL Row-Level Security.
-  // RLS policies use current_setting('app.current_user_sub', true) to filter rows.
-  // Without this SET, current_setting() returns NULL and all rows are filtered out.
-  await client.query(`SELECT set_config('app.current_user_sub', $1, false)`, [sub]);
+    // CRITICAL — activate PostgreSQL Row-Level Security.
+    // RLS policies use current_setting('app.current_user_sub', true) to filter rows.
+    // Without this SET, current_setting() returns NULL and all rows are filtered out.
+    await client.query(`SELECT set_config('app.current_user_sub', $1, false)`, [sub]);
 
-  return { client, creds, sub };
+    rows = (await client.query(sql, params)).rows;
+  } finally {
+    try {
+      await client.end();
+    } catch (err) {
+      // Closing must never stand between the credential and its revoke.
+      console.error(`pg_client_end_failed error=${err instanceof Error ? err.message : String(err)}`);
+    }
+    // The credential existed for exactly this query. Hand it back now.
+    revoke = await revokeLease(creds.leaseId);
+  }
+
+  // After the revoke, so asking never extends the credential's life.
+  const callerPolicies = await lookupCallerPolicies(jwt);
+
+  return { rows, creds, sub, revoke, callerPolicies };
+}
+
+/**
+ * What every tool returns besides its rows: the audit fields, the revoke
+ * outcome, and the credential Vault issued (see the header for why).
+ */
+function credentialReport({ creds, sub, revoke, callerPolicies }: UserQueryResult): object {
+  const login = revoke.serviceLogin;
+  return {
+    credential_metadata: {
+      vault_authenticated: true,
+      vault_auth_header: 'X-Vault-Token',
+      db_role: creds.dbRole,
+      vault_path: creds.vaultPath,
+      lease_id: creds.leaseId,
+      lease_duration_seconds: creds.leaseDuration,
+      // When the credential stops working if the revoke did not happen.
+      ...(creds.leaseExpiresAt ? { lease_expires_at: creds.leaseExpiresAt } : {}),
+      lease_revoked: revoke.revoked,
+      user_sub: sub,
+      ...(callerPolicies
+        ? {
+            vault_policies: callerPolicies.policies,
+            vault_identity_policies: callerPolicies.identityPolicies,
+          }
+        : {}),
+    },
+    issued_db_credentials: {
+      username: creds.username,
+      password: creds.password,
+    },
+    // The MCP server's own Vault token, from its Kubernetes login, that the
+    // revoke presented. A sibling of credential_metadata, never inside it: the
+    // agent narrates credential_metadata, and takes this out for its event
+    // stream only. Absent when no login was obtained.
+    ...(login
+      ? {
+          mcp_vault_token: {
+            token: login.token,
+            auth_method: 'kubernetes',
+            role: login.role,
+            policies: login.policies,
+            ttl_seconds: login.ttlSeconds,
+            issued_at: login.issuedAt,
+            logged_in_for_this_call: revoke.freshLogin,
+            presented_to: 'sys/leases/revoke',
+          },
+          // The Kubernetes ServiceAccount token that login presented to Vault.
+          // Same handling as mcp_vault_token: a sibling, taken out by the agent
+          // for its event stream only.
+          mcp_service_account_token: {
+            jwt: login.serviceAccountJwt,
+            service_account: login.serviceAccount,
+            role: login.role,
+            logged_in_for_this_call: revoke.freshLogin,
+            presented_to: 'auth/kubernetes/login',
+          },
+        }
+      : {}),
+  };
 }
 
 /**
  * get_accounts — Retrieve bank accounts visible to the authenticated user.
  *
- * Vault jwt auth + RLS ensures only rows belonging to this user's sub are returned.
+ * The caller's OAuth JWT (X-Vault-Token) + RLS ensures only rows belonging to this
+ * user's sub are returned.
  */
 export async function getAccounts(jwt: string): Promise<object> {
-  const { client, creds, sub } = await buildRlsClient(jwt);
+  const result = await queryAsUser(
+    jwt,
+    `SELECT id, account_number, account_type, balance, currency
+     FROM accounts
+     ORDER BY account_type`,
+    []
+  );
 
-  try {
-    const result = await client.query(
-      `SELECT id, account_number, account_type, balance, currency
-       FROM accounts
-       ORDER BY account_type`
-    );
-
-    return {
-      accounts: result.rows,
-      credential_metadata: {
-        vault_authenticated: true,
-        vault_role: 'uc2-jwt',
-        db_role: 'uc2-personal-readonly',
-        lease_id: creds.leaseId,
-        lease_duration_seconds: creds.leaseDuration,
-        user_sub: sub,
-      },
-    };
-  } finally {
-    await client.end();
-    // The credential existed for exactly this query. Hand it back now.
-    await revokeLease(creds.leaseId);
-  }
+  return {
+    accounts: result.rows,
+    ...credentialReport(result),
+  };
 }
 
 /**
  * get_transactions — Retrieve recent transactions for the authenticated user.
  *
- * Vault jwt auth + RLS ensures only transactions belonging to this user's accounts
- * are returned. Optional account_id parameter filters to a single account.
+ * The caller's OAuth JWT (X-Vault-Token) + RLS ensures only transactions belonging to
+ * this user's accounts are returned. Optional account_id parameter filters to a single account.
  */
 export async function getTransactions(jwt: string, accountId?: string): Promise<object> {
-  const { client, creds, sub } = await buildRlsClient(jwt);
+  let query: string;
+  let params: string[];
 
-  try {
-    let query: string;
-    let params: string[];
-
-    if (accountId) {
-      query = `SELECT t.id, t.account_id, t.amount, t.description,
-                      t.transaction_type, t.merchant, t.category, t.created_at
-               FROM transactions t
-               JOIN accounts a ON t.account_id = a.id
-               WHERE t.account_id = $1
-               ORDER BY t.created_at DESC
-               LIMIT 50`;
-      params = [accountId];
-    } else {
-      query = `SELECT t.id, t.account_id, t.amount, t.description,
-                      t.transaction_type, t.merchant, t.category, t.created_at
-               FROM transactions t
-               JOIN accounts a ON t.account_id = a.id
-               ORDER BY t.created_at DESC
-               LIMIT 50`;
-      params = [];
-    }
-
-    const result = await client.query(query, params);
-
-    return {
-      transactions: result.rows,
-      credential_metadata: {
-        vault_authenticated: true,
-        vault_role: 'uc2-jwt',
-        db_role: 'uc2-personal-readonly',
-        lease_id: creds.leaseId,
-        lease_duration_seconds: creds.leaseDuration,
-        user_sub: sub,
-      },
-    };
-  } finally {
-    await client.end();
-    // The credential existed for exactly this query. Hand it back now.
-    await revokeLease(creds.leaseId);
+  if (accountId) {
+    query = `SELECT t.id, t.account_id, t.amount, t.description,
+                    t.transaction_type, t.merchant, t.category, t.created_at
+             FROM transactions t
+             JOIN accounts a ON t.account_id = a.id
+             WHERE t.account_id = $1
+             ORDER BY t.created_at DESC
+             LIMIT 50`;
+    params = [accountId];
+  } else {
+    query = `SELECT t.id, t.account_id, t.amount, t.description,
+                    t.transaction_type, t.merchant, t.category, t.created_at
+             FROM transactions t
+             JOIN accounts a ON t.account_id = a.id
+             ORDER BY t.created_at DESC
+             LIMIT 50`;
+    params = [];
   }
+
+  const result = await queryAsUser(jwt, query, params);
+
+  return {
+    transactions: result.rows,
+    ...credentialReport(result),
+  };
 }

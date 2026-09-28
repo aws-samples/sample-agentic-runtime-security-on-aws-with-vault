@@ -7,6 +7,16 @@ weight: 70
 
 Use Case 1 proved an agent can have an identity. Use Case 2 tied what it reads to who is asking. Use Case 3 is the one where money moves — so the agent has to ask a person first, and everything it is then allowed to do is decided by Vault on the request itself.
 
+### Objectives Covered
+
+| Objective | ID | How Use Case 3 Demonstrates It |
+|---|---|---|
+| Every agent has a verifiable identity | OBJ-1 | The delegated token carries both halves of the pair: `sub` is the human who approved on their phone, and `act.sub` is `uc3-actor` (RFC 8693 Token Exchange), which Vault resolves against the Agent Registry — so the request names *which agent* acted *for which person*, not just a caller |
+| No standing privileges — JIT credentials only | OBJ-2 | The write credential is issued against the `uc3-refund-writer` database role with a 5-minute TTL and SELECT + INSERT + UPDATE only; the agent's `uc3-agent-ceiling` bounds the maximum it can ever hold, and a ceiling can only restrict, never grant |
+| Actions tied to user intent | OBJ-3 | The refund does not proceed until the person approves it out-of-band through CIBA on their own device; the agent records the terms when it requests the approval and reads them back rather than re-asking the model, and a unique index lets one approval pay exactly once |
+| Enforcement at the point of use | OBJ-4 | Vault narrows the token per request through `authorization_details` of `type: vault:path_access`, and Use Case 3 makes it **mandatory** (`optional_authorization_details=false`). The bypass test proves this layer on its own: a token whose RAR names a different path is denied even though the human baseline and the agent ceiling both permit the target |
+| Audit trail correlates approval, authorization and write | OBJ-5 | One `request_id` (W3C `traceparent`) runs through the IVIA decision log, the Vault audit log and the RDS pgaudit log; the Vault record names the approving human in `auth.entity_id` and the agent in `actor_entity_name`, so a single Athena query returns one row spanning all three planes |
+
 ### What Use Case 3 Adds
 
 ![Vault Enterprise native OBO — Agent Registry resolves the agent from act.sub; the effective grant is the human baseline ∩ agent ceiling ∩ per-request vault:path_access RAR](/static/images/agent-registry-flow.png)

@@ -1,8 +1,8 @@
 # Vault Server Module — tier 2 (shared services)
 
-Deploys the HashiCorp Vault **server runtime** on EKS: the `vault` namespace, the `vault` ServiceAccount, an autoloaded Enterprise license secret, and the Helm release (chart `hashicorp/vault` 0.32.0, image `hashicorp/vault-enterprise:2.0.3-ent`) in a 3-node Raft HA configuration with KMS auto-unseal.
+Deploys the HashiCorp Vault **server runtime** on EKS: the `vault` namespace, the `vault` ServiceAccount, an autoloaded Enterprise license secret, and the Helm release (chart `hashicorp/vault` 0.32.0, image `hashicorp/vault-enterprise:2.1.1-ent`) in a 3-node Raft HA configuration with KMS auto-unseal.
 
-**Enterprise, not community (Phase 9).** The server image was cut from community `hashicorp/vault:2.0.0` to `hashicorp/vault-enterprise:2.0.3-ent` to unlock the native Agent Registry + OAuth resource server primitives (Enterprise-only, license-gated). The Enterprise binary hard-fails `operator init` without an autoloaded license — `kubernetes_secret.vault_ent_license` (Opaque, key `license`) is wired into Helm `server.enterpriseLicense` so the license is present before the chart installs. The license itself is a per-attendee deploy input (`var.vault_enterprise_license`, sensitive, no default) — `deploy-workshop.sh` reads it from a license file (`VAULT_ENTERPRISE_LICENSE_PATH`, default `~/Downloads/vault-ent.hclic`) and writes it into the gitignored tier-2 `terraform.tfvars`; it is never a committed literal. The license MUST carry the `platform-standard` module (NOT `pki-only` — that is a *restriction* that blocks the `database`/`aws`/`kv`/`transit` mounts every use case depends on).
+**Enterprise, not community (Phase 9).** The server image was cut from community `hashicorp/vault:2.0.0` to Enterprise (first `2.0.3-ent`, now `2.1.1-ent`) to unlock the native Agent Registry + OAuth resource server primitives (Enterprise-only, license-gated). The Enterprise binary hard-fails `operator init` without an autoloaded license — `kubernetes_secret.vault_ent_license` (Opaque, key `license`) is wired into Helm `server.enterpriseLicense` so the license is present before the chart installs. The license itself is a per-attendee deploy input (`var.vault_enterprise_license`, sensitive, no default) — `deploy-workshop.sh` reads it from a license file (`VAULT_ENTERPRISE_LICENSE_PATH`, default `~/Downloads/vault-ent.hclic`) and writes it into the gitignored tier-2 `terraform.tfvars`; it is never a committed literal. The license MUST carry the `platform-standard` module (NOT `pki-only` — that is a *restriction* that blocks the `database`/`aws`/`kv`/`transit` mounts every use case depends on).
 
 The foundational IAM role, KMS unseal key, and Pod Identity association live in the sibling [`vault`](../vault/README.md) module (tier 1) — see that README for *why* the split exists. This module receives the KMS key id via the tier-1 `terraform_remote_state` read and binds the Vault `seal "awskms"` stanza to it.
 
@@ -65,6 +65,48 @@ kubectl exec -n vault vault-0 -- vault operator init -format=json
 ```
 
 The root token is captured into the runtime environment and consumed by the `vault-config` root. It is **never** written to Terraform state.
+
+## Why 2.1.1-ent
+
+**2.1.1-ent, not 2.0.x (issue #74).** A Use Case 3 refund token that reaches Vault with no
+`authorization_details` (or an empty list) must be refused, because the `uc3-actor`
+registration sets `optional_authorization_details = false`. A local reproduction with the
+Enterprise binaries showed 2.0.3 and 2.0.4 vend the refund-writer credential anyway, and 2.1.0
+and 2.1.1 refuse it. 2.1.x also has no `oauth-resource-server` activation flag
+(`sys/activation-flags/oauth-resource-server/activate` answers 404 `unsupported path`), so the
+`vault_config` module no longer manages one.
+
+**Every workshop deploy is fresh.** The environment is ephemeral, so Vault pods always start on
+the pinned tag and no deploy script upgrades Vault in place.
+
+**Changing the tag under a running cluster is a manual job.** The chart's server StatefulSet
+uses the `OnDelete` update strategy (chart 0.32.0 default `server.updateStrategyType: "OnDelete"`;
+this module does not override it). A tag change re-templates the StatefulSet, but running pods
+keep the old image until each one is deleted. HashiCorp's documented order
+([Vault on Kubernetes](https://developer.hashicorp.com/vault/docs/deploy/kubernetes/helm/run),
+[Manual upgrade for HA deployments](https://developer.hashicorp.com/vault/docs/upgrade/vault-ha-upgrade)):
+
+1. Take a Raft snapshot first (`vault operator raft snapshot save`). Rolling back means the old
+   version plus that snapshot ([rollback](https://developer.hashicorp.com/vault/docs/upgrade/rollback)).
+2. Record the current `disable_upgrade_migration` value (`vault operator raft autopilot
+   get-config`), then turn automated upgrade migration off
+   (`vault operator raft autopilot set-config -disable-upgrade-migration=true`). The HA upgrade
+   guide requires this for an in-place upgrade of Enterprise Integrated Storage. Restore the
+   recorded value once every pod runs the new version.
+3. Delete each standby pod, one at a time, and wait until it is Ready and unsealed, and until
+   autopilot's own entry for that node (`vault operator raft autopilot state`, `Servers.<pod>`)
+   shows the new `Version` and `Healthy`, with three voters. The cluster-level `Healthy` flag
+   alone can pass before autopilot has seen the restart: a local 2.0.3 to 2.1.1 rehearsal showed
+   it `true` while the just-restarted node was still listed at 2.0.3.
+4. Delete the active pod last. `kubectl delete pod` is a graceful shutdown (the chart's preStop
+   hook sends Vault SIGTERM), which hands leadership to an upgraded standby. Do not run
+   `vault operator step-down`: the HA guide says "DO NOT attempt to issue a step-down operation at
+   any time during the upgrade process".
+
+Do not follow the Kubernetes page's `vault operator raft remove-peer` step for these pods. They
+keep their Raft data on a PVC, and a removed node that still has Raft data is refused when it
+tries to rejoin (Vault 1.19.0 CHANGELOG;
+[`operator raft` reference](https://developer.hashicorp.com/vault/docs/commands/operator/raft)).
 
 ## Known Pitfalls
 

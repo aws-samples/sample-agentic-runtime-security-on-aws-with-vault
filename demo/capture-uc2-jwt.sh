@@ -37,21 +37,27 @@ USER_NAME="${1:-}"
 PASSWORD="${UC2_DEMO_PASSWORD:-}"
 [ -n "$PASSWORD" ] || { echo "UC2_DEMO_PASSWORD env var is required (the user's LDAP password)" >&2; exit 2; }
 
-# --- everything else derived from the live cluster (no hardcoded endpoints/secrets)
-# shellcheck disable=SC1091
-source infrastructure/.acme-state   # NIP_FQDN_WRP, NIP_FQDN_BANKING
-WRP="https://${NIP_FQDN_WRP}"
-RU="https://${NIP_FQDN_BANKING}/callback"
-cfg() { kubectl get configmap -n banking-app banking-ui-config -o jsonpath="{.data.$1}"; }
+# --- everything else derived from the live cluster (no hardcoded endpoints/secrets).
+# Every kubectl call names the context deploy-workshop.sh creates
+# (`aws eks update-kubeconfig --alias workshop`), never whatever context is current.
+KCTX=(--context workshop)
+cfg() { kubectl "${KCTX[@]}" get configmap -n banking-app banking-ui-config -o jsonpath="{.data.$1}"; }
+# banking-ui-config holds the URLs the banking UI itself signs in with
+# (infrastructure/modules/uc2_agent/main.tf): IVIA_ISSUER is https://<WRP host>/isvaop
+# and REDIRECT_URI is https://<banking host>/callback.
+ISSUER="$(cfg IVIA_ISSUER)"
+WRP="${ISSUER%/isvaop}"
+RU="$(cfg REDIRECT_URI)"
+[ -n "$ISSUER" ] && [ "$WRP" != "$ISSUER" ] && [ -n "$RU" ] || { echo "could not read IVIA_ISSUER (ending in /isvaop) and REDIRECT_URI from configmap banking-ui-config" >&2; exit 1; }
 CID="$(cfg IVIA_CLIENT_ID)"
 # agent-uc2's client secret is a Kubernetes Secret, not a ConfigMap key — each OIDC
 # client has its own credential and none of them are readable via `get configmap`.
-CSEC="$(kubectl get secret -n banking-app banking-ui-oidc -o jsonpath='{.data.IVIA_CLIENT_SECRET}' | base64 -d)"
+CSEC="$(kubectl "${KCTX[@]}" get secret -n banking-app banking-ui-oidc -o jsonpath='{.data.IVIA_CLIENT_SECRET}' | base64 -d)"
 [ -n "$CID" ] && [ -n "$CSEC" ] || { echo "could not read agent-uc2 client creds (client_id <- banking-ui-config, secret <- banking-ui-oidc Secret)" >&2; exit 1; }
 
 # --- in-cluster OP token endpoint via port-forward (bypasses the WRP junction)
 LPORT=18436
-kubectl port-forward -n verify-access svc/iviaop "${LPORT}:8436" >/tmp/uc2-pf.log 2>&1 &
+kubectl "${KCTX[@]}" port-forward -n verify-access svc/iviaop "${LPORT}:8436" >/tmp/uc2-pf.log 2>&1 &
 PF=$!
 trap 'kill "$PF" 2>/dev/null || true' EXIT
 for _ in $(seq 1 30); do

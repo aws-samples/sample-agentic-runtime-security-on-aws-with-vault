@@ -45,7 +45,7 @@ The script writes them into the gitignored `terraform.tfvars` files, so subseque
 
 ```bash
 export ICR_ENTITLEMENT_KEY="<entitlement key>"
-export IVIA_MMFA_PUSH_CLIENT_SECRET=[REDACTED_PASSWORD] secret>"
+export IVIA_MMFA_PUSH_CLIENT_SECRET="<MMFA push client secret>"
 ```
 
 ::::alert{header="Tier 1 timing" type="info"}

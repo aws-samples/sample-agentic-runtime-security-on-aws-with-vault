@@ -15,7 +15,8 @@
 #   Step  5: terraform apply — tier 2 (infrastructure/services/) vault_server + ivia
 #   Step  6: Initialize Vault (vault-init.sh)
 #   Step  7: ACME cert issuance + ACM sync + tier-2 module.ivia re-apply to nip.io
-#   Step  8: Configure Vault (vault-configure.sh) — reads tier-1 + tier-2 state
+#   Step  8: Configure Vault (vault-configure.sh) — reads tier-1 + tier-2 state;
+#            restarts uc3-agent if it is deployed, so it logs in to Vault again
 #   Step  9: Configure IVIA (ivia-configure.sh)
 #   Gate   : Tier-2 exit contract — Vault issuer_id must be the nip.io FQDN
 #            (hard abort; catches a tripped Step-7 cert gate before tier 3)
@@ -422,12 +423,21 @@ _run_subscript() {
     return 0
 }
 
+# Waits for a Vault port-forward to pass traffic. standbyok/perfstandbyok are
+# NOT optional: `kubectl port-forward svc/vault` binds whichever endpoint the
+# service picks, and a standby's bare /v1/sys/health answers 429 (standby) or
+# 473 (performance standby) — which `curl -sf` treats as a failure. Without
+# them this probe only passes when the service happens to pick the active node,
+# so any leadership move (a pod restart, a node recycle) made the tier-2 exit
+# gate fail and blame the tunnel. Same reasoning, same fix as
+# vault-configure.sh's connectivity probe. Reads still return current data: a
+# standby answered the gate's own issuer_id read with the active node's value.
 _wait_for_port() {
     local port="$1"
     local timeout="${2:-30}"
     local elapsed=0
     while [[ $elapsed -lt $timeout ]]; do
-        if curl -sf "http://localhost:${port}/v1/sys/health" >/dev/null 2>&1; then
+        if curl -sf "http://localhost:${port}/v1/sys/health?standbyok=true&perfstandbyok=true" >/dev/null 2>&1; then
             return 0
         fi
         sleep 2
@@ -1547,13 +1557,57 @@ step_07_acme_cert_issuance() {
 # policies, and the uc1/uc2/uc3 roles the tier-3 pods authenticate with. MUST
 # run before the tier-3 apply (Step 10) or the pods 403 on startup. Binds the
 # oauth-resource-server issuer_id to tier-2's ivia_issuer (nip.io after Step 7).
+# On a re-run against a live cluster it then restarts the Use Case 3 agent so it
+# logs in to Vault again (see _step08_relogin_uc3_agent).
 #===============================================================================
+
+# A Vault token keeps the policy NAMES it was issued with. The uc3-agent logs in
+# once with Kubernetes auth role uc3 and keeps that token until it expires: it
+# re-logs in only when lookup-self fails (ensure_authenticated in
+# applications/uc3-agent/app/vault_client.py). When vault_config changes which
+# policy role uc3 carries and deletes the old one (issue #72 · Use Case 3: the
+# refund agent's everyday Vault login can get refund-writing database credentials
+# with no approval, where uc3-refund-writer became uc3-agent), a pod started
+# before the apply keeps a token that names the
+# deleted policy. lookup-self still succeeds, so the agent never re-logs in, but
+# every path it uses is denied (transaction lookups, Bedrock, its audit-record
+# credentials) until the token expires, up to an hour later. Restarting the
+# Deployment makes the new pod log in under the role as it is configured now.
+#
+# This runs on every Step 8 re-run, not only when the binding changed. A run that
+# applied the change and then died before this point leaves a stale token that a
+# change-detecting re-run would not see. It covers the cases Step 10's roll does
+# not: `--tier 2` on its own, and `--image-source ghcr`, where Step 10 does not
+# roll. On a fresh install the Deployment does not exist yet, and this is skipped.
+_step08_relogin_uc3_agent() {
+    local ns="banking-app" dep="uc3-agent"
+    if ! kubectl --context workshop get deploy "$dep" -n "$ns" >/dev/null 2>&1; then
+        print_info "Step 8: ${ns}/${dep} not deployed yet — it logs in to Vault when the tier-3 apply creates it"
+        return 0
+    fi
+    if ! kubectl --context workshop rollout restart "deploy/${dep}" -n "$ns" >/dev/null 2>&1; then
+        print_fail "Step 8: restart ${ns}/${dep} so it logs in to Vault again" \
+            "The running agent may hold a Vault token issued before this apply, which can no longer read its own paths. Restart it: kubectl --context workshop rollout restart deploy/${dep} -n ${ns}"
+        return 1
+    fi
+    if kubectl --context workshop rollout status "deploy/${dep}" -n "$ns" --timeout=300s >/dev/null 2>&1; then
+        # Ready is all this observes: /health answers 200 whether or not the
+        # startup Vault login worked, so the line claims only the replacement.
+        print_pass "Step 8: ${ns}/${dep} restarted and Ready (its pods were replaced by ones started after this apply)"
+    else
+        print_fail "Step 8: ${ns}/${dep} did not become Ready within 300s after the Vault re-login restart" \
+            "Inspect: kubectl --context workshop get pods -n ${ns} -l app=${dep} && kubectl --context workshop logs deploy/${dep} -n ${ns} --tail=50"
+        return 1
+    fi
+}
+
 step_08_configure_vault() {
     echo ""
     echo -e "${YELLOW}> Step 8: Configure Vault${NC}"
 
     if [[ "$DRY_RUN" = true ]]; then
         print_info "[DRY-RUN] Would run: vault-configure.sh"
+        print_info "[DRY-RUN] Would restart banking-app/uc3-agent (if deployed) so it logs in to Vault again"
         print_pass "Step 8: Configure Vault (dry-run)"
     else
         if _run_subscript "Step 8: vault-configure" "${SCRIPT_DIR}/vault-configure.sh"; then
@@ -1592,6 +1646,7 @@ step_08_configure_vault() {
             else
                 print_warn "Step 8: Could not verify Vault auth — root token not found in ~/vault-init.json"
             fi
+            _step08_relogin_uc3_agent || true
         else
             _die "Step 8: vault-configure" "tier-3 pods authenticate to Vault with the roles this step creates. Re-run: ${SCRIPT_DIR}/vault-configure.sh"
         fi
@@ -1691,7 +1746,7 @@ _tier2_exit_gate() {
         kill "$VAULT_PF_PID" 2>/dev/null || true
         VAULT_PF_PID=""
         _die "Gate: Tier-2 exit contract" \
-            "Could not port-forward to Vault on :8200. Check: kubectl --context workshop get pods -n vault"
+            "Vault did not answer /v1/sys/health on :8200 within 30s (standby answers accepted). Check the pods are Running and unsealed: kubectl --context workshop get pods -n vault && kubectl --context workshop exec -n vault vault-0 -- vault status"
     fi
 
     # Same endpoint vault-configure.sh verifies against (reference contract).

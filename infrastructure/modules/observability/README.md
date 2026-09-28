@@ -62,6 +62,8 @@ Glue catalog tables layer an external schema over the S3 prefixes, enabling Athe
 | `athena_correlation_query` | SELECT query for `audit_correlation` view (use in verify-uc3.sh) |
 | `athena_view_named_query_id` | Athena named query ID — retrieve DDL via AWS CLI |
 | `firehose_stream_arns` | Map of log source → Firehose stream ARN |
+| `audit_correlation_view_name` | Name of the view (`audit_correlation`) — the tier-1 audit-reader grant follows it |
+| `audit_correlation_source_tables` | Map of the view's three tables (`ivia_decisions`, `vault_audit`, `pgaudit_logs`) → their S3 location, so a read grant names exactly the data the view reads |
 
 ## Verification
 

@@ -420,8 +420,8 @@ The `ALTER DEFAULT PRIVILEGES REVOKE` line matches the `ALTER DEFAULT PRIVILEGES
 This is not a pattern to adopt later — it is the code running in the cluster right now. `applications/banking-app/mcp-server/src/vault-client.ts` ships this, and `tools.ts` calls it from the `finally` block of both `get_accounts` and `get_transactions`, so the credential is handed back on the error path as well as the success path:
 
 ```typescript
-export async function revokeLease(leaseId: string): Promise<boolean> {
-  if (!leaseId || leaseId === 'unknown') return false;
+export async function revokeLease(leaseId: string): Promise<RevokeOutcome> {
+  if (!leaseId || leaseId === 'unknown') return { revoked: false, serviceLogin: null, freshLogin: false };
 
   const attempt = async (token: string) =>
     fetch(`${VAULT_ADDR}/v1/sys/leases/revoke`, {
@@ -430,32 +430,41 @@ export async function revokeLease(leaseId: string): Promise<boolean> {
       body: JSON.stringify({ lease_id: leaseId }),
     });
 
+  let used: { login: ServiceLogin; fresh: boolean } | null = null;
+  const outcome = (revoked: boolean): RevokeOutcome => ({
+    revoked,
+    serviceLogin: used?.login ?? null,
+    freshLogin: used?.fresh ?? false,
+  });
+
   try {
-    let res = await attempt(await getServiceToken());
+    used = await getServiceLogin();
+    let res = await attempt(used.login.token);
     // A 403 means the cached token is gone or was revoked out from under us —
     // log in again once before giving up.
     if (res.status === 403) {
-      res = await attempt(await getServiceToken(true));
+      used = await getServiceLogin(true);
+      res = await attempt(used.login.token);
     }
     if (!res.ok) {
       const body = await res.text();
       console.error(`vault_lease_revoke_failed lease_id=${leaseId} status=${res.status} body=${body}`);
-      return false;
+      return outcome(false);
     }
     console.log(`vault_lease_revoked lease_id=${leaseId}`);
-    return true;
+    return outcome(true);
   } catch (err) {
     console.error(`vault_lease_revoke_error lease_id=${leaseId} error=${String(err)}`);
-    return false;
+    return outcome(false);
   }
 }
 ```
 
-**Why workload identity (k8s auth) and not the user's JWT for the revoke?** The user's JWT may already have expired by the time the query returns, and revoking is not something the user authorized — it is the server disposing of its own resource. `getServiceToken()` logs in at `auth/kubernetes/login` with the pod's projected `uc2-mcp-server-sa` ServiceAccount token, caches the result, and renews it before expiry. The `uc2-personal` policy grants `update` on `sys/leases/revoke` and `read` on `auth/token/lookup-self` — nothing else — so a stolen copy of that token can hand credentials back and learn its own TTL, and can do nothing else.
+**Why workload identity (k8s auth) and not the user's JWT for the revoke?** The user's JWT may already have expired by the time the query returns, and revoking is not something the user authorized — it is the server disposing of its own resource. `getServiceLogin()` logs in at `auth/kubernetes/login` with the pod's projected `uc2-mcp-server-sa` ServiceAccount token, caches the result, and renews it before expiry. Calls that need a login while one is already on its way to Vault wait for that one, so the two tool calls of a cold turn make one login. The token carries two policies: `default`, and `uc2-personal`, which grants `update` on `sys/leases/revoke` and `read` on `auth/token/lookup-self` and nothing more. `revokeLease()` returns that login with the outcome, and the agent sends the Vault token and the ServiceAccount token the login presented in full on every signed-in user's activity stream. Anyone who reads them there holds both policies until the Vault token expires, including the power to revoke any lease whose id they know, and can sign in to Vault as role `uc2` with the ServiceAccount token until it expires.
 
-**Why best-effort?** By the time `finally` runs, the query has succeeded and the caller's data is already on its way back. A revoke failure is logged and swallowed rather than turned into a user-visible error: the credential still expires on its TTL, so the failure degrades to TTL-only behaviour instead of breaking the response. The `console.error` lines above are what an operator alerts on.
+**Why best-effort?** By the time `finally` runs, the query has succeeded and the caller's rows are ready; the MCP server waits for the revoke to finish, whatever its outcome, and then replies. A revoke failure is logged and swallowed rather than turned into a user-visible error: the credential still expires on its TTL, so the failure degrades to TTL-only behaviour instead of breaking the response. The `console.error` lines above are what an operator alerts on. The failure is also reported to the agent (`lease_revoked: false`), and the agent labels that credential in the activity stream `revoke FAILED — this credential is still live until <time>`, the time its lease ends.
 
-**Where does the `lease_id` come from?** `getDbCreds()` returns it alongside the username and password from the `database/creds/uc2-personal-readonly` read, and it stays in the request's local scope — one credential, one query, one revoke. The browser never sees a `lease_id`.
+**Where does the `lease_id` come from?** `getDbCreds()` returns it alongside the username and password from the `database/creds/uc2-personal-readonly` read — one credential, one query, one revoke. The MCP server revokes the lease before it replies, then returns the `lease_id`, the revoke outcome and the credential itself to the agent. The agent takes the credential out before the model sees the tool result — the model never receives it — and sends it, with its `lease_id`, only on the signed-in user's own activity stream.
 
 Step 8 below is where you watch all of this happen against your own cluster.
 :::

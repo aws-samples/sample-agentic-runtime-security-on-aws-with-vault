@@ -30,6 +30,7 @@ import json
 import logging
 import os
 import re
+import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
@@ -37,6 +38,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from . import activity
 from . import ciba_store
 from . import mmfa
 from .agent import build_uc3_agent
@@ -159,57 +161,121 @@ async def chat(request: Request, body: ChatRequest):
     if _vault_client is None:
         raise HTTPException(status_code=503, detail="UC3 agent not initialized")
 
-    if not _vault_client.is_authenticated():
-        try:
-            _vault_client.login()
-            logger.info("uc3_vault_k8s_reauth_success")
-        except Exception as exc:
-            raise HTTPException(status_code=503, detail=f"Vault re-auth failed: {exc}")
-
-    # Identity boundary — extract + verify the IVIA id_token BEFORE building
-    # the agent. 401 responses are kept generic to avoid info leak about which
-    # claim failed; the structured log in auth.py carries the failure reason.
-    auth_header = request.headers.get("Authorization", "")
-    if not auth_header.lower().startswith("bearer "):
-        raise HTTPException(
-            status_code=401,
-            detail="Authorization: Bearer <id_token> header required",
-        )
-    id_token = auth_header[7:].strip()
-    if not id_token:
-        raise HTTPException(status_code=401, detail="Empty id_token in Authorization header")
-
+    # This request's activity sink. It is bound while the request is prepared,
+    # so the credentials this turn uses before the agent starts (a Vault
+    # re-login, the caller's id_token, the Bedrock STS keys issued by
+    # build_uc3_agent) are queued for the stream; nothing is sent unless the
+    # request gets as far as streaming. The id is this turn's requestId unless
+    # a refund binds its own (activity.py, "The turn's requestId").
+    sink = activity.EventSink(asyncio.get_running_loop(), request_id=str(uuid.uuid4()))
+    prep_sink_token = activity.bind_sink(sink)
     try:
-        verified_sub = verify_id_token(id_token)
-    except AuthenticationError as exc:
-        raise HTTPException(status_code=401, detail="id_token verification failed") from exc
+        logged_in_now = False
+        if not _vault_client.is_authenticated():
+            try:
+                _vault_client.login()
+                logged_in_now = True
+                logger.info("uc3_vault_k8s_reauth_success")
+            except Exception as exc:
+                raise HTTPException(status_code=503, detail=f"Vault re-auth failed: {exc}")
 
-    agent = build_uc3_agent(vault_client=_vault_client, session_id=body.sessionId)
+        # Identity boundary — extract + verify the IVIA id_token BEFORE building
+        # the agent. 401 responses are kept generic to avoid info leak about which
+        # claim failed; the structured log in auth.py carries the failure reason.
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.lower().startswith("bearer "):
+            raise HTTPException(
+                status_code=401,
+                detail="Authorization: Bearer <id_token> header required",
+            )
+        id_token = auth_header[7:].strip()
+        if not id_token:
+            raise HTTPException(status_code=401, detail="Empty id_token in Authorization header")
+
+        try:
+            verified_sub = verify_id_token(id_token)
+        except AuthenticationError as exc:
+            raise HTTPException(status_code=401, detail="id_token verification failed") from exc
+
+        # Shown only once verified: the caller's own sign-in token.
+        id_claims = activity.decode_jwt_payload(id_token) or {}
+        activity.credential(
+            "id_token",
+            f"{verified_sub}'s id_token from sign-in, sent by the banking UI as this request's bearer",
+            "IBM Verify Identity Access",
+            reused=False,
+            value=id_token,
+            expires_at=int(id_claims["exp"] * 1000) if isinstance(id_claims.get("exp"), (int, float)) else None,
+        )
+        # Reused unless the login just above made it (login() has then already
+        # shown it, marked new).
+        _vault_client.report_vault_token(reused=not logged_in_now)
+
+        agent = build_uc3_agent(vault_client=_vault_client, session_id=body.sessionId)
+    finally:
+        activity.reset_sink(prep_sink_token)
     message = body.message
 
     async def generate():
-        # Bind the verified sub for the entire SSE stream lifetime. The set
-        # MUST happen before the to_thread(agent, message) call below —
-        # to_thread uses contextvars.copy_context() so the worker thread (and the Strands
-        # tool callbacks running in it) inherit this value. Reset in finally
-        # so the ContextVar is unbound before the request task is reused for
-        # another caller on the same uvicorn worker (defense in depth).
+        # Bind the verified sub AND this request's activity sink for the entire
+        # SSE stream lifetime. Both sets MUST happen before the agent task is
+        # created below — the task and to_thread copy the current context, so
+        # the worker thread (and the Strands tools and hooks running under it)
+        # inherit these values. Reset in finally, in reverse order, so neither
+        # ContextVar stays bound when the request task is reused for another
+        # caller on the same uvicorn worker (defense in depth).
+        sink_token = activity.bind_sink(sink)
         ctx_token = _AUTHENTICATED_SUB.set(verified_sub)
         try:
             yield f"data: {json.dumps({'role': 'ai', 'content': 'Processing your request...', 'type': 'tool_planning'})}\n\n"
+
+            # The agent runs in a worker thread while this generator streams the
+            # steps it reports. END is queued by the task's done-callback, which
+            # runs after every event the worker pushed (all pushes go through
+            # call_soon_threadsafe ahead of the task's own completion).
+            task = asyncio.ensure_future(asyncio.to_thread(agent, message))
+
+            def _on_agent_done(done: asyncio.Future) -> None:
+                sink.finish()
+                exc = None if done.cancelled() else done.exception()
+                if exc is not None and sink.closed:
+                    # The browser left before the answer; the error is only logged.
+                    logger.error("uc3_agent_error_after_disconnect: %s | user_message: %s", str(exc), message)
+
+            task.add_done_callback(_on_agent_done)
+
+            while True:
+                event = await sink.queue.get()
+                if event is activity.END:
+                    break
+                yield f"data: {json.dumps(event, default=str)}\n\n"
+
+            # The turn ends with the contract's frames — the answer, or the
+            # error, then agent:done, all carrying the turn's requestId — and
+            # after them the legacy frames today's dashboard reads, unchanged.
             try:
-                response = await asyncio.to_thread(agent, message)
+                # Already finished (END has arrived); shield so a disconnect
+                # here can never cancel the worker's task.
+                response = await asyncio.shield(task)
                 content = re.sub(r'<thinking>.*?</thinking>\s*', '', str(response), flags=re.DOTALL)
 
+                yield f"data: {json.dumps(sink.stamp({'type': 'agent:text_delta', 'text': content}))}\n\n"
+                yield f"data: {json.dumps(sink.stamp({'type': 'agent:done'}))}\n\n"
                 yield f"data: {json.dumps({'role': 'ai', 'content': content, 'type': 'delta'})}\n\n"
                 yield f"data: {json.dumps({'type': 'end'})}\n\n"
 
             except Exception as exc:
                 logger.error("uc3_agent_error: %s | user_message: %s", str(exc), message)
+                yield f"data: {json.dumps(sink.stamp({'type': 'agent:error', 'message': str(exc)}))}\n\n"
+                yield f"data: {json.dumps(sink.stamp({'type': 'agent:done'}))}\n\n"
                 yield f"data: {json.dumps({'type': 'error', 'content': str(exc)})}\n\n"
                 yield f"data: {json.dumps({'type': 'end'})}\n\n"
         finally:
+            # A disconnected browser leaves the worker running to completion;
+            # its later events are dropped instead of queued for nobody.
+            sink.close()
             _AUTHENTICATED_SUB.reset(ctx_token)
+            activity.reset_sink(sink_token)
 
     return StreamingResponse(
         generate(),

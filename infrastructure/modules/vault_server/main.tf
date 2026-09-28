@@ -90,7 +90,7 @@ resource "kubernetes_secret" "vault_ent_license" {
 
 ################################################################################
 # Vault Helm Release
-# Chart: hashicorp/vault 0.32.0 (Vault server image hashicorp/vault-enterprise:2.0.3-ent)
+# Chart: hashicorp/vault 0.32.0 (Vault server image hashicorp/vault-enterprise:2.1.1-ent)
 # HA values rendered from vault-ha.yaml.tpl. KMS key id is supplied by tier 1.
 #
 # POST-DEPLOY — Two-phase bootstrap (handled by deploy-workshop.sh):

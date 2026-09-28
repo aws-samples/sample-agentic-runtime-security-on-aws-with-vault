@@ -18,7 +18,7 @@ Delegated OAuth JWT (X-Vault-Token)
    authorization_details = [ { "type": "vault:path_access",
                                "path": "database/creds/uc3-refund-writer",
                                "capabilities": ["read"] } ]   (per-request RAR — MANDATORY for UC3)
-  →  Layer 1  human baseline    (uc3-refund-writer policy set — what jaime may do)
+  →  Layer 1  human baseline    (uc3-human-baseline policy on jaime's entity — what jaime may do)
   ∩  Layer 2  agent ceiling     (uc3-actor registration ceiling_policies — the max the agent may EVER hold)
   ∩  Layer 3  per-request RAR   (vault:path_access — Vault narrows the token to this EXACT path this request)
   →  allow iff all three permit
@@ -136,10 +136,6 @@ When the lease expires the PostgreSQL role is dropped. Reusing the credentials a
 The `vault_config` Terraform module configures the OAuth resource server, the agent registration + ceiling, and the human/agent identity aliases (provider `hashicorp/vault >= 5.10.1`):
 
 ```hcl
-resource "vault_activation_flags" "oauth_resource_server" {
-  feature = "oauth-resource-server"
-}
-
 resource "vault_agent_registration" "uc3_actor" {
   entity_id                      = vault_identity_entity.uc3_actor.id
   display_name                   = "uc3-actor"
@@ -150,7 +146,7 @@ resource "vault_agent_registration" "uc3_actor" {
 
 The `uc3-actor` registration is resolved from the delegated token's `act.sub` claim. The human `jaime` has a subject alias keyed on `sub`; the agent has an actor alias keyed on `act.sub = uc3-actor`. On the on-behalf-of request Vault resolves **both** and intersects the human baseline with the agent ceiling, then narrows by the `vault:path_access` RAR.
 
-Use Case 3 also keeps a **separate Kubernetes auth role (`uc3`)** for everything the agent does as *itself*, with no human in the picture: reading the model credentials it needs to answer at all (`aws/sts/bedrock-reader`), the credentials it writes its own audit records with (`aws/sts/uc3-logs-writer`), and read-only database credentials for listing transactions. That workload identity runs for the life of the pod and is deliberately powerless over refunds — `uc3-refund-writer` is reachable only through the delegated token, never through the Kubernetes role. CIBA initiation itself involves no Vault call at all; it is a request to IVIA.
+Use Case 3 also keeps a **separate Kubernetes auth role (`uc3`)** for everything the agent does as *itself*, with no human in the picture. The role binds one policy, `uc3-agent`, which grants three credentials: read-only database credentials for looking up transactions and refund status (`database/creds/uc3-readonly`), the model credentials the agent needs to answer at all (`aws/sts/bedrock-reader`), and the credentials it writes its own audit records with (`aws/sts/uc3-logs-writer`), plus looking up its own token and renewing leases. The agent's token also carries Vault's built-in `default` policy, because role `uc3` does not opt out of it. That workload identity runs for the life of the pod and has no path to refunds: neither `uc3-agent` nor `default` names `database/creds/uc3-refund-writer`, so the refund-writer credential is reachable only through the delegated token, never through the Kubernetes role. Check 21 on [The Bypass Test](../73-bypass-test/) page logs in as that role and proves it. CIBA initiation itself involves no Vault call at all; it is a request to IVIA.
 :::
 
 :::expand{header="Agent Dev Track — present the delegated JWT via X-Vault-Token"}

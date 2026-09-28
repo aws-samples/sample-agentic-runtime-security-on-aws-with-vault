@@ -113,7 +113,13 @@ The workshop deploys an EKS 1.34 cluster, and a client more than one minor versi
 
 ::::tab{label="Local terminal or IDE" id="local"}
 
-All five should report versions. If `kubectl` is not 1.34.x, re-run Step 2 — the script installs the right version from the Kubernetes package repository.
+All five should report versions.
+
+`kubectl` may report a version newer than 1.34.x, and the pre-flight says so rather than
+changing it: it installs `kubectl` only when you have none, so re-running Step 2 will not
+replace one that is already on your machine. Every command in this workshop works with the
+newer client — the script's own line is `kubectl installed (vX.Y.Z) but not 1.34.x — should
+work fine`. Treat that warning as information, not a failure.
 ::::
 
 :::::

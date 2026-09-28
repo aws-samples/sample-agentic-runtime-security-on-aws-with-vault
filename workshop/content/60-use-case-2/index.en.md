@@ -16,8 +16,8 @@ This use case adds **Objective 3 — actions tied to user intent** on top of the
 | Every agent has a verifiable identity | OBJ-1 | The MCP Server authenticates to Vault with its own Kubernetes ServiceAccount (`uc2-mcp-server-sa`) — only that SA in the `banking-app` namespace can obtain a `uc2-personal` Vault token, and that token's single capability is revoking the credentials it issued |
 | No standing privileges — JIT credentials only | OBJ-2 | Per-user Postgres credentials are issued dynamically via Vault's database secrets engine with a 15-minute TTL; no credential is stored on disk or in environment variables at rest |
 | Actions tied to user intent | OBJ-3 | The user's IVIA-issued access token carries both the `sub` claim (the human) and the `act.sub` claim (the acting agent); the MCP Server presents that token directly to Vault as `X-Vault-Token`; Vault's OAuth resource server validates it against IVIA's JWKS, resolves the agent through the Agent Registry, and issues per-user-scoped DB credentials; the database enforces Row-Level Security so each user sees only their own rows |
-| Enforcement at the point of use | ENFC-02 | The database credential is issued against `uc2-personal-readonly`, whose Postgres GRANTs exclude INSERT — so even if the Vault policy were widened, the DB GRANT layer still rejects writes |
-| Enforcement at the point of use | ENFC-03 | Kubernetes NetworkPolicy restricts MCP Server egress to Vault, RDS, and DNS only — external HTTP calls are blocked at the network layer |
+| Enforcement at the point of use | OBJ-4 · ENFC-02 | The database credential is issued against `uc2-personal-readonly`, whose Postgres GRANTs exclude INSERT — so even if the Vault policy were widened, the DB GRANT layer still rejects writes |
+| Enforcement at the point of use | OBJ-4 · ENFC-03 | Kubernetes NetworkPolicy restricts MCP Server egress to Vault, RDS, and DNS only — external HTTP calls are blocked at the network layer |
 | Audit trail ties credential issuance to user identity | OBJ-5 | The Vault audit log records both the OAuth resource server authorization (with the user's `sub` claim) and the subsequent database/creds issuance — providing a correlated audit trail from user identity to data access |
 
 ### Services Deployed
@@ -36,7 +36,7 @@ All three pods run in the `banking-app` namespace. Separate ALB Ingress exposes 
 - How IVIA acts as the identity provider and issues JWTs with user `sub`, `aud`, and `azp` claims
 - How Vault's OAuth resource server profile validates an IVIA access token presented directly as `X-Vault-Token` — no `auth/jwt/login` round-trip, no intermediate Vault token, and no confidential client secret at the Vault layer
 - How per-user Postgres credentials are scoped using Vault's database secrets engine and PostgreSQL Row-Level Security
-- How the MCP Server (not the agent) holds the credential-fetching responsibility — the agent never sees a DB credential
+- How the MCP Server (not the agent) fetches each database credential and revokes its lease before it replies — it then hands the credential to the agent only so the agent can show it in the signed-in user's own activity stream; the model never receives it, and a credential whose revoke failed is shown as still live until its lease ends
 - How Layer 2 (DB GRANTs) and Layer 3 (NetworkPolicy) enforcement work in combination as defense-in-depth
 - How the MCP Server revokes each database credential itself, using its own Kubernetes-auth Vault token, the moment the query it was issued for returns — and how that revoke removes the Postgres role immediately rather than at lease expiry
 - How the Vault audit log links a `sub` claim to a `database/creds` issuance — OBJ-5 audit correlation

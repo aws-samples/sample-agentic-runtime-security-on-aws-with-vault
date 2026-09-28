@@ -38,6 +38,16 @@ output "uc2_db_role_name" {
   value       = vault_database_secret_backend_role.uc2_personal_readonly.name
 }
 
+output "banking_ui_role_name" {
+  description = "Kubernetes auth role name for the banking UI server (value: 'banking-ui'). Bound to banking-app namespace / uc2-ui-sa; reads aws/sts/audit-reader only (issue #68 Audit Trace card)."
+  value       = vault_kubernetes_auth_backend_role.banking_ui.role_name
+}
+
+output "audit_reader_sts_path" {
+  description = "Vault path the banking UI reads its read-only Athena STS credentials from (value: 'aws/sts/audit-reader')."
+  value       = "${vault_aws_secret_backend.this.path}/sts/${vault_aws_secret_backend_role.audit_reader.name}"
+}
+
 output "uc3_role_name" {
   description = "Kubernetes auth role name for Use Case 3 (value: 'uc3'). Vault Agent init container annotation: vault.hashicorp.com/role=uc3."
   value       = vault_kubernetes_auth_backend_role.uc3.role_name

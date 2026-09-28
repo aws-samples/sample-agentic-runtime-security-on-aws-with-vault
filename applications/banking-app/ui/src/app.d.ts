@@ -10,7 +10,11 @@ declare global {
 			accessToken?: string | null;
 		}
 		// interface PageState {}
-		// interface Platform {}
+		// adapter-node hands every request's Node object over as platform.req
+		// (its ambient.d.ts declares the same). There is no platform under vite dev.
+		interface Platform {
+			req: import('node:http').IncomingMessage;
+		}
 	}
 }
 

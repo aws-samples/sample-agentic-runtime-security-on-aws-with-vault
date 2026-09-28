@@ -1,63 +1,168 @@
 <!--
-  Dashboard — Personalized banking view for authenticated users.
+  Dashboard — Personalized banking chat for authenticated users (Use Case 2).
 
-  Shows:
-    - Account balances (fetched via agent → MCP → Vault → RDS with RLS)
-    - Transaction history (same security path)
-    - AI chat interface for natural-language banking queries
+  The chat answers questions about the member's accounts and transactions
+  (fetched via agent → MCP → Vault → RDS with RLS). The refund suggestion switches
+  the chat to the Use Case 3 agent (/api/uc3-chat).
 
-  The user's access_token is passed from the server-side layout data
-  and forwarded to the agent pod via Authorization: Bearer header.
-  The agent never stores tokens — each request is independently authenticated.
+  The server-side proxy at /api/chat (and /api/uc3-chat) reads the user's
+  access_token from its httpOnly cookie and forwards it to the agent pod as
+  Authorization: Bearer. The agent never stores tokens — each request is
+  independently authenticated.
+
+  Every agent event of each turn is kept per turn ($lib/turn-events.svelte) and
+  printed by the Agent Log; the chat bubbles still come from the legacy frames
+  only, so an agent event never becomes a bubble.
 
   Test users: Oscar and Jaime
 -->
 <script lang="ts">
 	import type { PageData } from './$types';
 	import { sendChatMessage } from '$lib/agent-client';
-	import { Tile, Tag, Button, TextArea, InlineNotification } from 'carbon-components-svelte';
-	import Security from 'carbon-icons-svelte/lib/Security.svelte';
+	import { getPersona } from '$lib/personas';
+	import { Button, InlineNotification } from 'carbon-components-svelte';
 	import Locked from 'carbon-icons-svelte/lib/Locked.svelte';
 	import ArrowRight from 'carbon-icons-svelte/lib/ArrowRight.svelte';
+	import ChatWorkspace, { type Suggestion } from '$lib/components/chat/ChatWorkspace.svelte';
+	import UserMessage from '$lib/components/chat/UserMessage.svelte';
+	import AgentTurn from '$lib/components/chat/AgentTurn.svelte';
+	import ToolChip from '$lib/components/chat/ToolChip.svelte';
+	import AnswerCard from '$lib/components/chat/AnswerCard.svelte';
+	import ToolCallChip from '$lib/components/chat/ToolCallChip.svelte';
+	import AnswerCards from '$lib/components/chat/AnswerCards.svelte';
+	import FormattedAnswer from '$lib/components/chat/FormattedAnswer.svelte';
+	import AgentLogPanel from '$lib/components/activity/AgentLogPanel.svelte';
+	import SecurityFlowPanel from '$lib/components/activity/SecurityFlowPanel.svelte';
+	import AuditTraceCard from '$lib/components/activity/AuditTraceCard.svelte';
+	import { countEntries } from '$lib/agent-log';
+	import { createTurnLog } from '$lib/turn-events.svelte';
+	import { toolCallsOf } from '$lib/accounts-turn';
+	import { answerCardsOf } from '$lib/answer-cards';
 
 	let { data }: { data: PageData } = $props();
 
+	/** The agent that answers on an endpoint: the refund chat (Use Case 3) or the banking chat. */
+	type AgentName = 'Banking Agent' | 'Refund Agent';
+	const agentFor = (endpoint: string): AgentName => (endpoint === '/api/uc3-chat' ? 'Refund Agent' : 'Banking Agent');
+
+	/**
+	 * `agent` is set on every agent-side message: the agent whose turn it belongs to. `turnId` is
+	 * the TurnLog turn a streamed message arrived in; messages the page adds itself have none.
+	 */
+	type Msg = { role: string; content: string; type?: string; agent?: AgentName; turnId?: string };
+	type Turn = { kind: 'user'; msg: Msg } | { kind: 'agent'; agent: AgentName; msgs: Msg[] };
+
 	// Chat state
-	let messages: Array<{ role: string; content: string; type?: string }> = $state([]);
+	let messages: Msg[] = $state([]);
 	let inputMessage = $state('');
 	let isLoading = $state(false);
 	let sessionId = $state(`session-${Date.now()}`);
 
+	let chatEndpoint = $state('/api/chat');
+
+	// Every agent event of each turn, for the Agent Log.
+	const log = createTurnLog();
+	/** Which right-hand panel is open. Shared convention with the other chat pages. */
+	let openPanel = $state<'log' | 'flow' | null>(null);
+	const entryCount = $derived(countEntries(log.turns));
+	// The systems the current chat uses: the refund chat (Use Case 3) writes to Postgres
+	// itself; the banking chat (Use Case 2) reaches it through the MCP server.
+	const systems = $derived(chatEndpoint === '/api/uc3-chat' ? 'IVIA · Vault · Postgres' : 'IVIA · Vault · MCP');
+	// The chat header names the agent answering: the refund chat's is the Refund Agent.
+	const title = $derived(agentFor(chatEndpoint));
+	const inputLabel = $derived(chatEndpoint === '/api/uc3-chat' ? 'Message the refund agent' : 'Message the banking agent');
+
+	function toggleLog() {
+		openPanel = openPanel === 'log' ? null : 'log';
+	}
+	function toggleFlow() {
+		openPanel = openPanel === 'flow' ? null : 'flow';
+	}
+	/** The use case each turn was sent to, by Turn id: 3 for the refund chat, 2 for banking. */
+	let useCaseOf = $state<Record<string, 2 | 3>>({});
+	const latestTurn = $derived(log.turns.at(-1));
+
+	// The Audit Trace card sits above the first answer of each finished turn: the message it
+	// goes above, mapped to that turn.
+	const auditTurnFor = $derived.by(() => {
+		const byMsg = new Map<Msg, (typeof log.turns)[number]>();
+		const seen = new Set<string>();
+		for (const msg of messages) {
+			if (!msg.turnId || seen.has(msg.turnId)) continue;
+			if (msg.role === 'user' || msg.role === 'tool' || msg.role === 'error' || msg.type === 'tool_planning') continue;
+			seen.add(msg.turnId);
+			const logTurn = log.turns.find((t) => t.id === msg.turnId);
+			if (logTurn?.done) byMsg.set(msg, logTurn);
+		}
+		return byMsg;
+	});
+	/** `agent` is the agent whose turn asked for the consent. */
+	let pendingConsent: {
+		auth_req_id: string;
+		request_id: string;
+		user_code: string;
+		details: string;
+		consent_url: string;
+		agent: AgentName;
+	} | null = $state(null);
+
 	// Auto-scroll the message list to the newest message. The effect re-runs
-	// whenever a message is appended or the "Thinking…" indicator toggles.
+	// whenever a message is appended, the "Thinking…" indicator toggles, the
+	// consent card appears, or a turn ends and its Audit Trace card mounts under
+	// the answer.
 	let messagesEl: HTMLDivElement | undefined = $state();
 	$effect(() => {
 		messages.length;
 		isLoading;
+		pendingConsent;
+		auditTurnFor.size;
 		messagesEl?.scrollTo({ top: messagesEl.scrollHeight, behavior: 'smooth' });
 	});
 
-	// Decode user identity from id_token for display
-	let displayName = $state('');
-	$effect(() => {
-		if (data.idToken) {
-			try {
-				const parts = data.idToken.split('.');
-				if (parts.length === 3) {
-					const payload = JSON.parse(atob(parts[1]));
-					const raw = payload.name ?? payload.preferred_username ?? payload.sub ?? 'User';
-					displayName = raw.charAt(0).toUpperCase() + raw.slice(1);
-				}
-			} catch {
-				displayName = 'User';
-			}
+	// Display only: the persona name from the layout's id_token decode.
+	let actingFor = $derived(getPersona(data.sub)?.fullName ?? data.displayName);
+	// The refund chat's approvals go to the member's phone through IBM Verify.
+	let subtitle = $derived(
+		(chatEndpoint === '/api/uc3-chat'
+			? [actingFor ? `Acting for ${actingFor}` : '', 'approvals by IBM Verify']
+			: [actingFor ? `Acting for ${actingFor}` : '', 'Amazon Nova Pro', 'Vault-secured']
+		)
+			.filter(Boolean)
+			.join(' · ')
+	);
+
+	// Consecutive agent-side messages (tool steps, answer, errors) of the same agent render as
+	// one agent turn, named for that agent: a banking turn stays "Banking Agent" after the chat
+	// moves to the refund agent.
+	let turns = $derived.by(() => {
+		const out: Turn[] = [];
+		for (const msg of messages) {
+			const last = out.at(-1);
+			const agent = msg.agent ?? 'Banking Agent';
+			if (msg.role === 'user') out.push({ kind: 'user', msg });
+			else if (last?.kind === 'agent' && last.agent === agent) last.msgs.push(msg);
+			else out.push({ kind: 'agent', agent, msgs: [msg] });
 		}
+		return out;
 	});
 
-	let chatEndpoint = $state('/api/chat');
-	let pendingConsent: { auth_req_id: string; request_id: string; user_code: string; details: string; consent_url: string } | null = $state(null);
+	/**
+	 * Every answer, in the banking chat and the refund chat, is drawn as the approved #65 boards
+	 * draw it: a chip per tool call in place of the "Processing your request..." pill, a card of
+	 * what each tool returned with the credential that read it ($lib/answer-cards), then the Audit
+	 * Trace card and the formatted answer (Bear, 2026-09-25). The turn is the one its streamed
+	 * messages arrived in; a message the page adds itself (the consent follow-up) has none and is
+	 * drawn as a plain answer in that turn. Null for a group with no streamed turn at all.
+	 */
+	function answerViewOf(turn: Turn) {
+		if (turn.kind !== 'agent') return null;
+		const turnId = turn.msgs.find((msg) => msg.turnId)?.turnId;
+		const logTurn = turnId ? log.turns.find((t) => t.id === turnId) : undefined;
+		if (!logTurn) return null;
+		return { tools: toolCallsOf(logTurn.events, logTurn.done), cards: answerCardsOf(logTurn.events) };
+	}
 
-	function extractConsent(text: string) {
+	function extractConsent(text: string, agent: AgentName) {
 		const match = text.match(/CIBA_CONSENT:auth_req_id=([^|]+)\|request_id=([^|]+)\|user_code=([^|]+)\|details=([^|]+)(?:\|consent_url=(\S+))?/);
 		if (match) {
 			pendingConsent = {
@@ -65,7 +170,8 @@
 				request_id: match[2],
 				user_code: match[3],
 				details: match[4].replace(/\*+$/, ''),
-				consent_url: (match[5] ?? '').replace(/\*+$/, '')
+				consent_url: (match[5] ?? '').replace(/\*+$/, ''),
+				agent
 			};
 		}
 	}
@@ -86,10 +192,17 @@
 			...messages,
 			{
 				role: 'ai',
-				content: `On the IVIA consent page that just opened, approve the refund, then reply here (e.g. "I approved") so I can complete request ${pendingConsent.request_id}.`
+				content: `On the IVIA consent page that just opened, approve the refund, then reply here (e.g. "I approved") so I can complete request ${pendingConsent.request_id}.`,
+				agent: pendingConsent.agent
 			}
 		];
 		pendingConsent = null;
+	}
+
+	function denyConsent() {
+		const agent = pendingConsent?.agent;
+		pendingConsent = null;
+		messages = [...messages, { role: 'ai', content: 'Consent denied by user.', agent }];
 	}
 
 	// Persistent starter prompts. The refund prompt also switches the chat to the
@@ -101,15 +214,35 @@
 		sendMessage();
 	}
 
+	const suggestions: Suggestion[] = [
+		{ label: 'Show me my account balances', onselect: () => sendSuggestion('Show me my account balances') },
+		{ label: 'What are my recent transactions?', onselect: () => sendSuggestion('What are my recent transactions?') },
+		{
+			label: 'Show transactions for my checking account',
+			onselect: () => sendSuggestion('Show transactions for my checking account')
+		},
+		{
+			label: 'I need a refund for a recent transaction',
+			tone: 'warn',
+			onselect: () => sendSuggestion('I need a refund for a recent transaction', '/api/uc3-chat')
+		}
+	];
+
 	async function sendMessage() {
 		if (!inputMessage.trim() || isLoading) return;
 
 		const userMsg = inputMessage.trim();
 		const endpoint = chatEndpoint;
+		const agent = agentFor(endpoint);
 		inputMessage = '';
 
 		messages = [...messages, { role: 'user', content: userMsg }];
 		isLoading = true;
+		const turn = log.begin(userMsg);
+		useCaseOf[turn.id] = endpoint === '/api/uc3-chat' ? 3 : 2;
+		// The first error the page shows for this turn, without the "Error: " the
+		// notification puts in front of it: the Agent Log line has its own label.
+		let failure: string | undefined;
 
 		await sendChatMessage(
 			userMsg,
@@ -121,262 +254,245 @@
 					return;
 				}
 				if (chunk.type === 'error') {
-					messages = [...messages, { role: 'error', content: chunk.content }];
+					failure ??= chunk.content;
+					messages = [...messages, { role: 'error', content: chunk.content, agent, turnId: turn.id }];
 					isLoading = false;
 					return;
 				}
 				if (chunk.content) {
-					extractConsent(chunk.content);
-					messages = [...messages, { role: chunk.role ?? 'ai', content: chunk.content, type: chunk.type }];
+					extractConsent(chunk.content, agent);
+					messages = [
+						...messages,
+						{ role: chunk.role ?? 'ai', content: chunk.content, type: chunk.type, agent, turnId: turn.id }
+					];
 				}
 			},
 			(err) => {
-				messages = [...messages, { role: 'error', content: `Error: ${err}` }];
+				failure ??= err;
+				messages = [...messages, { role: 'error', content: `Error: ${err}`, agent, turnId: turn.id }];
 				isLoading = false;
 			},
-			endpoint
+			endpoint,
+			(event) => log.push(event, turn)
 		);
-	}
-
-	function handleKeydown(e: KeyboardEvent) {
-		if (e.key === 'Enter' && !e.shiftKey) {
-			e.preventDefault();
-			sendMessage();
-		}
+		// A turn that failed shows its error in the Agent Log too.
+		if (failure === undefined) log.end(turn);
+		else log.fail(failure, turn);
 	}
 </script>
 
-<div class="page-narrow">
-	<!-- Welcome header -->
-	<div class="dashboard-header">
-		<div>
-			<h1>Welcome{displayName ? `, ${displayName}` : ''}</h1>
-			<p class="subtitle">
-				This dashboard demonstrates identity-bound data access — your token alone decides which
-				accounts and transactions you can see, enforced in the data layer, not the UI.
-			</p>
-		</div>
-		<div class="security-badges">
-			<Tag type="green" icon={Security}>Identity-Bound Session</Tag>
-			<Tag type="teal">RLS Active</Tag>
-		</div>
-	</div>
+<svelte:head>
+	<title>{title} — OscarVault International</title>
+</svelte:head>
 
-	<!-- Chat interface -->
-	<Tile class="chat-card">
-		<div class="chat-header">
-			<h2>Banking Agent</h2>
-			<Tag type="purple">Powered by Amazon Nova Pro</Tag>
-		</div>
+{#snippet agentIcon()}
+	<svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+		<rect x="3" y="4" width="14" height="10" rx="2"></rect>
+		<path d="M7 17h6"></path>
+	</svg>
+{/snippet}
 
-		<div class="messages-container" bind:this={messagesEl}>
-			{#if messages.length === 0}
-				<div class="empty-state">
-					<p>Ask me about your accounts or transactions, or pick a starter prompt below.</p>
-				</div>
-			{:else}
-				{#each messages as msg}
-					{#if msg.role === 'tool'}
-						<InlineNotification kind="info" lowContrast hideCloseButton title="Tool" subtitle={msg.content} />
+<ChatWorkspace
+	{title}
+	{subtitle}
+	statusLabel="Identity-bound"
+	agentLogOpen={openPanel === 'log'}
+	agentLogCount={entryCount}
+	agentLogControls="agent-log"
+	onAgentLogToggle={toggleLog}
+	securityFlowOpen={openPanel === 'flow'}
+	securityFlowControls="security-flow"
+	onSecurityFlowToggle={latestTurn ? toggleFlow : undefined}
+	bind:messagesEl
+	{suggestions}
+	bind:value={inputMessage}
+	busy={isLoading}
+	inputId="dashboard-message"
+	{inputLabel}
+	placeholder="Ask about your accounts, transactions or a refund…"
+	onsend={sendMessage}
+	hint="Enter to send · Shift+Enter for new line · The refund agent keeps this conversation for the session"
+>
+	{#snippet icon()}
+		<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+			<rect x="3" y="4" width="14" height="10" rx="2"></rect>
+			<path d="M7 17h6M10 14v3"></path>
+		</svg>
+	{/snippet}
+
+	{#snippet panel()}
+		{#if openPanel === 'log'}
+			<AgentLogPanel id="agent-log" turns={log.turns} {systems} onclose={() => (openPanel = null)} />
+		{:else if openPanel === 'flow'}
+			<SecurityFlowPanel
+				id="security-flow"
+				useCase={(latestTurn && useCaseOf[latestTurn.id]) || 2}
+				turn={latestTurn}
+				onclose={() => (openPanel = null)}
+			/>
+		{/if}
+	{/snippet}
+
+	{#if messages.length === 0}
+		<p class="empty-state">Ask me about your accounts or transactions, or pick a starter prompt below.</p>
+	{/if}
+
+	{#each turns as turn, i}
+		{@const answer = answerViewOf(turn)}
+		{#if turn.kind === 'user'}
+			<UserMessage>{turn.msg.content}</UserMessage>
+		{:else if answer}
+			<AgentTurn label={turn.agent} icon={agentIcon}>
+				{#each answer.tools as tool (tool.id)}
+					<ToolCallChip name={tool.name} status={tool.status} durationMs={tool.durationMs} />
+				{/each}
+				<AnswerCards cards={answer.cards} owner={actingFor || undefined} />
+				{#each turn.msgs as msg}
+					{#if msg.type === 'tool_planning'}
+						<!-- The tool chips above stand in for the "Processing your request..." pill; a turn
+						     with no tool call in its stream keeps the pill. -->
+						{#if answer.tools.length === 0}
+							<ToolChip label={msg.content} />
+						{/if}
+					{:else if msg.role === 'tool'}
+						<ToolChip label={msg.content} />
 					{:else if msg.role === 'error'}
 						<InlineNotification kind="error" lowContrast hideCloseButton title="Error" subtitle={msg.content} />
 					{:else}
-						<div class="msg msg-{msg.role} {msg.type === 'tool_planning' ? 'msg-tool' : ''}">
-							<span class="msg-label">{msg.role === 'user' ? 'You' : 'Agent'}</span>
-							<div>{msg.content}</div>
-						</div>
+						{@const auditTurn = auditTurnFor.get(msg)}
+						{#if auditTurn}
+							<AuditTraceCard useCase={msg.agent === 'Refund Agent' ? 3 : 2} turn={auditTurn} turns={log.turns} />
+						{/if}
+						<FormattedAnswer text={msg.content} />
 					{/if}
 				{/each}
-
-				{#if isLoading}
-					<div class="msg msg-ai">
-						<span class="msg-label">Agent</span>
-						<div>Thinking…</div>
-					</div>
+				{#if isLoading && i === turns.length - 1}
+					<AnswerCard pending>Thinking…</AnswerCard>
 				{/if}
-			{/if}
-		</div>
+			</AgentTurn>
+		{:else}
+			<AgentTurn label={turn.agent} icon={agentIcon}>
+				{#each turn.msgs as msg}
+					{#if msg.role === 'tool' || msg.type === 'tool_planning'}
+						<ToolChip label={msg.content} />
+					{:else if msg.role === 'error'}
+						<InlineNotification kind="error" lowContrast hideCloseButton title="Error" subtitle={msg.content} />
+					{:else}
+						{@const auditTurn = auditTurnFor.get(msg)}
+						{#if auditTurn}
+							<AuditTraceCard useCase={msg.agent === 'Refund Agent' ? 3 : 2} turn={auditTurn} turns={log.turns} />
+						{/if}
+						<AnswerCard>{msg.content}</AnswerCard>
+					{/if}
+				{/each}
+				{#if isLoading && i === turns.length - 1}
+					<AnswerCard pending>Thinking…</AnswerCard>
+				{/if}
+			</AgentTurn>
+		{/if}
+	{/each}
 
-		{#if pendingConsent}
-			<div class="consent">
-				<div class="consent-head">
-					<Locked size={20} />
-					<strong>CIBA Consent Required (RFC 9126)</strong>
-				</div>
-				<p>The agent is requesting approval for a privileged action:</p>
-				<p class="consent-details mono">{pendingConsent.details}</p>
-				<p class="consent-rid">Request ID: <span class="mono">{pendingConsent.request_id}</span></p>
-				<div class="consent-actions">
-					<Button kind="primary" size="small" icon={ArrowRight} disabled={!pendingConsent.consent_url} on:click={openConsent}>
-						Approve in IVIA
-					</Button>
-					<Button kind="danger-tertiary" size="small" on:click={() => { pendingConsent = null; messages = [...messages, { role: 'ai', content: 'Consent denied by user.' }]; }}>
-						Deny
-					</Button>
+	{#if isLoading && turns.at(-1)?.kind !== 'agent'}
+		<AgentTurn label={agentFor(chatEndpoint)} icon={agentIcon}>
+			<AnswerCard pending>Thinking…</AnswerCard>
+		</AgentTurn>
+	{/if}
+
+	{#if pendingConsent}
+		<AgentTurn label={pendingConsent.agent} icon={agentIcon}>
+			<div class="approval" role="group" aria-labelledby="consent-title">
+				<span class="approval-icon" aria-hidden="true"><Locked size={16} /></span>
+				<div class="approval-body">
+					<p id="consent-title" class="approval-title">CIBA Consent Required (OpenID Connect CIBA)</p>
+					<p>The agent is requesting approval for a privileged action:</p>
+					<p class="approval-details mono">{pendingConsent.details}</p>
+					<p class="approval-meta">Request ID: <span class="mono">{pendingConsent.request_id}</span></p>
+					<div class="approval-actions">
+						<Button kind="primary" size="small" icon={ArrowRight} disabled={!pendingConsent.consent_url} on:click={openConsent}>
+							Approve in IVIA
+						</Button>
+						<Button kind="danger-tertiary" size="small" on:click={denyConsent}>Deny</Button>
+					</div>
 				</div>
 			</div>
-		{/if}
-
-		<!-- Persistent starter prompts — always available, not just on the empty state -->
-		<div class="suggestions-bar">
-			<Button kind="tertiary" size="small" disabled={isLoading} on:click={() => sendSuggestion('Show me my account balances')}>
-				Show my account balances
-			</Button>
-			<Button kind="tertiary" size="small" disabled={isLoading} on:click={() => sendSuggestion('What are my recent transactions?')}>
-				Recent transactions
-			</Button>
-			<Button kind="tertiary" size="small" disabled={isLoading} on:click={() => sendSuggestion('Show transactions for my checking account')}>
-				Checking account transactions
-			</Button>
-			<Button kind="danger-tertiary" size="small" disabled={isLoading} on:click={() => sendSuggestion('I need a refund for a recent transaction', '/api/uc3-chat')}>
-				I need a refund
-			</Button>
-		</div>
-
-		<div class="chat-input-area">
-			<TextArea
-				bind:value={inputMessage}
-				on:keydown={handleKeydown}
-				labelText="Message to the banking agent"
-				hideLabel
-				placeholder="Ask about your accounts or transactions..."
-				rows={2}
-				disabled={isLoading}
-			/>
-			<Button kind="primary" on:click={sendMessage} disabled={isLoading || !inputMessage.trim()}>
-				Send
-			</Button>
-		</div>
-	</Tile>
-</div>
+		</AgentTurn>
+	{/if}
+</ChatWorkspace>
 
 <style>
-	.dashboard-header {
-		display: flex;
-		align-items: flex-start;
-		justify-content: space-between;
-		margin-bottom: 1.5rem;
-		gap: 1rem;
-		padding-top: 0.5rem;
-	}
-
-	h1 {
-		font-size: 1.6rem;
-		font-weight: 700;
-		margin: 0 0 0.25rem;
-		color: #161616;
-	}
-
-	.subtitle {
-		font-size: 0.875rem;
-		color: #525252;
-		margin: 0;
-		max-width: 600px;
-	}
-
-	.security-badges {
-		display: flex;
-		gap: 0.5rem;
-		flex-shrink: 0;
-		flex-wrap: wrap;
-	}
-
-	:global(.chat-card) {
-		display: flex;
-		flex-direction: column;
-		height: calc(100vh - 16rem);
-		min-height: 500px;
-	}
-
-	.chat-header {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		margin-bottom: 1rem;
-		padding-bottom: 0.75rem;
-		border-bottom: 1px solid #e0e0e0;
-	}
-
-	.chat-header h2 {
-		margin: 0;
-		font-size: 1.1rem;
-		font-weight: 600;
-		color: #161616;
-	}
-
-	.messages-container {
-		flex: 1;
-		overflow-y: auto;
-		padding: 0.5rem 0;
-		display: flex;
-		flex-direction: column;
-		gap: 0.75rem;
-	}
-
 	.empty-state {
+		margin: auto 0;
 		padding: 2rem;
 		text-align: center;
-		color: #525252;
+		font-size: 15px;
+		color: var(--ovi-text-helper);
 	}
 
-	.suggestions {
+	/* Approval card — the amber human-in-the-loop card from the Use Case 3 design. */
+	.approval {
 		display: flex;
-		gap: 0.5rem;
-		justify-content: center;
-		flex-wrap: wrap;
-		margin-top: 1rem;
+		align-items: flex-start;
+		gap: 14px;
+		padding: 14px 18px;
+		border-radius: var(--ovi-radius-card);
+		border: 1px solid var(--ovi-amber-border);
+		background: var(--ovi-amber-soft);
 	}
 
-	.consent {
-		background: var(--cds-notification-background-warning, #fdf6dd);
-		border-inline-start: 3px solid var(--cds-support-warning, #f1c21b);
-		padding: 1rem;
-		margin: 0.75rem 0;
-	}
-
-	.consent-head {
+	.approval-icon {
+		width: 34px;
+		height: 34px;
+		flex-shrink: 0;
+		border-radius: 50%;
 		display: flex;
 		align-items: center;
-		gap: 0.5rem;
-		margin-bottom: 0.5rem;
+		justify-content: center;
+		background: var(--ovi-card);
+		color: var(--ovi-amber);
 	}
 
-	.consent p {
-		margin: 0.25rem 0;
-		font-size: 0.85rem;
-		color: #161616;
+	.approval-body {
+		min-width: 0;
 	}
 
-	.consent-details {
-		background: #ffffff;
-		border: 1px solid #e0e0e0;
-		padding: 0.5rem;
-		font-size: 0.8rem;
+	.approval-body p {
+		margin: 3px 0 0;
+		font-size: 14px;
+		line-height: 1.5;
+		color: var(--ovi-text-strong);
 	}
 
-	.consent-actions {
+	.approval-body .approval-title {
+		margin: 0;
+		font-size: 15px;
+		font-weight: 600;
+		color: var(--ovi-text-primary);
+	}
+
+	.approval-body .approval-details {
+		margin-top: 8px;
+		padding: 8px 10px;
+		border-radius: 8px;
+		border: 1px solid var(--ovi-hairline-strong);
+		background: var(--ovi-card);
+		font-size: 13px;
+		overflow-wrap: anywhere;
+	}
+
+	.approval-body .approval-meta {
+		margin-top: 8px;
+		font-size: 12.5px;
+		color: var(--ovi-amber);
+	}
+
+	.approval-actions {
 		display: flex;
-		gap: 0.5rem;
-		margin-top: 0.75rem;
-	}
-
-	.suggestions-bar {
-		display: flex;
-		gap: 0.5rem;
 		flex-wrap: wrap;
-		padding-top: 0.75rem;
-		margin-top: 0.5rem;
-		border-top: 1px solid #e0e0e0;
+		gap: 8px;
+		margin-top: 12px;
 	}
 
-	.chat-input-area {
-		display: flex;
-		gap: 0.75rem;
-		align-items: flex-end;
-		padding-top: 0.75rem;
-	}
-
-	.chat-input-area :global(.cds--form-item) {
-		flex: 1;
+	.approval-actions :global(.bx--btn) {
+		border-radius: var(--ovi-radius-pill);
 	}
 </style>

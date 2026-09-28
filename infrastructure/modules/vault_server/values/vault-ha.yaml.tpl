@@ -1,6 +1,6 @@
 # Vault Helm HA values template
 # Rendered by Terraform templatefile() — variables: kms_key_id, region
-# Chart: hashicorp/vault 0.32.0 (server image: hashicorp/vault-enterprise 2.0.3-ent, Phase 9)
+# Chart: hashicorp/vault 0.32.0 (server image: hashicorp/vault-enterprise 2.1.1-ent)
 # Image repository + tag are pinned literals (not templatefile vars) — the
 # workshop deploys a single fixed Enterprise build, not an attendee choice.
 
@@ -15,9 +15,16 @@ injector:
   enabled: true
 
 server:
+  # 2.1.x is the first line that refuses an on-behalf-of token with no
+  # authorization_details when the registration and profile make RAR mandatory
+  # (2.0.3 and 2.0.4 vend the credential anyway) — issue #74.
+  # The chart's StatefulSet uses the OnDelete update strategy: changing this tag
+  # re-templates the StatefulSet but leaves running pods on the old image. Every
+  # workshop deploy is fresh, so pods start on this tag; see the vault_server
+  # README before changing it under a running cluster.
   image:
     repository: "hashicorp/vault-enterprise"
-    tag: "2.0.3-ent"
+    tag: "2.1.1-ent"
 
   # Enterprise binary hard-fails init without an autoloaded license. The
   # license secret (Opaque, key "license") is provisioned by

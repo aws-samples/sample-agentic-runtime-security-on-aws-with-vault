@@ -11,7 +11,7 @@ Two systems own the identity story here, and they meet at exactly one place.
 
 **IBM Verify Identity Access owns the user-identity plane** — OAuth, OIDC, CIBA, and the JWT signing key. It authenticates users against your organization's directory over LDAP; in this workshop that directory is an in-cluster OpenLDAP.
 
-**HashiCorp Vault Enterprise 2.0.3 owns the workload-identity plane and the credential-vending plane.** Four pieces do that work:
+**HashiCorp Vault Enterprise 2.1.1 owns the workload-identity plane and the credential-vending plane.** Four pieces do that work:
 
 - the **Kubernetes auth method**, bound to the EKS OIDC provider
 - the **Agent Registry** — each agent a first-class identity (`uc1-agent`, `agent-uc2`, `uc3-actor`) carrying a `ceiling_policies` envelope
@@ -38,7 +38,7 @@ Verify never sees the database. Vault never authenticates an end user. Each syst
 :::expand{header="What you'll have at the end"}
 
 - A **5-node EKS cluster** (min 3 / desired 5 / max 7, Kubernetes 1.34) with three deployed Strands agents, each with its own ServiceAccount and NetworkPolicy.
-- A **3-node Vault Enterprise 2.0.3 Raft HA cluster** with KMS auto-unseal, the Kubernetes auth method, the OAuth resource server (`ivia` profile), the Agent Registry (`uc1-agent`, `agent-uc2`, `uc3-actor` with ceiling policies), and dynamic Postgres + AWS secrets engines.
+- A **3-node Vault Enterprise 2.1.1 Raft HA cluster** with KMS auto-unseal, the Kubernetes auth method, the OAuth resource server (`ivia` profile), the Agent Registry (`uc1-agent`, `agent-uc2`, `uc3-actor` with ceiling policies), and dynamic Postgres + AWS secrets engines.
 - **IBM Verify Identity Access (IVIA)** — self-hosted OIDC provider with OAuth clients, PKCE enforcement, and CIBA support.
 - **In-cluster OpenLDAP** — IVIA's user registry, seeded with the workshop user (Oscar) by the autoconf job, authenticated by IVIA via LDAP.
 - **Amazon RDS PostgreSQL 17** with pgaudit, Row-Level Security policies, and Vault-managed dynamic credentials.

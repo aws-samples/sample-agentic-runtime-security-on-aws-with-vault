@@ -66,7 +66,7 @@ pod "pg-client-oscar" deleted
 Open a **new Incognito / Private browser window**, go to the Banking UI URL, and sign in as `jaime` (password `WorkshopUser1!`). In the chat, ask "What are my account balances?" (or "show my accounts"). You should see Jaime's accounts only — no rows from Oscar's data.
 
 :::alert{type="info" header="Why a second window here?"}
-**Logout** fully signs you out: the Banking UI clears its session cookies and redirects to IVIA's `/pkmslogout`, which ends the WebSEAL single sign-on session too — so logging out and back in as Jaime in the *same* window gives you a clean credential prompt. We open a **separate Incognito / Private window** here only so your Oscar session stays live in the first window for a side-by-side comparison.
+**Log out** (click your name at the bottom of the navigation, then **Log out**) fully signs you out: the Banking UI clears its session cookies and redirects to IVIA's `/pkmslogout`, which ends the WebSEAL single sign-on session too — so logging out and back in as Jaime in the *same* window gives you a clean credential prompt. We open a **separate Incognito / Private window** here only so your Oscar session stays live in the first window for a side-by-side comparison.
 :::
 
 Run the same manual query with `app.current_user_sub = 'jaime'` (you can reuse the same Vault-vended credential — RLS isolation is driven entirely by the session variable, not by the Postgres user):
@@ -184,7 +184,7 @@ Expected summary output — a clean deploy self-mints the OBO token, so every ch
   ✓ PASS UC2 real token carries act.sub=agent-uc2 (OBO actor binding — AGENT_IDENTITY_CLAIM_UC2=act.sub)
   ✓ PASS UC2 refresh grant FAILS CLOSED at the source — agent-uc2 refresh_token grant rejected (HTTP 400; refresh_token issued at login=no)
   ✓ PASS UC2 alias accessor 'oauth-resource-server_root_<config_id>' matches oauth profile config_id — alias binding intact
-  ✓ PASS UC2 OBO allow: real token (sub + act.sub=agent-uc2) authorized database/creds/uc2-personal-readonly (username=v-JWT Toke-uc2-pers-<random>-<timestamp>)
+  ✓ PASS UC2 OBO allow: real token (sub + act.sub=agent-uc2) authorized database/creds/uc2-personal-readonly (username=v-JWT-Toke-uc2-pers-<random>-<timestamp>)
   ✓ PASS JIT DB creds issuance: username=v-root-uc2-pers-<random>-<timestamp>
   ✓ PASS DB read: SELECT from banking.accounts returned 2 row(s) for user 'oscar' (>= 2 expected)
   ✓ PASS ENFC-02: INSERT rejected by PostgreSQL (permission denied for table)
@@ -286,7 +286,16 @@ MCP Server  POST /mcp
   pgClient.end()
   await revokeLease(creds.leaseId)         ← credential handed back now, not left to TTL
     ↓
-  return accounts                          ← MCP tool response
+  return { accounts,                       ← MCP tool response: the rows,
+           credential_metadata,            ← the lease and whether the revoke succeeded,
+           issued_db_credentials,          ← the (now revoked) credential itself,
+           mcp_vault_token,                ← the MCP server's own revoke token,
+           mcp_service_account_token }     ← and the ServiceAccount token it signed in with
+    ↓
+Banking Agent
+  takes out issued_db_credentials, mcp_vault_token and mcp_service_account_token
+                                           ← sent only on this user's activity stream
+  returns accounts to the model            ← the model never receives a credential
     ↓
 Banking Agent formats response
   → "You have 2 accounts: OVI-CHK-100001 ($4,250) and OVI-SAV-100002 ($18,750)"
@@ -298,6 +307,7 @@ Key design choices:
 - **Connection closed after query**: The Postgres connection is opened, used, and closed within the tool handler. No connection pool is used. This ensures the JIT credential's Postgres session variable (`app.current_user_sub`) is set fresh on every connection — no risk of session state leaking between users.
 - **Identity comes from the header, never from the tool arguments**: `get_accounts` declares no parameters and `get_transactions` declares only an optional `account_id`. The token the MCP server acts on is read from `Authorization: Bearer` on the request and closed over by the tool handlers (`createMcpServer(authenticatedJwt)`), so there is no field in the tool contract for a caller to put an identity in. If there were, the identity Vault saw would be whatever the caller typed into the payload and the header would constrain nothing.
 - **The credential is handed back, not left to expire**: after the connection closes, the handler's `finally` block calls `revokeLease()` against `sys/leases/revoke` using the MCP server's own Kubernetes-auth Vault token. The credential exists for the duration of one query. See the [Credential Revocation](../65-credential-revocation/) page.
+- **The model never receives a credential**: the MCP server replies after the revoke, with the rows, the lease and its revoke outcome, the credential itself, its own revoke token and the ServiceAccount token it signed in to Vault with. The agent takes the credential and both tokens out before the model sees the tool result and sends them only on the signed-in user's own activity stream. If the revoke failed, the credential is labelled `revoke FAILED — this credential is still live until <time>`, the time its lease ends.
 - **The `sub` used for RLS is decoded from the JWT, and that is safe here**: `extractSubFromJwt()` base64-decodes the payload to get `sub` for `set_config('app.current_user_sub', ...)` — it does **not** verify the signature, and the code says so. The verification that matters already happened one step earlier: Vault validated the same token against IVIA's JWKS before issuing any credential. A forged token never gets a Postgres credential at all, so a `sub` decoded from one never reaches a live connection. The decode is a convenience on a token Vault has already accepted, not an identity decision.
 :::
 

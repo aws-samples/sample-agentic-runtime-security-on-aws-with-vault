@@ -1,38 +1,66 @@
-import type { RequestHandler } from '@sveltejs/kit';
+import { json, type RequestHandler } from '@sveltejs/kit';
+import { sessionEndedBody } from '$lib/session-ended';
 import { env } from '$env/dynamic/private';
+import { scrubErrorText } from '$lib/server/activity-filter';
+import { AgentCall, agentFailed, streamAgentEvents } from '$lib/server/agent-proxy';
 
 const UC3_AGENT_URL = env.UC3_AGENT_URL ?? 'http://uc3-agent-svc:8080';
 
-export const POST: RequestHandler = async ({ request, cookies }) => {
+export const POST: RequestHandler = async ({ request, cookies, platform }) => {
 	const idToken = cookies.get('id_token');
 	if (!idToken) {
-		return new Response(JSON.stringify({ error: 'Not authenticated' }), { status: 401 });
+		// No sign-in cookie left (both expire with their tokens): the same marked 401 the
+		// hook sends, so the open page goes to sign-in instead of showing an error.
+		return json(sessionEndedBody('unverifiable'), { status: 401, headers: { 'Cache-Control': 'no-store' } });
 	}
 
-	const body = await request.json();
+	let body: unknown;
+	try {
+		body = await request.json();
+	} catch {
+		return json({ error: 'Invalid JSON body' }, { status: 400 });
+	}
 
-	const agentRes = await fetch(`${UC3_AGENT_URL}/chat`, {
-		method: 'POST',
-		headers: {
-			'Content-Type': 'application/json',
-			Authorization: `Bearer ${idToken}`,
-		},
-		body: JSON.stringify(body),
-	});
+	// Closes the agent call when the browser leaves or the agent goes quiet.
+	// See $lib/server/agent-proxy.
+	const call = new AgentCall(request, platform);
+	let agentRes: Response;
+	try {
+		agentRes = await fetch(`${UC3_AGENT_URL}/chat`, {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				Authorization: `Bearer ${idToken}`,
+			},
+			body: JSON.stringify(body),
+			signal: call.signal,
+		});
+	} catch (err) {
+		call.end();
+		return agentFailed(
+			call,
+			'Use Case 3',
+			`Cannot reach the Use Case 3 agent: ${err instanceof Error ? err.message : String(err)}`
+		);
+	}
+	call.touch();
 
 	if (!agentRes.ok) {
-		const text = await agentRes.text();
-		return new Response(JSON.stringify({ error: `UC3 agent error [${agentRes.status}]: ${text}` }), {
-			status: agentRes.status,
-		});
+		// The agent can close the connection, or go quiet, part-way through its error body.
+		const errorBody = await call.readText(agentRes).catch(() => null);
+		if (errorBody === null && call.stopped === 'agent_idle') {
+			return agentFailed(call, 'Use Case 3', '');
+		}
+		const text = scrubErrorText(errorBody ?? '(the agent closed the connection before its error body arrived)');
+		return json({ error: `UC3 agent error [${agentRes.status}]: ${text}` }, { status: agentRes.status });
 	}
 
-	return new Response(agentRes.body, {
-		headers: {
-			'Content-Type': 'text/event-stream',
-			'Cache-Control': 'no-cache',
-			Connection: 'keep-alive',
-			'X-Accel-Buffering': 'no',
-		},
-	});
+	if (!agentRes.body) {
+		call.end();
+		return json({ error: 'UC3 agent returned no response body' }, { status: 502 });
+	}
+
+	// Every event the agent streams passes through the activity filter: the
+	// browser never receives the agent's bytes directly. See $lib/server/activity-filter.
+	return streamAgentEvents(call, agentRes.body, 'api/uc3-chat', 'Use Case 3');
 };

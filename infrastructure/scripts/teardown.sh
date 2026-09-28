@@ -276,9 +276,8 @@ _destroy_root() {
 # still be reachable. Best-effort + fully guarded: a missing namespace / token /
 # resource skips cleanly, never errors, and teardown continues regardless.
 #
-# Activation-flag note: sys/activation-flags/oauth-resource-server is ONE-WAY —
-# Vault exposes no deactivate operation, so there is nothing to undo on teardown
-# (a no-op; the flag vanishes with the Vault server on the tier-2 destroy).
+# Activation-flag note: Vault 2.1.x has no oauth-resource-server activation flag
+# (the vault_config module retired it), so there is nothing to undo on teardown.
 #===============================================================================
 cleanup_vault_native_resources() {
     step_header "Phase-9 native Vault resources (Agent Registry + OAuth profile + license)"
@@ -316,7 +315,7 @@ cleanup_vault_native_resources() {
 
     # The Vault-API cleanup needs a live Vault server + root token. If either is
     # missing, skip cleanly — the tier-2 destroy removes the Vault server + all its
-    # data (entities, registrations, aliases, activation state) regardless.
+    # data (entities, registrations, aliases) regardless.
     if ! kubectl get pods -n vault -l app.kubernetes.io/name=vault,component=server \
          --no-headers 2>/dev/null | grep -q '1/1'; then
         print_info "Vault server not reachable — skipping Vault-API cleanup (tier-2 destroy removes it)"
@@ -384,7 +383,6 @@ cleanup_vault_native_resources() {
     print_success "Removed oauth-resource-server profile 'ivia' (best-effort; or already absent)"
 
     kill "$vault_pf_pid" 2>/dev/null || true
-    print_info "Activation flag oauth-resource-server is one-way (no deactivate) — no-op on teardown"
 }
 
 #===============================================================================

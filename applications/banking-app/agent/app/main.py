@@ -11,7 +11,9 @@ Security flow per request:
   4. Invoke the agent in a worker thread — it calls get_accounts/get_transactions.
   5. Each tool forwards the JWT to the MCP server.
   6. MCP server authenticates to Vault with the JWT and fetches per-user DB creds.
-  7. Stream agent response back as Server-Sent Events; reset the ContextVar.
+  7. Stream each step as it happens (tool calls, the credential the MCP server
+     reports, audit correlation fields — see activity.py), then the agent
+     response, as Server-Sent Events; reset the ContextVars.
 
 The agent pod's workload identity (Vault K8s auth) and the shared Bedrock model
 are established once at startup. The user's identity (JWT) and the agent itself
@@ -24,6 +26,7 @@ import json
 import logging
 import os
 import re
+import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
@@ -31,7 +34,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from .agent import build_uc2_agent, build_uc2_model, _REQUEST_JWT
+from . import activity
+from .agent import build_uc2_agent, build_uc2_model, checked_reply, _REQUEST_JWT
 from .vault_client import build_agent_vault_client
 
 logging.basicConfig(
@@ -49,8 +53,13 @@ async def lifespan(app: FastAPI):
     """FastAPI lifespan — authenticate agent workload identity at startup."""
     global _model, _vault_client
 
-    # Establish agent workload identity via Vault Kubernetes auth (OBJ-1)
-    _vault_client = build_agent_vault_client()
+    # Establish agent workload identity via Vault Kubernetes auth (OBJ-1).
+    # Each time Vault-issued Bedrock keys sign a model call, the running turn is
+    # shown them and the login they came from (activity.report_model_credentials).
+    _vault_client = build_agent_vault_client(on_keys_used=activity.report_model_credentials)
+    # The policy line shows the agent's ceiling as Vault holds it: the turn reads
+    # the agent's own Agent Registry registration with this client's login.
+    activity.set_agent_registry_reader(_vault_client.read_agent_registration)
     try:
         _vault_client.login()
         logger.info("agent_vault_auth_success", extra={"auth_method": "kubernetes"})
@@ -84,6 +93,29 @@ app.add_middleware(
 )
 
 
+def _sse(event: dict) -> str:
+    """One Server-Sent Events frame."""
+    return f"data: {json.dumps(event)}\n\n"
+
+
+def _run_agent(agent, message: str, turn: activity.TurnActivity, state: dict):
+    """Run the agent on a worker thread, and always tell the stream when it is done.
+
+    `state` is this turn's own invocation_state: the tools record in it what
+    they returned, and checked_reply reads it once the agent has finished.
+    """
+    try:
+        return agent(message, invocation_state=state)
+    finally:
+        turn.close()
+
+
+def _discard_outcome(future: asyncio.Future) -> None:
+    """Collect a worker's outcome after its client disconnected, so it is never unretrieved."""
+    if not future.cancelled() and future.exception() is not None:
+        logger.warning("agent_worker_failed_after_disconnect: %s", type(future.exception()).__name__)
+
+
 class ChatRequest(BaseModel):
     message: str
     sessionId: str = "default"
@@ -98,7 +130,9 @@ async def chat(request: Request, body: ChatRequest):
     ContextVar before invoking the agent in a worker thread. A per-request agent
     (empty conversation history) plus a request-scoped JWT mean one caller's
     banking data can never reach another caller. The JWT is forwarded to MCP
-    tool calls — the agent never persists or discloses it.
+    tool calls and never persisted or logged; it is disclosed only on this
+    caller's own event stream: as an agent:credential event (activity.py), and in
+    any step or error text that quotes it.
     """
     global _model
     if _model is None:
@@ -130,27 +164,60 @@ async def chat(request: Request, body: ChatRequest):
         # global) keeps concurrent callers isolated; asyncio.to_thread copies the
         # context into the worker thread so the Strands tool callbacks read THIS
         # caller's JWT. Reset in finally so it never bleeds into the next request.
+        # This turn's activity queue is bound the same way, so the Strands hooks
+        # and the tools report into THIS turn's stream and no other.
+        turn = activity.TurnActivity(
+            loop=asyncio.get_running_loop(),
+            request_id=str(uuid.uuid4()),
+            claims=activity.decode_claims(jwt),
+        )
         ctx_token = _REQUEST_JWT.set(jwt)
+        turn_token = activity.bind(turn)
+        worker = None
         try:
             # Yield a planning message
             yield f"data: {json.dumps({'role': 'ai', 'content': 'Processing your request...', 'type': 'tool_planning'})}\n\n"
+            yield _sse(turn.build({"type": "agent:thinking", "text": "Reasoning about your request"}))
 
             # Invoke the Strands agent off the event loop; to_thread copies the
-            # current context, so _REQUEST_JWT is visible to the tools it calls.
-            response = await asyncio.to_thread(agent, message)
+            # current context, so _REQUEST_JWT and the turn are visible to the
+            # hooks and tools it runs. Each step streams as soon as it is reported.
+            state: dict = {}
+            worker = asyncio.ensure_future(asyncio.to_thread(_run_agent, agent, message, turn, state))
+            async for event in turn.events():
+                yield _sse(event)
+            response = await worker
 
             # Stream the response. Strip any <thinking>...</thinking> chain-of-thought
             # the model emits so it never leaks into the chat UI (mirrors uc3-agent).
             content = re.sub(r'<thinking>.*?</thinking>\s*', '', str(response), flags=re.DOTALL)
+            # A reply that lists this turn's transaction rows again becomes the line
+            # built from those rows (agent.checked_reply); both answer frames below
+            # carry the checked text.
+            content = checked_reply(content, state)
+            yield _sse(turn.audit_seed())
+            yield _sse(turn.build({"type": "agent:narration", "glyph": "▶", "text": "Writing the answer."}))
+            yield _sse(turn.build({"type": "agent:text_delta", "text": content}))
             yield f"data: {json.dumps({'role': 'ai', 'content': content, 'type': 'delta'})}\n\n"
+            yield _sse(turn.build({"type": "agent:done"}))
             yield f"data: {json.dumps({'type': 'end'})}\n\n"
 
         except Exception as exc:
             logger.error("agent_error: %s | user_message: %s", str(exc), message)
-            yield f"data: {json.dumps({'type': 'error', 'content': str(exc)})}\n\n"
+            # The stream carries the error text exactly as it was raised.
+            error_text = str(exc)
+            yield f"data: {json.dumps({'type': 'error', 'content': error_text})}\n\n"
+            yield _sse(turn.audit_seed())
+            yield _sse(turn.build({"type": "agent:error", "message": error_text}))
+            yield _sse(turn.build({"type": "agent:done"}))
             yield f"data: {json.dumps({'type': 'end'})}\n\n"
         finally:
-            # Unbind the JWT so the next request on this worker starts clean.
+            # A client that disconnects mid-turn leaves the worker running to its
+            # end (a thread cannot be cancelled); collect its outcome when it lands.
+            if worker is not None and not worker.done():
+                worker.add_done_callback(_discard_outcome)
+            # Unbind the JWT and the turn so the next request on this worker starts clean.
+            activity.unbind(turn_token)
             _REQUEST_JWT.reset(ctx_token)
 
     return StreamingResponse(

@@ -6,37 +6,70 @@
   credentials to read the Bedrock Knowledge Base and Postgres. There is no
   end-user token here — that is the entire point of Use Case 1.
 
-  The browser POSTs { query } to /api/ask, which proxies to uc1-agent-svc and
-  returns { answer, sources, credential_metadata }.
+  The browser POSTs { message } to /api/ask (via $lib/agent-client), which relays
+  the uc1-agent's event stream. Each turn's events are kept per turn
+  ($lib/turn-events.svelte): the tool chips, the result cards ($lib/answer-cards)
+  and the Agent Log are drawn from them as they arrive. The answer is the legacy `delta` frame,
+  so an agent event never becomes a chat bubble.
 
-  This page renders without the global OscarVault header (that only appears for
-  authenticated sessions), so it carries its own lightweight banner.
+  The left navigation comes from the root layout; signed-out visitors see
+  "Not signed in" and a Sign in link there.
 -->
 <script lang="ts">
-	import { Tile, Tag, Button, TextArea, InlineNotification } from 'carbon-components-svelte';
-	import Security from 'carbon-icons-svelte/lib/Security.svelte';
-	import Bot from 'carbon-icons-svelte/lib/Bot.svelte';
+	import { InlineNotification } from 'carbon-components-svelte';
+	import { sendChatMessage } from '$lib/agent-client';
+	import { countEntries } from '$lib/agent-log';
+	import { createTurnLog, type Turn } from '$lib/turn-events.svelte';
+	import { toolCallsOf } from '$lib/accounts-turn';
+	import { answerCardsOf } from '$lib/answer-cards';
+	import ChatWorkspace, { type Suggestion } from '$lib/components/chat/ChatWorkspace.svelte';
+	import UserMessage from '$lib/components/chat/UserMessage.svelte';
+	import AgentTurn from '$lib/components/chat/AgentTurn.svelte';
+	import AnswerCard from '$lib/components/chat/AnswerCard.svelte';
+	import ToolCallChip from '$lib/components/chat/ToolCallChip.svelte';
+	import AnswerCards from '$lib/components/chat/AnswerCards.svelte';
+	import FormattedAnswer from '$lib/components/chat/FormattedAnswer.svelte';
+	import AgentLogPanel from '$lib/components/activity/AgentLogPanel.svelte';
+	import SecurityFlowPanel from '$lib/components/activity/SecurityFlowPanel.svelte';
+	import AuditTraceCard from '$lib/components/activity/AuditTraceCard.svelte';
 
-	type Msg = { role: 'user' | 'ai' | 'error'; content: string };
-
-	let messages: Msg[] = $state([]);
+	const log = createTurnLog();
+	/** Which right-hand panel is open. Shared convention with the other chat pages. */
+	let openPanel = $state<'log' | 'flow' | null>(null);
+	/** The answer text and any error of each turn, by Turn id. */
+	let replies = $state<Record<string, { answer: string; error?: string }>>({});
 	let inputMessage = $state('');
 	let isLoading = $state(false);
 
-	// Auto-scroll the message list to the newest message. The effect re-runs
-	// whenever a message is appended or the "Thinking…" indicator toggles.
+	const entryCount = $derived(countEntries(log.turns));
+
+	// Each answer as the approved #65 board draws it: a chip per tool call, a card of what each
+	// tool returned with the credential that read it ($lib/answer-cards), then the Audit Trace
+	// card and the formatted answer.
+	const views = $derived(
+		log.turns.map((turn) => ({
+			turn,
+			tools: toolCallsOf(turn.events, turn.done),
+			cards: answerCardsOf(turn.events),
+			reply: replies[turn.id]
+		}))
+	);
+
+	// Auto-scroll the message list to the newest content: a new chip, card or answer.
 	let messagesEl: HTMLDivElement | undefined = $state();
 	$effect(() => {
-		messages.length;
-		isLoading;
+		void views;
+		void isLoading;
 		messagesEl?.scrollTo({ top: messagesEl.scrollHeight, behavior: 'smooth' });
 	});
 
-	const suggestions = [
+	const prompts = [
 		'Using the knowledge base, summarize the employee PTO policy.',
 		'What is the remote work policy?',
 		'How many vacation days do new employees get?'
 	];
+
+	const suggestions: Suggestion[] = prompts.map((s) => ({ label: s, onselect: () => sendSuggestion(s) }));
 
 	function sendSuggestion(s: string) {
 		if (isLoading) return;
@@ -44,229 +77,130 @@
 		sendMessage();
 	}
 
+	function toggleLog() {
+		openPanel = openPanel === 'log' ? null : 'log';
+	}
+
+	function toggleFlow() {
+		openPanel = openPanel === 'flow' ? null : 'flow';
+	}
+
 	async function sendMessage() {
 		const query = inputMessage.trim();
 		if (!query || isLoading) return;
 
 		inputMessage = '';
-		messages = [...messages, { role: 'user', content: query }];
 		isLoading = true;
+		const turn: Turn = log.begin(query);
+		replies[turn.id] = { answer: '' };
+		const reply = replies[turn.id];
 
-		try {
-			const res = await fetch('/api/ask', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ query })
-			});
-			const data = await res.json();
-			if (!res.ok) {
-				messages = [...messages, { role: 'error', content: data?.error ?? `Request failed (${res.status})` }];
-			} else {
-				messages = [...messages, { role: 'ai', content: (data?.answer ?? '').trim() || '(empty answer)' }];
-			}
-		} catch (err) {
-			messages = [...messages, { role: 'error', content: `Error: ${err instanceof Error ? err.message : String(err)}` }];
-		} finally {
-			isLoading = false;
-		}
-	}
-
-	function handleKeydown(e: KeyboardEvent) {
-		if (e.key === 'Enter' && !e.shiftKey) {
-			e.preventDefault();
-			sendMessage();
-		}
+		await sendChatMessage(
+			query,
+			'',
+			turn.id,
+			(chunk) => {
+				if (chunk.type === 'delta' && chunk.content) reply.answer += chunk.content;
+				else if (chunk.type === 'error') reply.error = chunk.content || 'The agent reported an error.';
+			},
+			(err) => {
+				reply.error ??= err;
+			},
+			'/api/ask',
+			(event) => log.push(event, turn)
+		);
+		// A turn that failed shows its error in the Agent Log too.
+		if (reply.error === undefined) log.end(turn);
+		else log.fail(reply.error, turn);
+		isLoading = false;
 	}
 </script>
 
-<div class="page-narrow">
-	<!-- Self-contained banner (global header is hidden for unauthenticated visitors) -->
-	<div class="ask-banner">
-		<img src="/oscarvault-logo.svg" alt="OscarVault International (OVI)" class="ask-logo" />
-		<a class="ask-signin bx--btn bx--btn--sm bx--btn--tertiary" href="/">Sign in</a>
-	</div>
+<svelte:head>
+	<title>Knowledge Agent — OscarVault International</title>
+</svelte:head>
 
-	<div class="ask-header">
-		<div>
-			<h1>Ask the Assistant</h1>
-			<p class="subtitle">
-				A public, read-only assistant that answers questions from OscarVault's internal knowledge
-				base. No account or sign-in is required — the agent uses its own workload identity to fetch
-				short-lived credentials, never your data.
-			</p>
-		</div>
-		<div class="security-badges">
-			<Tag type="green" icon={Security}>Workload Identity Only</Tag>
-			<Tag type="teal">Read-Only</Tag>
-		</div>
-	</div>
+{#snippet agentIcon()}
+	<svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+		<path d="M4 3h9l3 3v11H4z"></path>
+	</svg>
+{/snippet}
 
-	<Tile class="chat-card">
-		<div class="chat-header">
-			<h2>Use Case 1 — Non-Personalized Agent</h2>
-			<Tag type="purple" icon={Bot}>Powered by Amazon Nova Pro</Tag>
-		</div>
+<ChatWorkspace
+	title="Knowledge Agent"
+	subtitle="Public · no sign-in · the agent proves its own identity to Vault"
+	statusLabel="Workload identity"
+	agentLogOpen={openPanel === 'log'}
+	agentLogCount={entryCount}
+	agentLogControls="agent-log"
+	onAgentLogToggle={toggleLog}
+	securityFlowOpen={openPanel === 'flow'}
+	securityFlowControls="security-flow"
+	onSecurityFlowToggle={log.turns.length > 0 ? toggleFlow : undefined}
+	bind:messagesEl
+	{suggestions}
+	bind:value={inputMessage}
+	busy={isLoading}
+	inputId="ask-message"
+	inputLabel="Ask the knowledge agent"
+	placeholder="Ask about company policy…"
+	onsend={sendMessage}
+	hint="Enter to send · Shift+Enter for new line · No sign-in: this agent reads the policy knowledge base and can run read-only database queries"
+>
+	{#snippet icon()}
+		<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+			<path d="M4 3h9l3 3v11H4z"></path>
+			<path d="M7 9h6M7 12h6"></path>
+		</svg>
+	{/snippet}
 
-		<div class="messages-container" bind:this={messagesEl}>
-			{#if messages.length === 0}
-				<div class="empty-state">
-					<p>Ask a question about company policies, or pick a starter prompt below.</p>
-				</div>
-			{:else}
-				{#each messages as msg}
-					{#if msg.role === 'error'}
-						<InlineNotification kind="error" lowContrast hideCloseButton title="Error" subtitle={msg.content} />
-					{:else}
-						<div class="msg msg-{msg.role}">
-							<span class="msg-label">{msg.role === 'user' ? 'You' : 'Assistant'}</span>
-							<div>{msg.content}</div>
-						</div>
-					{/if}
-				{/each}
-
-				{#if isLoading}
-					<div class="msg msg-ai">
-						<span class="msg-label">Assistant</span>
-						<div>Thinking…</div>
-					</div>
-				{/if}
-			{/if}
-		</div>
-
-		<!-- Persistent starter prompts — always available, not just on the empty state -->
-		<div class="suggestions-bar">
-			{#each suggestions as s}
-				<Button kind="tertiary" size="small" disabled={isLoading} on:click={() => sendSuggestion(s)}>
-					{s}
-				</Button>
-			{/each}
-		</div>
-
-		<div class="chat-input-area">
-			<TextArea
-				bind:value={inputMessage}
-				on:keydown={handleKeydown}
-				labelText="Message to the assistant"
-				hideLabel
-				placeholder="Ask a question about company policies…"
-				rows={2}
-				disabled={isLoading}
+	{#snippet panel()}
+		{#if openPanel === 'log'}
+			<AgentLogPanel
+				id="agent-log"
+				turns={log.turns}
+				systems="Kubernetes auth · Vault · Bedrock"
+				onclose={() => (openPanel = null)}
 			/>
-			<Button kind="primary" on:click={sendMessage} disabled={isLoading || !inputMessage.trim()}>
-				Send
-			</Button>
-		</div>
-	</Tile>
-</div>
+		{:else if openPanel === 'flow'}
+			<SecurityFlowPanel id="security-flow" useCase={1} turn={log.turns.at(-1)} onclose={() => (openPanel = null)} />
+		{/if}
+	{/snippet}
+
+	{#if views.length === 0}
+		<p class="empty-state">Ask a question about company policies, or pick a starter prompt below.</p>
+	{/if}
+
+	{#each views as { turn, tools, cards, reply } (turn.id)}
+		<UserMessage>{turn.question}</UserMessage>
+		<AgentTurn label="Knowledge Agent" icon={agentIcon}>
+			{#each tools as tool (tool.id)}
+				<ToolCallChip name={tool.name} status={tool.status} durationMs={tool.durationMs} />
+			{/each}
+			<AnswerCards {cards} />
+			{#if reply?.error}
+				<InlineNotification kind="error" lowContrast hideCloseButton title="Error" subtitle={reply.error} />
+			{/if}
+			{#if turn.done && reply?.answer}
+				<AuditTraceCard useCase={1} {turn} />
+			{/if}
+			{#if reply?.answer}
+				<FormattedAnswer text={reply.answer} />
+			{:else if !turn.done}
+				<AnswerCard pending>Thinking…</AnswerCard>
+			{:else if !reply?.error}
+				<AnswerCard>(empty answer)</AnswerCard>
+			{/if}
+		</AgentTurn>
+	{/each}
+</ChatWorkspace>
 
 <style>
-	.ask-banner {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		padding: 0.75rem 0;
-		margin-bottom: 1rem;
-		border-bottom: 1px solid #e0e0e0;
-	}
-
-	.ask-logo {
-		height: 2.5rem;
-		width: auto;
-		display: block;
-	}
-
-	.ask-signin {
-		text-decoration: none;
-	}
-
-	.ask-header {
-		display: flex;
-		align-items: flex-start;
-		justify-content: space-between;
-		margin-bottom: 1.5rem;
-		gap: 1rem;
-	}
-
-	h1 {
-		font-size: 1.6rem;
-		font-weight: 700;
-		margin: 0 0 0.25rem;
-		color: #161616;
-	}
-
-	.subtitle {
-		font-size: 0.875rem;
-		color: #525252;
-		margin: 0;
-		max-width: 620px;
-	}
-
-	.security-badges {
-		display: flex;
-		gap: 0.5rem;
-		flex-shrink: 0;
-		flex-wrap: wrap;
-	}
-
-	:global(.chat-card) {
-		display: flex;
-		flex-direction: column;
-		height: calc(100vh - 18rem);
-		min-height: 460px;
-	}
-
-	.chat-header {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		margin-bottom: 1rem;
-		padding-bottom: 0.75rem;
-		border-bottom: 1px solid #e0e0e0;
-	}
-
-	.chat-header h2 {
-		margin: 0;
-		font-size: 1.1rem;
-		font-weight: 600;
-		color: #161616;
-	}
-
-	.messages-container {
-		flex: 1;
-		overflow-y: auto;
-		padding: 0.5rem 0;
-		display: flex;
-		flex-direction: column;
-		gap: 0.75rem;
-	}
-
 	.empty-state {
+		margin: auto 0;
 		padding: 2rem;
 		text-align: center;
-		color: #525252;
-	}
-
-	/* Message-bubble styling (.msg / .msg-user / .msg-ai / .msg-label) is
-	   inherited from the global app.css so this page matches the signed-in
-	   dashboard chat exactly. Do not redefine those here. */
-
-	.suggestions-bar {
-		display: flex;
-		gap: 0.5rem;
-		flex-wrap: wrap;
-		padding-top: 0.75rem;
-		margin-top: 0.5rem;
-		border-top: 1px solid #e0e0e0;
-	}
-
-	.chat-input-area {
-		display: flex;
-		gap: 0.75rem;
-		align-items: flex-end;
-		padding-top: 0.75rem;
-	}
-
-	.chat-input-area :global(.cds--form-item) {
-		flex: 1;
+		font-size: 15px;
+		color: var(--ovi-text-helper);
 	}
 </style>

@@ -5,7 +5,33 @@
  * the request (with the user's JWT from httpOnly cookies) to the
  * cluster-internal banking-agent pod. The browser never calls the
  * agent directly — it can't reach cluster-internal services.
+ *
+ * Two kinds of frame arrive (see $lib/agent-events):
+ *   - the legacy frames (tool_planning, delta, end, error) always go to
+ *     `onMessage`, exactly as before;
+ *   - every other event (agent:narration, tool_call, agent:credential, ...) goes
+ *     to `onEvent` when the caller passes one, and to `onMessage` otherwise, so a
+ *     caller that passes no `onEvent` sees what it always saw.
  */
+
+import type { AgentEvent, LegacyAgentEvent } from '$lib/agent-events';
+import { goToSignIn, isSessionEnded } from '$lib/session-ended';
+
+const LEGACY_TYPES: ReadonlySet<string> = new Set<LegacyAgentEvent['type']>(['tool_planning', 'delta', 'end', 'error']);
+
+/** The `error` sentence of a chat route's JSON failure body, or undefined for any other body. */
+function routeError(body: string): string | undefined {
+  try {
+    const parsed: unknown = JSON.parse(body);
+    if (parsed && typeof parsed === 'object' && 'error' in parsed) {
+      const error = (parsed as { error: unknown }).error;
+      if (typeof error === 'string' && error !== '') return error;
+    }
+  } catch {
+    // Not JSON: the caller shows the body as it came.
+  }
+  return undefined;
+}
 
 export interface ChatResponse {
   role: string;
@@ -19,7 +45,8 @@ export async function sendChatMessage(
   sessionId: string,
   onMessage: (chunk: ChatResponse) => void,
   onError: (error: string) => void,
-  endpoint: string = '/api/chat'
+  endpoint: string = '/api/chat',
+  onEvent?: (event: AgentEvent) => void
 ): Promise<void> {
   try {
     const res = await fetch(endpoint, {
@@ -30,7 +57,15 @@ export async function sendChatMessage(
 
     if (!res.ok) {
       const text = await res.text();
-      onError(`Agent request failed [${res.status}]: ${text}`);
+      // The sign-in has ended (hooks.server.ts): go and sign in again, rather than leave
+      // a page that looks signed in showing an error. See $lib/session-ended.
+      if (isSessionEnded(res.status, text)) {
+        goToSignIn();
+        return;
+      }
+      // The chat routes answer a failure with JSON { error }, a sentence written for the
+      // person reading the chat; show that sentence. Any other body is shown as it came.
+      onError(routeError(text) ?? `Agent request failed [${res.status}]: ${text}`);
       return;
     }
 
@@ -42,6 +77,10 @@ export async function sendChatMessage(
     const reader = res.body.getReader();
     const decoder = new TextDecoder('utf-8');
     let buffer = '';
+    // Every answer finishes with an `end` frame. A stream that closes without
+    // one was cut short (the agent died mid-answer), and the caller must hear
+    // about it: `end` or onError is what releases the chat.
+    let sawEnd = false;
 
     while (true) {
       const { value, done } = await reader.read();
@@ -55,12 +94,21 @@ export async function sendChatMessage(
         if (line.startsWith('data: ')) {
           try {
             const data = JSON.parse(line.substring(6)) as ChatResponse;
-            onMessage(data);
+            if (data.type === 'end') sawEnd = true;
+            if (onEvent && typeof data.type === 'string' && !LEGACY_TYPES.has(data.type)) {
+              onEvent(data as unknown as AgentEvent);
+            } else {
+              onMessage(data);
+            }
           } catch {
             // Skip malformed SSE lines
           }
         }
       }
+    }
+
+    if (!sawEnd) {
+      onError('The agent stopped before its answer was complete. Please try again.');
     }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

@@ -106,18 +106,34 @@ The tail shows raw output; it does not say where in the plan the run is. Both ar
 
 ---
 
-## Two modes — pick before Phase 0
+## Three modes — pick before Phase 0
 
 | Mode | When | What runs |
 |---|---|---|
 | **Full cycle** | Anything below the pages changed — Terraform, Helm values, module inputs, deploy/teardown script *logic*, image builds — or no environment is standing, or the last validated run is unknown. | Phase 0 → Phase 3, everything below. |
-| **Content pass** | The environment is up and already validated, and the diff since it touches **only** `workshop/content/**` prose and commands, or message strings in scripts. | Only the changed pages, against the running environment. No teardown, no deploy. |
+| **Full content pass** | Every page has to be read and run, and the environment standing in front of you is the one to run them against. Typically a branch that changed so much that "only the changed pages" is every page anyway, and whose infrastructure changes were already exercised live, in place, against that same environment. | **Every** page, in workshop order, verbatim, against the running environment. No teardown, no deploy. |
+| **Changed-pages pass** | The environment is up and already validated, and the diff since it touches **only** `workshop/content/**` prose and commands, or message strings in scripts. | Only the changed pages, against the running environment. No teardown, no deploy. |
 
-When in doubt it is a full cycle. A content pass that should have been a full cycle reports green on infrastructure nobody tested.
+When in doubt it is a full cycle. **Neither content mode proves a clean-slate deploy, and neither substitutes for one.** The failures that only surface on a fresh `terraform init` / `apply` — a `removed` block, a `required_version` raise, a provider constraint, a first-time resource ordering — cannot be reached from a standing environment at all. A content pass that should have been a full cycle reports green on infrastructure nobody tested; a content pass that is *honest about that gap* is a legitimate pre-PR gate on the pages.
 
 ---
 
-## Content pass — the changed pages only
+## Full content pass — every page, standing environment
+
+**Prove the environment first** — the same four checks as the changed-pages pass below. All four must hold, or this is a full cycle.
+
+**Then walk every page**, in the workshop's own order, exactly as a full cycle walks them — but starting at Phase 2 rather than Phase 0, because the environment is already deployed:
+
+1. **Phase 1's pages, read only.** **Run Pre-flight Checks**, the **Deploy** page for your audience, and **Configure kubectl** are already satisfied by the standing environment. Read them end to end against the rendered preview and re-run only the commands that are safe to repeat on a live cluster — the clone block, `aws sts get-caller-identity`, the kubeconfig write. Never re-run a deploy. Say in the report that these pages were read, not executed.
+2. **Phase 2 and Phase 3 in full** — every page, every command, verbatim, in order. A page is tested as a page, not as a diff.
+
+**Browser pages are driven in Chrome, by you, before they reach anybody.** A CLI-only pass does not test them. Every page whose step is something a person does in a browser gets opened, clicked through and seen: the sign-in, the transactions card, the persona menu at the lower left and what it opens, the token views, the refund chat's typed row number, the Security Flow's Story and Technical views, and where **Log out** actually is. Record what you saw, not that you looked.
+
+**The report names the gap in one line, precisely.** Not "infrastructure was not tested" — that is usually false, because the infrastructure changes were exercised live. The true statement is narrower: *no clean-slate deploy ran, so the fresh-`init` behaviour of the Terraform changes is unproven*. Name which changes those are.
+
+---
+
+## Changed-pages pass — the changed pages only
 
 **Prove the environment first.** All four must hold, or this is a full cycle:
 
@@ -141,11 +157,11 @@ git diff --stat <baseline-commit>...HEAD -- workshop/content/ infrastructure/scr
 
 **Then run the changed pages.** For each one, in the workshop's own page order, with the same reporting and the same dashboard write as any other step: execute its commands verbatim, including the ones that did not change, because a page is tested as a page and not as a diff. A page whose only change is prose still gets read end to end in the browser against the rendered preview.
 
-The dashboard's phases for a content pass are the changed pages themselves, one row each — the data model takes any phase list.
+The dashboard's phases for a changed-pages pass are the changed pages themselves, one row each — the data model takes any phase list. For a full content pass they are every page, in workshop order.
 
 **Every invariant above still applies**, including that a break on the self-paced path is a finding rather than something fixed mid-run.
 
-**Say what was not covered.** A content pass proves the changed pages and nothing else. The report names the mode, so nobody reads it as a clean-slate result.
+**Say what was not covered.** A changed-pages pass proves the changed pages and nothing else. The report names the mode, so nobody reads it as a clean-slate result.
 
 ---
 
@@ -214,7 +230,7 @@ All six `33-verify-deployment` pages, in order:
 ## Phase 3 — the three use cases (both audiences)
 
 - **Use Case 1 — Non-Personalized Read-Only:** **Request Flow**, **Configure Vault Auth for Use Case 1**, **Verify Credentials and Enforcement**.
-- **Use Case 2 — OAuth Personalized Read-only:** **OAuth Login Flow**, **Configure the OAuth Resource Server**, **Verify Per-User Data Access**, **Scope Enforcement (Layer 2)**, **Credential Revocation**. Start the first sign-in in a **fresh incognito window**; switch personas with a *new* incognito window, never Logout — IVIA keeps its own SSO cookie.
+- **Use Case 2 — OAuth Personalized Read-only:** **OAuth Login Flow**, **Configure the OAuth Resource Server**, **Verify Per-User Data Access**, **Scope Enforcement (Layer 2)**, **Credential Revocation**. Start the first sign-in in a **fresh incognito window**; switch personas with a *new* incognito window, never Log out — IVIA keeps its own SSO cookie. **Log out** lives in the persona menu: click your photo and name at the bottom left of the dashboard.
 - **Use Case 3 — Privileged Action with CIBA:** all six pages, see below.
 
 **Stop before Cleanup** unless the run is explicitly a teardown test.
@@ -253,6 +269,8 @@ Check these before filing:
 - **`terraform: command not found` in CloudShell after an idle disconnect.** Tools installed outside `$HOME` live on a non-persistent overlay. Re-run pre-flight Step 2. The license you uploaded and `~/vault-init.json` are in `$HOME` and survive.
 - **`kubectl version --client` reporting something other than 1.34.x in CloudShell** — CloudShell's own newer binary in `/usr/local/bin` shadows the one the script installed in `/usr/bin`. The page gives the `ln -sf` fix.
 - **The `mmfa_push_fired|ciba_status_polled` grep returning nothing** before any refund has run.
+- **`verify-uc3.sh --bypass` reports far fewer checks than a normal run.** Bypass mode terminates at `infrastructure/scripts/verify-uc3.sh:1111` so it never falls through into the normal-mode checks. Observed on Vault Enterprise 2.1.1: `--bypass` 9 checks, a normal run 19, and 20 when a real CIBA refund preceded it and the Athena correlation row exists. The mandatory-RAR assertion (`optional_authorization_details=false` on registration `uc3-actor`) is a normal-mode check and is *absent*, not failing, in bypass output.
+- **Athena's correlation row is empty immediately after a refund.** Firehose buffers for 60 s (`infrastructure/modules/observability/main.tf`), so the audit rows land about a minute after the turn. Re-run the query; do not file it.
 - **`localhost:8200/ui` not opening from CloudShell.** `localhost` is the CloudShell container, not the machine your browser runs on. The `vault` CLI reads are the lesson and work identically either way.
 
 ---
@@ -263,4 +281,6 @@ Check these before filing:
 
 **Per full cycle:** every page's commands executed with the expected output, defects fixed and re-run, then a plain-English report — what works, what does not, what needs a decision. Nothing merges or closes on it.
 
-**Per content pass:** every changed page run end to end, the baseline commit named, and the report saying plainly that infrastructure was not re-tested.
+**Per changed-pages pass:** every changed page run end to end, the baseline commit named, and the report saying plainly that infrastructure was not re-tested.
+
+**Per full content pass:** every page run end to end against the standing environment, every browser page driven in Chrome and what was seen recorded, the baseline commit named, and one precise line on the gap — which Terraform changes have never run from a fresh `init`.

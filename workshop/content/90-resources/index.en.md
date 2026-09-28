@@ -31,7 +31,7 @@ weight: 90
 - [SPIFFE for Agentic AI Blog](https://www.hashicorp.com/en/blog/spiffe-securing-the-identity-of-agentic-ai-and-non-human-actors)
 - [Native AI Agent Support in Vault (May 2026)](https://www.hashicorp.com/en/blog/announcing-native-ai-agent-support-in-hashicorp-vault) — Agent Registry, ceiling-policy intersection, OBO delegation, ephemeral authorization
 
-### Native Agent Identity (deployed in this workshop — Enterprise 2.0.3)
+### Native Agent Identity (deployed in this workshop — Enterprise 2.1.1)
 
 - [Vault Agent Registry — Concept](https://developer.hashicorp.com/vault/docs/concepts/agent-registry) — register each agent as a first-class identity (`agent-registry/registration/display-name/<name>`) with `ceiling_policies`, distinct from human users and traditional NHIs
 - [Vault OAuth Resource Server — Concept](https://developer.hashicorp.com/vault/docs/concepts/oauth-resource-server) — authorize a Vault request directly with an external OAuth JWT via `X-Vault-Token`; no `jwt_login`, no intermediate token

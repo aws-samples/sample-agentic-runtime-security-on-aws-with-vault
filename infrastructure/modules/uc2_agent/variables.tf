@@ -18,6 +18,21 @@ variable "vault_k8s_role" {
   default     = "uc2"
 }
 
+variable "ui_vault_role" {
+  description = "Vault Kubernetes auth role the banking UI server logs in with (uc2-ui-sa). Its policy reads aws/sts/audit-reader and nothing else: short-lived read-only Athena keys for the Audit Trace card (issue #68)."
+  type        = string
+}
+
+variable "athena_workgroup" {
+  description = "Athena work group the banking UI's Audit Trace endpoint runs its query in (tier-1 output athena_workgroup_name). The audit-reader credential may query in this work group only."
+  type        = string
+}
+
+variable "audit_glue_database" {
+  description = "Glue database holding the audit_correlation VIEW (tier-1 output glue_database_name). Passed to Athena as the query's database."
+  type        = string
+}
+
 variable "vault_jwt_role" {
   description = "Vault JWT auth role name used by the MCP server for per-user token exchange."
   type        = string

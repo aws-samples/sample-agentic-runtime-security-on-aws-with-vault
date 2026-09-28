@@ -8,16 +8,19 @@ Terraform module that provisions all Vault configuration required by the three a
 |---|---|---|
 | Audit device (file → stdout, json) | — | PLAT-05 |
 | Kubernetes auth backend | `kubernetes/` | CONF-01 |
-| OAuth resource server activation flag | `sys/activation-flags/oauth-resource-server` | CONF-02 |
 | OAuth resource server profile (IVIA) | `sys/config/oauth-resource-server/...` | CONF-02 |
 | PostgreSQL secrets engine | `database/` | CONF-03 |
 | AWS secrets engine (STS assumed_role) | `aws/` | CONF-04 |
 | Policy: uc1-readonly | — | CONF-01, CONF-03 |
 | Policy: uc2-personal | — | CONF-02, CONF-03, CONF-04 |
-| Policy: uc3-refund-writer | — | CONF-02, CONF-03, CONF-04 |
+| Policy: uc2-agent (the banking agent's own Kubernetes login: Bedrock STS, `lookup-self`, and read on its own registration) | `aws/sts/bedrock-reader`, `agent-registry/registration/display-name/agent-uc2` | CONF-04, VNAI-03 |
+| Policy: uc3-agent (the UC3 agent acting as itself — no refund-writer path) | — | CONF-01, CONF-03, CONF-04 |
 | K8s role: uc1 | `kubernetes/role/uc1` | CONF-01 |
 | K8s role: uc2 | `kubernetes/role/uc2` | CONF-01 |
 | K8s role: uc3 | `kubernetes/role/uc3` | CONF-01 |
+| AWS STS role `audit-reader` (assumed_role, 900 s; session policy from tier 1, plan fails if over AWS's 2,048-character limit) | `aws/sts/audit-reader` | #68 · Audit Trace card |
+| Policy: banking-ui (read on `aws/sts/audit-reader`, nothing else, no default policy) | — | #68 · Audit Trace card |
+| K8s role: banking-ui (bound to `uc2-ui-sa` in `banking-app`, 1,200 s token) | `kubernetes/role/banking-ui` | #68 · Audit Trace card |
 | Agent Registry: entity + registration `uc1-agent` (inert ceiling) | `identity/entity` + `agent-registry/registration/display-name/uc1-agent` | VNAI-03 |
 | Agent Registry: entity + registration `agent-uc2` (UC2 ceiling; RAR optional) | `agent-registry/registration/display-name/agent-uc2` | VNAI-03 |
 | Agent Registry: entity + registration `uc3-actor` (UC3 ceiling; RAR mandatory) | `agent-registry/registration/display-name/uc3-actor` | VNAI-03 |
@@ -38,7 +41,7 @@ Terraform module that provisions all Vault configuration required by the three a
 
 ## Agent Registry + three-layer policy model (Phase 9)
 
-Vault Enterprise `2.0.3-ent` exposes the native Agent Registry + OAuth resource
+Vault Enterprise `2.1.1-ent` exposes the native Agent Registry + OAuth resource
 server primitives (license module `platform-standard` → `agentic-iam`; see the
 [`vault_server`](../vault_server/README.md) README). This module registers every
 agent as a first-class identity and layers policy natively instead of the retired
@@ -65,6 +68,14 @@ Inspect a registration:
 vault read agent-registry/registration/display-name/uc3-actor
 ```
 
+The Use Case 2 banking agent reads its own registration at runtime, with its own
+Kubernetes-auth token (policy `uc2-agent`), so each chat turn can show the ceiling
+Vault intersects with the caller's human baseline. The policy grants `read` on
+exactly `agent-registry/registration/display-name/<uc2_agent_identity>` — the same
+variable the registration's `display_name` uses — and nothing else in the
+registry. No other policy in this module grants any path under
+`agent-registry/`.
+
 ### Aliases (how a JWT claim resolves to an entity)
 
 - **UC1** — one provider-native `vault_identity_entity_alias` on the `kubernetes`
@@ -81,13 +92,22 @@ vault read agent-registry/registration/display-name/uc3-actor
   registered `sub=jaime`+`act.sub=uc3-actor` → 200; unregistered `sub=bob` → 403), so
   every human persona that drives an OBO use case MUST have an entity + subject alias.
 
-### Enforcement layers (probe-confirmed on the live 2.0.3-ent binary)
+### Enforcement layers
+
+The **UC1**, **UC2** and **UC3** rows were probe-confirmed on the live 2.0.3-ent binary; the
+re-check on 2.1.1-ent is pending. One behaviour is known to differ: on 2.0.3 a UC3 delegated
+token with no `authorization_details` was still vended the refund-writer credential, and
+2.1.x refuses it (`RAR_MISSING`), which is why the workshop moved to 2.1.1 (issue #74).
+The **UC3 agent as itself** row is **pending live proof**: it is confirmed once
+`verify-uc3.sh` Check 21 passes against a stack deployed with the `uc3-agent` policy.
 
 | Use case | Layers | Composition |
 |---|---|---|
 | **UC1** | ONE | k8s `uc1-readonly` floor bound to the `uc1` role. The `uc1-ceiling` is INERT — k8s tokens carry no `act.sub`, so the ceiling never self-applies. |
 | **UC2** | THREE | human baseline (`uc2-human-baseline`, resolved from `sub`) ∩ agent ceiling (`uc2-agent-ceiling`, resolved from `act.sub`) ∩ per-request `vault:path_access` RAR (optional for UC2). |
 | **UC3** | THREE | human baseline (`uc3-human-baseline`, `sub=jaime`) ∩ agent ceiling (`uc3-agent-ceiling`, `act.sub=uc3-actor`) ∩ per-request `vault:path_access` RAR (**mandatory**). |
+| **Banking UI server as itself** | ONE | k8s `banking-ui` policy bound to the `banking-ui` role (`uc2-ui-sa`): read on `aws/sts/audit-reader`, nothing else — not even `default`, so it cannot look up or renew its own token; it logs in afresh whenever its keys run out. The keys it gets can read **every** user's audit rows; per-user isolation is the endpoint's `WHERE request_id = ? AND user_approved_sub = ?` on the `sub` of the caller's verified id_token (`applications/banking-app/ui/src/lib/server/audit-trace/`). |
+| **UC3 agent as itself** | ONE | k8s `uc3-agent` policy bound to the `uc3` role (the pod's own login, held for its lifetime): `database/creds/uc3-readonly`, `aws/sts/bedrock-reader`, `aws/sts/uc3-logs-writer`, own-token lookup and lease renewal. It has **no** `database/creds/uc3-refund-writer`: the refund writer is reachable only through the three-layer UC3 row above. `verify-uc3.sh` Check 21, in both normal mode and `--bypass`, logs in as this role and asserts the denial. |
 
 The ceiling is **restrict-only** — it can only shrink the human baseline, never grant
 beyond it (a path in the ceiling but absent from the baseline is still denied). The
@@ -104,8 +124,9 @@ The PostgreSQL secrets engine `connection_url` uses the RDS master password fetc
 | Vault role | Postgres grants | TTL | Use case |
 |---|---|---|---|
 | `uc1-readonly` | SELECT on all tables | 15 min / max 30 min | Use Case 1 — read-only data query agent |
-| `uc2-personal` | SELECT on all tables | 15 min / max 30 min | Use Case 2 — personal data access agent |
-| `uc3-refund-writer` | SELECT + INSERT + UPDATE | 5 min / max 10 min | Use Case 3 — refund processing agent (tightest scope) |
+| `uc2-personal-readonly` | SELECT on the banking schema | 15 min / max 30 min | Use Case 2 — personal data access agent |
+| `uc3-refund-writer` | SELECT + INSERT + UPDATE | 5 min / max 10 min | Use Case 3 — refund processing agent (tightest scope); reachable only with an approved refund's delegated token |
+| `uc3-readonly` | SELECT on the banking schema (RLS applies) | 15 min / max 30 min | Use Case 3 — the agent's own lookups (transactions, refund status) under the `uc3` role |
 
 Creation statements include `VALID UNTIL '{{expiration}}'` so Postgres enforces the TTL independently of Vault lease expiry. Revocation statements drop the ephemeral role entirely (no residual access).
 
@@ -129,10 +150,22 @@ extracts the **subject**, never the agent — the AGENT is resolved by Vault's n
 On-Behalf-Of handling of the RFC 8693 `act.sub` claim (IVIA emits it in Plan 04; Plan 05's
 actor alias binds it). `optional_authorization_details` is deliberately NOT set on the
 profile: it is a per-registration field (`OPT_AUTH_DETAILS_LEVEL=registration`), set by
-Plan 05 (UC3 `false` = RAR mandatory; UC1/UC2 `true` = RAR optional). The
-`vault_activation_flags` resource activates the `oauth-resource-server` feature first; the
-profile `depends_on` it. The profile's server-assigned identifier is exported as
+Plan 05 (UC3 `false` = RAR mandatory; UC1/UC2 `true` = RAR optional). The profile's
+server-assigned identifier is exported as
 `oauth_resource_server_config_id` (the provider exposes it as the resource `id`).
+
+### Retired: the `oauth-resource-server` activation flag
+
+On 2.0.3 the feature had to be switched on through `sys/activation-flags/oauth-resource-server`
+(`vault_activation_flags.oauth_resource_server`), and the profile and every identity entity
+were ordered after it. Vault 2.1.0 removed that step ("The Agentic IAM no longer requires an
+activation flag to use", [2.1.0 release notes](https://developer.hashicorp.com/vault/docs/updates/release-notes)),
+and on 2.1.1 the activate call answers 404 unsupported path. The module now carries a
+`removed` block (`lifecycle { destroy = false }`), so a vault-config state from a 2.0.3 deploy
+forgets the flag on its next apply without any call to Vault; a fresh state is unaffected.
+This is why the module and the `vault-config` root require Terraform `>= 1.10` (`removed`
+needs 1.7). No depends_on on the flag remains; the entities need no ordering edge because
+nothing activates mid-apply any more.
 
 ## Audit device
 
@@ -160,6 +193,8 @@ Vault writes one JSON object per API call to pod stdout. The fluent-bit DaemonSe
 | `rds_master_user_secret_arn` | `string` | — | Secrets Manager ARN for RDS master password (sensitive) |
 | `rds_db_name` | `string` | `workshop` | Database name |
 | `bedrock_role_arn` | `string` | — | IAM role ARN Vault assumes for scoped Bedrock STS credentials |
+| `audit_reader_role_arn` | `string` | — | IAM role ARN Vault assumes for `aws/sts/audit-reader` (tier-1 `audit_reader_role_arn`) |
+| `audit_reader_session_policy` | `string` | — | Inline session policy for that role, ≤ 2,048 characters (tier-1 `audit_reader_session_policy`) |
 | `region` | `string` | — | AWS region for the AWS secrets engine |
 | `tags` | `map(string)` | `{}` | Resource tags |
 
@@ -174,6 +209,8 @@ Vault writes one JSON object per API call to pod stdout. The fluent-bit DaemonSe
 | `uc1_role_name` | K8s auth role name for Use Case 1 (`uc1`) |
 | `uc2_role_name` | K8s auth role name for Use Case 2 (`uc2`) |
 | `uc3_role_name` | K8s auth role name for Use Case 3 (`uc3`) |
+| `banking_ui_role_name` | K8s auth role name for the banking UI server (`banking-ui`) |
+| `audit_reader_sts_path` | Vault path the banking UI reads for audit-reader keys (`aws/sts/audit-reader`) |
 
 ## Root module wiring
 

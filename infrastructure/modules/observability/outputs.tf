@@ -18,6 +18,22 @@ output "fluent_bit_namespace" {
   value       = var.namespace
 }
 
+output "audit_correlation_view_name" {
+  description = "Name of the audit_correlation Athena VIEW in the workshop Glue database. The banking UI's Audit Trace card queries it (issue #68); the audit-reader IAM policy grants glue:GetTable on it."
+  value       = local.audit_correlation_view_name
+}
+
+output "audit_correlation_source_tables" {
+  description = "The Glue tables the audit_correlation VIEW reads, as table name => S3 location (s3://<log bucket>/<prefix>/). The audit-reader IAM policy derives its Glue table and S3 prefix grants from this map, so a moved table moves its grant with it."
+  value = {
+    for table in [
+      aws_glue_catalog_table.ivia_decisions,
+      aws_glue_catalog_table.vault_audit,
+      aws_glue_catalog_table.pgaudit_logs,
+    ] : table.name => table.storage_descriptor[0].location
+  }
+}
+
 output "athena_correlation_query" {
   description = "SELECT query for cross-plane audit correlation. Execute after running the create-audit-correlation-view named query to create the VIEW, then run this to query it."
   value       = local.athena_select_sql

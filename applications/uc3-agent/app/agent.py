@@ -25,18 +25,29 @@ Tools:
 import json
 import logging
 import os
+import re
 import secrets
 import time
 import uuid
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 
 import httpx
 import psycopg2
+import psycopg2.extensions
 import psycopg2.extras
-from strands import Agent, tool
+from strands import Agent, ToolContext, tool
+from strands.hooks import (
+    AfterToolsEvent,
+    BeforeInvocationEvent,
+    BeforeModelCallEvent,
+    HookProvider,
+    HookRegistry,
+)
 from strands.models import BedrockModel
 from strands.session import FileSessionManager
 
+from . import activity
 from . import ciba_store
 from . import mmfa
 from .auth import _AUTHENTICATED_SUB
@@ -61,6 +72,37 @@ class RefundAuthorizationError(Exception):
     """
 
 
+class RefundRefusedError(Exception):
+    """Raised when the refund terms do not fit the real charge (issue #73).
+
+    initiate_refund raises it before any approval is requested: the transaction
+    is not a charge on the signed-in user's account, it is not on the account
+    named, it is not a debit, or the amount is not more than zero and at most
+    what is still refundable. complete_refund raises it when, inside the write
+    transaction, the approved amount no longer fits what is still refundable.
+
+    The message is a plain-English reason the model can relay to the user as it
+    stands. It names only the signed-in user's own figures.
+    """
+
+
+def _open_readonly_connection():
+    """A connection on a fresh short-lived uc3-readonly credential from Vault."""
+    global _vault_client
+    if _vault_client is None:
+        raise RuntimeError("UC3 vault client not initialized")
+
+    creds = _vault_client.get_readonly_credentials()
+    return psycopg2.connect(
+        host=creds["host"],
+        port=creds["port"],
+        dbname=creds["dbname"],
+        user=creds["username"],
+        password=creds["password"],
+        cursor_factory=psycopg2.extras.RealDictCursor,
+    )
+
+
 def _check_account_owner(
     account_id: str, authenticated_sub: str, request_id: str, tool_name: str
 ) -> None:
@@ -80,34 +122,34 @@ def _check_account_owner(
         RefundAuthorizationError: on mismatch OR missing-account (no info
             leak between the two cases).
     """
-    global _vault_client
-    if _vault_client is None:
-        raise RuntimeError("UC3 vault client not initialized")
-
-    creds = _vault_client.get_readonly_credentials()
-    with psycopg2.connect(
-        host=creds["host"],
-        port=creds["port"],
-        dbname=creds["dbname"],
-        user=creds["username"],
-        password=creds["password"],
-        cursor_factory=psycopg2.extras.RealDictCursor,
-    ) as conn:
+    with _open_readonly_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT set_config('app.current_user_sub', %s, false)",
-                (authenticated_sub,),
-            )
-            cur.execute(
-                """
-                SELECT user_sub
-                FROM banking.accounts
-                WHERE id = %s
-                LIMIT 1
-                """,
-                (account_id,),
-            )
-            row = cur.fetchone()
+            _owner_check(cur, account_id, authenticated_sub, request_id, tool_name)
+
+
+def _owner_check(
+    cur, account_id: str, authenticated_sub: str, request_id: str, tool_name: str
+) -> None:
+    """The account-owner check on an open read-only cursor (see _check_account_owner).
+
+    Sets app.current_user_sub on the connection, so a caller reading more rows
+    on the same cursor afterwards reads them under the signed-in user's RLS
+    scope.
+    """
+    cur.execute(
+        "SELECT set_config('app.current_user_sub', %s, false)",
+        (authenticated_sub,),
+    )
+    cur.execute(
+        """
+        SELECT user_sub
+        FROM banking.accounts
+        WHERE id = %s
+        LIMIT 1
+        """,
+        (account_id,),
+    )
+    row = cur.fetchone()
 
     if row is None or row["user_sub"] != authenticated_sub:
         logger.warning(
@@ -125,7 +167,217 @@ def _check_account_owner(
                 "tool": tool_name,
             },
         )
+        # The owner's identity is logged above and never reported to the browser.
+        activity.narrate(
+            f"Account owner check refused: {account_id} does not belong to the signed-in user. "
+            + _OWNER_CHECK_REFUSED_CONSEQUENCE.get(tool_name, ""),
+            request_id,
+        )
         raise RefundAuthorizationError("refund_authz_denied")
+
+    activity.narrate(
+        f"Account owner check passed: {account_id} belongs to the signed-in user "
+        "(checked with a short-lived read-only database credential from Vault).",
+        request_id,
+    )
+
+
+# What did NOT happen when the owner check refuses, per tool — both tools run the
+# check before anything else touches IVIA, Vault's write path or the database.
+_OWNER_CHECK_REFUSED_CONSEQUENCE = {
+    "initiate_refund": "No approval was requested.",
+    "complete_refund": "Nothing was written.",
+}
+
+
+# ---------------------------------------------------------------------------
+# Refund terms, checked against the real charge (issue #73)
+#
+# The model proposes a transaction and an amount; nothing it says is trusted as a
+# figure. initiate_refund reads the charge itself and refuses before any approval
+# is requested unless the transaction is a debit on the signed-in user's account,
+# on the account named, the currency asked for is the account's currency, and the
+# amount is more than zero and at most the charge minus what is already refunded.
+# The approval then carries the database's merchant, charge, amount and currency.
+# complete_refund re-checks the remaining amount
+# inside its write transaction, serialised per transaction, so two approvals for
+# one charge can never together refund more than the charge.
+#
+# Money is Decimal to the cent throughout; no float is ever compared.
+# ---------------------------------------------------------------------------
+
+_CENT = Decimal("0.01")
+_MAX_AMOUNT = Decimal("9999999999.99")  # the largest DECIMAL(12,2)
+
+
+def _money(value: Decimal) -> str:
+    """A Decimal as a two-decimal string, e.g. Decimal('88.3') -> '88.30'."""
+    return str(value.quantize(_CENT))
+
+
+def _refuse_terms(reason_code: str, reason: str, request_id: str, **log_fields) -> None:
+    """Log, report and raise one initiate_refund refusal. Nothing has been sent yet."""
+    logger.warning(
+        "refund_terms_refused",
+        extra={"request_id": request_id, "reason_code": reason_code, "tool": "initiate_refund", **log_fields},
+    )
+    reason = f"Refund refused: {reason} No approval was requested."
+    activity.narrate(reason, request_id)
+    raise RefundRefusedError(reason)
+
+
+def _requested_amount(amount, request_id: str) -> Decimal:
+    """The model's amount as a Decimal to the cent, or a refusal (not a number, <= 0, sub-cent)."""
+    try:
+        value = Decimal(str(amount))
+    except (InvalidOperation, ValueError, TypeError):
+        value = None
+    if value is None or not value.is_finite():
+        _refuse_terms("amount_not_a_number", f"the amount {amount!r} is not a number.", request_id)
+    if value <= 0:
+        _refuse_terms("amount_not_positive", f"the amount must be more than zero, not {value}.", request_id)
+    # banking.refunds.amount is DECIMAL(12,2); anything larger is no charge's
+    # amount, and quantizing a huge value would raise instead of refusing.
+    if value > _MAX_AMOUNT:
+        _refuse_terms("amount_too_large", f"the amount {value} is larger than any charge can be.", request_id)
+    if value != value.quantize(_CENT):
+        _refuse_terms(
+            "amount_sub_cent", f"the amount {value} has fractions of a cent.", request_id, requested_amount=str(value)
+        )
+    return value.quantize(_CENT)
+
+
+def _check_refund_terms(
+    account_id: str,
+    transaction_id: str,
+    amount,
+    currency,
+    authenticated_sub: str,
+    request_id: str,
+) -> dict:
+    """Check the model's refund against the real charge; return the database's terms.
+
+    Runs the account-owner check and the charge read on ONE short-lived
+    uc3-readonly credential, RLS-scoped to the signed-in user exactly as
+    list_transactions is. Raises RefundAuthorizationError (owner check) or
+    RefundRefusedError (everything else) before anything is sent to IVIA or the
+    phone.
+
+    Returns:
+        {transaction_id, account_id, merchant, charge_amount, already_refunded,
+         refundable, amount, currency} — every figure from the database except
+        `amount`, which is the model's request after it has been checked.
+    """
+    requested = _requested_amount(amount, request_id)
+    try:
+        txn_uuid = uuid.UUID(str(transaction_id))
+    except ValueError:
+        _refuse_terms(
+            "transaction_id_invalid",
+            f"{transaction_id!r} is not a transaction ID.",
+            request_id,
+            transaction_id=str(transaction_id),
+        )
+
+    with _open_readonly_connection() as conn:
+        with conn.cursor() as cur:
+            _owner_check(cur, account_id, authenticated_sub, request_id, "initiate_refund")
+            # RLS already limits both tables to the signed-in user's rows; the
+            # explicit user_sub predicate says the same thing in the query itself.
+            cur.execute(
+                """
+                SELECT t.id::text AS transaction_id,
+                       t.account_id::text AS account_id,
+                       t.transaction_type,
+                       t.amount,
+                       t.merchant,
+                       t.description,
+                       a.currency,
+                       (SELECT COALESCE(sum(r.amount), 0)
+                          FROM banking.refunds r
+                         WHERE r.transaction_id = t.id) AS already_refunded
+                FROM banking.transactions t
+                JOIN banking.accounts a ON a.id = t.account_id
+                WHERE t.id = %s
+                  AND a.user_sub = %s
+                """,
+                (str(txn_uuid), authenticated_sub),
+            )
+            row = cur.fetchone()
+
+    log_fields = {"transaction_id": str(txn_uuid), "account_id": account_id, "requested_amount": _money(requested)}
+    if row is None:
+        # Same answer for "does not exist" and "belongs to someone else".
+        _refuse_terms(
+            "transaction_not_found",
+            f"transaction {txn_uuid} is not a charge on your accounts.",
+            request_id,
+            **log_fields,
+        )
+
+    merchant = row["merchant"] or row["description"] or "unnamed"
+    requested_currency = str(currency or "").strip().upper()
+    currency = row["currency"]
+    if uuid.UUID(row["account_id"]) != uuid.UUID(str(account_id)):
+        _refuse_terms(
+            "account_mismatch",
+            f"the {merchant} charge is on account {row['account_id']}, not on {account_id}.",
+            request_id,
+            **log_fields,
+        )
+    # A refund is paid in the account's own currency. A request in any other
+    # currency is refused, not re-labelled, so an approval never names a
+    # different currency from the one the user asked for.
+    if requested_currency != currency:
+        _refuse_terms(
+            "currency_mismatch",
+            f"the refund was asked for in {requested_currency or 'no currency'}, but account "
+            f"{row['account_id']} holds {currency}. A refund is paid in the account's currency.",
+            request_id,
+            requested_currency=requested_currency,
+            account_currency=currency,
+            **log_fields,
+        )
+    if row["transaction_type"] != "debit":
+        _refuse_terms(
+            "not_a_debit",
+            f"the {merchant} transaction is a {row['transaction_type']} of {_money(row['amount'])} {currency}, "
+            "not a charge. Only a debit can be refunded.",
+            request_id,
+            **log_fields,
+        )
+
+    charge = abs(row["amount"])
+    already = row["already_refunded"]
+    refundable = charge - already
+    log_fields.update(charge_amount=_money(charge), already_refunded=_money(already), refundable=_money(refundable))
+    if requested > refundable:
+        if refundable <= 0:
+            reason = f"the {merchant} charge of {_money(charge)} {currency} has already been refunded in full."
+        else:
+            reason = (
+                f"{_money(requested)} {currency} is more than the {_money(refundable)} {currency} still refundable "
+                f"on the {merchant} charge of {_money(charge)} {currency} ({_money(already)} {currency} already refunded)."
+            )
+        _refuse_terms("exceeds_refundable", reason, request_id, **log_fields)
+
+    activity.narrate(
+        f"Refund check passed: the {merchant} charge of {_money(charge)} {currency} on {row['account_id']} is a "
+        f"debit, {_money(already)} {currency} is already refunded, so up to {_money(refundable)} {currency} can be "
+        f"refunded; {_money(requested)} {currency} was requested (read from the database with the same "
+        "read-only credential).",
+        request_id,
+    )
+    return {
+        "transaction_id": row["transaction_id"],
+        "account_id": row["account_id"],
+        "merchant": merchant,
+        "charge_amount": charge,
+        "already_refunded": already,
+        "refundable": refundable,
+        "amount": requested,
+        "currency": currency,
+    }
 
 # IVIA configuration from env vars
 IVIA_BASE_URL = os.getenv("IVIA_BASE_URL", "https://iviaop.verify-access.svc.cluster.local:8436")
@@ -301,6 +553,24 @@ def _poll_ciba(auth_req_id: str, request_id: str) -> str:
                         "token_type": data.get("token_type", "unknown"),
                     },
                 )
+                activity.hitl(
+                    "approved",
+                    "Approved: the user approved on their phone, and IBM Verify Identity Access "
+                    "returned the CIBA access token.",
+                    request_id,
+                    details={"auth_req_id": auth_req_id, "poll_attempts": attempt},
+                )
+                activity.credential(
+                    "ciba_token",
+                    f"{_sub_for_label()}'s CIBA token, issued by IBM Verify Identity Access "
+                    "after the phone approval",
+                    "IBM Verify Identity Access",
+                    reused=False,
+                    value=access_token,
+                    ttl_seconds=data.get("expires_in"),
+                    expires_at=activity.expires_at_ms(data.get("expires_in")),
+                    request_id=request_id,
+                )
                 return access_token
 
         # authorization_pending — keep polling
@@ -322,10 +592,28 @@ def _poll_ciba(auth_req_id: str, request_id: str) -> str:
                 time.sleep(CIBA_POLL_INTERVAL_SECONDS * 2)
                 continue
             elif error == "access_denied":
+                activity.hitl(
+                    "denied",
+                    "Denied: the user declined the approval. No token was exchanged and "
+                    "nothing was written.",
+                    request_id,
+                    details={"auth_req_id": auth_req_id},
+                )
                 raise RuntimeError(
                     f"CIBA access denied by user (request_id={request_id})"
                 )
             else:
+                if error == "expired_token":
+                    # CIBA token error "expired_token": the auth_req_id has expired.
+                    # Same exception as any other unexpected error; reported to the
+                    # browser as the approval timing out.
+                    activity.hitl(
+                        "timeout",
+                        "Timed out: IBM Verify Identity Access reports the approval request "
+                        "expired. No token was exchanged and nothing was written.",
+                        request_id,
+                        details={"auth_req_id": auth_req_id},
+                    )
                 raise RuntimeError(
                     f"CIBA poll unexpected error: {error_data} (request_id={request_id})"
                 )
@@ -334,6 +622,13 @@ def _poll_ciba(auth_req_id: str, request_id: str) -> str:
             f"CIBA poll HTTP {resp.status_code}: {resp.text} (request_id={request_id})"
         )
 
+    activity.hitl(
+        "timeout",
+        f"Timed out: no approval arrived within {CIBA_TIMEOUT_SECONDS} s. No token was "
+        "exchanged and nothing was written.",
+        request_id,
+        details={"auth_req_id": auth_req_id, "poll_attempts": attempt},
+    )
     raise TimeoutError(
         f"CIBA consent not received within {CIBA_TIMEOUT_SECONDS}s "
         f"(auth_req_id={auth_req_id}, request_id={request_id})"
@@ -425,6 +720,44 @@ def _token_exchange(ciba_token: str, request_id: str) -> str:
     return delegated_jwt
 
 
+def _sub_for_label() -> str:
+    """The signed-in user's sub, for a credential's plain-English label."""
+    try:
+        return _AUTHENTICATED_SUB.get()
+    except LookupError:
+        return "The user"
+
+
+def _describe_token_exchange(claims: dict) -> str:
+    """One Agent Log line for the RFC 8693 exchange, from decoded claims only.
+
+    Names only what the delegated token actually carries; a claim that is
+    missing is left out rather than guessed.
+    """
+    parts = []
+    if claims.get("sub"):
+        parts.append(f"subject {claims['sub']}")
+    # IVIA's pretoken rule stamps both act and may_act; name may_act only when it
+    # says something act does not.
+    act, may_act = claims.get("act"), claims.get("may_act")
+    act_sub = act.get("sub") if isinstance(act, dict) else None
+    may_act_sub = may_act.get("sub") if isinstance(may_act, dict) else None
+    if act_sub:
+        parts.append(f"acting party (act.sub) {act_sub}")
+    if may_act_sub and may_act_sub != act_sub:
+        parts.append(f"may_act.sub {may_act_sub}")
+    if claims.get("scope"):
+        parts.append(f"scope {claims['scope']}")
+    detail_types = [d["type"] for d in claims.get("authorization_details") or [] if d.get("type")]
+    if detail_types:
+        parts.append("authorization_details " + " + ".join(detail_types))
+    if isinstance(claims.get("exp"), (int, float)):
+        expires = datetime.fromtimestamp(claims["exp"], tz=timezone.utc)
+        parts.append(f"expires {expires.strftime('%H:%M:%S')} UTC")
+    line = "Token exchanged (RFC 8693): IBM Verify Identity Access issued a delegated token"
+    return f"{line}: {', '.join(parts)}." if parts else f"{line}."
+
+
 # ---------------------------------------------------------------------------
 # Strands tools
 # ---------------------------------------------------------------------------
@@ -498,12 +831,13 @@ def list_transactions() -> list:
     return results
 
 
-@tool
+@tool(context=True)
 def initiate_refund(
     account_id: str,
     transaction_id: str,
     amount: float,
     currency: str,
+    tool_context: ToolContext,
 ) -> dict:
     """Initiate a CIBA consent request for a privileged refund (step 1 of 2).
 
@@ -519,20 +853,44 @@ def initiate_refund(
     bound to the approval at this point and read back from the store, never
     re-supplied by the model.
 
+    Nothing the model passes is trusted as a figure (issue #73). Before any
+    approval is requested the transaction is read from the database and the
+    refund is refused, with a plain reason, unless the transaction is a debit on
+    the signed-in user's account, on the account named, the currency is the
+    account's own currency, and the amount is more than zero and at most the
+    charge minus what is already refunded. The approval then carries the
+    database's merchant, charge, amount and currency.
+
     Args:
         account_id: Account to credit the refund to.
         transaction_id: Original transaction being refunded.
-        amount: Refund amount (positive float).
-        currency: ISO 4217 currency code (e.g. "USD").
+        amount: Refund amount in the currency's main unit, not in cents
+            (e.g. 34.99 for $34.99). Positive, at most two decimal places.
+        currency: ISO 4217 currency code (e.g. "USD"). Must be the account's
+            own currency; any other is refused.
 
     Returns:
         Dict with auth_req_id, request_id, and consent status.
     """
     request_id = str(uuid.uuid4())
+    # tool_context is injected by Strands and is not a model input. It ties this
+    # tool call to the refund's request_id, so every event it reports from here on
+    # carries the SAME id as the CIBA binding_message, Vault's X-Correlation-Id,
+    # the pgaudit statement comment and banking.refunds.request_id.
+    activity.bind_request(tool_context, request_id)
     authenticated_sub = _AUTHENTICATED_SUB.get()
-    _check_account_owner(
-        account_id, authenticated_sub, request_id, "initiate_refund"
+    # The owner check and the charge check, on one read-only credential. Either
+    # refusal raises here, before IVIA or the phone hears anything.
+    checked = _check_refund_terms(
+        account_id, transaction_id, amount, currency, authenticated_sub, request_id
     )
+    # From here on every figure is the database's, never the model's.
+    account_id = checked["account_id"]
+    transaction_id = checked["transaction_id"]
+    merchant = checked["merchant"]
+    charge_text = _money(checked["charge_amount"])
+    amount_text = _money(checked["amount"])
+    currency = checked["currency"]
     # Local — sent on the CIBA wire to IVIA; NOT exposed to LLM.
     login_hint = authenticated_sub
 
@@ -542,7 +900,10 @@ def initiate_refund(
             "request_id": request_id,
             "account_id": account_id,
             "transaction_id": transaction_id,
-            "amount": amount,
+            "merchant": merchant,
+            "charge_amount": charge_text,
+            "already_refunded": _money(checked["already_refunded"]),
+            "amount": amount_text,
             "currency": currency,
         },
     )
@@ -552,16 +913,30 @@ def initiate_refund(
             "type": "refund_approval",
             "transaction_id": transaction_id,
             "account_id": account_id,
-            "amount": amount,
+            # JSON numbers, the shape IVIA has accepted for `amount` since the
+            # flow was built; both come from Decimals already checked to the cent.
+            "amount": float(checked["amount"]),
             "currency": currency,
             "request_id": request_id,
+            "merchant": merchant,
+            "charge_amount": float(checked["charge_amount"]),
         }
     ]
 
     ciba = _initiate_ciba(login_hint, authorization_details, request_id)
     auth_req_id = ciba["auth_req_id"]
+    activity.narrate(
+        "Backchannel sign-in request (CIBA) sent to IBM Verify Identity Access. It carries "
+        f"the refund terms as authorization details (RFC 9396): {amount_text} {currency} to "
+        f"{account_id} for the {merchant} charge of {charge_text} {currency} "
+        f"(transaction {transaction_id}).",
+        request_id,
+    )
 
-    rar_desc = f"refund_approval ${amount} {currency} for transaction {transaction_id}"
+    rar_desc = (
+        f"refund_approval {amount_text} {currency} of the {merchant} charge of "
+        f"{charge_text} {currency}, transaction {transaction_id}"
+    )
 
     # Mobile-push consent: fire an MMFA push to the AUTHENTICATED user's IBM Verify
     # device (identity straight from the verified session — never a parameter) and
@@ -572,7 +947,8 @@ def initiate_refund(
     # Bind the terms to the approval (issue #31). These are the values the human
     # is being asked to approve; complete_refund reads them back from here rather
     # than taking them from its own tool arguments, so the model cannot substitute
-    # a different figure once the approval has been granted.
+    # a different figure once the approval has been granted. Every value is the
+    # database's (issue #73); amount and charge_amount are Decimal.
     ciba_store.put_txn(
         auth_req_id,
         authenticated_sub,
@@ -581,7 +957,9 @@ def initiate_refund(
             "request_id": request_id,
             "account_id": account_id,
             "transaction_id": transaction_id,
-            "amount": amount,
+            "merchant": merchant,
+            "charge_amount": checked["charge_amount"],
+            "amount": checked["amount"],
             "currency": currency,
             "approver_sub": authenticated_sub,
         },
@@ -597,13 +975,34 @@ def initiate_refund(
         },
     )
 
+    # The push itself is a generic IBM Verify approval; the refund terms travel
+    # on the CIBA request above and are bound to auth_req_id in ciba_store.
+    activity.hitl(
+        "required",
+        "Approval push sent to the user's IBM Verify app. Waiting for the user to approve "
+        "before anything is written.",
+        request_id,
+        details={
+            "amount": amount_text,
+            "currency": currency,
+            "merchant": merchant,
+            "charge_amount": charge_text,
+            "account_id": account_id,
+            "transaction_id": transaction_id,
+            "auth_req_id": auth_req_id,
+            "channel": "mobile_push",
+        },
+    )
+
     return {
         "status": "consent_required",
         "auth_req_id": auth_req_id,
         "request_id": request_id,
         "account_id": account_id,
         "transaction_id": transaction_id,
-        "amount": amount,
+        "merchant": merchant,
+        "charge_amount": charge_text,
+        "amount": amount_text,
         "currency": currency,
         "channel": "mobile_push",
         "details": rar_desc,
@@ -611,8 +1010,8 @@ def initiate_refund(
     }
 
 
-@tool
-def complete_refund(auth_req_id: str, request_id: str) -> dict:
+@tool(context=True)
+def complete_refund(auth_req_id: str, request_id: str, tool_context: ToolContext) -> dict:
     """Complete a refund after CIBA consent is granted (step 2 of 2).
 
     Identity is sourced from the verified id_token's `sub` claim (ContextVar).
@@ -648,12 +1047,16 @@ def complete_refund(auth_req_id: str, request_id: str) -> dict:
     # The approved terms, recovered from the approval this auth_req_id names.
     # Fail closed: no record means this process never fired that push (or it has
     # aged out of the store), and there is no safe value to fall back on.
+    # The three refusals below never report the request_id argument: until all
+    # three checks pass it is unverified model input. They carry the turn's own
+    # requestId instead (activity.py, "The turn's requestId").
     terms = ciba_store.get_terms(auth_req_id)
     if terms is None:
         logger.warning(
             "complete_refund_no_approval_record",
             extra={"request_id": request_id, "auth_req_id": auth_req_id},
         )
+        activity.narrate("Refused: there is no approval on record for this request. Nothing was written.")
         raise RefundAuthorizationError("refund_approval_not_found")
 
     # request_id identifies the flow for audit correlation; it must name the SAME
@@ -667,6 +1070,9 @@ def complete_refund(auth_req_id: str, request_id: str) -> dict:
                 "approved_request_id": terms.get("request_id"),
             },
         )
+        activity.narrate(
+            "Refused: the request ID does not match the approval it names. Nothing was written."
+        )
         raise RefundAuthorizationError("refund_request_id_mismatch")
 
     # An approval belongs to the human who granted it — a different authenticated
@@ -676,12 +1082,21 @@ def complete_refund(auth_req_id: str, request_id: str) -> dict:
             "complete_refund_approver_mismatch",
             extra={"request_id": request_id, "auth_req_id": auth_req_id},
         )
+        activity.narrate(
+            "Refused: this approval belongs to a different user. Nothing was written."
+        )
         raise RefundAuthorizationError("refund_approver_mismatch")
+
+    # request_id is now proven to be the approval's own id (terms were written by
+    # initiate_refund): from here on every event carries it.
+    activity.bind_request(tool_context, request_id)
 
     account_id = terms["account_id"]
     transaction_id = terms["transaction_id"]
+    # Decimal, checked to the cent against the charge by initiate_refund.
     amount = terms["amount"]
     currency = terms["currency"]
+    merchant = terms.get("merchant") or "unnamed"
 
     _check_account_owner(
         account_id, authenticated_sub, request_id, "complete_refund"
@@ -698,9 +1113,44 @@ def complete_refund(auth_req_id: str, request_id: str) -> dict:
         },
     )
 
+    activity.narrate(
+        "Checking IBM Verify Identity Access for the user's approval "
+        f"(every {CIBA_POLL_INTERVAL_SECONDS} s, for up to {CIBA_TIMEOUT_SECONDS} s).",
+        request_id,
+    )
     ciba_token = _poll_ciba(auth_req_id, request_id)
     delegated_jwt = _token_exchange(ciba_token, request_id)
+    # The narration and the audit seed carry the token's decoded claims; the
+    # token itself is shown once, as a credential event, and is never part of
+    # this tool's return value.
+    delegated_claims = activity.delegated_token_claims(delegated_jwt)
+    activity.narrate(_describe_token_exchange(delegated_claims), request_id)
+    activity.credential(
+        "delegated_token",
+        f"{_sub_for_label()}'s delegated token from the RFC 8693 exchange",
+        "IBM Verify Identity Access",
+        reused=False,
+        value=delegated_jwt,
+        expires_at=int(delegated_claims["exp"] * 1000)
+        if isinstance(delegated_claims.get("exp"), (int, float))
+        else None,
+        request_id=request_id,
+    )
+
     write_creds = _vault_client.get_refund_credentials(delegated_jwt, request_id)
+    writer_lease = {
+        "vault_path": "database/creds/uc3-refund-writer",
+        "lease_id": write_creds.get("lease_id"),
+        "ttl_seconds": write_creds.get("lease_duration"),
+        # The same identifier vault_client logs: this lease was issued to the
+        # delegated token presented as X-Vault-Token, not to the agent's own role.
+        "auth_method": "oauth_resource_server_x_vault_token",
+    }
+    activity.narrate(
+        "Vault issued a uc3-refund-writer database credential to the delegated token: "
+        f"lease {writer_lease['lease_id']}, time-to-live {writer_lease['ttl_seconds']} s.",
+        request_id,
+    )
 
     refund_id = str(uuid.uuid4())
     approved_by = authenticated_sub
@@ -728,6 +1178,11 @@ def complete_refund(auth_req_id: str, request_id: str) -> dict:
             user=write_creds["username"],
             password=write_creds["password"],
         ) as conn:
+            # The re-check below relies on READ COMMITTED: each statement sees
+            # everything committed before it started, so the SELECT after the lock
+            # sees a refund another approval committed while this one waited.
+            # Pinned here rather than inherited from the server default.
+            conn.isolation_level = psycopg2.extensions.ISOLATION_LEVEL_READ_COMMITTED
             with conn.cursor() as cur:
                 # RLS WITH CHECK gate: banking.refunds is FORCE ROW LEVEL SECURITY and the
                 # refund_insert_own policy verifies account_id belongs to
@@ -739,6 +1194,60 @@ def complete_refund(auth_req_id: str, request_id: str) -> dict:
                 cur.execute(
                     "SELECT set_config('app.current_user_sub', %s, true)",
                     (authenticated_sub,),
+                )
+                # Issue #73: two approvals for one charge must never together refund
+                # more than the charge. Serialise every write for this transaction
+                # on a transaction-scoped advisory lock (the writer role may not row-
+                # lock banking.transactions: it has no UPDATE there, and a charge with
+                # no refunds yet has no refunds row to lock). The key is the uuid in
+                # canonical text form, so any spelling of the same id takes the same
+                # lock. Held until COMMIT or ROLLBACK.
+                cur.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s::uuid::text, 0))",
+                    (transaction_id,),
+                )
+                cur.execute(
+                    """
+                    SELECT abs(t.amount) AS charge,
+                           (SELECT COALESCE(sum(r.amount), 0)
+                              FROM banking.refunds r
+                             WHERE r.transaction_id = t.id) AS already_refunded
+                    FROM banking.transactions t
+                    WHERE t.id = %s
+                      AND t.account_id = %s
+                      AND t.transaction_type = 'debit'
+                    """,
+                    (transaction_id, account_id),
+                )
+                charge_row = cur.fetchone()
+                refundable = charge_row[0] - charge_row[1] if charge_row else Decimal("0")
+                if charge_row is None or amount > refundable:
+                    logger.warning(
+                        "refund_terms_refused",
+                        extra={
+                            "request_id": request_id,
+                            "reason_code": "exceeds_refundable_at_write",
+                            "tool": "complete_refund",
+                            "transaction_id": transaction_id,
+                            "account_id": account_id,
+                            "approved_amount": _money(amount),
+                            "refundable": _money(refundable),
+                        },
+                    )
+                    reason = (
+                        f"Refund refused: only {_money(refundable)} {currency} is still refundable on the "
+                        f"{merchant} charge, less than the {_money(amount)} {currency} that was approved. "
+                        "Another refund of this charge was written after this approval was requested. "
+                        "Nothing was written."
+                    )
+                    activity.narrate(reason, request_id)
+                    raise RefundRefusedError(reason)
+                activity.narrate(
+                    f"Refundable amount re-checked inside the write transaction, locked for this "
+                    f"charge: {_money(charge_row[1])} {currency} of the {merchant} charge of "
+                    f"{_money(charge_row[0])} {currency} is already refunded, {_money(refundable)} "
+                    f"{currency} is still refundable; writing {_money(amount)} {currency}.",
+                    request_id,
                 )
                 # OBJ-5 PLANE-A: thread request_id into the pgaudit STATEMENT field via
                 # an inline SQL comment. pgaudit (log='write') captures the full statement
@@ -773,7 +1282,19 @@ def complete_refund(auth_req_id: str, request_id: str) -> dict:
             "refund_already_redeemed",
             extra={"request_id": request_id, "auth_req_id": auth_req_id},
         )
+        activity.narrate(
+            "Refused: this approval was already redeemed. The database rejected a second "
+            "refund with the same request ID.",
+            request_id,
+        )
         raise RefundAuthorizationError("refund_already_redeemed") from None
+
+    activity.narrate(
+        f"Refund written: INSERT into banking.refunds (refund {refund_id}, {amount} {currency} "
+        f"to {account_id}) with the uc3-refund-writer credential. The statement carries "
+        f"uc3_request_id={request_id} for pgaudit.",
+        request_id,
+    )
 
     # OBJ-5 Branch B: emit the ivia_decisions ANCHOR record for the three-plane
     # audit_correlation VIEW. The VIEW INNER-JOINs on ivia_decisions, so without
@@ -807,7 +1328,7 @@ def complete_refund(auth_req_id: str, request_id: str) -> dict:
                 {
                     "type": "refund_approval",
                     "actions": ["process_refund"],
-                    "amount": str(amount),
+                    "amount": _money(amount),
                     "currency": currency,
                 }
             ],
@@ -834,11 +1355,28 @@ def complete_refund(auth_req_id: str, request_id: str) -> dict:
             "ivia_decision_anchor_emitted",
             extra={"request_id": request_id, "log_group": log_group},
         )
+        activity.narrate(
+            f"Audit anchor written to CloudWatch Logs ({log_group}) for request {request_id}.",
+            request_id,
+        )
     except Exception as exc:  # noqa: BLE001 — best-effort audit emission
         logger.warning(
             "ivia_decision_anchor_emit_failed",
             extra={"request_id": request_id, "error": str(exc)},
         )
+        activity.narrate(
+            "The audit anchor could not be written to CloudWatch Logs. The refund itself is "
+            "recorded in banking.refunds.",
+            request_id,
+        )
+
+    activity.audit_seed(
+        request_id=request_id,
+        vault_role=_vault_client.role,
+        db_role="uc3-refund-writer",
+        leases=[writer_lease],
+        claims=delegated_claims,
+    )
 
     logger.info(
         "process_refund_success",
@@ -857,7 +1395,9 @@ def complete_refund(auth_req_id: str, request_id: str) -> dict:
         "request_id": request_id,
         "account_id": account_id,
         "transaction_id": transaction_id,
-        "amount": amount,
+        "merchant": merchant,
+        # A two-decimal string: the tool result is JSON, and Decimal is not.
+        "amount": _money(amount),
         "currency": currency,
         "approved_by": approved_by,
         "status": "approved",
@@ -937,6 +1477,309 @@ def check_refund_status(refund_id: str) -> dict:
     return result
 
 
+# ---------------------------------------------------------------------------
+# Replies written by code, not by the model
+#
+# The chat shows list_transactions' rows as a card numbered 1, 2, 3... in the
+# order the tool returned them. Asking the model not to repeat the rows under
+# that card, or to count to the row a person picked, is not reliable. So after
+# the first listing of a session no model call is made: the reply is one fixed
+# question. When initiate_refund refuses the terms (_refuse_terms), the reply
+# is that refusal as worded, followed by a fixed question asking for another
+# transaction number. And a reply that is only a row number, sent right after
+# one of those questions or after the code's own out-of-range reply, is
+# resolved here against the listing, never counted by the model. A number sent
+# after a reply the model wrote goes to the model as typed.
+# ---------------------------------------------------------------------------
+
+# The reply after the first listing of a session.
+FIRST_LISTING_QUESTION = "Which transaction number do you want to refund?"
+
+# Added after initiate_refund's terms refusal, which ends that reply.
+REFUSAL_FOLLOW_UP = " Which transaction number do you want to refund instead?"
+
+# How Strands reports a RefundRefusedError raised by a tool, and the start of
+# every refusal _refuse_terms words: the tool result's text starts with both.
+_REFUSED_ERROR_PREFIX = "Error: RefundRefusedError - "
+_TERMS_REFUSAL_RESULT = _REFUSED_ERROR_PREFIX + "Refund refused: "
+
+# A reply that is only a row number: 1 to 3 digits, optionally after one of #,
+# "no.", "number", "transaction", "txn" or "item", and optionally followed by a
+# full stop or exclamation mark ("9", " 9 ", "#9", "Number 9", "no. 9",
+# "item 9!"). Anything else ("9 please", "$9", "Refund $65 of the Equinox
+# charge") goes to the model as typed.
+_ROW_NUMBER = re.compile(r"\s*(?:(?:#|no\.|number|transaction|txn|item)\s*)?(\d{1,3})\s*[.!]?\s*", re.IGNORECASE)
+
+# The fields of the selected row the model is given.
+_SELECTED_FIELDS = ("id", "account_id", "description", "merchant", "amount", "created_at")
+
+# The start of the code's own reply to a row number the listing does not have
+# (_out_of_range_reply).
+_OUT_OF_RANGE_REPLY = re.compile(r"There is no transaction \d{1,3} — ")
+
+
+def row_number(text) -> int | None:
+    """The row number a reply names when the whole reply is a row number, else None."""
+    match = _ROW_NUMBER.fullmatch(text) if isinstance(text, str) else None
+    return int(match.group(1)) if match else None
+
+
+def _tool_names(messages: list) -> dict:
+    """toolUseId -> tool name, from every toolUse block in messages."""
+    names = {}
+    for message in messages:
+        for block in message.get("content", []):
+            tool_use = block.get("toolUse") if isinstance(block, dict) else None
+            if isinstance(tool_use, dict):
+                names[tool_use.get("toolUseId")] = tool_use.get("name")
+    return names
+
+
+def _listing_rows(tool_result: dict) -> list | None:
+    """The rows of a successful list_transactions result, in the order returned, or None.
+
+    Read from the same text the card is drawn from (activity._tool_result_payload):
+    one JSON array of objects. Anything else is not a listing the card shows.
+    """
+    if tool_result.get("status") != "success":
+        return None
+    texts = [
+        block["text"]
+        for block in tool_result.get("content", [])
+        if isinstance(block, dict) and isinstance(block.get("text"), str)
+    ]
+    if len(texts) != 1:
+        return None
+    try:
+        rows = json.loads(texts[0])
+    except ValueError:
+        return None
+    if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+        return None
+    return rows
+
+
+def _terms_refusal(tool_result: dict) -> str | None:
+    """The refusal as _refuse_terms worded it, when an initiate_refund result is one, else None.
+
+    Only a RefundRefusedError reaches the result as _TERMS_REFUSAL_RESULT; the
+    owner check (RefundAuthorizationError), CIBA and network failures do not.
+    """
+    if tool_result.get("status") != "error":
+        return None
+    content = tool_result.get("content") or []
+    if len(content) != 1 or not isinstance(content[0], dict):
+        return None
+    text = content[0].get("text")
+    if not isinstance(text, str) or not text.startswith(_TERMS_REFUSAL_RESULT):
+        return None
+    return text[len(_REFUSED_ERROR_PREFIX):]
+
+
+def _latest_listing(messages: list) -> list | None:
+    """The rows of the most recent successful list_transactions result in messages, or None."""
+    names = _tool_names(messages)
+    latest = None
+    for message in messages:
+        if message.get("role") != "user":
+            continue
+        for block in message.get("content", []):
+            tool_result = block.get("toolResult") if isinstance(block, dict) else None
+            if isinstance(tool_result, dict) and names.get(tool_result.get("toolUseId")) == "list_transactions":
+                rows = _listing_rows(tool_result)
+                if rows is not None:
+                    latest = rows
+    return latest
+
+
+def _row_pick_due(history: list) -> bool:
+    """True when the session's last reply is one the code wrote to ask for a row number.
+
+    That is exactly FIRST_LISTING_QUESTION, the code's terms-refusal reply
+    (one text block ending with REFUSAL_FOLLOW_UP), or the code's own "There
+    is no transaction N — " reply (_out_of_range_reply). The model's own
+    wording is never read: after any reply the model wrote — asking how much
+    to refund, or confirming a charge — a bare number goes to the model as
+    typed, since "5" there may mean $5.
+    """
+    if not history or history[-1].get("role") != "assistant":
+        return False
+    texts = [
+        block.get("text")
+        for block in history[-1].get("content", [])
+        if isinstance(block, dict) and "text" in block
+    ]
+    if len(texts) != 1 or not isinstance(texts[0], str):
+        return False
+    return (
+        texts[0] == FIRST_LISTING_QUESTION
+        or texts[0].endswith(REFUSAL_FOLLOW_UP)
+        or _OUT_OF_RANGE_REPLY.match(texts[0]) is not None
+    )
+
+
+def _row_selection(message, history: list) -> tuple[int, list] | None:
+    """(number, rows) when `message` is only a row number sent when a row pick is due, else None.
+
+    A row pick is due when the session's last reply is the code's own question
+    or out-of-range reply (_row_pick_due). `rows` are the session's most recent
+    successful list_transactions result, in the order returned — the order the
+    card numbers them. They come only from that result, which list_transactions
+    read for the verified sub; nothing the message says is used but the number.
+    """
+    if not isinstance(message, dict) or message.get("role") != "user":
+        return None
+    content = message.get("content") or []
+    if len(content) != 1 or not isinstance(content[0], dict):
+        return None
+    number = row_number(content[0].get("text"))
+    if number is None or not _row_pick_due(history):
+        return None
+    rows = _latest_listing(history)
+    if rows is None:
+        return None
+    return number, rows
+
+
+def _selection_note(number: int, row: dict) -> str:
+    """The text given to the model, beside the user's own reply, naming the row it selects."""
+    selected = {key: row.get(key) for key in _SELECTED_FIELDS}
+    return (
+        f"[Added by the app, not typed by the user] Transaction {number} is row {number} of the most "
+        f"recent list_transactions result, in the order it was returned: {json.dumps(selected, default=str)}. "
+        "This is the transaction the user selected. Go to step 4: confirm its details and ask 'Shall I proceed?'."
+    )
+
+
+def _out_of_range_reply(number: int, count: int) -> str:
+    """The reply to a row number the listing does not have."""
+    if count == 0:
+        return f"There is no transaction {number} — there are no transactions to pick from."
+    if count == 1:
+        return f"There is no transaction {number} — the list has only transaction 1."
+    return f"There is no transaction {number} — pick a number from 1 to {count}."
+
+
+class RefundReplies(HookProvider):
+    """The refund chat's replies that code writes instead of the model.
+
+    After a session's first transaction list the turn ends with
+    FIRST_LISTING_QUESTION and the model is not called again. That fires only
+    when the tool batch is exactly one list_transactions result that succeeded
+    with at least one row, and no earlier successful list_transactions result
+    is in the session's history. Any other batch — an error, several tools, an
+    empty list, or a second listing (the no-phone driver's "Refund $X of the
+    {merchant} charge" turn may re-list) — is left to the model.
+
+    When the tool batch is exactly one initiate_refund result that is a terms
+    refusal (_refuse_terms, read by _terms_refusal), the turn ends with that
+    refusal as worded plus REFUSAL_FOLLOW_UP. Any other initiate_refund error —
+    the owner check, CIBA, the network — and any batch of several tools is
+    left to the model.
+
+    A reply that is only a row number (row_number), sent right after a reply
+    the code wrote — FIRST_LISTING_QUESTION, the terms-refusal reply or the
+    out-of-range reply (_row_pick_due) — is resolved against the most recent
+    listing:
+      - in range: the row is added to the user's message, beside what they
+        typed, before the message is saved, so the model confirms that row;
+      - out of range: the model is not called; the reply names the valid range.
+    A number sent after a reply the model wrote, such as its question about how
+    much to refund, goes to the model untouched.
+
+    A failure in a callback is logged without any value and the model writes
+    the reply: Strands raises a hook's exception into the turn, and this must
+    never break one.
+    """
+
+    def register_hooks(self, registry: HookRegistry, **kwargs) -> None:
+        registry.add_callback(BeforeInvocationEvent, self._before_invocation)
+        registry.add_callback(BeforeModelCallEvent, self._before_model_call)
+        registry.add_callback(AfterToolsEvent, self._after_tools)
+
+    @staticmethod
+    def _before_invocation(event: BeforeInvocationEvent) -> None:
+        """A row number in range: add the row it selects to the user's message."""
+        try:
+            messages = event.messages
+            if not messages or len(messages) != 1:
+                return
+            # event.agent.messages is the session's history before this message.
+            selection = _row_selection(messages[0], event.agent.messages)
+            if selection is None:
+                return
+            number, rows = selection
+            if not 1 <= number <= len(rows):
+                return  # answered without the model: _before_model_call
+            message = messages[0]
+            event.messages = [
+                {**message, "content": [*message["content"], {"text": _selection_note(number, rows[number - 1])}]}
+            ]
+            logger.info("uc3_reply_by_code", extra={"reply": "row_selected", "row": number, "rows": len(rows)})
+        except Exception as exc:  # noqa: BLE001 — the message then goes to the model as typed
+            logger.warning(
+                "uc3_reply_hook_failed", extra={"hook": "before_invocation", "error_type": type(exc).__name__}
+            )
+
+    @staticmethod
+    def _before_model_call(event: BeforeModelCallEvent) -> None:
+        """A row number out of range: reply without calling the model.
+
+        Only the turn's first model call can match: the user's message is then
+        the last one in the history. On any later call the last message is a
+        tool result.
+        """
+        try:
+            history = event.agent.messages
+            if not history:
+                return
+            selection = _row_selection(history[-1], history[:-1])
+            if selection is None:
+                return
+            number, rows = selection
+            if 1 <= number <= len(rows):
+                return
+            event.cancel = _out_of_range_reply(number, len(rows))
+            logger.info("uc3_reply_by_code", extra={"reply": "row_out_of_range", "row": number, "rows": len(rows)})
+        except Exception as exc:  # noqa: BLE001 — the model writes the reply instead
+            logger.warning(
+                "uc3_reply_hook_failed", extra={"hook": "before_model_call", "error_type": type(exc).__name__}
+            )
+
+    @staticmethod
+    def _after_tools(event: AfterToolsEvent) -> None:
+        try:
+            results = [
+                block["toolResult"]
+                for block in event.message.get("content", [])
+                if isinstance(block, dict) and isinstance(block.get("toolResult"), dict)
+            ]
+            if len(results) != 1:
+                return
+            # The assistant message that asked for this batch is already in the
+            # history; this batch's result is not yet.
+            history = event.agent.messages
+            tool_name = _tool_names(history).get(results[0].get("toolUseId"))
+            if tool_name == "initiate_refund":
+                refusal = _terms_refusal(results[0])
+                if refusal is None:
+                    return
+                event.end_turn = refusal + REFUSAL_FOLLOW_UP
+                # The refusal can hold figures the model supplied; none are logged.
+                logger.info("uc3_reply_by_code", extra={"reply": "terms_refused"})
+                return
+            if tool_name != "list_transactions":
+                return
+            if not _listing_rows(results[0]):
+                return
+            if _latest_listing(history) is not None:
+                return
+            event.end_turn = FIRST_LISTING_QUESTION
+            logger.info("uc3_reply_by_code", extra={"reply": "first_listing_question"})
+        except Exception as exc:  # noqa: BLE001 — the model writes the reply instead
+            logger.warning("uc3_reply_hook_failed", extra={"hook": "after_tools", "error_type": type(exc).__name__})
+
+
 def build_uc3_agent(vault_client=None, session_id: str = "default") -> Agent:
     """Construct a fresh UC3 Strands Agent with new STS creds and session history.
 
@@ -971,14 +1814,21 @@ def build_uc3_agent(vault_client=None, session_id: str = "default") -> Agent:
         "You are the OscarVault Refund Assistant.\n\n"
         "WORKFLOW — follow these steps exactly:\n"
         "1. When the user asks for a refund, call the list_transactions tool.\n"
-        "2. Present results as a numbered list: description, amount, merchant, date.\n"
-        "3. Ask the user which number they want to refund.\n"
+        "2. Do NOT list the transactions in your reply.\n"
+        "3. After the first list_transactions call of a conversation, the app itself asks the user\n"
+        "   which transaction number they want to refund. If you call list_transactions again\n"
+        "   later, do not list the transactions in your reply either; go on with the user's request.\n"
+        "   Transaction number N is the Nth transaction in the list_transactions result, in the\n"
+        "   order it was returned.\n"
         "4. When the user selects a number, confirm the transaction details and ask 'Shall I proceed?'\n"
+        "   When a number the user sends selects a transaction, the app attaches that transaction\n"
+        "   to their message; confirm that transaction.\n"
         "5. When the user confirms, call the initiate_refund tool with:\n"
         "   - account_id: the account_id from the selected transaction\n"
         "   - transaction_id: the id from the selected transaction\n"
-        "   - amount: the absolute value of the amount (positive number)\n"
-        "   - currency: 'USD'\n"
+        "   - amount: the amount the user asked to refund, as a positive number; only if they\n"
+        "     named no amount, the absolute value of the transaction's amount\n"
+        "   - currency: the three-letter currency code the user named; if they named none, 'USD'\n"
         "6. initiate_refund pushes an approval request to the user's IBM Verify mobile app.\n"
         "   Tell the user EXACTLY: 'I've sent an approval request to your IBM Verify app. Open the\n"
         "   app and tap Approve, then reply here and I'll finish the refund.' Do NOT print any\n"
@@ -993,6 +1843,9 @@ def build_uc3_agent(vault_client=None, session_id: str = "default") -> Agent:
         "- NEVER generate URLs, consent links, request_ids, or refund_ids yourself.\n"
         "- NEVER simulate or role-play what a tool would do. ALWAYS call the actual tool.\n"
         "- ALL data must come from tool calls, never from your own knowledge.\n"
+        "- If initiate_refund refuses a refund, tell the user the reason it gave. Do NOT call\n"
+        "  initiate_refund again with a different amount, transaction or currency unless the\n"
+        "  user asks for it.\n"
         "- Present financial amounts with $ symbol.\n"
         "- Do NOT include JWT tokens, Vault credentials, or internal secrets in responses."
     )
@@ -1002,6 +1855,13 @@ def build_uc3_agent(vault_client=None, session_id: str = "default") -> Agent:
         tools=[list_transactions, initiate_refund, complete_refund, check_refund_status],
         system_prompt=system_prompt,
         session_manager=session_manager,
+        # Reports every tool call's start and finish to this request's activity
+        # stream (see activity.py); the tools add the steps inside each call.
+        # RefundReplies writes the replies code owns (see above).
+        hooks=[
+            activity.ToolActivityHooks(refund_tools=frozenset({"initiate_refund", "complete_refund"})),
+            RefundReplies(),
+        ],
     )
 
     logger.info(

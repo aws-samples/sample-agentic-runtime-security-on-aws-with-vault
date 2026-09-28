@@ -1,5 +1,6 @@
 import { redirect } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
+import { SESSION_COOKIES, SESSION_COOKIE_OPTIONS } from '$lib/server/session-lifetime';
 import type { RequestHandler } from './$types';
 
 /**
@@ -25,10 +26,8 @@ import type { RequestHandler } from './$types';
  * serves /pkmslogout.
  */
 export const GET: RequestHandler = async ({ cookies }) => {
-	const cookieOpts = { path: '/', secure: true, httpOnly: true, sameSite: 'lax' as const };
-	cookies.delete('access_token', cookieOpts);
-	cookies.delete('id_token', cookieOpts);
-	cookies.delete('refresh_token', cookieOpts);
+	// access_token, id_token, refresh_token, cleared with the attributes they are set with.
+	for (const name of SESSION_COOKIES) cookies.delete(name, SESSION_COOKIE_OPTIONS);
 
 	// Bounce the browser to WebSEAL /pkmslogout to kill the front-line session.
 	// Fall back to /ask if the issuer is unset/malformed so logout never 500s.

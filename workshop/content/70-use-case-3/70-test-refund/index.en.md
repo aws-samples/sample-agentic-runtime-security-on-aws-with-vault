@@ -21,7 +21,9 @@ Open the printed URL, incognito window, sign in `jaime` / `WorkshopUser1!`.
 
 **Why:** You are talking to an agent that can read your transactions but cannot move money on its own. Watch where it stops.
 
-Click the red **I need a refund** button in the chat suggestions bar. When the agent asks which transaction, reply with the transaction number from your recent transactions list, then confirm.
+Click the red **I need a refund for a recent transaction** suggestion under the chat. The app lists your transactions and asks which number you want to refund. Type the number of a **charge** (money that went out) that you have not refunded before — just the number — then confirm.
+
+The agent checks your choice against the database before it asks you to approve anything. It refuses a deposit, a charge that is already refunded in full, and an amount larger than what is left to refund on the charge, and it tells you why. A refused refund sends nothing to your phone: the app asks for another transaction number, so type a different number straight into the same chat rather than starting over.
 
 ### 3. Approve on your phone
 
@@ -54,6 +56,8 @@ Your IDs, amount, and timestamp will differ. What matters is that the chat retur
 ::::expand{header="If the approval push never arrives"}
 
 **Why:** The agent is an LLM, and occasionally it *says* it sent the push without calling the tool that fires one. Nothing reaches your phone, and the chat looks like it worked.
+
+First read the agent's last reply. If it says the refund was **refused**, no push was sent on purpose, and the reply says why: most often the charge you picked is a deposit, or part or all of it has already been refunded. Pick a different charge instead of forcing the push.
 
 Force it to actually send. Reply in the chat:
 

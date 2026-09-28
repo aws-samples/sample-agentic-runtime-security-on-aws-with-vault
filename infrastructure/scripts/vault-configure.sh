@@ -16,9 +16,9 @@
 #   1. Gather inputs    — resolves the Vault root token + confirms root TF state
 #                         (all other inputs come from root outputs via
 #                         terraform_remote_state in vault-config/main.tf)
-#   2. Vault config     — port-forward :8200, activate the oauth-resource-server
-#                         Enterprise feature (idempotent, pre-reconcile), terraform
-#                         apply vault-config/, then a deploy-time license-module
+#   2. Vault config     — port-forward :8200, terraform apply vault-config/ (Vault
+#                         2.1.x needs no oauth-resource-server activation flag),
+#                         then a deploy-time license-module
 #                         gate (database+aws mounts + agent-registry/oauth respond —
 #                         fails loud if the license is pki-only / lacks platform-standard)
 #   3. IVIA verify      — confirms 7 pods Running + OIDC discovery returns issuer
@@ -397,41 +397,6 @@ _workshop_oauth_expected_aliases() {
     ' <<<"$tf_out" 2>/dev/null || true
 }
 
-# Activate the oauth-resource-server Enterprise feature BEFORE terraform reconciles
-# the OAuth resource-server profile + agent registrations. Ordering matters: the
-# vault_oauth_resource_server_config_profile resource depends on the activation
-# flag (09-CONTEXT Decision 1). Activation flags are one-way and server-side
-# idempotent, so an already-active re-run is SUCCESS, not failure.
-#
-# NOTE: deliberately NOT `curl -sf` — under `set -e` a non-2xx response from an
-# already-active flag would abort the whole script and break the idempotency
-# contract. Capture the HTTP code with `|| echo 000` and decide explicitly.
-# Non-fatal on failure: the terraform apply below (and the post-apply license
-# gate) is authoritative if the license genuinely lacks platform-standard.
-activate_oauth_resource_server() {
-  local url="http://127.0.0.1:8200/v1/sys/activation-flags/oauth-resource-server/activate"
-  local body http_code
-  body="$(mktemp)"
-  http_code=$(curl -s -o "$body" -w '%{http_code}' -X POST \
-    -H "X-Vault-Token: ${VAULT_TOKEN}" "$url" 2>/dev/null || echo "000")
-  if [[ "$http_code" == "200" || "$http_code" == "204" ]]; then
-    ok "oauth-resource-server feature activated (or already active — idempotent)"
-    rm -f "$body"
-    return 0
-  fi
-  # Some builds answer an already-activated re-request with 400 + an explicit
-  # message — treat that as idempotent success too.
-  if grep -qiE 'already[ -]?activated|already been activated' "$body" 2>/dev/null; then
-    ok "oauth-resource-server feature already activated (idempotent)"
-    rm -f "$body"
-    return 0
-  fi
-  warn "oauth-resource-server activation returned HTTP ${http_code} — the license may lack platform-standard/agentic-iam"
-  warn "  ${LICENSE_REMEDIATION}"
-  rm -f "$body"
-  return 1
-}
-
 # ---- Vault verification reads run through `kubectl exec`, never the tunnel ----
 #
 # The port-forward is one long-lived tunnel shared by an entire phase. When it
@@ -655,13 +620,11 @@ TFVARS
     return 1
   fi
 
-  # Activation ordering (09-CONTEXT Decision 1): enable the oauth-resource-server
-  # Enterprise feature BEFORE terraform applies the profile + agent registrations,
-  # since the profile resource depends on the activation flag. Idempotent and
-  # non-fatal here — the terraform apply and the post-apply license gate below are
-  # authoritative if the license is wrong.
-  info "Activating oauth-resource-server feature (pre-reconcile, idempotent)..."
-  activate_oauth_resource_server || true
+  # No activation step: Vault 2.1.x has no oauth-resource-server activation flag
+  # ("The Agentic IAM no longer requires an activation flag to use" — 2.1.0 release
+  # notes), and the activate endpoint answers 404. The vault_config module forgets
+  # the flag from older states with a `removed` block. The post-apply license gate
+  # below is what catches a license without platform-standard.
 
   # Sweep OAuth entity aliases left behind by oauth-resource-server profiles this
   # deploy no longer binds, BEFORE the apply writes this generation's aliases. A
@@ -799,12 +762,12 @@ TFVARS
     verify_pass=false
   fi
 
-  # oauth-resource-server config profile 'ivia' responds → feature active +
+  # oauth-resource-server config profile 'ivia' responds → feature licensed +
   # profile reconciled (sys/config/oauth-resource-server/<name> — reference contract).
   if vault_exec "vault read sys/config/oauth-resource-server/ivia" >/dev/null 2>&1; then
-    ok "License gate: oauth-resource-server profile 'ivia' responds (feature active)"
+    ok "License gate: oauth-resource-server profile 'ivia' responds"
   else
-    fail "License gate: oauth-resource-server profile 'ivia' did not respond — activation/license issue. ${LICENSE_REMEDIATION}"
+    fail "License gate: oauth-resource-server profile 'ivia' did not respond — license issue. ${LICENSE_REMEDIATION}"
     verify_pass=false
   fi
 

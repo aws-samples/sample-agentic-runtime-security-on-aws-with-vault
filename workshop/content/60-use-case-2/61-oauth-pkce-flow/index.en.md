@@ -74,6 +74,7 @@ sequenceDiagram
     User->>UI: "What are my accounts?"
     UI->>Agent: POST /chat + Authorization: Bearer access_token
     Agent->>Agent: Extract JWT from header
+    Agent-->>UI: SSE: each step as it happens, starting with<br/>the agent's own credentials and the caller's token
     Agent->>MCP: JSON-RPC tools/call get_accounts<br/>Authorization: Bearer access_token
     Note over Agent,MCP: The tool takes no arguments —<br/>identity travels in the header alone
     MCP->>MCP: Decode header JWT → read sub claim (for RLS only)
@@ -92,16 +93,18 @@ sequenceDiagram
     RDS-->>MCP: Oscar's accounts only
     end
 
-    MCP-->>Agent: Tool result (accounts JSON)
-    Agent->>Agent: LLM formats response
-    Agent-->>UI: SSE stream with formatted answer
-    UI-->>User: "Checking: $4,250 · Savings: $18,750"
-
     rect rgba(167, 240, 186, 0.3)
-    Note over MCP,RDS: Credential lifecycle
+    Note over MCP,RDS: Credential lifecycle — before the MCP server replies
     MCP->>Vault: POST /v1/sys/leases/revoke<br/>X-Vault-Token: MCP server's own k8s-auth token
     Vault->>RDS: DROP ROLE (immediately, not at TTL)
     end
+
+    MCP-->>Agent: Tool result: accounts, lease and revoke outcome,<br/>the revoked credential, the MCP server's own tokens
+    Agent->>Agent: Take out the credential and tokens<br/>(the model never receives them)
+    Agent-->>UI: SSE: the database credential with its revoke outcome,<br/>and the MCP server's own tokens
+    Agent->>Agent: LLM formats response from the accounts
+    Agent-->>UI: SSE stream with formatted answer
+    UI-->>User: "Checking: $4,250 · Savings: $18,750"
 ```
 
 **Step-by-step breakdown:**
@@ -120,6 +123,7 @@ sequenceDiagram
 12. In that same call Vault issues a JIT Postgres credential with a 15-minute TTL.
 13. The MCP Server opens a Postgres connection, sets `app.current_user_sub` to the JWT's `sub` claim, and executes `SELECT` queries. PostgreSQL Row-Level Security filters results to the authenticated user's rows only.
 14. The MCP Server revokes the lease as soon as the query returns — `POST /v1/sys/leases/revoke`, authenticated with the server's **own** Kubernetes-auth Vault token rather than the caller's, so the revoke still works when the user's JWT has already expired. Vault drops the Postgres role immediately. The 15-minute TTL remains only as a backstop for the case where the server dies mid-request.
+15. Only then does the MCP Server reply: the rows, the lease and whether the revoke succeeded, the credential itself, and the MCP Server's own Vault token and ServiceAccount token. The Banking Agent takes the credential and both tokens out before the model sees the tool result, sends them only on the signed-in user's own activity stream, and gives the model the rows.
 
 The `sub` claim in the `access_token` (e.g. `oscar`) flows to:
 
@@ -175,7 +179,7 @@ Credentials never reach the Banking UI — they are entered on the WebSEAL login
 
 ### Step 4 — Confirm personalized dashboard data
 
-After login, the dashboard shows Oscar's accounts and transactions. Observe:
+After login you land on the dashboard, the **Banking Agent** chat. Click the **Show me my account balances** suggestion under the chat. Observe:
 
 - The balance figures are specific to Oscar — RLS is filtering the `banking.accounts` table by `sub = 'oscar'`.
 - The agent responds to natural-language queries about Oscar's financial data.
@@ -188,10 +192,10 @@ To act as a different user, open a **new Incognito / Private browser window** an
 - **Password:** `WorkshopUser1!`
 
 :::alert{type="info" header="Why a second window here?"}
-**Logout** fully signs you out: the Banking UI `/logout` handler clears its session cookies and then redirects to IVIA's `/pkmslogout`, which terminates the WebSEAL single sign-on session as well — so clicking Logout and signing back in as Jaime in the *same* window works and lands you on a fresh credential prompt. We open a **separate Incognito / Private window** here only so your Oscar session stays live in the first window and you can compare the two personas side-by-side.
+**Log out** (click your name at the bottom of the navigation, then **Log out**) fully signs you out: the Banking UI `/logout` handler clears its session cookies and then redirects to IVIA's `/pkmslogout`, which terminates the WebSEAL single sign-on session as well — so clicking **Log out** and signing back in as Jaime in the *same* window works and lands you on a fresh credential prompt. We open a **separate Incognito / Private window** here only so your Oscar session stays live in the first window and you can compare the two personas side-by-side.
 :::
 
-The dashboard now shows Jaime's accounts and transactions — not Oscar's. The `sub` claim changed, activating a different RLS filter in PostgreSQL.
+Click **Show me my account balances** again. The agent now answers with Jaime's accounts — not Oscar's. The `sub` claim changed, activating a different RLS filter in PostgreSQL.
 
 ### Step 6 — Confirm the tool contract has nowhere to put an identity
 
@@ -260,7 +264,7 @@ Expected output:
 `not-a-jwt-at-all` is the header value, and `expected header.payload.signature` is the complaint about it. The server tried to use the **header** and never looked at the argument — even though the argument was the well-formed one.
 
 :::alert{type="info" header="What the other answer would have meant"}
-If the server had acted on the tool argument instead, that argument *is* JWT-shaped, so it would have travelled all the way to Vault and come back `Vault DB creds fetch failed [403]: {"errors":["permission denied"]}` — Vault rejecting an unsigned token. Same request, completely different error, and the header would have been decoration. Anything that could reach the MCP server would then be choosing the identity Vault saw, and the OBO intersection, the RLS predicate and the audit record would all faithfully enforce the *caller's* choice of user.
+If the server had acted on the tool argument instead, that argument *is* JWT-shaped, so it would have traveled all the way to Vault and come back `Vault DB creds fetch failed [403]: {"errors":["permission denied"]}` — Vault rejecting an unsigned token. Same request, completely different error, and the header would have been decoration. Anything that could reach the MCP server would then be choosing the identity Vault saw, and the OBO intersection, the RLS predicate and the audit record would all faithfully enforce the *caller's* choice of user.
 :::
 
 ### How the login is split between Banking UI and IVIA
@@ -362,11 +366,12 @@ export async function getDbCreds(
   oauthJwt: string,
   role: string = 'uc2-personal-readonly'
 ): Promise<DbCredentials> {
-  const url = `${VAULT_ADDR}/v1/database/creds/${role}`;
+  const vaultPath = `database/creds/${role}`;
+  const url = `${VAULT_ADDR}/v1/${vaultPath}`;
 
   const res = await fetch(url, {
     method: 'GET',
-    headers: { 'X-Vault-Token': oauthJwt },   // the IVIA OAuth JWT, presented directly
+    headers: { 'X-Vault-Token': oauthJwt },
   });
 
   if (!res.ok) {
@@ -379,9 +384,29 @@ export async function getDbCreds(
     lease_id?: string;
     lease_duration?: number;
   };
-  // ... returns { username, password, leaseId, leaseDuration }
+  const receivedAt = Date.now();
+
+  const username = data?.data?.username;
+  const password = data?.data?.password;
+
+  if (!username || !password) {
+    throw new Error('Vault DB creds response missing data.username or data.password');
+  }
+
+  const leaseDuration = data.lease_duration ?? 0;
+  return {
+    username,
+    password,
+    leaseId: data.lease_id ?? 'unknown',
+    leaseDuration,
+    vaultPath,
+    dbRole: role,
+    leaseExpiresAt: leaseDuration > 0 ? new Date(receivedAt + leaseDuration * 1000).toISOString() : null,
+  };
 }
 ```
+
+The `oauthJwt` in the `X-Vault-Token` header is the caller's IVIA OAuth JWT, presented as-is. Besides the database username and password, `getDbCreds` returns the lease that governs them (`leaseId`, `leaseDuration`, `leaseExpiresAt`) and where they came from (`vaultPath`, `dbRole`), which is what lets the agent show the credential and its revocation during the turn.
 
 Vault's OAuth resource server validates the JWT against IVIA's JWKS endpoint (the signing CA pinned in the `ivia` profile), resolves the human `sub` and the agent actor `act.sub = agent-uc2` (against the Agent Registry), and applies the On-Behalf-Of intersection `uc2-human-baseline ∩ uc2-agent-ceiling` — all in that one `database/creds` read.
 

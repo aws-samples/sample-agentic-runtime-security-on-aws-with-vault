@@ -144,6 +144,21 @@ output "uc3_logs_role_arn" {
   value       = aws_iam_role.uc3_logs_writer.arn
 }
 
+output "audit_reader_role_arn" {
+  description = "IAM role ARN Vault assumes for the banking UI's read-only Athena STS creds (aws/sts/audit-reader, issue #68 Audit Trace card). Consumed by vault-config."
+  value       = aws_iam_role.audit_reader.arn
+}
+
+output "audit_reader_session_policy" {
+  description = "Session policy JSON Vault attaches to every aws/sts/audit-reader AssumeRole (bucket/work group/database level; the role's own policy is the least-privilege one). Consumed by vault-config."
+  value       = local.audit_reader_session_policy
+}
+
+output "athena_workgroup_name" {
+  description = "Athena work group every audit query must run in (workshop). Consumed by tier 3: the banking UI's Audit Trace endpoint runs its query here."
+  value       = module.audit.athena_workgroup_name
+}
+
 #-------------------------------------------------------------------------------
 # TLS — stable workshop ACM ARN
 # Consumed by tier-2 IVIA + tier-3 banking-ui Ingress annotations, by

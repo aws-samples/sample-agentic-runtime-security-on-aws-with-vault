@@ -211,7 +211,7 @@ lease_id           database/creds/uc2-personal-readonly/<opaque>
 lease_duration     15m
 lease_renewable    false
 password           <ephemeral>
-username           v-JWT Toke-uc2-pers-<random>-<timestamp>
+username           v-JWT-Toke-uc2-pers-<random>-<timestamp>
 ```
 
 ::::alert{header="Use access_token, not id_token — the id_token cannot work here" type="warning"}
@@ -229,11 +229,6 @@ There is no `vault write auth/jwt/login` in that sequence. Vault validated the O
 The native model is configured by the `vault_config` Terraform module using Vault Enterprise identity primitives (provider `hashicorp/vault >= 5.10.1`):
 
 ```hcl
-# Activate the Enterprise feature (idempotent)
-resource "vault_activation_flags" "oauth_resource_server" {
-  feature = "oauth-resource-server"
-}
-
 # One OAuth resource server profile — IVIA issuer + JWKS. user_claim = sub for all OAuth Use Cases.
 resource "vault_oauth_resource_server_config_profile" "ivia" {
   # issuer_id / jwks_url resolved from IVIA's OAuth provider

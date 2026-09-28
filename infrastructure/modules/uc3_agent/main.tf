@@ -16,9 +16,13 @@
 #   11. kubernetes_network_policy   "uc3_allow_inbound"    (ingress from banking-agent:8080)
 #
 # Security design:
-#   - uc3-privileged-actor-sa is the Vault k8s auth role subject — the agent presents
-#     its SA JWT to Vault and exchanges it for a short-TTL uc3-refund-writer token
-#     whose may_act + RAR claims are validated by the Vault JWT policy (OBJ-2 + OBJ-3).
+#   - uc3-privileged-actor-sa is the Vault k8s auth role subject — the agent logs in
+#     with its SA JWT (role uc3, policy uc3-agent: read-only DB creds, Bedrock and
+#     CloudWatch Logs STS). That login cannot reach the refund writer: each approved
+#     refund's delegated token (act.sub + RAR, validated natively by Vault's OAuth
+#     resource server) is what fetches the short-TTL uc3-refund-writer credential
+#     (OBJ-2 + OBJ-3, issue #72 · Use Case 3: the refund agent's everyday Vault
+#     login can get refund-writing database credentials with no approval).
 #   - No Ingress / ALB — the UC3 agent is a ClusterIP service reached from
 #     the banking-agent (uc2-agent) or via kubectl port-forward for workshop demos.
 #   - IVIA_CLIENT_SECRET (agent-uc3) and IVIA_ACTOR_CLIENT_SECRET (uc3-actor) are
@@ -425,8 +429,9 @@ resource "kubernetes_network_policy" "uc3_allow_dns" {
 ################################################################################
 # 7. NetworkPolicy — uc3-allow-vault (Vault k8s auth + secret vending)
 #
-# UC3 agent authenticates to Vault at pod start using its SA JWT, then fetches
-# a short-TTL uc3-refund-writer database credential for each privileged action.
+# UC3 agent authenticates to Vault at pod start using its SA JWT, then, for each
+# approved refund, fetches a short-TTL uc3-refund-writer database credential with
+# that refund's delegated token.
 ################################################################################
 
 resource "kubernetes_network_policy" "uc3_allow_vault" {

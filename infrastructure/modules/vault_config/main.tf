@@ -17,6 +17,10 @@
 ################################################################################
 
 terraform {
+  # `removed` blocks (the retired activation flag below) need Terraform >= 1.7;
+  # the workshop floor is 1.10 (check-prerequisites.sh TERRAFORM_MIN_VERSION).
+  required_version = ">= 1.10"
+
   required_providers {
     vault = {
       source = "hashicorp/vault"
@@ -121,10 +125,22 @@ resource "vault_kubernetes_auth_backend_config" "this" {
 # profile-wide false.
 ################################################################################
 
-# Activation gate — the oauth-resource-server feature must be enabled before the
-# profile (and Plan 05's agent registrations) reconcile.
-resource "vault_activation_flags" "oauth_resource_server" {
-  feature = "oauth-resource-server"
+# The oauth-resource-server activation flag is RETIRED. Vault 2.1.0 release notes:
+# "The Agentic IAM no longer requires an activation flag to use." On 2.1.x the
+# endpoint is gone (sys/activation-flags/oauth-resource-server/activate answers
+# 404 unsupported path), so keeping the resource would make every apply on 2.1.1
+# try to re-create it and fail.
+#
+# `removed` with destroy = false makes Terraform FORGET the flag in existing
+# vault-config states without calling Vault: no read, no delete. A fresh state
+# never had it and the block is a no-op there. Do not replace this with
+# `terraform state rm` or any manual step — the block is the whole migration.
+removed {
+  from = vault_activation_flags.oauth_resource_server
+
+  lifecycle {
+    destroy = false
+  }
 }
 
 resource "vault_oauth_resource_server_config_profile" "ivia" {
@@ -142,8 +158,6 @@ resource "vault_oauth_resource_server_config_profile" "ivia" {
   audiences            = ["uc3-actor", "agent-uc2"]
   supported_algorithms = ["RS256"]
   user_claim           = "sub"
-
-  depends_on = [vault_activation_flags.oauth_resource_server]
 }
 
 ################################################################################
@@ -360,6 +374,32 @@ resource "vault_aws_secret_backend_role" "uc3_logs_writer" {
   })
 }
 
+# Audit-reader aws/sts role (issue #68 · Audit Trace card: each answer links to the
+# audit records every system wrote for it). Vended short-lived to the banking UI's
+# own Kubernetes login (vault_kubernetes_auth_backend_role.banking_ui below) so its
+# server can read one refund's rows from the audit_correlation VIEW in Athena with
+# no standing AWS identity. The assumable role's own policy (tier 1) is the
+# least-privilege one; the session policy here is the coarser envelope that fits
+# AWS's 2,048-character limit, and the precondition fails the plan, not the first
+# `vault read`, if it ever outgrows it. 900 s is the shortest STS lifetime AWS allows.
+resource "vault_aws_secret_backend_role" "audit_reader" {
+  backend         = vault_aws_secret_backend.this.path
+  name            = "audit-reader"
+  credential_type = "assumed_role"
+
+  role_arns       = [var.audit_reader_role_arn]
+  policy_document = var.audit_reader_session_policy
+  default_sts_ttl = 900
+  max_sts_ttl     = 900
+
+  lifecycle {
+    precondition {
+      condition     = length(var.audit_reader_session_policy) <= 2048
+      error_message = "The aws/sts/audit-reader session policy is ${length(var.audit_reader_session_policy)} characters; AWS rejects an inline session policy over 2,048. Shorten audit_reader_session_policy in infrastructure/main.tf."
+    }
+  }
+}
+
 ################################################################################
 # Vault policies — one per use case
 ################################################################################
@@ -415,35 +455,6 @@ resource "vault_policy" "uc2_personal" {
   EOT
 }
 
-resource "vault_policy" "uc3_refund_writer" {
-  name = "uc3-refund-writer"
-
-  policy = <<-EOT
-    # UC3: Refund-writer agent policy
-    # Allows: kubernetes auth + OAuth resource server (X-Vault-Token), database write creds, read-only creds,
-    # AWS (Bedrock) STS creds, AWS (CloudWatch logs) STS creds for the
-    # ivia_decisions anchor emission (OBJ-5)
-    path "database/creds/uc3-refund-writer" {
-      capabilities = ["read"]
-    }
-    path "database/creds/uc3-readonly" {
-      capabilities = ["read"]
-    }
-    path "aws/sts/bedrock-reader" {
-      capabilities = ["read", "update"]
-    }
-    path "aws/sts/uc3-logs-writer" {
-      capabilities = ["read", "update"]
-    }
-    path "auth/token/lookup-self" {
-      capabilities = ["read"]
-    }
-    path "sys/leases/renew" {
-      capabilities = ["update"]
-    }
-  EOT
-}
-
 ################################################################################
 # Kubernetes auth roles — one per use case
 # bound_service_account_namespaces references the agent namespace (uc1/uc2/uc3)
@@ -491,6 +502,12 @@ resource "vault_policy" "uc2_agent" {
     path "auth/token/lookup-self" {
       capabilities = ["read"]
     }
+    # Its OWN Agent Registry registration, read only, so the agent can show each
+    # turn the ceiling Vault intersects with the caller's baseline. Same variable
+    # as the registration's display_name below, so the two cannot drift apart.
+    path "agent-registry/registration/display-name/${var.uc2_agent_identity}" {
+      capabilities = ["read"]
+    }
   EOT
 }
 
@@ -504,6 +521,44 @@ resource "vault_kubernetes_auth_backend_role" "uc2_agent" {
   token_max_ttl                    = 7200
 }
 
+# The UC3 agent's OWN workload identity, obtained by Kubernetes auth login with
+# the uc3-privileged-actor-sa ServiceAccount (vault_kubernetes_auth_backend_role.uc3)
+# and held for the life of the pod. It covers only what the agent does as itself,
+# with no human in the picture: list transactions and refund status (read-only DB
+# creds), answer at all (Bedrock STS), and write its own IVIA-decision anchor
+# records (CloudWatch Logs STS, OBJ-5).
+#
+# It deliberately does NOT grant database/creds/uc3-refund-writer. A refund write
+# is reachable only with the delegated OAuth token an approved CIBA request
+# produces, presented as X-Vault-Token and authorized by human baseline ∩ agent
+# ceiling ∩ per-request RAR (uc3-human-baseline, uc3-agent-ceiling below). Granting
+# it here was a standing path to the write with no approval at all (issue #72 ·
+# Use Case 3: the refund agent's everyday Vault login can get refund-writing
+# database credentials with no approval).
+resource "vault_policy" "uc3_agent" {
+  name = "uc3-agent"
+
+  policy = <<-EOT
+    # UC3 Agent: acting as itself — no refund-writer credentials.
+    # The refund write is reachable only through the delegated token (OBO + RAR).
+    path "database/creds/uc3-readonly" {
+      capabilities = ["read"]
+    }
+    path "aws/sts/bedrock-reader" {
+      capabilities = ["read", "update"]
+    }
+    path "aws/sts/uc3-logs-writer" {
+      capabilities = ["read", "update"]
+    }
+    path "auth/token/lookup-self" {
+      capabilities = ["read"]
+    }
+    path "sys/leases/renew" {
+      capabilities = ["update"]
+    }
+  EOT
+}
+
 resource "vault_kubernetes_auth_backend_role" "uc3" {
   backend                     = vault_auth_backend.kubernetes.path
   role_name                   = "uc3"
@@ -511,9 +566,39 @@ resource "vault_kubernetes_auth_backend_role" "uc3" {
   # Pitfall 5 fix: UC3 agent runs in banking-app namespace (same as UC1/UC2 agents)
   # not a dedicated "uc3" namespace — bound namespace must match actual pod namespace.
   bound_service_account_namespaces = ["banking-app"]
-  token_policies                   = [vault_policy.uc3_refund_writer.name]
+  token_policies                   = [vault_policy.uc3_agent.name]
   token_ttl                        = 3600
   token_max_ttl                    = 7200
+}
+
+# The banking UI's OWN workload identity (issue #68 · Audit Trace card: each answer
+# links to the audit records every system wrote for it). Its server logs in with the
+# uc2-ui-sa ServiceAccount for exactly one thing: short-lived read-only Athena keys
+# (aws/sts/audit-reader) to fetch the audit_correlation rows of one refund for the
+# signed-in user who made it. Nothing else — no database path, no Bedrock, not even
+# the default policy (it never looks up, renews or revokes its own token: it logs in
+# afresh each time its keys run out). The token outlives the 900 s STS lease it
+# issues, so the lease is never cut short by its parent token.
+resource "vault_policy" "banking_ui" {
+  name = "banking-ui"
+
+  policy = <<-EOT
+    # Banking UI: read-only Athena keys for the Audit Trace card. Nothing else.
+    path "aws/sts/${vault_aws_secret_backend_role.audit_reader.name}" {
+      capabilities = ["read"]
+    }
+  EOT
+}
+
+resource "vault_kubernetes_auth_backend_role" "banking_ui" {
+  backend                          = vault_auth_backend.kubernetes.path
+  role_name                        = "banking-ui"
+  bound_service_account_names      = ["uc2-ui-sa"]
+  bound_service_account_namespaces = ["banking-app"]
+  token_policies                   = [vault_policy.banking_ui.name]
+  token_no_default_policy          = true
+  token_ttl                        = 1200
+  token_max_ttl                    = 1200
 }
 
 ################################################################################
@@ -609,7 +694,10 @@ resource "vault_policy" "uc2_human_baseline" {
 # UC3 human baseline — jaime's refund-approver envelope (his MAX for UC3). jaime's
 # entity carries BOTH this and uc2-human-baseline (his max across both UCs); the
 # per-UC agent ceiling intersects it down per request. Starting envelope:
-# 09-DISCOVERY line 206 (uc3 human baseline, from the uc3-refund-writer policy set).
+# 09-DISCOVERY line 206 (uc3 human baseline, taken from the former uc3-refund-writer
+# ACL policy, which was retired in issue #72 · Use Case 3: the refund agent's
+# everyday Vault login can get refund-writing database credentials with no
+# approval — no k8s role grants the refund path).
 resource "vault_policy" "uc3_human_baseline" {
   name = "uc3-human-baseline"
 
@@ -719,16 +807,14 @@ locals {
   }
 }
 
-# Every identity write below is ordered AFTER the oauth-resource-server activation
-# flag. The gate declared at the top of this file names the agent registrations, but
-# the edge only ever reached the config profile — so Terraform was free to schedule
-# identity writes concurrently with the activation. An entity create whose request is
-# in flight when the feature activates comes back without `id`, and the provider reads
-# that field unguarded (resource_identity_entity.go:146), panicking the plugin process
-# and failing the whole apply. Observed 2026-08-10: of five entities dispatched in one
-# wave, the three issued after the flag landed created in 0s; the two issued before it
-# panicked. The registrations and aliases inherit this ordering transitively through
-# entity_id / canonical_id, so the edge belongs on the entities.
+# The identity entities need no ordering edge on 2.1.x. On 2.0.3 every entity carried a
+# depends_on on the oauth-resource-server activation flag: an entity create in flight
+# while the feature activated came back without `id` and panicked the provider
+# (resource_identity_entity.go:146), observed 2026-08-10. Vault 2.1.x has no activation
+# step (the flag is retired above), so nothing activates mid-apply and the race cannot
+# occur. The registrations and aliases still order themselves after their entities
+# through entity_id / canonical_id, and the oauth aliases after the profile through
+# their explicit depends_on.
 #
 # --- UC1: Kubernetes registry identity (entity + registration; alias in Task 3) ---
 resource "vault_identity_entity" "uc1_agent" {
@@ -736,8 +822,6 @@ resource "vault_identity_entity" "uc1_agent" {
   # No entity policies: UC1's enforcement floor is vault_policy.uc1_readonly bound
   # to the uc1 k8s role. This entity exists purely as the Agent Registry identity;
   # its ceiling is inert (k8s tokens carry no act.sub).
-
-  depends_on = [vault_activation_flags.oauth_resource_server]
 }
 
 resource "vault_agent_registration" "uc1_agent" {
@@ -755,8 +839,6 @@ resource "vault_identity_entity" "human" {
   for_each = local.obo_human_subs
   name     = each.value
   policies = local.obo_human_policies[each.key]
-
-  depends_on = [vault_activation_flags.oauth_resource_server]
 }
 
 # --- UC2 agent (agent-uc2): entity + registration ---
@@ -764,8 +846,6 @@ resource "vault_identity_entity" "agent_uc2" {
   name = var.uc2_agent_identity # "agent-uc2"
   # No baseline policies: in OBO the agent contributes its ceiling via the
   # registration below, not via entity policies.
-
-  depends_on = [vault_activation_flags.oauth_resource_server]
 }
 
 resource "vault_agent_registration" "agent_uc2" {
@@ -780,8 +860,6 @@ resource "vault_agent_registration" "agent_uc2" {
 # --- UC3 agent (uc3-actor): entity + registration ---
 resource "vault_identity_entity" "uc3_actor" {
   name = var.uc3_agent_identity # "uc3-actor" — the ACTOR, not the human sub
-
-  depends_on = [vault_activation_flags.oauth_resource_server]
 }
 
 resource "vault_agent_registration" "uc3_actor" {
@@ -802,13 +880,15 @@ resource "vault_agent_registration" "uc3_actor" {
 # UC2/UC3 = OAuth-resource-server aliases (subject + actor). These carry an
 # `issuer` binding that the OAuth resource server REQUIRES (09-DISCOVERY: an alias
 # without it validates but then fails JWT auth — issuer is part of the anti-spoof
-# actor binding, threat T-09-05-01). The provider resource
+# actor binding, threat T-09-05-01). In the pinned provider (5.10.1, lock file)
 # vault_identity_entity_alias exposes ONLY name/mount_accessor/canonical_id — it
-# has NO `issuer` field (confirmed against the 5.10.1 schema + provider docs; no
-# later 5.x adds it). So the oauth aliases are written via vault_generic_endpoint
+# has NO `issuer` field. Provider 5.11.0 added `external_id` and `issuer`
+# (Enterprise-only, provider CHANGELOG #2994); the workshop does not take that
+# upgrade here. So the oauth aliases are written via vault_generic_endpoint
 # to identity/entity-alias, faithfully replaying the raw write the 09-DISCOVERY
 # probe confirmed on the live 2.0.3-ent binary (name=<claim value>, canonical_id,
-# mount_accessor, issuer). See 09-05-SUMMARY "Deviations".
+# mount_accessor, issuer); the re-check on 2.1.1-ent is pending. See 09-05-SUMMARY
+# "Deviations".
 #
 # mount_accessor is PROVIDED as the synthetic string oauth-resource-server_root_
 # <config_id> (09-DISCOVERY MOUNT_ACCESSOR_FORM; the config_id is this profile's

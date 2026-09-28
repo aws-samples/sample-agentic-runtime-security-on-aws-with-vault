@@ -78,10 +78,56 @@ This matches the official SDK example (`simpleStatelessStreamableHttp.ts` in `@m
 The database credential is fetched with the **user's** OAuth JWT (`X-Vault-Token`)
 and revoked with the **server's own** identity: at startup-on-demand the server
 performs a Vault Kubernetes auth login as `uc2-mcp-server-sa` (role `uc2`,
-policy `uc2-personal`), whose single capability is `sys/leases/revoke`.
+policies `default` and `uc2-personal`). `uc2-personal` grants `update` on
+`sys/leases/revoke` and `read` on `auth/token/lookup-self`, nothing else. The
+login is cached and reused until 60 seconds before its TTL ends; a 403 forces a
+new one. Calls that need a login while one is already on its way to Vault wait
+for that one instead of starting their own, so the two tool calls of a cold
+turn make one login, not two. A failed login is not kept: the next call tries
+again.
 
 Every tool call ends by closing the Postgres connection and revoking its lease,
 so the ephemeral role is dropped immediately rather than living out its TTL.
 Revocation is best-effort: the query has already returned, so a failed revoke is
 logged (`vault_lease_revoke_failed`) and the credential falls back to expiring on
-its TTL — it never turns a successful query into an error.
+its TTL — it never turns a successful query into an error. Once Vault has issued
+the credential, a failure to connect or query still revokes it.
+
+The close and the revoke both finish before the tool returns, so each response
+reports what happened:
+
+| Field | What it holds |
+|---|---|
+| `credential_metadata.vault_auth_header` | How the credential read authenticated: `X-Vault-Token`, carrying the caller's OAuth JWT, with no Vault login |
+| `credential_metadata.db_role`, `vault_path` | The database role and the Vault path the credential came from (`database/creds/uc2-personal-readonly`) |
+| `credential_metadata.lease_id`, `lease_duration_seconds` | The lease Vault issued and its duration |
+| `credential_metadata.lease_expires_at` | When the lease ends unless it is revoked first (ISO 8601, UTC): the time this server received the credential plus `lease_duration`. Left out when Vault returns no lease duration |
+| `credential_metadata.lease_revoked` | `true` only when Vault confirmed the revoke |
+| `credential_metadata.vault_policies`, `vault_identity_policies` | The policies Vault attaches to the caller's token, from `auth/token/lookup-self` with the same header. Left out when Vault does not answer |
+| `issued_db_credentials.username`, `.password` | The credential itself |
+| `mcp_vault_token` | The server's own Vault token that the revoke presented: `token`, `auth_method` (`kubernetes`), `role`, `policies` (from the login response), `ttl_seconds`, `issued_at`, `logged_in_for_this_call`, `presented_to` (`sys/leases/revoke`). Left out when no login was obtained |
+| `mcp_service_account_token` | The Kubernetes ServiceAccount token that login presented to Vault: `jwt`, `service_account` (`<namespace>/<name>` as Vault reported it), `role`, `logged_in_for_this_call`, `presented_to` (`auth/kubernetes/login`). Left out when no login was obtained |
+
+There is no `vault_role`: the credential read involves no Vault auth role (the
+`uc2-jwt` JWT role was retired with the native cutover). The two policy lists
+are what `lookup-self` reports for the caller's token; they are not the
+effective permission, which is also bounded by the agent's ceiling (resolved
+from `act.sub`) and which `lookup-self` does not list. The `lookup-self` call
+runs after the revoke, and its response is never logged, because its `id` field
+is the token itself.
+
+`issued_db_credentials`, `mcp_vault_token` and `mcp_service_account_token` are
+returned so the workshop can show attendees every credential used during a
+turn. The banking agent removes all three from the response before the model
+sees the tool result and sends them only on the caller's own chat event stream.
+The server never logs any of them.
+
+The database credential belongs to one caller and one call. The other two do
+not: they are the server's standing credentials, so every caller's stream shows
+the same values while the server reuses its login. The agent marks their
+credential events `reused: true` unless `logged_in_for_this_call` is `true`,
+and marks the database credential `reused: false`. Whoever sees the Vault token
+holds its policies (`default`, `uc2-personal`) until it expires — among other
+things, they can revoke any lease whose id they know. Whoever sees the
+ServiceAccount token can present it to Vault's Kubernetes login as role `uc2`
+for a Vault token of their own, until the ServiceAccount token expires.

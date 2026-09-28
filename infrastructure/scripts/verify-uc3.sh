@@ -12,7 +12,7 @@
 #   E.  CIBA consent endpoint reachable via WRP ALB (HTTP not 404)
 #   F.  notifyuser mapping rule: InternalAuthenticator configured
 #
-# UC3-Specific Checks (1-13):
+# UC3-Specific Checks (1-14, 21):
 #   1.  UC3 agent pod Running in banking-app namespace (app=uc3-agent)
 #   2.  ServiceAccount uc3-privileged-actor-sa exists in banking-app namespace
 #   3.  Vault k8s auth role uc3 bound to uc3-privileged-actor-sa
@@ -33,6 +33,11 @@
 #       impossible without expanding the production attack surface. If unset, this
 #       check is SKIPPED with a print_warn — never a fake pass.
 #   13. UC3 agent /chat multi-turn session — same UC3_VERIFY_CHAT_TOKEN gate.
+#   14. Athena audit_correlation returns exactly one row for the approved refund
+#       named by UC3_VERIFY_REQUEST_ID (the three-plane capstone). If unset, this
+#       check is SKIPPED with a print_warn. Not the same check as Bypass Check 14.
+#   21. No approval, no write — the same check as Bypass Check 21 below, run in
+#       this mode too.
 #
 # Bypass mode (--bypass) — the native enforcement done-gate.
 # SELF-MINTING: the suite headlessly mints a REAL IVIA-issued delegated token via
@@ -52,6 +57,14 @@
 #   19. (optional) TRUE wrong-actor → DENY (UC3_WRONG_ACTOR_TOKEN). Production IVIA
 #       only signs act.sub=uc3-actor, so a validly-signed wrong-actor token is
 #       operator-supplied; ABSENT = documented SKIP (WARN), not required for green.
+#   20. Token-exchange client allowlist: an identical RFC 8693 request is refused as
+#       agent-uc2 (unauthorized_client) while uc3-actor gets past the client gate.
+#   21. No approval, no write: the agent's OWN Kubernetes login (role uc3, a fresh
+#       TokenRequest JWT for uc3-privileged-actor-sa) is DENIED
+#       database/creds/uc3-refund-writer (permission denied) and still ALLOWED
+#       database/creds/uc3-readonly (positive control). The probe token is always
+#       revoked, which revokes its leases. Needs no self-mint. Runs in normal
+#       mode too, as Check 21.
 #   Checks 15-18 self-mint (no manual token); a mint failure is a HARD FAIL.
 #   UC3_DELEGATED_TOKEN (if set) overrides the minted token for the Part B live gate.
 #
@@ -59,7 +72,8 @@
 # end when nobody has the IBM Verify app: it enrols a throwaway virtual authenticator
 # over the same OAuth + SCIM endpoints the app uses, signs the real user-presence
 # challenge, and then prints the full three-plane Athena correlation for the refund it
-# produced (checks N1-N8). Nothing is stubbed — IVIA resolves the transaction on its
+# produced (checks N1-N8), then proves a refund larger than what is left on the
+# charge is refused before any approval (N9). Nothing is stubbed — IVIA resolves the transaction on its
 # own evidence and approval stays bound to the exact transaction the agent fired. It
 # refuses to run if the persona already has a device it did not enrol, and it never
 # leaves one enrolled. See uc3-virtual-authenticator.py.
@@ -118,7 +132,7 @@ verify-uc3.sh — ${SCRIPT_DESCRIPTION}
 Usage:
   ./verify-uc3.sh [--bypass | --no-phone] [--help]
 
-Normal mode checks (19 total):
+Normal mode checks (21 total):
   IVIA Full-Stack Checks (A-F):
   A.  IVIA Config container pod Running in verify-access
   B.  IVIA Runtime pod Running in verify-access
@@ -127,7 +141,7 @@ Normal mode checks (19 total):
   E.  CIBA consent endpoint reachable via WRP ALB (HTTP not 404)
   F.  notifyuser mapping rule: InternalAuthenticator configured
 
-  UC3-Specific Checks (1-13):
+  UC3-Specific Checks (1-14, 21):
   1.  UC3 agent pod Running (app=uc3-agent in banking-app namespace)
   2.  ServiceAccount uc3-privileged-actor-sa exists
   3.  Vault k8s auth role uc3 bound to uc3-privileged-actor-sa
@@ -147,6 +161,10 @@ Normal mode checks (19 total):
        jaime id_token minting is impossible without expanding production attack
        surface. Capture a real bearer from the browser flow:
        workshop/content/70-use-case-3/70-test-refund/.
+  14. Athena audit_correlation returns exactly one row for the approved refund
+      (requires UC3_VERIFY_REQUEST_ID; SKIPPED with print_warn if unset). Not the
+      same check as Bypass Check 14.
+  21. No approval, no write — the same check as Bypass Check 21 below
 
 Bypass mode (--bypass) runs the native enforcement done-gate. Checks 15-18
 SELF-MINT a real IVIA-issued delegated token by driving an ACTUAL approval with a
@@ -160,6 +178,12 @@ no manual browser capture needed:
   18. Cross-UC ceiling isolation → DENY: agent-uc2 token (act.sub=agent-uc2) denied UC3 refund
   19. (optional) TRUE wrong-actor → DENY (UC3_WRONG_ACTOR_TOKEN) — production IVIA
       only signs act.sub=uc3-actor, so this is operator-supplied; absent = SKIP (WARN)
+  20. Token-exchange client allowlist — an identical RFC 8693 request is refused as
+      agent-uc2 (unauthorized_client) while uc3-actor gets past the client gate
+  21. No approval, no write — the agent's own Kubernetes login (role uc3) is DENIED
+      database/creds/uc3-refund-writer and still ALLOWED database/creds/uc3-readonly
+      (needs no self-mint; the probe token and its leases are always revoked;
+      also runs in normal mode as Check 21)
       A self-mint failure is a HARD FAIL (skip = not-proven != pass), never silent.
       The mint drives a REAL approval (virtual authenticator) rather than a plain
       login: minting a delegated token WITHOUT an approval is the very bypass the
@@ -177,10 +201,15 @@ three-plane Athena audit correlation for the refund it just produced:
   N4. IVIA accepted a real RSA-signed user-presence challenge and resolved the
       transaction SUCCESS — read back through the SAME SCIM surface the agent reads
   N5. The agent completed the refund turn (CIBA poll -> RFC 8693 -> Vault JIT creds)
-  N6. The refund row is in banking.refunds under RLS, approved_by=<persona>
+  N6. The refund row is in banking.refunds under RLS, approved_by=<persona>, and is
+      the 0.01 of the named charge the run asked for (see _refund_charge)
   N7. The virtual authenticator was deleted (nothing left enrolled)
   N8. audit_correlation returns the row for this refund's request_id — printed in
       full, every column (the three-plane capstone)
+  N9. Asked, in a new session, for the whole charge — more than is left after this
+      run's refund — the agent refused it before any approval: every initiate_refund
+      call failed with refund_terms_refused (exceeds_refundable), none sent a push,
+      and no new approval reached the device. A turn with no call FAILS.
   Nothing is stubbed: IVIA resolves the transaction on its own evidence and the
   approval stays bound to the EXACT transaction the agent fired. Every check is a
   HARD FAIL — there are no skips in this mode.
@@ -196,9 +225,11 @@ Env-var overrides:
   IVIA_ISSUER             (default: https://iviaop.verify-access.svc.cluster.local:8436/oauth2)
   AWS_REGION              (default: resolved from terraform.tfvars)
   UC3_PERSONA             (--bypass — workshop persona whose APPROVAL mints the delegated
-                           token for; default: oscar. Any user in base_layer.yaml.tftpl)
+                           token for; default: oscar. jaime or oscar — the personas
+                           with a seeded charge to refund)
   UC3_NOPHONE_PERSONA     (--no-phone — persona whose refund is driven end-to-end;
-                           default: jaime, the persona the workshop pages use)
+                           default: jaime, the persona the workshop pages use;
+                           jaime or oscar)
   UC3_VERIFY_CHAT_TOKEN   (optional — bearer captured from a real browser sign-in;
                            enables Checks 12 and 13 against the live /chat endpoint)
   UC3_DELEGATED_TOKEN     (--bypass — OPTIONAL override: a REAL IVIA-issued delegated
@@ -272,6 +303,25 @@ ivia_client_secret() {
     esac
     kubectl get secret -n "${BANKING_NAMESPACE}" "${secret_name}" \
         -o "jsonpath={.data.${key}}" 2>/dev/null | base64 --decode 2>/dev/null
+}
+
+# The refund a verify run asks for: UC3_VERIFY_REFUND_AMOUNT of one seeded charge,
+# named by merchant. The agent refuses any refund larger than what is left on a
+# charge (issue #73), so the run asks for a cent: it leaves the charge refundable
+# and the next run works too. A list position ("transaction 1") is not a stable
+# choice — every seeded row for a persona shares one created_at.
+UC3_VERIFY_REFUND_AMOUNT="0.01"
+
+# _refund_charge <persona> — echoes "<merchant>|<full charge amount>" for the seeded
+# charge (applications/banking-app/db/seed.sql) the run refunds; non-zero for a
+# persona with no seeded charge. The full amount is what --no-phone then asks for
+# to prove the over-refund is refused (Check N9).
+_refund_charge() {
+    case "$1" in
+        jaime) echo "United Airlines|210.00" ;;
+        oscar) echo "Whole Foods Market|52.40" ;;
+        *) return 1 ;;
+    esac
 }
 
 
@@ -374,6 +424,134 @@ assert_native_allow() {
     fi
 }
 
+# --- Check 21 helpers (normal mode and --bypass): the agent's OWN Kubernetes login (role uc3) ---
+#
+# The agent holds a Kubernetes-auth Vault token (role uc3) for the life of the
+# pod. That identity must NOT reach the refund-writer credential: a refund write
+# is reachable only with the delegated token an approved CIBA request produces
+# (issue #72 · Use Case 3: the refund agent's everyday Vault login can get
+# refund-writing database credentials with no approval). No mint, no approval
+# and no IVIA call is involved here.
+
+# Runs INSIDE the Vault pod. Reads the service-account JWT from stdin (so it is
+# never in any process's argv), logs in with role uc3, reads the two creds paths
+# with the resulting token, and always revokes that token — revoke-self also
+# revokes every lease the token created, so a credential issued here is dropped
+# at once. The token reaches this host only inside the lookup output (its data.id),
+# which is parsed for the policy names and never printed, and it is revoked before
+# the probe ends. A performance standby can answer
+# "412 required index state not present" just after a login, so the lookup and
+# the two reads retry on 412 only. Each result follows a "@@<STEP> <rc>" marker.
+# shellcheck disable=SC2016  # expanded by the pod's sh, not here
+_UC3_ROLE_PROBE_SH='
+read -r J
+r412() {
+    n=0
+    while :; do
+        o=$("$@" 2>&1); c=$?
+        case "$o" in
+            *"Code: 412"*|*"required index state not present"*)
+                n=$((n + 1))
+                if [ "$n" -lt 5 ]; then sleep 1; continue; fi ;;
+        esac
+        break
+    done
+    printf "%s\n" "$o"
+    return "$c"
+}
+T=$(printf "%s" "$J" | vault write -field=token auth/kubernetes/login role=uc3 jwt=- 2>&1); c=$?
+unset J
+echo "@@LOGIN $c"
+if [ "$c" -ne 0 ]; then printf "%s\n" "$T"; exit 0; fi
+VAULT_TOKEN="$T"; export VAULT_TOKEN; unset T
+o=$(r412 vault token lookup -format=json); c=$?; echo "@@LOOKUP $c"; printf "%s\n" "$o"
+o=$(r412 vault read -format=json database/creds/uc3-readonly); c=$?; echo "@@READONLY $c"; printf "%s\n" "$o"
+o=$(r412 vault read -format=json database/creds/uc3-refund-writer); c=$?; echo "@@WRITER $c"; printf "%s\n" "$o"
+o=$(vault token revoke -self 2>&1); c=$?; echo "@@REVOKE $c"; printf "%s\n" "$o"
+'
+
+# _uc3_probe_rc <probe-output> <STEP> / _uc3_probe_body <probe-output> <STEP> —
+# the exit code after a "@@<STEP>" marker, and the lines under it.
+_uc3_probe_rc() { awk -v m="@@$2" '$1 == m { print $2; exit }' <<<"$1"; }
+_uc3_probe_body() { awk -v m="@@$2" '/^@@[A-Z]+ / { p = ($1 == m); next } p' <<<"$1"; }
+
+# check_uc3_role_denied_refund_writer <label> — Check 21, called from both modes:
+# normal mode passes "Check 21", --bypass passes "Bypass Check 21", and every
+# line the check prints starts with that label. The agent's own login must be
+# ALLOWED database/creds/uc3-readonly (positive control: the login works and the
+# token is usable) and DENIED database/creds/uc3-refund-writer, with the denial
+# classified by reason. Issued credentials are never printed: only the username
+# is extracted, and the password stays in a local.
+check_uc3_role_denied_refund_writer() {
+    local label="$1"
+    local sa_jwt rc out login_rc policies ro_rc ro_out ro_user w_rc w_out w_user rv_rc rv_out
+
+    print_info "${label}: the agent's own Kubernetes login (role uc3, no approval) must be DENIED database/creds/uc3-refund-writer and still ALLOWED database/creds/uc3-readonly"
+
+    # A short-lived TokenRequest JWT for the agent's ServiceAccount — the same
+    # identity the pod presents. Nothing is stored in the cluster.
+    sa_jwt=$(kubectl create token uc3-privileged-actor-sa -n "${BANKING_NAMESPACE}" --duration=10m 2>&1)
+    rc=$?
+    if [ "${rc}" -ne 0 ]; then
+        print_fail "${label}: could not mint a service-account token for uc3-privileged-actor-sa — the check was NOT exercised" \
+            "kubectl create token failed: ${sa_jwt:0:280}. Check: kubectl get sa uc3-privileged-actor-sa -n ${BANKING_NAMESPACE}"
+        return
+    fi
+    if [[ "${sa_jwt}" != eyJ* ]]; then
+        print_fail "${label}: kubectl create token returned something that is not a JWT — the check was NOT exercised" \
+            "Re-run: kubectl create token uc3-privileged-actor-sa -n ${BANKING_NAMESPACE} --duration=10m"
+        return
+    fi
+
+    out=$(kubectl exec -i -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- sh -c "${_UC3_ROLE_PROBE_SH}" 2>&1 <<<"${sa_jwt}")
+    sa_jwt=""
+
+    login_rc=$(_uc3_probe_rc "${out}" LOGIN)
+    if [ -z "${login_rc}" ]; then
+        print_fail "${label}: the probe did not run inside the Vault pod (infra error, NOT evidence either way)" \
+            "kubectl exec into ${VAULT_NAMESPACE}/${VAULT_POD} failed. Output: ${out:0:280}"
+        return
+    fi
+    if [ "${login_rc}" != "0" ]; then
+        local login_err
+        login_err=$(_uc3_probe_body "${out}" LOGIN)
+        print_fail "${label}: Vault refused the role uc3 login — the check was NOT exercised" \
+            "Vault said: ${login_err:0:280}. The agent logs in the same way at startup. Check the role binding: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault read auth/kubernetes/role/uc3"
+        return
+    fi
+
+    policies=$(_uc3_probe_body "${out}" LOOKUP | jq -r '.data.policies // [] | join(",")' 2>/dev/null)
+    ro_rc=$(_uc3_probe_rc "${out}" READONLY)
+    ro_out=$(_uc3_probe_body "${out}" READONLY)
+    ro_user=$(jq -r '.data.username // empty' 2>/dev/null <<<"${ro_out}")
+    w_rc=$(_uc3_probe_rc "${out}" WRITER)
+    w_out=$(_uc3_probe_body "${out}" WRITER)
+    w_user=$(jq -r '.data.username // empty' 2>/dev/null <<<"${w_out}")
+    rv_rc=$(_uc3_probe_rc "${out}" REVOKE)
+    rv_out=$(_uc3_probe_body "${out}" REVOKE)
+
+    if [ "${w_rc}" = "0" ] && [ -n "${w_user}" ]; then
+        # The bug, whatever the positive control says: the agent's everyday login
+        # was handed a credential that can INSERT into banking.refunds.
+        print_fail "${label}: Vault ISSUED refund-writer credentials to the agent's own Kubernetes login (role uc3, policies=${policies:-unknown}, username=${w_user}) — no approval was involved" \
+            "Role uc3 is bound to a policy that grants read on database/creds/uc3-refund-writer (issue #72 · Use Case 3: the refund agent's everyday Vault login can get refund-writing database credentials with no approval). Role uc3 must be bound only to uc3-agent (uc3-readonly, aws/sts/bedrock-reader, aws/sts/uc3-logs-writer, lookup-self, lease renew). Reapply vault_config (deploy-workshop.sh Step 8), then check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault read auth/kubernetes/role/uc3"
+    elif [ "${ro_rc}" != "0" ] || [ -z "${ro_user}" ]; then
+        # Positive control first: without it, a denial on the writer path could be
+        # a broken login or a token that can read nothing at all.
+        print_fail "${label}: positive control failed — the role uc3 login (policies=${policies:-unknown}) was NOT allowed database/creds/uc3-readonly" \
+            "The agent lists transactions with this credential, and without this leg a denial on the refund-writer path proves nothing. Vault said: ${ro_out:0:280}. Expected role uc3 -> policy uc3-agent: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault policy read uc3-agent"
+    elif grep -qiE 'permission denied' <<<"${w_out}"; then
+        print_pass "${label} PASSED: the agent's own Kubernetes login (role uc3, policies=${policies}) was DENIED database/creds/uc3-refund-writer (permission denied) while still ALLOWED database/creds/uc3-readonly — without an approved refund there is no path to a write credential"
+    else
+        print_fail "${label}: the refund-writer read failed, but NOT with permission denied — cannot confirm the policy denied it" \
+            "Expected a 403 permission denied. Got: ${w_out:0:280}"
+    fi
+
+    if [ "${rv_rc}" != "0" ]; then
+        print_warn "${label}: could not revoke the probe's Vault token — it and its leases expire at the role's token TTL (1h). Vault said: ${rv_out:0:200}"
+    fi
+}
+
 # _mint_uc3_tokens <user> — obtain a REAL IVIA-issued delegated OBO token for
 # <user> by driving an ACTUAL human approval.
 # Populates one global:
@@ -437,6 +615,11 @@ _mint_uc3_tokens() {
         MINT_ERR="uc3-virtual-authenticator.py not found at ${helper}"
         return 1
     fi
+    local refund_charge
+    if ! refund_charge=$(_refund_charge "${user}"); then
+        MINT_ERR="persona '${user}' has no seeded charge to refund (jaime and oscar do). Fix: UC3_PERSONA=oscar or UC3_PERSONA=jaime"
+        return 1
+    fi
 
     # Step 1 — a REAL approval. `approveonly` enrols a virtual authenticator, drives
     # the refund turn so the agent fires the MMFA push, signs the user-presence
@@ -447,6 +630,7 @@ _mint_uc3_tokens() {
     kubectl exec -i -n "${BANKING_NAMESPACE}" "${pod}" -- python3 - approveonly \
         "${wrp}" "${user}" "${persona_pw}" "${agent_client}" \
         "${login_secret}" "${ru}" "${op_url}" \
+        "${refund_charge%%|*}" "${UC3_VERIFY_REFUND_AMOUNT}" "${refund_charge#*|}" \
         <"${helper}" >"${approve_log}" 2>&1
     if ! grep -q '^APPROVED_NOT_REDEEMED=1' "${approve_log}"; then
         MINT_ERR=$(sed -n 's/^ERR=//p' "${approve_log}" | tail -1)
@@ -607,6 +791,9 @@ if [ "${BYPASS_MODE}" = true ]; then
     #   17. Per-request RAR → DENY (valid token to a path OUTSIDE its RAR).
     #   18. Cross-UC ceiling isolation → DENY (agent-uc2 token denied UC3 refund).
     #   19. (optional) TRUE wrong-actor → DENY (operator-supplied; absent = SKIP).
+    #   20. Token-exchange client allowlist (agent-uc2 refused, uc3-actor admitted).
+    #   21. The agent's own Kubernetes login (role uc3) → DENY uc3-refund-writer,
+    #       ALLOW uc3-readonly (no mint needed).
     # A self-mint failure is a HARD FAIL (skip = not-proven != pass).
     #===========================================================================
 
@@ -902,6 +1089,22 @@ print(jwt.encode(payload, 'forged-secret', algorithm='HS256'))
         fi
     fi
 
+    echo ""
+
+    #---------------------------------------------------------------------------
+    # Bypass Check 21 — skip the approval entirely: the agent's OWN login
+    #
+    # Checks 14-20 attack the delegated token. This one never asks for one: it
+    # logs in exactly as the agent pod does (Kubernetes auth role uc3, the
+    # uc3-privileged-actor-sa ServiceAccount) and asks Vault for the refund-writer
+    # credential directly. It must be DENIED — the refund write is reachable only
+    # through an approved refund's delegated token — while the same login is still
+    # ALLOWED the read-only credential the agent lists transactions with. Needs no
+    # mint, so it runs even when the self-mint above failed. Normal mode runs the
+    # same function as Check 21 at its end.
+    #---------------------------------------------------------------------------
+    check_uc3_role_denied_refund_writer "Bypass Check 21"
+
     # Summary is printed automatically by the common-checks.sh EXIT trap.
     # Keep a terminating exit so bypass mode does not fall through into the
     # normal-mode checks (the trap still overrides the code with the real result).
@@ -961,6 +1164,13 @@ if [ "${NOPHONE_MODE}" = true ]; then
             "wrp='${np_wrp}' redirect_uri='${np_redirect}' client='${np_client}' secret=$([ -n "${np_secret}" ] && echo set || echo MISSING) password=$([ -n "${np_password}" ] && echo set || echo MISSING) uc3-agent pod='${np_pod}'. Fix: deploy tier 3 and confirm the banking-ui-config ConfigMap and the banking-ui-oidc Secret exist. Check: kubectl get configmap,secret -n ${BANKING_NAMESPACE}"
         exit 0
     fi
+    if ! np_charge=$(_refund_charge "${NOPHONE_PERSONA}"); then
+        print_fail "Check N1: persona '${NOPHONE_PERSONA}' has no seeded charge to refund" \
+            "The run refunds ${UC3_VERIFY_REFUND_AMOUNT} of one named charge (see _refund_charge). jaime and oscar have one. Fix: UC3_NOPHONE_PERSONA=jaime"
+        exit 0
+    fi
+    np_merchant="${np_charge%%|*}"
+    np_charge_amount="${np_charge#*|}"
 
     np_log="${TMPDIR:-/tmp}/verify-uc3-no-phone-$$.log"
     np_started=$(date +%s)
@@ -971,6 +1181,7 @@ if [ "${NOPHONE_MODE}" = true ]; then
     kubectl exec -i -n "${BANKING_NAMESPACE}" "${np_pod}" -- python3 - run \
         "${np_wrp}" "${NOPHONE_PERSONA}" "${np_password}" "${np_client}" \
         "${np_secret}" "${np_redirect}" "${np_op}" \
+        "${np_merchant}" "${UC3_VERIFY_REFUND_AMOUNT}" "${np_charge_amount}" \
         <"${nophone_helper}" 2>&1 | tee "${np_log}"
     np_rc=${PIPESTATUS[0]}
     echo ""
@@ -1012,8 +1223,8 @@ if [ "${NOPHONE_MODE}" = true ]; then
     if [ -n "${np_txn}" ]; then
         print_pass "Check N3: the agent fired a real MMFA push at initiate_refund (transaction ${np_txn}) — this is the approval an attendee would see on their phone"
     else
-        print_fail "Check N3: no MMFA transaction appeared — the agent never reached initiate_refund" \
-            "Detail: ${np_err:-see ${np_log}}. The refund turn is: '$(_np CHAT2)'. Check: kubectl logs deployment/uc3-agent -n ${BANKING_NAMESPACE} | grep ciba"
+        print_fail "Check N3: no MMFA transaction appeared — the agent sent no approval push" \
+            "Detail: ${np_err:-see ${np_log}}. The refund turn is: '$(_np CHAT2)'. A refund_terms_refused line means the agent refused the refund before any approval, and its reason_code says why (exceeds_refundable: the charge has less left to refund than the run asks for). Check: kubectl logs deployment/uc3-agent -n ${BANKING_NAMESPACE} | grep -E 'refund_terms_refused|ciba'"
     fi
 
     #---------------------------------------------------------------------------
@@ -1061,7 +1272,7 @@ if [ "${NOPHONE_MODE}" = true ]; then
         kubectl run "${np_row_pod}" -n default --restart=Never \
             --image=postgres:17-alpine --env="PGPASSWORD=${np_db_pass}" \
             --command -- psql -h "${np_rds}" -U "${np_db_user}" -d workshop --no-password -A -t -F'|' \
-            -c "SET app.current_user_sub = '${NOPHONE_PERSONA}'; SELECT refund_id, request_id, amount, currency, approved_by, EXTRACT(EPOCH FROM created_at)::bigint FROM banking.refunds WHERE approved_by = '${NOPHONE_PERSONA}' ORDER BY created_at DESC LIMIT 1;" &>/dev/null
+            -c "SET app.current_user_sub = '${NOPHONE_PERSONA}'; SELECT r.refund_id, r.request_id, r.amount, r.currency, r.approved_by, EXTRACT(EPOCH FROM r.created_at)::bigint, t.merchant FROM banking.refunds r JOIN banking.transactions t ON t.id = r.transaction_id WHERE r.approved_by = '${NOPHONE_PERSONA}' ORDER BY r.created_at DESC LIMIT 1;" &>/dev/null
         kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/"${np_row_pod}" -n default --timeout=90s &>/dev/null || true
         np_row=$(kubectl logs "${np_row_pod}" -n default 2>/dev/null | grep '|' | tail -1)
         kubectl delete pod "${np_row_pod}" -n default --ignore-not-found &>/dev/null
@@ -1072,6 +1283,7 @@ if [ "${NOPHONE_MODE}" = true ]; then
         np_currency=$(echo "${np_row}" | cut -d'|' -f4)
         np_approved_by=$(echo "${np_row}" | cut -d'|' -f5)
         np_created=$(echo "${np_row}" | cut -d'|' -f6)
+        np_row_merchant=$(echo "${np_row}" | cut -d'|' -f7)
 
         if [ -z "${np_refund_id}" ]; then
             print_fail "Check N6: no refund row for ${NOPHONE_PERSONA} in banking.refunds" \
@@ -1080,8 +1292,11 @@ if [ "${NOPHONE_MODE}" = true ]; then
             print_fail "Check N6: the newest refund row for ${NOPHONE_PERSONA} predates this run (refund_id=${np_refund_id})" \
                 "This run wrote nothing — the row shown is from an earlier refund. Do NOT read it as a pass. Check: kubectl logs deployment/uc3-agent -n ${BANKING_NAMESPACE} | grep process_refund"
             np_request_id=""
+        elif [ "${np_amount}" != "${UC3_VERIFY_REFUND_AMOUNT}" ] || [ "${np_row_merchant}" != "${np_merchant}" ]; then
+            print_fail "Check N6: this run's refund row is ${np_amount} ${np_currency} of the ${np_row_merchant} charge, not the ${UC3_VERIFY_REFUND_AMOUNT} of the ${np_merchant} charge the run asked for (refund_id=${np_refund_id}, request_id=${np_request_id})" \
+                "The agent wrote a different refund from the one requested. The amount comes from what the model passed to initiate_refund — check its call: kubectl logs deployment/uc3-agent -n ${BANKING_NAMESPACE} | grep initiate_refund_started"
         else
-            print_pass "Check N6: refund row written to RDS under RLS — refund_id=${np_refund_id}, ${np_amount} ${np_currency}, approved_by=${np_approved_by}, request_id=${np_request_id}"
+            print_pass "Check N6: refund row written to RDS under RLS — refund_id=${np_refund_id}, ${np_amount} ${np_currency} of the ${np_row_merchant} charge, approved_by=${np_approved_by}, request_id=${np_request_id}"
         fi
     else
         print_fail "Check N6: could not read banking.refunds (no Vault DB creds or RDS host)" \
@@ -1192,6 +1407,90 @@ if [ "${NOPHONE_MODE}" = true ]; then
         else
             print_fail "Check N8: audit_correlation returned ZERO rows for request_id=${np_request_id} after ~200s" \
                 "The refund is written (Check N6) but the planes have not correlated. Fix: wait for fluent-bit + Firehose (60s buffer) + Glue, then re-run just this assertion: UC3_VERIFY_REQUEST_ID=${np_request_id} ./verify-uc3.sh"
+        fi
+    fi
+
+    #---------------------------------------------------------------------------
+    # Check N9 — the whole charge, asked for after this run's refund, is refused
+    # before any approval is requested
+    #
+    # With this run's refund written, the whole charge is more than is still
+    # refundable, so the agent must refuse it (issue #73). The proof is the agent's
+    # own record, request by request: every initiate_refund call in that turn
+    # failed, each one's request_id has a refund_terms_refused line with
+    # reason_code exceeds_refundable for exactly the whole charge, and no
+    # ciba_mobile_push_sent line, and no new approval reached the device. No push
+    # on its own proves nothing — the model may never have called the tool — so a
+    # turn with no initiate_refund FAILS. A refusal of any other amount FAILS too:
+    # an amount above the whole charge is refused whether or not this run's refund
+    # counted, so only the whole charge proves that what is already refunded counts.
+    #---------------------------------------------------------------------------
+    np_neg_skipped=$(_np NEG_SKIPPED)
+    np_neg_initiate=$(_np NEG_INITIATE)
+    np_neg_pending=$(_np NEG_NEW_PENDING)
+    np_neg_reply=$(_np NEG_CHATB)
+    [ -z "${np_neg_reply}" ] && np_neg_reply=$(_np NEG_CHAT)
+    if [ -n "${np_neg_skipped}" ]; then
+        print_fail "Check N9: the whole-charge refund was not asked — ${np_neg_skipped}" \
+            "It is asked only once this run's refund is written; before that the whole charge may still be refundable and the ask would rightly fire a push. Fix the refund first (Checks N5 and N6)."
+    elif [ -z "${np_neg_initiate}" ]; then
+        print_fail "Check N9: the agent never called initiate_refund for the whole ${np_merchant} charge (${np_charge_amount}), so no refusal was exercised" \
+            "No push is not proof on its own. The agent replied: '${np_neg_reply:0:200}'. Detail: ${np_err:-see ${np_log}}"
+    else
+        np_agent_log="${TMPDIR:-/tmp}/verify-uc3-agent-log-$$.log"
+        kubectl logs -n "${BANKING_NAMESPACE}" "${np_pod}" --tail=-1 >"${np_agent_log}" 2>/dev/null
+        np_neg_verdict=$(python3 - "${np_agent_log}" "${np_neg_initiate}" "${np_charge_amount}" <<'PYEOF'
+import json, sys
+from decimal import Decimal, InvalidOperation
+
+
+def money(value):
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+
+
+asked = money(sys.argv[3])
+refused, pushed = {}, set()
+with open(sys.argv[1]) as log:
+    for line in log:
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(rec, dict):
+            continue
+        if rec.get("event") == "refund_terms_refused":
+            refused[rec.get("request_id")] = (rec.get("reason_code"), rec.get("requested_amount"))
+        elif rec.get("event") == "ciba_mobile_push_sent":
+            pushed.add(rec.get("request_id"))
+bad, ok = [], []
+for call in [c for c in sys.argv[2].split(",") if c]:
+    name, status, rid = (call.split(":") + ["", "", ""])[:3]
+    reason, requested = refused.get(rid, (None, None))
+    if status != "error":
+        bad.append(f"initiate_refund {status} for request_id {rid}")
+    elif rid in pushed:
+        bad.append(f"a push was sent for request_id {rid}")
+    elif reason != "exceeds_refundable":
+        bad.append(f"request_id {rid} logged refusal reason {reason or 'none'}")
+    elif asked is None or money(requested) != asked:
+        bad.append(f"request_id {rid} was refused for {requested or 'no amount'}, not the whole charge {sys.argv[3]}")
+    else:
+        ok.append(rid)
+if bad:
+    print("NOT_REFUSED " + "; ".join(bad))
+else:
+    print("REFUSED request_id " + ", ".join(ok) + f" logged refund_terms_refused (exceeds_refundable) for {sys.argv[3]} and no push")
+PYEOF
+)
+        rm -f "${np_agent_log}"
+        if [ "${np_neg_verdict%% *}" = "REFUSED" ] && [ "${np_neg_pending}" = "0" ]; then
+            print_pass "Check N9: asking for the whole ${np_merchant} charge (${np_charge_amount}) after this run's refund was refused before any approval — ${np_neg_verdict#REFUSED }, and no new approval reached the device"
+        else
+            print_fail "Check N9: asking for the whole ${np_merchant} charge (${np_charge_amount}) was NOT refused before approval — ${np_neg_verdict:-agent log unreadable}; new approvals on the device: ${np_neg_pending:-unknown}" \
+                "A refund larger than what is left on the charge must be refused before bc-authorize and the push. The agent replied: '${np_neg_reply:0:200}'. Check: kubectl logs deployment/uc3-agent -n ${BANKING_NAMESPACE} | grep -E 'refund_terms_refused|ciba_mobile_push_sent'"
         fi
     fi
 
@@ -1377,14 +1676,41 @@ fi
 # human sub=jaime + the agent act.sub=uc3-actor resolve via the oauth-resource-server
 # profile. Assert the native surfaces + the alias binding.
 #-------------------------------------------------------------------------------
-uc3_reg_name=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
-    sh -c "${VAULT_EXEC} vault read -format=json agent-registry/registration/display-name/uc3-actor" 2>/dev/null \
-    | jq -r '.data.display_name // empty' 2>/dev/null || echo "")
+uc3_reg_json=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
+    sh -c "${VAULT_EXEC} vault read -format=json agent-registry/registration/display-name/uc3-actor" 2>/dev/null || echo "")
+uc3_reg_name=$(printf '%s' "${uc3_reg_json}" | jq -r '.data.display_name // empty' 2>/dev/null || echo "")
 if [ "${uc3_reg_name}" = "uc3-actor" ]; then
     print_pass "UC3 Agent Registry: registration 'uc3-actor' resolvable by display-name (OBO actor)"
 else
     print_fail "UC3 Agent Registry registration (uc3-actor)" \
         "agent-registry/registration/display-name/uc3-actor did not read back (got '${uc3_reg_name}') — reapply vault_config (vault_agent_registration.uc3_actor). Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault read agent-registry/registration/display-name/uc3-actor"
+fi
+
+# Mandatory RAR (issue #74). Vault refuses a delegated token that arrives with no
+# authorization_details ONLY when the registration sets optional_authorization_details
+# = false AND the binary is 2.1.0 or later — 2.0.3 and 2.0.4 vend the refund-writer
+# credential to a no-RAR token regardless of the registration. This asserts the Vault
+# side of that pair; test-vault-verify.sh Check 9 asserts the version floor.
+#
+# It is NOT a behavioural denial and must not be read as one: production IVIA stamps
+# vault:path_access on EVERY token-exchange output (iviaop-config/rules.yaml
+# isvaop_pretoken), so no live token can arrive without a RAR to be refused. The
+# denial itself is reproduced against the 2.1.1 binary outside the cluster.
+#
+# Fail-closed: an unreadable registration, a missing field, or true are all failures.
+# has() + tostring, NOT `// empty`: jq's alternative operator treats false as absent,
+# so `.data.optional_authorization_details // empty` returns empty for the very value
+# this check exists to confirm and reports an armed gate as a failure.
+uc3_rar_mandatory=$(printf '%s' "${uc3_reg_json}" \
+    | jq -r 'if (.data | type == "object" and has("optional_authorization_details")) then (.data.optional_authorization_details | tostring) else "" end' 2>/dev/null || echo "")
+if [ "${uc3_rar_mandatory}" = "false" ]; then
+    print_pass "UC3 rich authorization requests are MANDATORY: registration 'uc3-actor' has optional_authorization_details=false, so on Vault 2.1.0+ a delegated token carrying no authorization_details is refused the refund-writer credential (issue #74)"
+elif [ -z "${uc3_reg_json}" ]; then
+    print_fail "UC3 mandatory RAR (optional_authorization_details)" \
+        "Could not read agent-registry/registration/display-name/uc3-actor at all, so the mandatory-RAR gate was NOT observed — this is not evidence it is armed. Check: kubectl exec -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault read agent-registry/registration/display-name/uc3-actor"
+else
+    print_fail "UC3 mandatory RAR (optional_authorization_details)" \
+        "Registration 'uc3-actor' reports optional_authorization_details='${uc3_rar_mandatory:-<absent>}' (expected false). With it optional, a delegated token that reaches Vault with NO authorization_details is vended the refund-writer credential and Use Case 3's per-request scoping is not enforced. Fix: reapply vault_config (vault_agent_registration.uc3_actor sets optional_authorization_details = false)."
 fi
 
 uc3_ceiling=$(kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
@@ -1837,5 +2163,18 @@ else
         fi
     fi
 fi
+
+#-------------------------------------------------------------------------------
+# Check 21 — no approval, no write: the agent's OWN Kubernetes login
+#
+# The same check --bypass runs as Bypass Check 21, run here too so a normal
+# verification also proves it. It logs in exactly as the agent pod does
+# (Kubernetes auth role uc3, the uc3-privileged-actor-sa ServiceAccount) and asks
+# Vault for the refund-writer credential directly. It must be DENIED — the refund
+# write is reachable only through an approved refund's delegated token — while
+# the same login is still ALLOWED the read-only credential the agent lists
+# transactions with. It never uses the root token.
+#-------------------------------------------------------------------------------
+check_uc3_role_denied_refund_writer "Check 21"
 
 # Summary is printed automatically by the common-checks.sh EXIT trap

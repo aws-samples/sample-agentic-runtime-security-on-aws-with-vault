@@ -36,6 +36,7 @@ Per `.planning/phases/02-foundation-infrastructure/02-CONTEXT.md`: traceability 
 | `glue_database_name` | string | `workshop_logs` |
 | `athena_workgroup_name` | string | `workshop` |
 | `athena_results_bucket` | string | S3 bucket holding query results |
+| `athena_results_location` | string | The work group's enforced result location (`s3://<bucket>/results/`) — the only place the audit-reader role may write |
 
 ## Downstream Consumption
 
