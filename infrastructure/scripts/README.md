@@ -254,30 +254,50 @@ bash infrastructure/scripts/deploy-workshop.sh
 
 ## Recovery: interrupted Tier 2 — `vault-configure.sh` "path is already in use"
 
-If Tier 2 is interrupted mid-run and re-run, `vault-configure.sh` may fail its
-`terraform apply` with `path is already in use at jwt/` (or `kubernetes/`). This
-happens when a prior apply created the auth backend in Vault but the run died
-before the state write — leaving the mount **orphaned**: present in Vault but
-absent from `infrastructure/vault-config/terraform.tfstate`. On the retry
-terraform tries to create it again and Vault rejects the duplicate.
+If Tier 2 is interrupted mid-run, the apply that died may already have written
+objects into Vault without persisting them to state — leaving them **orphaned**:
+present in Vault, absent from `infrastructure/vault-config/terraform.tfstate`.
+On the retry terraform tries to create them again and Vault rejects the
+duplicate with `path is already in use at <path>/`, or with
+`Identity Entity ... already exists`.
 
-`vault-configure.sh` now **self-heals** this automatically: on a `path is already
-in use` failure it unmounts the orphaned auth backend (confirmed present in
-`GET /sys/auth`) and retries the apply once. These auth backends are fully
-declarative, so terraform recreates them identically — the unmount is
-non-destructive. You will see `[WARN] Auth backend jwt/ is orphaned … unmounting
-to recover` followed by `[ OK ] … applied successfully (after self-heal)`.
+`vault-configure.sh` recovers this automatically, **by adopting the orphans, not
+by deleting them**. On any apply failure that is not a license refusal it
+compares an explicit table of orphan-able resources — audit device, auth
+backends, secrets mounts, identity entities and entity aliases — against both
+Vault and terraform state, writes one `import` block per genuine orphan into a
+generated `zz-orphan-reconcile.tf`, verifies it with `terraform plan`, and
+retries the apply once. You will see `<name> exists in Vault but is absent from
+terraform state — will import <address>`, then
+`Vault configuration applied successfully (orphans adopted by import)`.
 
-If the self-heal cannot clear it (e.g. the conflict is a non-auth secrets mount),
-recover manually, then re-run:
+**Never unmount to recover.** Deleting an orphaned auth backend revokes every
+token issued through it, including the ones running tier-3 pods hold. Import
+blocks are used rather than `terraform import` on the CLI because CLI import
+materialises only the single instance being imported, which makes the module's
+own `local.oauth_aliases` fail with `Invalid index` when one `for_each` sibling
+is adopted while another is still missing.
+
+The generated file is removed on every path out of the script — after the retry
+apply, on the failure path, and by the EXIT trap — and is gitignored. A
+surviving copy makes every later apply fail with `resource already managed`.
+
+If the reconcile cannot run (Vault unreadable through `kubectl exec`, or a
+tier-2 output missing), the script says which, and stops rather than reporting a
+clean pass. Recover manually, then re-run:
 
 ```bash
-# Inspect the auth mounts (port-forward Vault first if needed)
-curl -s -H "X-Vault-Token: $VAULT_TOKEN" http://127.0.0.1:8200/v1/sys/auth | jq 'keys'
+# What terraform already tracks
+terraform -chdir=infrastructure/vault-config state list
 
-# Unmount the orphaned path
-curl -sf -X DELETE -H "X-Vault-Token: $VAULT_TOKEN" \
-  http://127.0.0.1:8200/v1/sys/auth/jwt
+# What Vault actually has
+kubectl exec -n vault vault-0 -- vault secrets list
+kubectl exec -n vault vault-0 -- vault auth list
+kubectl exec -n vault vault-0 -- vault read identity/entity/name/<name>   # -> id
+
+# Adopt it. Mounts, auth backends and audit devices import by PATH;
+# identity entities and aliases import by UUID.
+terraform -chdir=infrastructure/vault-config import <address> <id>
 
 # Re-run Tier 2 (Vault already initialized, cert already valid)
 bash infrastructure/scripts/deploy-workshop.sh --tier 2 --skip-vault-init --skip-acme
