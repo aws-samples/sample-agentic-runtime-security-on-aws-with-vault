@@ -48,6 +48,18 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 VAULT_CONFIG_DIR="${REPO_ROOT}/infrastructure/vault-config"
+# tier-2 state FILE — read-only here, and read with jq rather than
+# `terraform -chdir=services output`. Same channel the module reads
+# (vault-config/main.tf: data.terraform_remote_state.services), and the same file
+# phase_gather already hard-requires. `terraform output` would add an init
+# dependency on the tier-2 workspace: a wiped plugin cache or a removed
+# .terraform/ makes it fail, and a failed name lookup silently drops the very
+# rows #83 was filed for (the orphaned uc3-actor entity).
+SERVICES_STATE="${REPO_ROOT}/infrastructure/services/terraform.tfstate"
+# Generated-then-deleted config-driven import file. Named here so the cleanup
+# trap and the pre-init sweep both reference exactly one path. NEVER committed: a
+# copy left behind makes every later apply fail with "resource already managed".
+ORPHAN_IMPORT_TF="${VAULT_CONFIG_DIR}/zz-orphan-reconcile.tf"
 
 #--- Defaults ------------------------------------------------------------------
 VAULT_TOKEN=""
@@ -218,11 +230,15 @@ _free_local_port_8200() {
 # and self-heal could not clear it (or the conflict was not an auth backend).
 _vault_orphan_fix_hint() {
   info "Fix: 'path is already in use at <path>/' means a prior interrupted run left"
-  info "     a Vault mount that is absent from this workspace's terraform state."
-  info "     Inspect the auth mounts, unmount the orphan, then re-run tier 2:"
-  info "       curl -s -H \"X-Vault-Token: \$VAULT_TOKEN\" http://127.0.0.1:8200/v1/sys/auth | jq 'keys'"
-  info "       curl -sf -X DELETE -H \"X-Vault-Token: \$VAULT_TOKEN\" http://127.0.0.1:8200/v1/sys/auth/<path>"
-  info "       bash infrastructure/scripts/deploy-workshop.sh --tier 2 --skip-vault-init --skip-acme"
+  info "     an object in Vault that is absent from this workspace's terraform state."
+  info "     Adopt it by IMPORT — never by deleting the live object, which revokes"
+  info "     every token issued through it, including the ones tier-3 pods hold:"
+  info "       terraform -chdir=${VAULT_CONFIG_DIR} state list"
+  info "       kubectl exec -n vault vault-0 -- vault secrets list     # and: vault auth list"
+  info "       terraform -chdir=${VAULT_CONFIG_DIR} import <address> <id>"
+  info "     Mounts, auth backends and audit devices import by PATH; identity"
+  info "     entities import by UUID (vault read identity/entity/name/<name>)."
+  info "     Then re-run: bash infrastructure/scripts/deploy-workshop.sh --tier 2 --skip-vault-init --skip-acme"
   info "Fix: 'alias already exists for issuer and external_id' means a previous TLS"
   info "     host left OAuth entity aliases behind and one of them squats the issuer"
   info "     this run needs. List them and delete the ones whose mount_accessor is"
@@ -232,43 +248,274 @@ _vault_orphan_fix_hint() {
   info "       vault delete identity/entity-alias/id/<alias-id>"
 }
 
-# Self-heal an interrupted prior run. Vault emits "path is already in use at
-# <path>/" ONLY when terraform tries to CREATE a mount that already exists in
-# Vault — which, by definition, means the mount is absent from this workspace's
-# state (the apply created it, then the run died before the state write). The
-# error message is itself the orphan signal. For each conflicting AUTH path that
-# is present in GET /sys/auth, unmount it so the retry re-creates it. These auth
-# backends are fully declarative (kubernetes/, jwt/) — terraform recreates them
-# identically — so unmount+retry is non-destructive. Returns 0 if it unmounted
-# at least one orphan (caller should retry apply), non-zero otherwise.
-heal_orphan_auth_mounts() {
-  local apply_log="$1" healed=false p conflicts auth_json
-  conflicts=$(grep -oE 'path is already in use at [A-Za-z0-9_-]+/' "$apply_log" \
-    | sed -E 's#.*at ([A-Za-z0-9_-]+)/#\1#' | sort -u)
-  [[ -z "$conflicts" ]] && return 1
+# A tier-2 output value, read straight from the state file the vault-config root
+# reads (data.terraform_remote_state.services). Echoes nothing and returns
+# non-zero when the value is absent, so callers can fail LOUD — a name that
+# cannot be resolved must never quietly drop a row from the reconcile table.
+_services_output() {
+  local v
+  v="$(jq -r --arg k "$1" '.outputs[$k].value // empty' "${SERVICES_STATE}" 2>/dev/null)"
+  [[ -z "$v" || "$v" == "null" ]] && return 1
+  printf '%s' "$v"
+}
 
-  auth_json=$(curl -sf -H "X-Vault-Token: ${VAULT_TOKEN}" \
-    http://127.0.0.1:8200/v1/sys/auth 2>/dev/null || echo '{}')
+# The human `sub` values, one per line: uc2_human_subs (a list) plus uc3_human_sub.
+# Mirrors the module's local.obo_human_subs = toset(concat(uc2_human_subs, [uc3_human_sub])).
+#
+# Each source is required INDEPENDENTLY. A `// []` fallback on one of them and a
+# single both-are-empty guard downstream is not fail-loud: uc3_human_sub alone
+# resolving would return success with every uc2 human missing from the table, and
+# the retry apply then collides on exactly the row that was dropped.
+_obo_human_names() {
+  local subs uc3
+  subs="$(jq -r 'if (.outputs.uc2_human_subs.value | type) == "array"
+                 then .outputs.uc2_human_subs.value[] else empty end' \
+          "${SERVICES_STATE}" 2>/dev/null)"
+  [[ -z "$subs" ]] && return 1
+  uc3="$(_services_output uc3_human_sub)" || return 2
+  printf '%s\n%s\n' "$subs" "$uc3"
+}
 
-  while IFS= read -r p; do
-    [[ -z "$p" ]] && continue
-    # Only heal auth-backend orphans — confirm the path is actually mounted under
-    # sys/auth before deleting (a secrets-mount conflict is left to the Fix hint).
-    if ! echo "$auth_json" | jq -e --arg k "${p}/" 'has($k)' >/dev/null 2>&1; then
-      warn "Conflict path ${p}/ is not an auth backend (not in /sys/auth) — skipping self-heal"
+# The explicit set of resources an interrupted apply can leave behind in Vault.
+# Emits "address<TAB>kind<TAB>vault-identifier". Deliberately explicit rather than
+# derived from the plan: every row is reviewable, and a resource that cannot be
+# safely imported simply is not listed.
+#
+# A row belongs here when creating it a SECOND time is an error — that is what
+# makes it orphan-able:
+#   audit device   PUT  /v1/sys/audit/file        -> "path already in use"
+#   auth backend   POST /v1/sys/auth/kubernetes   -> "path is already in use"
+#   secrets mount  POST /v1/sys/mounts/database   -> "path is already in use"
+#   identity entity                               -> "Identity Entity ... already exists"
+#   entity alias                                  -> "entity alias ... already exists"
+# Everything else the module writes (policies, database/aws/kubernetes roles, the
+# database connection, the audit request-header allowlist, the generic_endpoint
+# OAuth aliases) is an upsert, so a second create overwrites and never fails —
+# those are not orphan-able and must NOT be listed.
+#
+# Diagnostics go to STDERR: this function's stdout IS the table, captured by the
+# caller, so a warn() on stdout would be swallowed into the variable and the
+# operator would see only a generic message naming every possible cause.
+#
+# Returns non-zero if a tier-2 name could not be resolved; the caller aborts the
+# reconcile rather than run with a table that silently omits rows.
+_vault_reconcile_table() {
+  printf '%s\t%s\t%s\n' 'module.vault_config.vault_audit.stdout'              audit  file
+  printf '%s\t%s\t%s\n' 'module.vault_config.vault_auth_backend.kubernetes'   auth   kubernetes
+  printf '%s\t%s\t%s\n' 'module.vault_config.vault_mount.database'            mount  database
+  printf '%s\t%s\t%s\n' 'module.vault_config.vault_aws_secret_backend.this'   mount  aws
+  printf '%s\t%s\t%s\n' 'module.vault_config.vault_identity_entity.uc1_agent' entity uc1-agent
+
+  # The UC1 Kubernetes-mount alias. Identified by "<auth path>|<alias name>"
+  # because an alias is unique on (mount_accessor, name), and the accessor is only
+  # knowable from the LIVE mount — importing the auth backend preserves it, so the
+  # alias collides on the retry unless it is adopted too.
+  printf '%s\t%s\t%s\n' 'module.vault_config.vault_identity_entity_alias.uc1_agent' \
+    entity_alias 'kubernetes|uc1/uc1-retriever-sa'
+
+  # agent-uc2 / uc3-actor: the resource names are fixed, the Vault entity names
+  # come from tier 2 (var.uc2_agent_identity / var.uc3_agent_identity).
+  local n
+  n="$(_services_output uc2_agent_identity)" \
+    || { warn "tier-2 output uc2_agent_identity is unreadable in ${SERVICES_STATE}" >&2; return 1; }
+  printf '%s\t%s\t%s\n' 'module.vault_config.vault_identity_entity.agent_uc2' entity "$n"
+  n="$(_services_output uc3_agent_identity)" \
+    || { warn "tier-2 output uc3_agent_identity is unreadable in ${SERVICES_STATE}" >&2; return 1; }
+  printf '%s\t%s\t%s\n' 'module.vault_config.vault_identity_entity.uc3_actor' entity "$n"
+
+  # vault_identity_entity.human is for_each over toset(obo_human_subs), so each
+  # instance address carries the sub as its key AND its name (name = each.value on
+  # a set => key == value). Enumerate the same set tier 2 publishes.
+  local humans rc=0
+  humans="$(_obo_human_names)" || rc=$?
+  case "$rc" in
+    1) warn "tier-2 output uc2_human_subs is unreadable in ${SERVICES_STATE}" >&2; return 1 ;;
+    2) warn "tier-2 output uc3_human_sub is unreadable in ${SERVICES_STATE}"  >&2; return 1 ;;
+  esac
+  while IFS= read -r n; do
+    [[ -z "$n" ]] && continue
+    printf '%s\t%s\t%s\n' "module.vault_config.vault_identity_entity.human[\"${n}\"]" entity "$n"
+  done <<< "$(printf '%s\n' "$humans" | sort -u)"
+}
+
+#--- Vault reads for the reconcile ---------------------------------------------
+# Every read below goes through vault_exec (kubectl exec), NEVER the 127.0.0.1:8200
+# tunnel. The reconcile runs only AFTER an apply has failed, and a killed
+# port-forward is one of the named causes of that failure — so the tunnel is at
+# its least trustworthy exactly here. A transient tunnel read returning "not
+# found" would drop a genuinely orphaned row, produce an incomplete import file,
+# and make the retry fail on the dropped row with no indication why.
+
+# The three mount tables, fetched ONCE per reconcile pass into these caches.
+# Empty string means "not fetched"; a fetch failure aborts the whole pass rather
+# than letting an unreadable Vault masquerade as "nothing is orphaned".
+VAULT_TBL_AUTH=""
+VAULT_TBL_MOUNTS=""
+VAULT_TBL_AUDIT=""
+
+_vault_load_mount_tables() {
+  VAULT_TBL_AUTH="$(vault_exec "vault auth list -format=json" 2>/dev/null)"   || return 1
+  VAULT_TBL_MOUNTS="$(vault_exec "vault secrets list -format=json" 2>/dev/null)" || return 1
+  VAULT_TBL_AUDIT="$(vault_exec "vault audit list -format=json" 2>/dev/null)"  || return 1
+  [[ -n "$VAULT_TBL_AUTH" && -n "$VAULT_TBL_MOUNTS" ]] || return 1
+  return 0
+}
+
+# True when the cached table for <kind> already carries <path>/.
+_vault_path_mounted() {
+  local kind="$1" p="$2" tbl
+  case "$kind" in
+    auth)  tbl="$VAULT_TBL_AUTH" ;;
+    mount) tbl="$VAULT_TBL_MOUNTS" ;;
+    audit) tbl="$VAULT_TBL_AUDIT" ;;
+    *)     return 1 ;;
+  esac
+  [[ -n "$tbl" ]] || return 1
+  jq -e --arg k "${p}/" 'has($k)' <<<"$tbl" >/dev/null 2>&1
+}
+
+# Vault's UUID for an identity entity name. Echoes nothing when the entity does
+# not exist; returns non-zero only when Vault itself could not be read, which the
+# caller must treat as "abort", never as "absent".
+_vault_entity_id() {
+  local out
+  out="$(vault_exec "vault read -format=json identity/entity/name/'$1'" 2>/dev/null)" || {
+    # A missing entity and an unreadable Vault both fail the CLI. Ask a question
+    # we know the answer to: if the auth table still reads, the entity is simply
+    # absent; if it does not, the channel is down and the pass must abort.
+    vault_exec "vault auth list -format=json" >/dev/null 2>&1 || return 1
+    return 0
+  }
+  jq -r '.data.id // empty' <<<"$out" 2>/dev/null
+}
+
+# Vault's UUID for an entity alias, given "<auth mount path>|<alias name>".
+# There is no read-by-name endpoint for an alias, so resolve it the documented
+# way: look the entity up BY its alias, then pick the matching alias off it. The
+# mount accessor comes from the live auth table, never from terraform state —
+# the whole point is that state does not know about this object.
+_vault_entity_alias_id() {
+  local mount_path="${1%%|*}" alias_name="${1#*|}" accessor out
+  accessor="$(jq -r --arg k "${mount_path}/" '.[$k].accessor // empty' <<<"$VAULT_TBL_AUTH" 2>/dev/null)"
+  [[ -z "$accessor" ]] && return 0   # mount absent => the alias cannot exist yet
+
+  out="$(vault_exec "vault write -format=json identity/lookup/entity alias_name='${alias_name}' alias_mount_accessor='${accessor}'" 2>/dev/null)" || {
+    vault_exec "vault auth list -format=json" >/dev/null 2>&1 || return 1
+    return 0
+  }
+  jq -r --arg n "$alias_name" --arg a "$accessor" \
+    '[.data.aliases[]? | select(.name == $n and .mount_accessor == $a) | .id][0] // empty' \
+    <<<"$out" 2>/dev/null
+}
+
+# Reconcile an interrupted prior run. A terraform apply that dies partway through
+# (provider panic, killed port-forward, lost session) leaves the objects it already
+# wrote in Vault while never persisting them to state, so the next apply tries to
+# CREATE them and fails.
+#
+# Recovery is CONFIG-DRIVEN import: write an `import` block per orphan and let the
+# retry apply adopt them. `terraform import` on the CLI cannot do this job — it
+# materialises only the single instance being imported, so importing one for_each
+# instance of vault_identity_entity.human while its sibling is also missing makes
+# the module's own local.oauth_aliases fail with "Invalid index". Import blocks are
+# expanded during plan, where for_each is whole, and the same apply then creates
+# everything genuinely missing. Requires Terraform >= 1.5; the repo floor is 1.10.
+#
+# This replaces an unmount-based heal that (a) only ever covered auth backends, so
+# orphaned secrets engines and identity entities were unrecoverable, and (b) removed
+# the live object: deleting kubernetes/ auth revokes every token issued through it,
+# including the ones running tier-3 pods hold. Nothing here mutates Vault.
+#
+# Runs ONLY after a failed apply. Returns 0 when it wrote a verified import file
+# (caller retries the apply, then deletes the file), non-zero otherwise.
+reconcile_orphaned_vault_resources() {
+  local state_list addr kind vid import_id blocks=0 plan_log table rc
+  info "Apply failed — reconciling Vault against terraform state..."
+
+  # Never build on a previous attempt's file.
+  rm -f "${ORPHAN_IMPORT_TF}"
+
+  # Build the table FIRST and abort if it is incomplete. A table missing rows
+  # because a tier-2 name would not resolve reconciles only part of the drift and
+  # reports success — worse than the hint, because the retry then fails on the row
+  # that was dropped. stderr passes through so the specific warn() is seen.
+  if ! table="$(_vault_reconcile_table)"; then
+    fail "Cannot build the reconcile table — the tier-2 output named above is unreadable."
+    fail "  Expected in: ${SERVICES_STATE}"
+    return 1
+  fi
+
+  if ! _vault_load_mount_tables; then
+    fail "Cannot read Vault's mount tables through 'kubectl exec' — not reconciling."
+    fail "  An unreadable Vault must not be reported as 'nothing is orphaned'."
+    fail "  Check: kubectl get pods -n vault"
+    return 1
+  fi
+
+  state_list="$(terraform -chdir="${VAULT_CONFIG_DIR}" state list 2>/dev/null || true)"
+
+  while IFS=$'\t' read -r addr kind vid; do
+    [[ -z "$addr" || -z "$kind" || -z "$vid" ]] && continue
+    # Already tracked — an import block for a managed resource is a hard error, so
+    # only genuine orphans may be written. -x -F so the for_each brackets and quotes
+    # in an instance address match literally and never as a pattern.
+    if printf '%s\n' "$state_list" | grep -qxF "$addr"; then
       continue
     fi
-    warn "Auth backend ${p}/ is orphaned (exists in Vault, absent from terraform state) — unmounting to recover"
-    if curl -sf -X DELETE -H "X-Vault-Token: ${VAULT_TOKEN}" \
-         "http://127.0.0.1:8200/v1/sys/auth/${p}" >/dev/null 2>&1; then
-      ok "Unmounted orphaned auth backend ${p}/"
-      healed=true
-    else
-      warn "Failed to unmount ${p}/ — manual recovery may be required"
-    fi
-  done <<< "$conflicts"
 
-  [[ "$healed" == true ]]
+    import_id=""
+    rc=0
+    case "$kind" in
+      # Mounts, auth backends and audit devices adopt by PATH. vault_audit's id is
+      # the DEVICE PATH, which defaults to the type ("file") — not the file_path
+      # option ("stdout"): the failing call is PUT /v1/sys/audit/file.
+      auth|mount|audit) _vault_path_mounted "$kind" "$vid" && import_id="$vid" ;;
+      entity)           import_id="$(_vault_entity_id "$vid")" || rc=$? ;;        # adopts by UUID
+      entity_alias)     import_id="$(_vault_entity_alias_id "$vid")" || rc=$? ;;  # adopts by UUID
+      *) warn "Reconcile row '${addr}' has unknown kind '${kind}' — skipped"; continue ;;
+    esac
+    if (( rc != 0 )); then
+      fail "Vault became unreadable while checking '${vid}' — not reconciling."
+      fail "  Reconciling on partial reads writes an incomplete import file, and the"
+      fail "  retry then fails on the row that was silently dropped."
+      rm -f "${ORPHAN_IMPORT_TF}"
+      return 1
+    fi
+    # Absent from state AND absent from Vault is not drift — the retry creates it.
+    [[ -z "$import_id" ]] && continue
+
+    warn "${vid} exists in Vault but is absent from terraform state — will import ${addr}"
+    {
+      printf 'import {\n'
+      printf '  to = %s\n' "$addr"
+      printf '  id = "%s"\n' "$import_id"
+      printf '}\n'
+    } >> "${ORPHAN_IMPORT_TF}"
+    blocks=$((blocks + 1))
+  done <<< "$table"
+
+  if [[ "$blocks" -eq 0 ]]; then
+    info "Nothing orphaned — the apply failed for another reason"
+    rm -f "${ORPHAN_IMPORT_TF}"
+    return 1
+  fi
+
+  # Verify before handing a generated file to an -auto-approve apply. A bad block
+  # must surface as "reconcile failed, here is why", never as a second apply
+  # failure on config the script wrote.
+  info "Verifying ${blocks} import block(s) with terraform plan..."
+  plan_log="$(mktemp)"
+  if ! terraform -chdir="${VAULT_CONFIG_DIR}" plan -input=false -no-color >"$plan_log" 2>&1; then
+    fail "Reconcile plan failed — not applying the generated import blocks:"
+    grep -E '^(Error|╷|│|╵)' "$plan_log" | head -15 | while IFS= read -r line; do
+      fail "  ${line}"
+    done
+    rm -f "$plan_log" "${ORPHAN_IMPORT_TF}"
+    return 1
+  fi
+  ok "Reconcile plan clean — $(grep -c 'will be imported' "$plan_log" || true) resource(s) to adopt"
+  rm -f "$plan_log"
+  return 0
 }
 
 # Self-heal orphaned OAuth entity aliases. Vault enforces (issuer, external_id)
@@ -541,6 +788,9 @@ vault_exec() {
 }
 
 cleanup() {
+  # A surviving zz-orphan-reconcile.tf makes EVERY later apply fail with
+  # "resource already managed", so it is removed on every path out of the script.
+  rm -f "${ORPHAN_IMPORT_TF}" 2>/dev/null || true
   info "Cleaning up port-forwards..."
   [[ -n "${VAULT_PF_PID:-}" ]] && kill "$VAULT_PF_PID" 2>/dev/null || true
   [[ -n "${IVIA_PF_PID:-}" ]] && kill "$IVIA_PF_PID" 2>/dev/null || true
@@ -761,6 +1011,11 @@ TFVARS
   fi
 
   # Terraform init + apply
+  # Belt one of three against a generated import file surviving a crash: an EXIT
+  # trap cannot cover kill -9, which is the very class of interruption that
+  # creates this drift in the first place. Sweep unconditionally before init.
+  rm -f "${ORPHAN_IMPORT_TF}"
+
   info "Running terraform init..."
   if ! terraform -chdir="${VAULT_CONFIG_DIR}" init -input=false 2>&1 | tail -3; then
     fail "terraform init failed"
@@ -776,15 +1031,23 @@ TFVARS
   apply_log="$(mktemp)"
   if terraform -chdir="${VAULT_CONFIG_DIR}" apply -auto-approve -input=false 2>&1 | tee "$apply_log"; then
     ok "Vault configuration applied successfully"
-  elif grep -q 'path is already in use' "$apply_log" && heal_orphan_auth_mounts "$apply_log"; then
-    # An interrupted prior run strands an auth MOUNT. Cleared non-destructively,
-    # then the apply is retried. (The OAuth entity ALIAS class is swept before the
-    # apply above, so it never reaches this error path.)
-    info "Retrying terraform apply after self-heal..."
+  # Any failure that is not a license refusal gets a reconcile pass. Deliberately
+  # NOT gated on the "path is already in use" string: the interrupted apply that
+  # causes this drift can die on a provider panic while creating identity
+  # entities, which never emits that message, and entities are not mounts so they
+  # never matched it anyway. The pass is a no-op when nothing is orphaned. A
+  # pki-only license short-circuits it — importing nothing would be pointless work
+  # ahead of the license gate below, which is the real diagnosis.
+  elif ! grep -q 'not supported by license' "$apply_log" && reconcile_orphaned_vault_resources; then
+    info "Retrying terraform apply — adopting the orphans and creating the rest..."
     if terraform -chdir="${VAULT_CONFIG_DIR}" apply -auto-approve -input=false 2>&1; then
-      ok "Vault configuration applied successfully (after self-heal)"
+      # Belt two: the file has done its job the instant the apply lands, and is
+      # removed on BOTH paths out of the retry, not just the happy one.
+      rm -f "${ORPHAN_IMPORT_TF}"
+      ok "Vault configuration applied successfully (orphans adopted by import)"
     else
-      fail "terraform apply still failing after self-heal"
+      rm -f "${ORPHAN_IMPORT_TF}"
+      fail "terraform apply still failing after reconciliation"
       _vault_orphan_fix_hint
       rm -f "$apply_log"
       record "vault_config" "FAIL"
