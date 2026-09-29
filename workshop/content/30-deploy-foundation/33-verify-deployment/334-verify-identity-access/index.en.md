@@ -118,7 +118,13 @@ A `curl: (60) SSL certificate problem` here means Step 7's ACME issuance did not
 **Why:** Vault and the agents reach IVIA from inside the cluster, not through the load balancer. This checks they are told the same issuer a browser is — if the two disagreed, token validation would fail later.
 
 ```bash
-kubectl run oidc-check --image=curlimages/curl --rm -i --restart=Never --quiet -n verify-access -- curl -sk https://iviaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration </dev/null | jq .issuer
+kubectl delete pod oidc-check -n verify-access --ignore-not-found --now >/dev/null 2>&1
+kubectl run oidc-check --image=curlimages/curl --restart=Never -n verify-access \
+  -- curl -sk https://iviaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration >/dev/null
+kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/oidc-check -n verify-access --timeout=120s >/dev/null 2>&1 \
+  || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/oidc-check -n verify-access --timeout=30s >/dev/null 2>&1
+kubectl logs oidc-check -n verify-access | jq .issuer
+kubectl delete pod oidc-check -n verify-access --now >/dev/null 2>&1
 ```
 
 Expected — the **same** issuer as Step 3, even reached over ClusterIP. The provider always advertises the one public WRP issuer, which lets Vault validate IVIA tokens against a single `issuer_id` on its OAuth resource server profile:

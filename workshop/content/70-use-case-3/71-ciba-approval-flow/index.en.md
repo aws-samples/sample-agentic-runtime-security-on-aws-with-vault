@@ -112,13 +112,17 @@ Attempt the exchange as `agent-uc2` — the Use Case 2 banking client, not allow
 
 ```bash
 kubectl delete pod ivia-exch-probe -n verify-access --ignore-not-found --now >/dev/null 2>&1
-kubectl run ivia-exch-probe --rm -i --quiet --restart=Never --image=curlimages/curl:8.11.1 -n verify-access \
+kubectl run ivia-exch-probe --restart=Never --image=curlimages/curl:8.11.1 -n verify-access \
   --command -- curl -sk -X POST https://iviaop.verify-access.svc.cluster.local:8436/oauth2/token \
     -u "agent-uc2:${UC2_SECRET}" \
     -d 'grant_type=urn:ietf:params:oauth:grant-type:token-exchange' \
     -d 'subject_token=not-a-real-ciba-token' \
     -d 'subject_token_type=urn:ietf:params:oauth:token-type:access_token' \
-    -d 'requested_token_type=urn:ietf:params:oauth:token-type:access_token'
+    -d 'requested_token_type=urn:ietf:params:oauth:token-type:access_token' >/dev/null
+kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/ivia-exch-probe -n verify-access --timeout=120s >/dev/null 2>&1 \
+  || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/ivia-exch-probe -n verify-access --timeout=30s >/dev/null 2>&1
+kubectl logs ivia-exch-probe -n verify-access
+kubectl delete pod ivia-exch-probe -n verify-access --now >/dev/null 2>&1
 ```
 
 Expected output — refused on the client, before the token is looked at:
@@ -131,13 +135,17 @@ Now the same request as `uc3-actor`, the client that *is* allowlisted:
 
 ```bash
 kubectl delete pod ivia-exch-probe -n verify-access --ignore-not-found --now >/dev/null 2>&1
-kubectl run ivia-exch-probe --rm -i --quiet --restart=Never --image=curlimages/curl:8.11.1 -n verify-access \
+kubectl run ivia-exch-probe --restart=Never --image=curlimages/curl:8.11.1 -n verify-access \
   --command -- curl -sk -X POST https://iviaop.verify-access.svc.cluster.local:8436/oauth2/token \
     -u "uc3-actor:${ACTOR_SECRET}" \
     -d 'grant_type=urn:ietf:params:oauth:grant-type:token-exchange' \
     -d 'subject_token=not-a-real-ciba-token' \
     -d 'subject_token_type=urn:ietf:params:oauth:token-type:access_token' \
-    -d 'requested_token_type=urn:ietf:params:oauth:token-type:access_token'
+    -d 'requested_token_type=urn:ietf:params:oauth:token-type:access_token' >/dev/null
+kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/ivia-exch-probe -n verify-access --timeout=120s >/dev/null 2>&1 \
+  || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/ivia-exch-probe -n verify-access --timeout=30s >/dev/null 2>&1
+kubectl logs ivia-exch-probe -n verify-access
+kubectl delete pod ivia-exch-probe -n verify-access --now >/dev/null 2>&1
 ```
 
 Expected output — it gets past the client check and dies on the token, which is the *only* thing left to object to:

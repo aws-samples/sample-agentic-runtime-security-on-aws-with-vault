@@ -158,10 +158,16 @@ allowed_roles         [uc1-readonly uc2-personal-readonly uc3-refund-writer uc3-
 **Why:** Vault reads this document to learn where to fetch IVIA's signing keys. The issuer it advertises must match Step 3 exactly, or every token is rejected.
 
 ```bash
-kubectl run oidc-check --image=curlimages/curl --rm -i --restart=Never --quiet -n verify-access -- curl -sk https://iviaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration </dev/null | jq .
+kubectl delete pod oidc-check -n verify-access --ignore-not-found --now >/dev/null 2>&1
+kubectl run oidc-check --image=curlimages/curl --restart=Never -n verify-access \
+  -- curl -sk https://iviaop.verify-access.svc.cluster.local:8436/oauth2/.well-known/openid-configuration >/dev/null
+kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/oidc-check -n verify-access --timeout=120s >/dev/null 2>&1 \
+  || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/oidc-check -n verify-access --timeout=30s >/dev/null 2>&1
+kubectl logs oidc-check -n verify-access | jq .
+kubectl delete pod oidc-check -n verify-access --now >/dev/null 2>&1
 ```
 
-The `--quiet` flag and `</dev/null` are both required: without them `kubectl run`'s pod-lifecycle message lands in the `jq` pipe and the command fails with `jq: parse error: Invalid numeric literal`.
+The pod is run detached and its output read back with `kubectl logs`, so only the provider's JSON reaches `jq`. Attaching to a pod this short-lived is a race: `kubectl` loses it, falls back to streaming the logs, and its warning lands in the `jq` pipe as `jq: parse error: Invalid numeric literal`.
 
 Expected — `issuer` matches the `issuer_id` from Step 3. Note the provider advertises the **public WRP host**, not the cluster-internal address you just called:
 

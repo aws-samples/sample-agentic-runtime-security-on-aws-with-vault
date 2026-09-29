@@ -258,10 +258,14 @@ This is the exact call the MCP server makes: the token *is* the Vault token. Run
 ```bash
 for attempt in 1 2; do
   kubectl delete pod vault-replay -n banking-app --ignore-not-found --now >/dev/null 2>&1
-  kubectl run vault-replay --rm -i --quiet --restart=Never --image=curlimages/curl:8.11.1 -n banking-app \
+  kubectl run vault-replay --restart=Never --image=curlimages/curl:8.11.1 -n banking-app \
     --command -- curl -s -H "X-Vault-Token: ${ACCESS_TOKEN}" \
-      http://vault.vault.svc.cluster.local:8200/v1/database/creds/uc2-personal-readonly \
+      http://vault.vault.svc.cluster.local:8200/v1/database/creds/uc2-personal-readonly >/dev/null
+  kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/vault-replay -n banking-app --timeout=120s >/dev/null 2>&1 \
+    || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/vault-replay -n banking-app --timeout=30s >/dev/null 2>&1
+  kubectl logs vault-replay -n banking-app \
     | sed -e "s/.*\"username\":\"\([^\"]*\)\".*/attempt ${attempt} username=\1/"
+  kubectl delete pod vault-replay -n banking-app --now >/dev/null 2>&1
 done
 ```
 
