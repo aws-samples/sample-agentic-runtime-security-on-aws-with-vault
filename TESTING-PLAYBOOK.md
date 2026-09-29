@@ -74,6 +74,13 @@ Everything from `30-deploy-foundation/32-configure-kubectl` — **Configure kube
 
 ---
 
+**Findings are Bear's call, not mine.** When something looks like a break, I say so in
+chat with the evidence and ask him whether it is a finding. Nothing is written to the
+dashboard's Findings section until he agrees it is one. A wrong entry at the top of that
+page is worse than no entry: it is the first thing anyone reads, and it sends colleagues
+chasing a defect that does not exist. (Stated 2026-09-28, after I filed the CloudShell
+licence upload as a finding when the upload does exactly what the page says.)
+
 ## Start of run — three things, in this order, before Phase 0
 
 **1. Open the walkthrough log and hand over its `tail -f` immediately.** This is the first thing said in a run, before Phase 0 and before any command:
