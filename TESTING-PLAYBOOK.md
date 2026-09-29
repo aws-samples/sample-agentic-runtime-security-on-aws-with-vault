@@ -97,7 +97,7 @@ page is worse than no entry: it is the first thing anyone reads, and it sends co
 chasing a defect that does not exist. (Stated 2026-09-28, after I filed the CloudShell
 licence upload as a finding when the upload does exactly what the page says.)
 
-## Start of run — three things, in this order, before Phase 0
+## Start of run — four things, in this order, before Phase 0
 
 **1. Open the walkthrough log and hand over its `tail -f` immediately.** This is the first thing said in a run, before Phase 0 and before any command:
 
@@ -133,7 +133,19 @@ A heading with a single command block gets one document with `sub: ''`. A step t
 
 Moving a phase is one `write_db` `update` on its phase document, with `currentPhase` and `updatedAt` on the run in the same batch.
 
-**3. Then Phase 0.**
+**3. On any run from your own terminal or IDE, prove `~/vault-init.json` is absent before Phase 0.**
+
+```bash
+ls -l ~/vault-init.json 2>/dev/null && echo "STALE — remove it before starting" || echo "absent — good"
+```
+
+If it is there, delete it: `rm -f ~/vault-init.json`.
+
+**Why this is an entry check and not only an exit one.** `teardown.sh` removes the file at the end of its run (issue #48), and that is correct — but it only ever fires for an environment that was torn down *on this machine*. A laptop accumulates the file from anywhere: a run against a different account, a copy pulled out of CloudShell, an environment destroyed from another shell. None of those leave a teardown behind to clean up after them. CloudShell does not have this problem — the file lives in that account's `$HOME` and dies with it — so this check belongs to the local cell specifically.
+
+A stale file is worse than a missing one. The missing-file guard fails loudly and correctly (`ERROR: no root token in ~/vault-init.json — the Tier-2 deploy has not run on this machine`). A stale file sails straight past it and hands every Vault page a root token for a Vault that no longer exists, so the run fails later, somewhere else, looking like a workshop defect rather than a dirty machine.
+
+**4. Then Phase 0.**
 
 ---
 
