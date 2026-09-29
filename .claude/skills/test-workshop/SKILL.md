@@ -53,6 +53,14 @@ State in one line, and stop if any of it is wrong:
 
 A test of the wrong branch, or of a dirty tree, measures nothing.
 
+## Step 3.5 — then run it to the end without asking
+
+Once Step 2's path is settled and Step 3's base is confirmed, the run is **autonomous**.
+No questions from Phase 0 to the end of Phase 3. Decide from the pages, the scripts and
+the repo; record what happens; keep going. Stop only for a credential Bear alone holds, an
+account-level denial nothing in the repo can clear, or a destructive action. Findings are
+collected and put to him at the end, not raised mid-run.
+
 ## Step 4 — run the playbook
 
 Start of run, in the playbook's order: hand over the `tail -f` first, publish and seed the dashboard second, Phase 0 third. Then, for a full cycle, Phase 0 through Phase 3 for the cell chosen in Step 2 — or, for a content pass, the changed pages only.

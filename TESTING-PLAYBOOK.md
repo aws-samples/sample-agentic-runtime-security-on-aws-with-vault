@@ -74,9 +74,21 @@ Everything from `30-deploy-foundation/32-configure-kubectl` — **Configure kube
 
 ---
 
-**Findings are Bear's call, not mine.** When something looks like a break, I say so in
-chat with the evidence and ask him whether it is a finding. Nothing is written to the
-dashboard's Findings section until he agrees it is one. A wrong entry at the top of that
+**The run is autonomous. Ask the path, then do not stop again.** Once Bear has chosen
+the cell, the run goes from Phase 0 to the end of Phase 3 without a single question. Every
+decision inside the run is mine to make from the pages, the scripts and the repo: which
+command comes next, what a documented flag is for, whether a prompt takes the value the
+page already names, how to read an error. A question mid-run is a defect in my preparation,
+not diligence. The two exceptions are a genuine external blocker I cannot act on (a
+credential only Bear holds, an account-level denial) and something destructive. Everything
+else: decide, run it, record what happened, keep going. (Stated 2026-09-28 — "I need you to
+run this test autonomously, you have all you need, you do not need to stop to ask me
+questions. That is how i want the playbook to be from now on.")
+
+**Findings are Bear's call, not mine — but they do not stop the run.** When something
+looks like a break, I record it in the walkthrough log, keep going, and put the whole list
+to him at the end for his verdict. Nothing is written to the dashboard's Findings section
+until he agrees it is one. A wrong entry at the top of that
 page is worse than no entry: it is the first thing anyone reads, and it sends colleagues
 chasing a defect that does not exist. (Stated 2026-09-28, after I filed the CloudShell
 licence upload as a finding when the upload does exactly what the page says.)
