@@ -8,6 +8,13 @@ The single document for testing this workshop. It covers both audiences (at an e
 
 ## Pick your cell before you start
 
+**ALWAYS ASK. This is a gate, not a preference.** The workshop has four paths, and the
+first thing any test run does — before Phase 0, before the log, before the dashboard — is
+put the four to Bear with `AskUserQuestion` and wait for his answer. Never infer the cell
+from a previous run, a skill argument, a compacted summary, or what was standing in the
+account. A run started on the wrong cell measures the wrong workshop and has to be thrown
+away.
+
 Four combinations. They diverge in three places and rejoin at **Configure kubectl**.
 
 |                  | **CloudShell** | **Your own terminal / IDE** |
@@ -28,6 +35,13 @@ Credentials are the first thing to get right in every cell — the pre-flight ch
 `30-deploy-foundation` — **Deploy Foundation** is a two-button chooser; pick the button matching your audience.
 
 Everything from `30-deploy-foundation/32-configure-kubectl` — **Configure kubectl** onward is one shared path through `80-cleanup` — **Cleanup**.
+
+**Two more forks to settle in the same question**, because they change which commands run:
+
+| Fork | Values | Where it bites |
+|---|---|---|
+| Image source | `ecr` (default — build the five images and push to your own ECR; needs a container runtime) · `ghcr` (`--image-source=ghcr`, pre-built public images, no build) | Pre-flight and Tier 1 |
+| Use Case 3 enrollment | real phone (scan the QR, tap Approve on the CIBA push) · `--no-phone` substitute | The six Use Case 3 pages |
 
 **The environment tabs sync.** Pre-flight uses `groupId="workshop-env"`, so picking CloudShell on one tab block selects it on the other. A page you tested on one tab is half tested — say which tab you were on.
 
@@ -59,6 +73,25 @@ Everything from `30-deploy-foundation/32-configure-kubectl` — **Configure kube
 10. **Nothing merges or closes on a green test run.** A passing run means *ready to verify*, nothing more.
 
 ---
+
+**The run is autonomous. Ask the path, then do not stop again.** Once Bear has chosen
+the cell, the run goes from Phase 0 to the end of Phase 3 without a single question. Every
+decision inside the run is mine to make from the pages, the scripts and the repo: which
+command comes next, what a documented flag is for, whether a prompt takes the value the
+page already names, how to read an error. A question mid-run is a defect in my preparation,
+not diligence. The two exceptions are a genuine external blocker I cannot act on (a
+credential only Bear holds, an account-level denial) and something destructive. Everything
+else: decide, run it, record what happened, keep going. (Stated 2026-09-28 — "I need you to
+run this test autonomously, you have all you need, you do not need to stop to ask me
+questions. That is how i want the playbook to be from now on.")
+
+**Findings are Bear's call, not mine — but they do not stop the run.** When something
+looks like a break, I record it in the walkthrough log, keep going, and put the whole list
+to him at the end for his verdict. Nothing is written to the dashboard's Findings section
+until he agrees it is one. A wrong entry at the top of that
+page is worse than no entry: it is the first thing anyone reads, and it sends colleagues
+chasing a defect that does not exist. (Stated 2026-09-28, after I filed the CloudShell
+licence upload as a finding when the upload does exactly what the page says.)
 
 ## Start of run — three things, in this order, before Phase 0
 

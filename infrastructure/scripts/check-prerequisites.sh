@@ -27,11 +27,10 @@
 #   ./check-prerequisites.sh --dry-run       # print actions without executing installs
 #   ./check-prerequisites.sh --skip-tools    # skip the tool-install + tool-version
 #                                            # sections; run credential + region +
-#                                            # quota + IAM checks only. Required for
-#                                            # the Instruqt distribution where the
-#                                            # sandbox image has aws/terraform/kubectl
-#                                            # pre-baked and `brew` / `apt` are not
-#                                            # available.
+#                                            # quota + IAM checks only. For an
+#                                            # environment that ships aws/terraform/
+#                                            # kubectl pre-installed and has no
+#                                            # `brew` / `apt`.
 #   ./check-prerequisites.sh --help          # usage
 #
 # Replaces (and consolidates) the previous 4 scripts:
@@ -55,18 +54,16 @@ DRY_RUN=false
 INTERACTIVE=false
 # Skip the tool-install + tool-version sections when running in an environment
 # where aws/terraform/kubectl are pre-installed and the host package manager
-# (brew, apt, yum) is not available. Set true by --skip-tools; required by the
-# Instruqt distribution's track_scripts/setup-cloud-client (see instruqt/README.md).
+# (brew, apt, yum) is not available. Set true by --skip-tools.
 SKIP_TOOLS=false
 # Skip Section 3 (servicequotas:GetServiceQuota) when running in an environment
-# whose SCP blocks the servicequotas API entirely — Instruqt sandboxes:
-# `servicequotas` is not on Instruqt's 43-key allowed-services list, so every
-# quota probe gets an explicit-deny. Set true by --skip-quotas.
+# whose SCP or session policy blocks the servicequotas API entirely, so every
+# quota probe comes back as an explicit deny. Set true by --skip-quotas.
 SKIP_QUOTAS=false
 # Skip Section 4 (iam:SimulatePrincipalPolicy probes) when running in an
 # environment whose SCP architecture makes the simulator return implicitDeny
-# for actions the principal can actually perform — Instruqt sandboxes. The
-# real test is the subsequent terraform apply. Set true by --skip-iam-sim.
+# for actions the principal can actually perform. The real test is the
+# subsequent terraform apply. Set true by --skip-iam-sim.
 SKIP_IAM_SIM=false
 # Image source mode — controls whether the container-runtime gate fires.
 # ecr (default): local build + push to ECR — container runtime (Docker or Podman) required.
@@ -107,19 +104,17 @@ Modes:
                     side effects.
   --skip-tools      Skip the tool-install (Section 1) + tool-version
                     (Section 1.5) gates. Keep all credential + region + Bedrock
-                    + quota + IAM checks (Sections 2-4). Required for the
-                    Instruqt distribution where aws/terraform/kubectl/jq/helm
-                    are pre-baked into the sandbox image and brew/apt are not
-                    available.
+                    + quota + IAM checks (Sections 2-4). For an environment
+                    that ships aws/terraform/kubectl/jq/helm pre-installed and
+                    has no brew/apt.
   --skip-quotas     Skip Section 3 (servicequotas:GetServiceQuota probe loop).
-                    Required where the sandbox SCP blocks the servicequotas
-                    API entirely (Instruqt — servicequotas is not on the
-                    43-key allowed-services list).
+                    For an account whose SCP or session policy blocks the
+                    servicequotas API entirely.
   --skip-iam-sim    Skip Section 4 (iam:SimulatePrincipalPolicy probes).
                     Required where the sandbox SCP architecture makes the
                     simulator return implicitDeny for actions the principal
                     can actually perform; terraform apply becomes the real
-                    test (Instruqt).
+                    test.
   --help, -h        Show this help and exit.
 USAGE
             exit 0
@@ -496,7 +491,7 @@ fi  # end if [ "$SKIP_TOOLS" = true ] ... else  (covers Sections 1 + 1.5)
 #
 # Runs regardless of --skip-tools: the license file requirement is unrelated to
 # CLI tool installation and matters even when aws/terraform/kubectl are
-# pre-baked (Instruqt-style sandboxes).
+# pre-installed.
 #
 #   (a) hashicorp/vault Terraform provider >= VAULT_PROVIDER_MIN_VERSION —
 #       vault_agent_registration + vault_oauth_resource_server_config_profile
@@ -610,7 +605,7 @@ echo
 # =============================================================================
 if [ "$SKIP_QUOTAS" = true ]; then
     echo -e "${BLUE}=== Check AWS service quotas — SKIPPED (--skip-quotas) ===${NC}"
-    print_info "servicequotas:GetServiceQuota is SCP-denied in the Instruqt sandbox; relying on terraform apply / actual workshop usage to surface real quota issues."
+    print_info "servicequotas:GetServiceQuota is denied for this principal; relying on terraform apply / actual workshop usage to surface real quota issues."
     QUOTAS_HEADER_PRINTED=1
 fi
 if [ -z "${QUOTAS_HEADER_PRINTED:-}" ]; then
@@ -730,7 +725,7 @@ echo
 # =============================================================================
 if [ "$SKIP_IAM_SIM" = true ]; then
     echo -e "${BLUE}=== Check IAM permissions — SKIPPED (--skip-iam-sim) ===${NC}"
-    print_info "iam:SimulatePrincipalPolicy returns implicitDeny under Instruqt's SCP architecture even for actions the principal can perform; relying on terraform apply to surface real permission failures."
+    print_info "iam:SimulatePrincipalPolicy returns implicitDeny for this principal even for actions it can perform; relying on terraform apply to surface real permission failures."
     IAM_HEADER_PRINTED=1
 fi
 if [ -z "${IAM_HEADER_PRINTED:-}" ]; then

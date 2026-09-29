@@ -20,18 +20,27 @@ If nothing is standing, or the diff touches Terraform, Helm values, images, or d
 
 Never tear down a standing, validated environment without Bear saying to.
 
-## Step 2 — settle the cell
+## Step 2 — ASK which path. Always.
 
-Two independent choices. Take whichever Bear already gave in his message or in `$ARGUMENTS`, and ask **only** for what is still missing — never re-ask something he already said.
+**This is a hard gate. Ask every single run, with `AskUserQuestion`, and wait.** Never
+infer the cell from a previous session, from this skill's own argument text, from a
+compacted summary, or from what happens to be standing in the account. Bear's direction,
+2026-09-28: *"you need to AALWAYS ASK THAT DAMN IT"* — after a run was started on the
+wrong environment and had to be abandoned mid-flight.
+
+Four independent choices. Put all four to him in one call.
 
 | Choice | Values | How it is usually phrased |
 |---|---|---|
 | **Audience** | At an event · Self-paced | "at-event", "at an event", "ws", "workshop studio" · "self-paced", "selfpaced", "my account" |
 | **Environment** | AWS CloudShell · Own terminal or IDE | "cloudshell", "cs" · "laptop", "local", "terminal", "ide", "mac" |
+| **Image source** | `ecr` (default: build the five images, push to your own ECR, needs a container runtime) · `ghcr` (`--image-source=ghcr`, pre-built public images, no build) | "build", "ecr" · "ghcr", "prebuilt", "no build" |
+| **Use Case 3 enrollment** | Real phone (scan the QR, tap Approve) · `--no-phone` substitute | "phone", "real" · "no-phone", "skip the phone" |
 
-Ask with `AskUserQuestion` — one question per missing choice, both in the same call. Never as a prose list.
+Ask with `AskUserQuestion` — one question per choice, all in the same call. Never as a prose list.
 
-If he names only an audience (the historical trigger was just "self-paced" or "at-event"), ask only the environment.
+Ask all four every run, even the ones he named last time. The only choices you may carry
+forward are ones he stated **in this session's own messages**.
 
 ## Step 3 — confirm the base before anything runs
 
@@ -43,6 +52,14 @@ State in one line, and stop if any of it is wrong:
 - The caller identity and region — `aws sts get-caller-identity` and the region, which is `us-east-1`.
 
 A test of the wrong branch, or of a dirty tree, measures nothing.
+
+## Step 3.5 — then run it to the end without asking
+
+Once Step 2's path is settled and Step 3's base is confirmed, the run is **autonomous**.
+No questions from Phase 0 to the end of Phase 3. Decide from the pages, the scripts and
+the repo; record what happens; keep going. Stop only for a credential Bear alone holds, an
+account-level denial nothing in the repo can clear, or a destructive action. Findings are
+collected and put to him at the end, not raised mid-run.
 
 ## Step 4 — run the playbook
 

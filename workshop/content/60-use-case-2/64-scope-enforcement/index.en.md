@@ -156,19 +156,21 @@ No workshop pod has the `psql` binary pre-installed, so spawn a transient `postg
 
 ```bash
 kubectl delete pod pg-insert-attempt -n banking-app --ignore-not-found --now >/dev/null 2>&1
-kubectl run pg-insert-attempt --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
+kubectl run pg-insert-attempt --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${PG_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop \
-    -c "INSERT INTO banking.accounts (user_sub, account_number, balance)
+    -c "INSERT INTO banking.accounts (user_sub, account_number, balance) >/dev/null
+kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-insert-attempt -n banking-app --timeout=120s >/dev/null 2>&1 \
+  || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/pg-insert-attempt -n banking-app --timeout=30s >/dev/null 2>&1
+kubectl logs pg-insert-attempt -n banking-app
+kubectl delete pod pg-insert-attempt -n banking-app --now >/dev/null 2>&1
          VALUES ('attacker@example.com', 'FAKE-001', 999999.00);"
 ```
 
-Expected output (the pod exits with code 1 because `psql` returns non-zero on SQL errors — that is the *success* signal here, the INSERT was rejected):
+Expected output — the INSERT is rejected, which is the *success* signal here. The pod ends in the `Failed` phase (`psql` returns non-zero on SQL errors), which is why the block waits for `Succeeded` **or** `Failed` before reading the log:
 
 ```
 ERROR:  permission denied for table accounts
-pod "pg-insert-attempt" deleted
-pod banking-app/pg-insert-attempt terminated (Error)
 ```
 
 The Postgres GRANT layer rejected the INSERT independently of Vault policy. Even if an attacker obtained a `uc2-personal-readonly` credential through a Vault misconfiguration that widened the policy scope, the database GRANT would still prevent writes — and because every Vault-vended credential is its own freshly-created Postgres role (with grants applied directly to it), there is no permanent role to GRANT INSERT onto either.
@@ -193,10 +195,14 @@ kubectl create secret generic db-master -n banking-app \
   --from-literal=password="${MASTER_PASS}" --dry-run=client -o yaml | kubectl apply -f -
 
 kubectl delete pod pg-grants -n banking-app --ignore-not-found --now >/dev/null 2>&1
-kubectl run pg-grants --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
+kubectl run pg-grants --restart=Never --image=postgres:16-alpine -n banking-app \
   --overrides="$(jq -n --arg host "${RDS_HOST}" --arg user "${MASTER_USER}" \
     --arg sql "\dp banking.accounts" \
-    '{spec:{containers:[{name:"pg-grants",image:"postgres:16-alpine",env:[{name:"PGPASSWORD",valueFrom:{secretKeyRef:{name:"db-master",key:"password"}}}],command:["psql","-h",$host,"-U",$user,"-d","workshop","-c",$sql]}],restartPolicy:"Never"}}')"
+    '{spec:{containers:[{name:"pg-grants",image:"postgres:16-alpine",env:[{name:"PGPASSWORD",valueFrom:{secretKeyRef:{name:"db-master",key:"password"}}}],command:["psql","-h",$host,"-U",$user,"-d","workshop","-c",$sql]}],restartPolicy:"Never"}}')" >/dev/null
+kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-grants -n banking-app --timeout=120s >/dev/null 2>&1 \
+  || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/pg-grants -n banking-app --timeout=30s >/dev/null 2>&1
+kubectl logs pg-grants -n banking-app
+kubectl delete pod pg-grants -n banking-app --now >/dev/null 2>&1
 
 kubectl delete secret db-master -n banking-app
 ```
@@ -214,7 +220,6 @@ secret/db-master created
          |          |       | "v-root-uc2-pers-<random>-<timestamp>"=r/vault_root                |                   |
 (1 row)
 
-pod "pg-grants" deleted
 secret "db-master" deleted
 ```
 
@@ -253,10 +258,14 @@ This is the exact call the MCP server makes: the token *is* the Vault token. Run
 ```bash
 for attempt in 1 2; do
   kubectl delete pod vault-replay -n banking-app --ignore-not-found --now >/dev/null 2>&1
-  kubectl run vault-replay --rm -i --quiet --restart=Never --image=curlimages/curl:8.11.1 -n banking-app \
+  kubectl run vault-replay --restart=Never --image=curlimages/curl:8.11.1 -n banking-app \
     --command -- curl -s -H "X-Vault-Token: ${ACCESS_TOKEN}" \
-      http://vault.vault.svc.cluster.local:8200/v1/database/creds/uc2-personal-readonly \
+      http://vault.vault.svc.cluster.local:8200/v1/database/creds/uc2-personal-readonly >/dev/null
+  kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/vault-replay -n banking-app --timeout=120s >/dev/null 2>&1 \
+    || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/vault-replay -n banking-app --timeout=30s >/dev/null 2>&1
+  kubectl logs vault-replay -n banking-app \
     | sed -e "s/.*\"username\":\"\([^\"]*\)\".*/attempt ${attempt} username=\1/"
+  kubectl delete pod vault-replay -n banking-app --now >/dev/null 2>&1
 done
 ```
 

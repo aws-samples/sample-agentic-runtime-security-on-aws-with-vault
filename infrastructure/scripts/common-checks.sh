@@ -41,7 +41,7 @@ export AWS_PAGER=""
 # plugin cache on the larger TMPDIR volume ($TMPDIR, /tmp in CloudShell) is
 # populated once and symlinked into each root, so all three roots share a
 # single copy off the home volume. Only set when unset so a caller-supplied
-# TF_PLUGIN_CACHE_DIR (CI, Instruqt, etc.) is never overridden.
+# TF_PLUGIN_CACHE_DIR (CI, etc.) is never overridden.
 if [ -z "${TF_PLUGIN_CACHE_DIR:-}" ]; then
     export TF_PLUGIN_CACHE_DIR="${TMPDIR:-/tmp}/tf-plugin-cache"
     mkdir -p "$TF_PLUGIN_CACHE_DIR"

@@ -207,13 +207,17 @@ Ask the MCP server to describe its own tools. `tools/list` needs no user — any
 
 ```bash
 kubectl delete pod mcp-probe -n banking-app --ignore-not-found --now >/dev/null 2>&1
-kubectl run mcp-probe --rm -i --quiet --restart=Never --image=curlimages/curl:8.11.1 -n banking-app \
+kubectl run mcp-probe --restart=Never --image=curlimages/curl:8.11.1 -n banking-app \
   --command -- curl -s -X POST http://banking-mcp-svc:3001/mcp \
     -H 'Authorization: Bearer schema-probe' \
     -H 'Content-Type: application/json' \
     -H 'Accept: application/json, text/event-stream' \
-    -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' >/dev/null
+kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/mcp-probe -n banking-app --timeout=120s >/dev/null 2>&1 \
+  || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/mcp-probe -n banking-app --timeout=30s >/dev/null 2>&1
+kubectl logs mcp-probe -n banking-app \
   | jq '.result.tools[] | {name, properties: .inputSchema.properties, required: .inputSchema.required}'
+kubectl delete pod mcp-probe -n banking-app --now >/dev/null 2>&1
 ```
 
 Expected output — `get_accounts` takes **no arguments at all**, `get_transactions` takes only an optional `account_id`, and neither requires anything:
@@ -246,13 +250,17 @@ A schema is a promise. This request tests it: it puts a **JWT-shaped** token in 
 
 ```bash
 kubectl delete pod mcp-probe -n banking-app --ignore-not-found --now >/dev/null 2>&1
-kubectl run mcp-probe --rm -i --quiet --restart=Never --image=curlimages/curl:8.11.1 -n banking-app \
+kubectl run mcp-probe --restart=Never --image=curlimages/curl:8.11.1 -n banking-app \
   --command -- curl -s -X POST http://banking-mcp-svc:3001/mcp \
     -H 'Authorization: Bearer not-a-jwt-at-all' \
     -H 'Content-Type: application/json' \
     -H 'Accept: application/json, text/event-stream' \
     -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_accounts",
-         "arguments":{"jwt":"eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJvc2NhciJ9.not-a-real-signature"}}}'
+         "arguments":{"jwt":"eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJvc2NhciJ9.not-a-real-signature"}}}' >/dev/null
+kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/mcp-probe -n banking-app --timeout=120s >/dev/null 2>&1 \
+  || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/mcp-probe -n banking-app --timeout=30s >/dev/null 2>&1
+kubectl logs mcp-probe -n banking-app
+kubectl delete pod mcp-probe -n banking-app --now >/dev/null 2>&1
 ```
 
 Expected output:

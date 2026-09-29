@@ -41,8 +41,8 @@
 #                            tier 1 = steps 1-4 (core infra + kubectl + images + LBC gate)
 #                            tier 2 = steps 5-9 (vault + ivia + ACME + vault/ivia configure)
 #                            tier 3 = steps 10-14 (workloads + ALB assert + seed + KB ingest)
-#                            Required for the Instruqt distribution (one tier per challenge);
-#                            bare invocation is the Workshop Studio path (all 14 steps).
+#                            Deploy one tier at a time; bare invocation is the
+#                            Workshop Studio path (all 14 steps).
 #   --image-source <ghcr|ecr>     Image source mode (default: ecr). ecr builds the five
 #                                 images locally and pushes them to the account's private
 #                                 ECR (container runtime required). ghcr pulls pre-built
@@ -79,9 +79,9 @@
 # Examples:
 #   ./deploy-workshop.sh                              # full deploy, ecr mode (default) — build+push to ECR
 #   ./deploy-workshop.sh --image-source ghcr --ghcr-registry-base ghcr.io/<githubusername>  # no build; pull your own pre-built GHCR images
-#   ./deploy-workshop.sh --tier 1                    # only steps 1-4 (Instruqt tier-1 challenge)
-#   ./deploy-workshop.sh --tier 2                    # only steps 5-9 (Instruqt tier-2 challenge)
-#   ./deploy-workshop.sh --tier 3                    # only steps 10-14 (Instruqt tier-3 challenge)
+#   ./deploy-workshop.sh --tier 1                    # only steps 1-4
+#   ./deploy-workshop.sh --tier 2                    # only steps 5-9
+#   ./deploy-workshop.sh --tier 3                    # only steps 10-14
 #   ./deploy-workshop.sh --skip-infra                # re-run config against a live cluster
 #   ./deploy-workshop.sh --skip-build                # re-run when images are already pushed (ecr mode)
 #   ./deploy-workshop.sh --dry-run          # preview every step
@@ -166,7 +166,7 @@ if [[ "${TLS_DNS_SUFFIX}" == "${TLS_DNS_SUFFIX_FALLBACK}" ]]; then
 fi
 
 # Per-tier execution gate (empty = run all 14 steps, the Workshop Studio path;
-# 1|2|3 = run only that tier's steps, the Instruqt per-challenge path).
+# 1|2|3 = run only that tier's steps).
 TIER=""
 
 # Vault port-forward PID (cleaned up on exit)
@@ -448,8 +448,8 @@ _wait_for_port() {
 
 # Per-tier gate. When --tier is unset (Workshop Studio path), every step runs.
 # When --tier=N, only steps whose step_tier matches N run. Steps gated out are
-# silent — no echo, no PASS/SKIP marker — so an Instruqt tier-2 challenge does
-# not visually replay tier-1 work the previous challenge already completed.
+# silent — no echo, no PASS/SKIP marker — so a tier-2 run does not visually
+# replay tier-1 work an earlier run already completed.
 #
 # Step → tier mapping (also encoded by the main flow's _run_if_tier calls):
 #   steps 1-4  → tier 1   core infra + kubectl + images + LBC gate
@@ -2002,9 +2002,9 @@ step_14_sync_bedrock_kb() {
 
 #===============================================================================
 # Main flow — call each step function via _run_if_tier so the same script
-# drives both distributions:
+# drives both invocations:
 #   - Workshop Studio (bare):  TIER="" runs every step (all 14)
-#   - Instruqt tier-N:         TIER="N" runs only that tier's steps
+#   - per tier:                TIER="N" runs only that tier's steps
 # Idempotency contract (project CLAUDE.md): every step is safe to re-run, so
 # running --tier 1 then --tier 2 then --tier 3 produces the same end state as
 # a bare invocation, and re-running any tier converges.

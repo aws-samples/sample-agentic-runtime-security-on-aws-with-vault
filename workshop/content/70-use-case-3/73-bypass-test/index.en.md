@@ -123,9 +123,13 @@ Spawn **one** transient `postgres:16-alpine` pod. In a single `psql` session, se
 
 ```bash
 kubectl delete pod pg-rls-test -n banking-app --ignore-not-found --now >/dev/null 2>&1
-kubectl run pg-rls-test --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
+kubectl run pg-rls-test --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${PG_PASS}" \
-  --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop -c "
+  --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop -c " >/dev/null
+kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-rls-test -n banking-app --timeout=120s >/dev/null 2>&1 \
+  || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/pg-rls-test -n banking-app --timeout=30s >/dev/null 2>&1
+kubectl logs pg-rls-test -n banking-app
+kubectl delete pod pg-rls-test -n banking-app --now >/dev/null 2>&1
     SELECT set_config('app.current_user_sub','jaime',false);
     SELECT 'jaime' AS acting_as, count(*) AS tx_count FROM banking.transactions;
     SELECT set_config('app.current_user_sub','oscar',false);
@@ -168,10 +172,14 @@ The `INSERT` below names **only real `banking.refunds` columns** (`account_id, t
 
 ```bash
 kubectl delete pod pg-insert-uc3 -n banking-app --ignore-not-found --now >/dev/null 2>&1
-kubectl run pg-insert-uc3 --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
+kubectl run pg-insert-uc3 --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${PG_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop \
-    -c "INSERT INTO banking.refunds (account_id, transaction_id, amount, approved_by, request_id)
+    -c "INSERT INTO banking.refunds (account_id, transaction_id, amount, approved_by, request_id) >/dev/null
+kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-insert-uc3 -n banking-app --timeout=120s >/dev/null 2>&1 \
+  || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/pg-insert-uc3 -n banking-app --timeout=30s >/dev/null 2>&1
+kubectl logs pg-insert-uc3 -n banking-app
+kubectl delete pod pg-insert-uc3 -n banking-app --now >/dev/null 2>&1
          VALUES ('00000000-0000-0000-0000-000000000000', '00000000-0000-0000-0000-000000000000', 1.00, 'least-priv-test', gen_random_uuid());"
 ```
 
@@ -179,10 +187,9 @@ Expected output:
 
 ```
 ERROR:  permission denied for table refunds
-pod "pg-insert-uc3" deleted
 ```
 
-`psql` exits non-zero, so `kubectl` may also print `pod "banking-app/pg-insert-uc3" terminated (Error)` — that is expected; the non-zero exit **is** the INSERT being correctly rejected.
+`psql` exits non-zero, so the pod ends in the `Failed` phase — that is expected, and it is why the block waits for `Succeeded` **or** `Failed` before reading the log. The non-zero exit **is** the INSERT being correctly rejected.
 
 The Postgres GRANT layer rejects the INSERT before the RLS policy (or any constraint) is even evaluated. This confirms that a bug in the agent code that accidentally attempted a write would fail closed at the database layer — Vault's `uc3-readonly` role has no write capability.
 
@@ -200,9 +207,13 @@ A refund is visible only to its owner (RLS), so list refunds under each persona 
 
 ```bash
 kubectl delete pod pg-find-refund -n banking-app --ignore-not-found --now >/dev/null 2>&1
-kubectl run pg-find-refund --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
+kubectl run pg-find-refund --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${PG_PASS}" \
-  --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop -c "
+  --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop -c " >/dev/null
+kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-find-refund -n banking-app --timeout=120s >/dev/null 2>&1 \
+  || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/pg-find-refund -n banking-app --timeout=30s >/dev/null 2>&1
+kubectl logs pg-find-refund -n banking-app
+kubectl delete pod pg-find-refund -n banking-app --now >/dev/null 2>&1
     SELECT set_config('app.current_user_sub','oscar',false);
     SELECT 'oscar' AS persona, refund_id, amount::float AS amount FROM banking.refunds;
     SELECT set_config('app.current_user_sub','jaime',false);
@@ -237,9 +248,13 @@ Run the exact owner-predicate JOIN `check_refund_status` executes — first as t
 
 ```bash
 kubectl delete pod pg-owner-test -n banking-app --ignore-not-found --now >/dev/null 2>&1
-kubectl run pg-owner-test --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
+kubectl run pg-owner-test --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${PG_PASS}" \
-  --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop -c "
+  --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop -c " >/dev/null
+kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-owner-test -n banking-app --timeout=120s >/dev/null 2>&1 \
+  || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/pg-owner-test -n banking-app --timeout=30s >/dev/null 2>&1
+kubectl logs pg-owner-test -n banking-app
+kubectl delete pod pg-owner-test -n banking-app --now >/dev/null 2>&1
     SELECT set_config('app.current_user_sub','${ATTACKER}',false);
     SELECT 'hostile cross-owner read' AS test, r.refund_id, r.amount::float AS amount
       FROM banking.refunds r
@@ -320,9 +335,13 @@ Before proving a write is refused, prove this credential can write at all — ot
 
 ```bash
 kubectl delete pod pg-replay-uc3 -n banking-app --ignore-not-found --now >/dev/null 2>&1
-kubectl run pg-replay-uc3 --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
+kubectl run pg-replay-uc3 --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${PG_PASS}" \
-  --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop -c "
+  --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop -c " >/dev/null
+kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-replay-uc3 -n banking-app --timeout=120s >/dev/null 2>&1 \
+  || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/pg-replay-uc3 -n banking-app --timeout=30s >/dev/null 2>&1
+kubectl logs pg-replay-uc3 -n banking-app
+kubectl delete pod pg-replay-uc3 -n banking-app --now >/dev/null 2>&1
     SELECT set_config('app.current_user_sub','jaime',false);
     BEGIN;
     INSERT INTO banking.refunds (account_id, transaction_id, amount, approved_by, request_id)
@@ -342,7 +361,6 @@ Expected output — `INSERT 0 1` is the write being accepted, `ROLLBACK` is it b
 BEGIN
 INSERT 0 1
 ROLLBACK
-pod "pg-replay-uc3" deleted
 ```
 
 #### The replay — same approval, second refund
@@ -353,9 +371,13 @@ Identical statement, one column changed: `request_id` is now carried over from t
 
 ```bash
 kubectl delete pod pg-replay-uc3 -n banking-app --ignore-not-found --now >/dev/null 2>&1
-kubectl run pg-replay-uc3 --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
+kubectl run pg-replay-uc3 --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${PG_PASS}" \
-  --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop -c "
+  --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop -c " >/dev/null
+kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-replay-uc3 -n banking-app --timeout=120s >/dev/null 2>&1 \
+  || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/pg-replay-uc3 -n banking-app --timeout=30s >/dev/null 2>&1
+kubectl logs pg-replay-uc3 -n banking-app
+kubectl delete pod pg-replay-uc3 -n banking-app --now >/dev/null 2>&1
     SELECT set_config('app.current_user_sub','jaime',false);
     INSERT INTO banking.refunds (account_id, transaction_id, amount, approved_by, request_id)
     SELECT account_id, transaction_id, amount, approved_by, request_id
@@ -371,10 +393,8 @@ Expected output — the write is refused by name:
 ERROR:  duplicate key value violates unique constraint "refunds_request_id_key"
 (1 row)
 
-pod "pg-replay-uc3" deleted
-pod banking-app/pg-replay-uc3 terminated (Error)
 ```
 
-The `ERROR:` line arrives on stderr and the `set_config` table on stdout, so the two may interleave differently in your terminal — what matters is the constraint name. `psql` exits non-zero, so `kubectl` also reports `terminated (Error)`; that non-zero exit **is** the replay being correctly rejected.
+The `ERROR:` line arrives on stderr and the `set_config` table on stdout, so the two may interleave differently in your terminal — what matters is the constraint name. `psql` exits non-zero, so the pod ends in the `Failed` phase; that non-zero exit **is** the replay being correctly rejected.
 
 **Why this is a genuine negative test.** Every column is copied from a row Postgres already accepted, so the values are schema-valid and the foreign keys resolve. The privilege is present — Step 2 just wrote with this exact credential. The RLS `WITH CHECK` policy is satisfied — the GUC names the account owner, the same way it did for the row that succeeded. Nothing is left that can reject this statement except `refunds_request_id_key`. And it is a *unique index*, not application code: no bug in the agent, no compromised pod, and no stolen 5-minute credential can write a second refund for an approval that has already been paid.

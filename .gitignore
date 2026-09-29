@@ -63,3 +63,7 @@ node_modules/
 slides-site/
 workshop/tmp/
 
+
+# Generated-then-deleted Vault orphan reconciliation (vault-configure.sh).
+# A committed copy makes every later apply fail with "resource already managed".
+zz-orphan-reconcile.tf
