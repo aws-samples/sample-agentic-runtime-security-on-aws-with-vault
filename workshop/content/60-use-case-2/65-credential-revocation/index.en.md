@@ -232,17 +232,17 @@ LIMIT 10;"
 Expected output — one row per recent issuance:
 
 ```
-time                 identity                                                  agent      human_entity
-2026-09-02T23:24:18  root                                                      -          -
-2026-09-02T23:17:10  JWT Token with JTI: 5a9564c0-cce3-4442-8a8f-a8d7d1339eb0  agent-uc2  2979d2cd-f25e-2915-a9f8-e6e23d87e047
-2026-09-02T23:14:25  JWT Token with JTI: f82c6e27-33d2-4ec2-94e8-29a3b63173a5  agent-uc2  2979d2cd-f25e-2915-a9f8-e6e23d87e047
+time                 identity                                                                agent      human_entity
+2026-09-29T01:37:46  root                                                                    -          -
+2026-09-29T01:34:56  JWT Token with Unique Identifier: f1943922-32f2-431d-9044-4542f44200a0  agent-uc2  d141ccbc-0077-229c-8fa6-31fc287002d0
+2026-09-29T01:31:40  JWT Token with Unique Identifier: a78c5e6f-7dea-4f01-8839-8a56e0d06edd  agent-uc2  d141ccbc-0077-229c-8fa6-31fc287002d0
 ...
 ```
 
 Two row patterns appear:
 
 - **`identity=root`, `agent=-`** — the credential was issued via the Vault root token (the inspection commands on the previous pages, including your Step 1 above, and the `verify-uc2.sh` checks). Root-token issuance resolves no Agent Registry identity, so the `agent` column is empty (the helper renders empty fields as `-`).
-- **`identity=JWT Token with JTI: <jti>`, `agent=agent-uc2`, and a `human_entity`** — the credential was issued by presenting a real user's IVIA OAuth JWT directly as the `X-Vault-Token` on the `database/creds` read. Vault's OAuth resource server validated the JWT, resolved it to the `agent-uc2` Agent Registry identity, and recorded the token by its unique **JTI** rather than its raw value. **These rows appear after you sign in through the Banking UI and run a banking query** (the browser flow in [OAuth Login Flow](../61-oauth-pkce-flow/)) — one fresh row per tool call. If you have not yet driven a signed-in query, only the `root` rows are present.
+- **`identity=JWT Token with Unique Identifier: <jti>`, `agent=agent-uc2`, and a `human_entity`** — the credential was issued by presenting a real user's IVIA OAuth JWT directly as the `X-Vault-Token` on the `database/creds` read. Vault's OAuth resource server validated the JWT, resolved it to the `agent-uc2` Agent Registry identity, and recorded the token by its unique **JTI** rather than its raw value. **These rows appear after you sign in through the Banking UI and run a banking query** (the browser flow in [OAuth Login Flow](../61-oauth-pkce-flow/)) — one fresh row per tool call. If you have not yet driven a signed-in query, only the `root` rows are present.
 
 Note the `human_entity` column on those rows. It is Vault's own identity entity for the **person**, recorded on the same authorization decision as the agent — two identities on one request, which is what on-behalf-of means. Ask Vault whose it is:
 
@@ -256,7 +256,7 @@ kubectl exec -n vault vault-0 -- \
 
 ```json
 {
-  "id": "2979d2cd-f25e-2915-a9f8-e6e23d87e047",
+  "id": "d141ccbc-0077-229c-8fa6-31fc287002d0",
   "name": "oscar"
 }
 ```
