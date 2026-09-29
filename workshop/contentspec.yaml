@@ -1,6 +1,6 @@
 # AWS Workshop Studio v2 manifest for the Agentic Runtime Security on AWS workshop.
 # Schema: https://docs.aws.amazon.com/workshop-studio/latest/
-# rebuild marker: 2026-09-28 (PR#82 observability UI + Vault 2.1.1 + UC3 attack suite)
+# rebuild marker: 2026-09-29 (PR#87 vault-configure orphan recovery + probe-pod fixes)
 
 version: 2.0
 
