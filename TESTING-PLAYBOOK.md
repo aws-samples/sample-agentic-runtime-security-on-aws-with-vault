@@ -49,9 +49,12 @@ Everything from `30-deploy-foundation/32-configure-kubectl` — **Configure kube
 
 ## Setup
 
-1. Work from a fork of `https://github.com/aws-samples/sample-agentic-runtime-security-on-aws-with-vault`.
-2. Sync your fork's `main` with upstream before each session.
-3. Clone it where you will run the workshop — the pre-flight page does this for you, and the block is idempotent.
+1. **Clone fresh from GitHub `main`, into a directory that is not the dev checkout** — see invariant 1 below, which is not negotiable. The pre-flight page's own clone block is the command to use, and it is idempotent:
+   ```bash
+   cd ~ && { [ -d sample-agentic-runtime-security-on-aws-with-vault ] || git clone https://github.com/aws-samples/sample-agentic-runtime-security-on-aws-with-vault.git; } && cd sample-agentic-runtime-security-on-aws-with-vault && pwd
+   ```
+2. Sync `main` with upstream before each session, and record the commit the run is testing.
+3. Everything the run produces — the walkthrough log, Terraform state, `.acme-state` — lives under that clone, never under the dev checkout.
 
 **Region — everything is `us-east-1`.** `workshop/contentspec.yaml` declares `accessibleRegions` and `deployableRegions` as `us-east-1` only, with `maxAccessibleRegions: 1`, and `infrastructure/terraform.tfvars` sets both `region` and `kb_region` to it. The Nova 2 embedding model the Knowledge Base needs exists only there. There is no second region to get wrong.
 
@@ -61,16 +64,17 @@ Everything from `30-deploy-foundation/32-configure-kubectl` — **Configure kube
 
 ## Invariants — these are what make it a test and not a demo
 
-1. **Run the page verbatim.** Never author a script or a convenience wrapper. The only exception is a clearly-labelled ad-hoc diagnostic while actively troubleshooting a failure.
-2. **Verify the cluster context before any `kubectl`, `helm`, or Kubernetes-provider `terraform` call.** This repo is AWS: the context is `workshop` or an `arn:aws:eks:*` ARN. Never a `gke_*` context.
-3. **Keep full, untruncated output.** A trimmed log is not evidence. Redact before anything leaves the terminal: AWS account IDs, ARNs, access keys, JWTs and bearer tokens, private IPs, and the **Vault root token** — several pages print it to stdout by design.
-4. **Stream every command to one tail-able log**, and hand over its `tail -f` before anything runs — see *Start of run* below. Output nobody can watch does not count as evidence.
-5. **Keep the dashboard true, writing after every step** — see *Start of run* and *Reporting every step* below. A stale board reads as no progress and is worse than no board.
-6. **Say which step is running, for every step**, before it runs — see *Reporting every step* below.
-7. **Never mark a page done on evidence you have not just seen.** The commands must be in *this* run's log. A log from an earlier run does not count. Re-running a passing page costs minutes; a false green costs the workshop.
-8. **The self-paced run is measured, not repaired — no fixes mid-run.** Self-paced is the proof that someone on a laptop gets through with nothing but the pages. Patch a script or hand-run a command the page does not contain and you stop measuring that. A break is a **finding**: logged, filed, reported. Fixes happen after the run ends.
-9. **Everywhere else, a defect gets fixed, not worked around** — fix the page or the script, one atomic commit, then re-run that page. Never "pre-existing", never a cheat path.
-10. **Nothing merges or closes on a green test run.** A passing run means *ready to verify*, nothing more.
+1. **NEVER test from the dev repo. Ever.** The run clones fresh from GitHub `main` into its own directory — using the clone block the pre-flight page itself gives the attendee — and every command of the run executes from that clone. The dev repo is where the code is edited and committed; it is never where it is tested. Testing from the working tree measures the wrong thing: it carries uncommitted edits, leftover local state, gitignored artifacts and branch drift, so a green run proves the working directory works, not that what is published on `main` works. An attendee has none of that — they have a clone and the pages. If you find yourself `cd`-ing into the dev checkout mid-run, that is the violation; stop and start the run again from the clone. The walkthrough log, the Terraform state and every artifact the run produces live under the clone too.
+2. **Run the page verbatim.** Never author a script or a convenience wrapper. The only exception is a clearly-labelled ad-hoc diagnostic while actively troubleshooting a failure. A verbatim command run in the wrong directory is not verbatim — see invariant 1.
+3. **Verify the cluster context before any `kubectl`, `helm`, or Kubernetes-provider `terraform` call.** This repo is AWS: the context is `workshop` or an `arn:aws:eks:*` ARN. Never a `gke_*` context.
+4. **Keep full, untruncated output.** A trimmed log is not evidence. Redact before anything leaves the terminal: AWS account IDs, ARNs, access keys, JWTs and bearer tokens, private IPs, and the **Vault root token** — several pages print it to stdout by design.
+5. **Stream every command to one tail-able log**, and hand over its `tail -f` before anything runs — see *Start of run* below. Output nobody can watch does not count as evidence.
+6. **Keep the dashboard true, writing after every step** — see *Start of run* and *Reporting every step* below. A stale board reads as no progress and is worse than no board.
+7. **Say which step is running, for every step**, before it runs — see *Reporting every step* below.
+8. **Never mark a page done on evidence you have not just seen.** The commands must be in *this* run's log. A log from an earlier run does not count. Re-running a passing page costs minutes; a false green costs the workshop.
+9. **The self-paced run is measured, not repaired — no fixes mid-run.** Self-paced is the proof that someone on a laptop gets through with nothing but the pages. Patch a script or hand-run a command the page does not contain and you stop measuring that. A break is a **finding**: logged, filed, reported. Fixes happen after the run ends.
+10. **Everywhere else, a defect gets fixed, not worked around** — fix the page or the script, one atomic commit, then re-run that page. Never "pre-existing", never a cheat path.
+11. **Nothing merges or closes on a green test run.** A passing run means *ready to verify*, nothing more.
 
 ---
 
