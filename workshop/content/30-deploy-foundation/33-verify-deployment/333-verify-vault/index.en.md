@@ -3,14 +3,11 @@ title: 'Validate Vault'
 weight: 333
 ---
 
-Vault was deployed as a 3-node Raft HA cluster, initialized, and unsealed as part of Tier 2 — during your account setup at an event, or by your own `deploy-workshop.sh` run when self-paced. Confirm it is healthy before proceeding.
+Vault was deployed as a 3-node Raft HA cluster, initialized, and unsealed as part of Tier 2 — the `deploy-workshop.sh --tier 2` run you did yourself, on both paths. Confirm it is healthy before proceeding.
 
 ![Vault authorization flow — ephemeral, per-request credentials across Use Cases 1, 2, and 3](/static/images/vault-authorization-flow.png)
 
-The Vault root token lives at `~/vault-init.json`. How it got there depends on your path:
-
-- **At an event** — you pulled it from the state bucket in Step 3 of [Deploy — At an Event](../../31-deploy-at-an-event/). `vault-init.sh` ran inside the account-setup build, not on your machine, so there is no local run to go looking for.
-- **Self-paced** — `vault-init.sh` (run by `deploy-workshop.sh`) wrote it during Tier-2 initialization.
+The Vault root token lives at `~/vault-init.json`, and it got there the same way on both paths: `vault-init.sh` — Step 6 of the Tier-2 deploy you ran yourself — initialized Vault and wrote the root token and recovery keys to that file, mode `600`, in the home directory of the shell you ran the deploy from. It is never uploaded anywhere, so if the file is missing you are in a different shell or a different machine than the one that ran `deploy-workshop.sh --tier 2`.
 
 **Why:** Steps 3, 4 and 5 read Vault as an administrator. This loads that token into your shell so those commands work.
 

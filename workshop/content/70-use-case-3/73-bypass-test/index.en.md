@@ -125,15 +125,15 @@ Spawn **one** transient `postgres:16-alpine` pod. In a single `psql` session, se
 kubectl delete pod pg-rls-test -n banking-app --ignore-not-found --now >/dev/null 2>&1
 kubectl run pg-rls-test --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${PG_PASS}" \
-  --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop -c " >/dev/null
+  --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop -c "
+    SELECT set_config('app.current_user_sub','jaime',false);
+    SELECT 'jaime' AS acting_as, count(*) AS tx_count FROM banking.transactions;
+    SELECT set_config('app.current_user_sub','oscar',false);
+    SELECT 'oscar' AS acting_as, count(*) AS tx_count FROM banking.transactions;" >/dev/null
 kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-rls-test -n banking-app --timeout=120s >/dev/null 2>&1 \
   || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/pg-rls-test -n banking-app --timeout=30s >/dev/null 2>&1
 kubectl logs pg-rls-test -n banking-app
 kubectl delete pod pg-rls-test -n banking-app --now >/dev/null 2>&1
-    SELECT set_config('app.current_user_sub','jaime',false);
-    SELECT 'jaime' AS acting_as, count(*) AS tx_count FROM banking.transactions;
-    SELECT set_config('app.current_user_sub','oscar',false);
-    SELECT 'oscar' AS acting_as, count(*) AS tx_count FROM banking.transactions;"
 ```
 
 **Expected output** — each `set_config` line echoes the `sub` it just activated, and the two `tx_count` rows differ (Jaime owns 9 transactions, Oscar owns 8):
@@ -175,12 +175,12 @@ kubectl delete pod pg-insert-uc3 -n banking-app --ignore-not-found --now >/dev/n
 kubectl run pg-insert-uc3 --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${PG_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop \
-    -c "INSERT INTO banking.refunds (account_id, transaction_id, amount, approved_by, request_id) >/dev/null
+    -c "INSERT INTO banking.refunds (account_id, transaction_id, amount, approved_by, request_id)
+         VALUES ('00000000-0000-0000-0000-000000000000', '00000000-0000-0000-0000-000000000000', 1.00, 'least-priv-test', gen_random_uuid());" >/dev/null
 kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-insert-uc3 -n banking-app --timeout=120s >/dev/null 2>&1 \
   || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/pg-insert-uc3 -n banking-app --timeout=30s >/dev/null 2>&1
 kubectl logs pg-insert-uc3 -n banking-app
 kubectl delete pod pg-insert-uc3 -n banking-app --now >/dev/null 2>&1
-         VALUES ('00000000-0000-0000-0000-000000000000', '00000000-0000-0000-0000-000000000000', 1.00, 'least-priv-test', gen_random_uuid());"
 ```
 
 Expected output:
@@ -209,15 +209,15 @@ A refund is visible only to its owner (RLS), so list refunds under each persona 
 kubectl delete pod pg-find-refund -n banking-app --ignore-not-found --now >/dev/null 2>&1
 kubectl run pg-find-refund --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${PG_PASS}" \
-  --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop -c " >/dev/null
+  --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop -c "
+    SELECT set_config('app.current_user_sub','oscar',false);
+    SELECT 'oscar' AS persona, refund_id, amount::float AS amount FROM banking.refunds;
+    SELECT set_config('app.current_user_sub','jaime',false);
+    SELECT 'jaime' AS persona, refund_id, amount::float AS amount FROM banking.refunds;" >/dev/null
 kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-find-refund -n banking-app --timeout=120s >/dev/null 2>&1 \
   || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/pg-find-refund -n banking-app --timeout=30s >/dev/null 2>&1
 kubectl logs pg-find-refund -n banking-app
 kubectl delete pod pg-find-refund -n banking-app --now >/dev/null 2>&1
-    SELECT set_config('app.current_user_sub','oscar',false);
-    SELECT 'oscar' AS persona, refund_id, amount::float AS amount FROM banking.refunds;
-    SELECT set_config('app.current_user_sub','jaime',false);
-    SELECT 'jaime' AS persona, refund_id, amount::float AS amount FROM banking.refunds;"
 ```
 
 **Example output** — one refund created as each persona (what you see depends on what you approved on page 71):
@@ -250,11 +250,7 @@ Run the exact owner-predicate JOIN `check_refund_status` executes — first as t
 kubectl delete pod pg-owner-test -n banking-app --ignore-not-found --now >/dev/null 2>&1
 kubectl run pg-owner-test --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${PG_PASS}" \
-  --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop -c " >/dev/null
-kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-owner-test -n banking-app --timeout=120s >/dev/null 2>&1 \
-  || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/pg-owner-test -n banking-app --timeout=30s >/dev/null 2>&1
-kubectl logs pg-owner-test -n banking-app
-kubectl delete pod pg-owner-test -n banking-app --now >/dev/null 2>&1
+  --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop -c "
     SELECT set_config('app.current_user_sub','${ATTACKER}',false);
     SELECT 'hostile cross-owner read' AS test, r.refund_id, r.amount::float AS amount
       FROM banking.refunds r
@@ -264,7 +260,11 @@ kubectl delete pod pg-owner-test -n banking-app --now >/dev/null 2>&1
     SELECT 'owner read' AS test, r.refund_id, r.amount::float AS amount
       FROM banking.refunds r
       JOIN banking.accounts a ON a.id = r.account_id
-     WHERE r.refund_id = '${REFUND_ID}' AND a.user_sub = '${OWNER}';"
+     WHERE r.refund_id = '${REFUND_ID}' AND a.user_sub = '${OWNER}';" >/dev/null
+kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-owner-test -n banking-app --timeout=120s >/dev/null 2>&1 \
+  || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/pg-owner-test -n banking-app --timeout=30s >/dev/null 2>&1
+kubectl logs pg-owner-test -n banking-app
+kubectl delete pod pg-owner-test -n banking-app --now >/dev/null 2>&1
 ```
 
 **Expected output** — the hostile cross-owner read returns **0 rows**; the owner read returns the single row (this example used `OWNER=oscar`, `ATTACKER=jaime`, the $45 refund):
@@ -337,17 +337,17 @@ Before proving a write is refused, prove this credential can write at all — ot
 kubectl delete pod pg-replay-uc3 -n banking-app --ignore-not-found --now >/dev/null 2>&1
 kubectl run pg-replay-uc3 --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${PG_PASS}" \
-  --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop -c " >/dev/null
-kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-replay-uc3 -n banking-app --timeout=120s >/dev/null 2>&1 \
-  || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/pg-replay-uc3 -n banking-app --timeout=30s >/dev/null 2>&1
-kubectl logs pg-replay-uc3 -n banking-app
-kubectl delete pod pg-replay-uc3 -n banking-app --now >/dev/null 2>&1
+  --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop -c "
     SELECT set_config('app.current_user_sub','jaime',false);
     BEGIN;
     INSERT INTO banking.refunds (account_id, transaction_id, amount, approved_by, request_id)
     SELECT account_id, transaction_id, amount, approved_by, gen_random_uuid()
       FROM banking.refunds ORDER BY created_at DESC LIMIT 1;
-    ROLLBACK;"
+    ROLLBACK;" >/dev/null
+kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-replay-uc3 -n banking-app --timeout=120s >/dev/null 2>&1 \
+  || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/pg-replay-uc3 -n banking-app --timeout=30s >/dev/null 2>&1
+kubectl logs pg-replay-uc3 -n banking-app
+kubectl delete pod pg-replay-uc3 -n banking-app --now >/dev/null 2>&1
 ```
 
 Expected output — `INSERT 0 1` is the write being accepted, `ROLLBACK` is it being discarded:
@@ -373,15 +373,15 @@ Identical statement, one column changed: `request_id` is now carried over from t
 kubectl delete pod pg-replay-uc3 -n banking-app --ignore-not-found --now >/dev/null 2>&1
 kubectl run pg-replay-uc3 --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${PG_PASS}" \
-  --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop -c " >/dev/null
+  --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop -c "
+    SELECT set_config('app.current_user_sub','jaime',false);
+    INSERT INTO banking.refunds (account_id, transaction_id, amount, approved_by, request_id)
+    SELECT account_id, transaction_id, amount, approved_by, request_id
+      FROM banking.refunds ORDER BY created_at DESC LIMIT 1;" >/dev/null
 kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-replay-uc3 -n banking-app --timeout=120s >/dev/null 2>&1 \
   || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/pg-replay-uc3 -n banking-app --timeout=30s >/dev/null 2>&1
 kubectl logs pg-replay-uc3 -n banking-app
 kubectl delete pod pg-replay-uc3 -n banking-app --now >/dev/null 2>&1
-    SELECT set_config('app.current_user_sub','jaime',false);
-    INSERT INTO banking.refunds (account_id, transaction_id, amount, approved_by, request_id)
-    SELECT account_id, transaction_id, amount, approved_by, request_id
-      FROM banking.refunds ORDER BY created_at DESC LIMIT 1;"
 ```
 
 Expected output — the write is refused by name:

@@ -159,12 +159,12 @@ kubectl delete pod pg-insert-attempt -n banking-app --ignore-not-found --now >/d
 kubectl run pg-insert-attempt --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${PG_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop \
-    -c "INSERT INTO banking.accounts (user_sub, account_number, balance) >/dev/null
+    -c "INSERT INTO banking.accounts (user_sub, account_number, balance)
+         VALUES ('attacker@example.com', 'FAKE-001', 999999.00);" >/dev/null
 kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-insert-attempt -n banking-app --timeout=120s >/dev/null 2>&1 \
   || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/pg-insert-attempt -n banking-app --timeout=30s >/dev/null 2>&1
 kubectl logs pg-insert-attempt -n banking-app
 kubectl delete pod pg-insert-attempt -n banking-app --now >/dev/null 2>&1
-         VALUES ('attacker@example.com', 'FAKE-001', 999999.00);"
 ```
 
 Expected output — the INSERT is rejected, which is the *success* signal here. The pod ends in the `Failed` phase (`psql` returns non-zero on SQL errors), which is why the block waits for `Succeeded` **or** `Failed` before reading the log:
