@@ -42,10 +42,14 @@ Now spawn a transient `postgres:16-alpine` pod, run the SELECT as Oscar, and let
 
 ```bash
 kubectl delete pod pg-client-oscar -n banking-app --ignore-not-found --now >/dev/null 2>&1
-kubectl run pg-client-oscar --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
+kubectl run pg-client-oscar --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${PG_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop \
-    -c "SET app.current_user_sub = 'oscar'; SELECT account_number, balance FROM banking.accounts;"
+    -c "SET app.current_user_sub = 'oscar'; SELECT account_number, balance FROM banking.accounts;" >/dev/null
+kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-client-oscar -n banking-app --timeout=120s >/dev/null 2>&1 \
+  || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/pg-client-oscar -n banking-app --timeout=30s >/dev/null 2>&1
+kubectl logs pg-client-oscar -n banking-app
+kubectl delete pod pg-client-oscar -n banking-app --now >/dev/null 2>&1
 ```
 
 Expected output — only Oscar's rows:
@@ -58,7 +62,6 @@ SET
  OVI-SAV-100002 | 18750.50
 (2 rows)
 
-pod "pg-client-oscar" deleted
 ```
 
 ### Step 2 — Switch to Jaime, confirm data isolation
@@ -75,10 +78,14 @@ Run the same manual query with `app.current_user_sub = 'jaime'` (you can reuse t
 
 ```bash
 kubectl delete pod pg-client-jaime -n banking-app --ignore-not-found --now >/dev/null 2>&1
-kubectl run pg-client-jaime --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
+kubectl run pg-client-jaime --restart=Never --image=postgres:16-alpine -n banking-app \
   --env="PGPASSWORD=${PG_PASS}" \
   --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop \
-    -c "SET app.current_user_sub = 'jaime'; SELECT account_number, balance FROM banking.accounts;"
+    -c "SET app.current_user_sub = 'jaime'; SELECT account_number, balance FROM banking.accounts;" >/dev/null
+kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-client-jaime -n banking-app --timeout=120s >/dev/null 2>&1 \
+  || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/pg-client-jaime -n banking-app --timeout=30s >/dev/null 2>&1
+kubectl logs pg-client-jaime -n banking-app
+kubectl delete pod pg-client-jaime -n banking-app --now >/dev/null 2>&1
 ```
 
 Expected output — only Jaime's rows:
@@ -91,7 +98,6 @@ SET
  OVI-SAV-200002 | 32100.00
 (2 rows)
 
-pod "pg-client-jaime" deleted
 ```
 
 ### Step 3 — Inspect the Row-Level Security policy
@@ -113,10 +119,14 @@ kubectl create secret generic db-master -n banking-app \
   --from-literal=password="${MASTER_PASS}" --dry-run=client -o yaml | kubectl apply -f -
 
 kubectl delete pod pg-client-policy -n banking-app --ignore-not-found --now >/dev/null 2>&1
-kubectl run pg-client-policy --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
+kubectl run pg-client-policy --restart=Never --image=postgres:16-alpine -n banking-app \
   --overrides="$(jq -n --arg host "${RDS_HOST}" --arg user "${MASTER_USER}" \
     --arg sql "SELECT polname, polcmd, polroles, pg_get_expr(polqual, polrelid) AS policy_expr FROM pg_policy JOIN pg_class ON pg_class.oid = pg_policy.polrelid WHERE pg_class.relname = 'accounts';" \
-    '{spec:{containers:[{name:"pg-client-policy",image:"postgres:16-alpine",env:[{name:"PGPASSWORD",valueFrom:{secretKeyRef:{name:"db-master",key:"password"}}}],command:["psql","-h",$host,"-U",$user,"-d","workshop","-c",$sql]}],restartPolicy:"Never"}}')"
+    '{spec:{containers:[{name:"pg-client-policy",image:"postgres:16-alpine",env:[{name:"PGPASSWORD",valueFrom:{secretKeyRef:{name:"db-master",key:"password"}}}],command:["psql","-h",$host,"-U",$user,"-d","workshop","-c",$sql]}],restartPolicy:"Never"}}')" >/dev/null
+kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-client-policy -n banking-app --timeout=120s >/dev/null 2>&1 \
+  || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/pg-client-policy -n banking-app --timeout=30s >/dev/null 2>&1
+kubectl logs pg-client-policy -n banking-app
+kubectl delete pod pg-client-policy -n banking-app --now >/dev/null 2>&1
 
 kubectl delete secret db-master -n banking-app
 ```
@@ -130,7 +140,6 @@ secret/db-master created
  user_accounts | r      | {0}      | ((user_sub)::text = current_setting('app.current_user_sub'::text, true))
 (1 row)
 
-pod "pg-client-policy" deleted
 secret "db-master" deleted
 ```
 

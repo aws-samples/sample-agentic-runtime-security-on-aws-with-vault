@@ -63,10 +63,14 @@ kubectl create secret generic db-master -n banking-app \
   --from-literal=password="${MASTER_PASS}" --dry-run=client -o yaml | kubectl apply -f -
 
 kubectl delete pod pg-role-before -n banking-app --ignore-not-found --now >/dev/null 2>&1
-kubectl run pg-role-before --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
+kubectl run pg-role-before --restart=Never --image=postgres:16-alpine -n banking-app \
   --overrides="$(jq -n --arg host "${RDS_HOST}" --arg user "${MASTER_USER}" \
     --arg sql "SELECT rolname FROM pg_roles WHERE rolname='${PG_USER}';" \
-    '{spec:{containers:[{name:"pg-role-before",image:"postgres:16-alpine",env:[{name:"PGPASSWORD",valueFrom:{secretKeyRef:{name:"db-master",key:"password"}}}],command:["psql","-h",$host,"-U",$user,"-d","workshop","-c",$sql]}],restartPolicy:"Never"}}')"
+    '{spec:{containers:[{name:"pg-role-before",image:"postgres:16-alpine",env:[{name:"PGPASSWORD",valueFrom:{secretKeyRef:{name:"db-master",key:"password"}}}],command:["psql","-h",$host,"-U",$user,"-d","workshop","-c",$sql]}],restartPolicy:"Never"}}')" >/dev/null
+kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-role-before -n banking-app --timeout=120s >/dev/null 2>&1 \
+  || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/pg-role-before -n banking-app --timeout=30s >/dev/null 2>&1
+kubectl logs pg-role-before -n banking-app
+kubectl delete pod pg-role-before -n banking-app --now >/dev/null 2>&1
 ```
 
 Expected output — exactly one row, your fresh ephemeral role:
@@ -78,7 +82,6 @@ secret/db-master created
  v-root-uc2-pers-IwaMUs8kxzRLvjsvSjwO-1780000048
 (1 row)
 
-pod "pg-role-before" deleted
 ```
 
 ### Step 3 — Revoke the lease (the production code path)
@@ -108,10 +111,14 @@ Re-run the role check. The lease's ephemeral Postgres role should be gone:
 
 ```bash
 kubectl delete pod pg-role-after -n banking-app --ignore-not-found --now >/dev/null 2>&1
-kubectl run pg-role-after --rm -i --restart=Never --image=postgres:16-alpine -n banking-app \
+kubectl run pg-role-after --restart=Never --image=postgres:16-alpine -n banking-app \
   --overrides="$(jq -n --arg host "${RDS_HOST}" --arg user "${MASTER_USER}" \
     --arg sql "SELECT rolname FROM pg_roles WHERE rolname='${PG_USER}';" \
-    '{spec:{containers:[{name:"pg-role-after",image:"postgres:16-alpine",env:[{name:"PGPASSWORD",valueFrom:{secretKeyRef:{name:"db-master",key:"password"}}}],command:["psql","-h",$host,"-U",$user,"-d","workshop","-c",$sql]}],restartPolicy:"Never"}}')"
+    '{spec:{containers:[{name:"pg-role-after",image:"postgres:16-alpine",env:[{name:"PGPASSWORD",valueFrom:{secretKeyRef:{name:"db-master",key:"password"}}}],command:["psql","-h",$host,"-U",$user,"-d","workshop","-c",$sql]}],restartPolicy:"Never"}}')" >/dev/null
+kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-role-after -n banking-app --timeout=120s >/dev/null 2>&1 \
+  || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/pg-role-after -n banking-app --timeout=30s >/dev/null 2>&1
+kubectl logs pg-role-after -n banking-app
+kubectl delete pod pg-role-after -n banking-app --now >/dev/null 2>&1
 
 kubectl delete secret db-master -n banking-app
 ```
@@ -123,7 +130,6 @@ Expected output:
 ---------
 (0 rows)
 
-pod "pg-role-after" deleted
 secret "db-master" deleted
 ```
 
