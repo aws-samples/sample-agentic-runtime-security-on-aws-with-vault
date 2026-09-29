@@ -3,7 +3,7 @@ title: 'Validate Vault'
 weight: 333
 ---
 
-Vault was deployed as a 3-node Raft HA cluster, initialized, and unsealed as part of Tier 2 — during your account setup at an event, or by your own `deploy-workshop.sh` run when self-paced. Confirm it is healthy before proceeding.
+Vault was deployed as a 3-node Raft HA cluster, initialized, and unsealed as part of Tier 2 — the `deploy-workshop.sh --tier 2` run you did yourself, on both paths. Confirm it is healthy before proceeding.
 
 ![Vault authorization flow — ephemeral, per-request credentials across Use Cases 1, 2, and 3](/static/images/vault-authorization-flow.png)
 
