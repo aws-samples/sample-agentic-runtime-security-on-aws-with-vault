@@ -10,17 +10,17 @@ The single document for testing this workshop. It covers both audiences (at an e
 
 **ALWAYS ASK. This is a gate, not a preference.** The workshop has four paths, and the
 first thing any test run does — before Phase 0, before the log, before the dashboard — is
-put the four to Bear with `AskUserQuestion` and wait for his answer. Never infer the cell
+put the choices to Bear with `AskUserQuestion` and wait for his answer. Never infer the cell
 from a previous run, a skill argument, a compacted summary, or what was standing in the
 account. A run started on the wrong cell measures the wrong workshop and has to be thrown
 away.
 
-Four combinations. They diverge in three places and rejoin at **Configure kubectl**.
+The workshop has four combinations; **three are tested** (Bear, 2026-09-30). They diverge in three places and rejoin at **Configure kubectl**.
 
 |                  | **CloudShell** | **Your own terminal / IDE** |
 |---|---|---|
-| **At an event**  | The default. Console session credentials, nothing to configure. | **At an Event** Step 5 — the short-term `WSParticipantRole` credentials from the event page's AWS CLI credentials panel. |
-| **Self-paced**   | Supported — **Self-paced AWS Account** Step 1 says to skip the configuration. | The default. macOS or Linux only. **Self-paced AWS Account** Step 1 covers SSO, access keys and an existing profile. |
+| **At an event** — always a real Workshop Studio account, tier 1 already built when the account was created; never torn down | Tested. Console session credentials, nothing to configure. | Tested. **At an Event** Step 5 — the short-term `WSParticipantRole` credentials from the event page's AWS CLI credentials panel. |
+| **Self-paced** — always Bear's own AWS account | **Not tested.** The page supports it (**Self-paced AWS Account** Step 1 says to skip the configuration), but self-paced is tested only from Bear's own terminal. | Tested. macOS or Linux only. **Self-paced AWS Account** Step 1 covers SSO, access keys and an existing profile. |
 
 Credentials are the first thing to get right in every cell — the pre-flight checker, `bootstrap.sh` and every `terraform apply` run as whatever the CLI is configured with. Test that step before anything else.
 
@@ -128,8 +128,8 @@ Seed the run, then write state as it changes:
 | Document | Carries |
 |---|---|
 | `config/current` | `{runId}` — the pointer the page reads first |
-| `runs/<runId>` | `label, startedAt, updatedAt, branch, commit, cluster, region, identity, currentPhase, questionTitle, question, logPath` |
-| `runs/<runId>/phases/<id>` | `order, track` (`phase0`/`A`/`B`), `trackLabel` (first phase of a track only), `code` (the **page title**), `step` (that page's **step heading**), `sub` (the **sub-task** under that step, `''` when the document is the whole step), `name` (`Page › Step › Sub-task`, for the log), `does, cmd, state` (`queued`/`running`/`done`/`failed`/`skipped`), `proof` (array of `{label, value}`), and `trackNoteTitle`/`trackNote` for a track's known-limitation callout |
+| `runs/<runId>` | `label, standfirst, startedAt, updatedAt, branch, commit, cluster, region, identity, currentPhase, questionTitle, question, logPath` |
+| `runs/<runId>/phases/<id>` | `order, track` (`P0`/`A`/`B`/`C`/`D`/`E`/`V`/`F` — clean slate, deploy, foundation, Use Cases 1–3, Bear verifies, Cleanup), `trackLabel` (first phase of a track only), `code` (the **page title**), `step` (that page's **step heading**), `sub` (the **sub-task** under that step, `''` when the document is the whole step), `name` (`Page › Step › Sub-task`, for the log), `does, cmd, state` (`queued`/`running`/`done`/`failed`/`na` — shown as Not Applicable), `proof` (array of `{label, value}`), and `trackNoteTitle`/`trackNote` for a track's known-limitation callout |
 | `runs/<runId>/findings/<id>` | `order, tone` (`good`/`warn`/`info`), `title, body, proof` |
 
 **Group by the workshop, never by invention.** One phase document is one sub-task: one command block, or one browser action, under one of the page's steps. The dashboard nests them as **Page › Step › Sub-task**. Each page is a collapsible block with a done/total count, its steps are headings inside it, and the sub-task rows sit under each step. So the three names are copied, not written:
@@ -141,7 +141,7 @@ A heading with a single command block gets one document with `sub: ''`. A step t
 
 Moving a phase is one `write_db` `update` on its phase document, with `currentPhase` and `updatedAt` on the run in the same batch.
 
-**3. On any run from your own terminal or IDE, prove `~/vault-init.json` is absent before Phase 0.**
+**3. Before a full cycle from your own terminal or IDE, prove `~/vault-init.json` is absent.** On a full content pass or changed-pages pass, leave it alone — it holds the root token of the Vault that is standing, and every Vault page needs it.
 
 ```bash
 ls -l ~/vault-init.json 2>/dev/null && echo "STALE — remove it before starting" || echo "absent — good"
@@ -170,10 +170,10 @@ A stale file is worse than a missing one. The missing-file guard fails loudly an
 
 **Never ask before a dashboard write.** Keeping the board true is part of the run, not a change that needs approval. The four ways a row goes stale, and the rule against each:
 
-- **A skipped step's reason goes in `proof`.** The page renders `proof` and nothing else, so a reason left in `note` or any other field is invisible and the row reads as skipped for no reason.
+- **A Not Applicable step's reason goes in `proof`.** The page renders `proof` and nothing else, so a reason left in `note` or any other field is invisible and the row reads as Not Applicable for no reason.
 - **Never assign a step to Bear unless he said he will do it.** A row that says "for Bear" or "Bear confirms by hand" about a step he never took on is false.
 - **A re-run updates its row in the same turn.** When a page command is run again later — for example the correlation query after a new refund — append that result to the row's `proof` with a label saying what triggered the re-run. Never leave the earlier result standing alone.
-- **`currentPhase` names what was skipped.** "All steps done" is only true when nothing is `skipped`. Otherwise it says which steps were skipped and why, in a few words.
+- **`currentPhase` names what did not run.** "All steps done" counts only the steps that apply; a step that should have run and did not is `failed`, never `na`.
 
 The tail shows raw output; it does not say where in the plan the run is. Both are required, and neither substitutes for the other.
 
@@ -240,13 +240,15 @@ The dashboard's phases for a changed-pages pass are the changed pages themselves
 
 ---
 
-## Phase 0 — clean slate (both audiences, always)
+## Phase 0 — clean slate (self-paced full cycle only)
+
+At an event, never — Workshop Studio owns the account. A content pass or changed-pages pass skips Phase 0 and runs on what is standing.
 
 ```bash
 bash infrastructure/scripts/teardown.sh --yes
 ```
 
-Then confirm zero residuals: `aws eks list-clusters` empty, no workshop S3 buckets, no workshop ACM cert, no orphan ALB.
+This removes all three tiers — `teardown.sh` has no `--tier N` option yet. Because every self-paced run ends with **Cleanup**, Phase 0 normally finds nothing, and its job is to prove that: `aws eks list-clusters` empty, no workshop S3 buckets, no workshop ACM cert, no orphan ALB.
 
 Wipe all **four** Terraform roots — `infrastructure`, `infrastructure/services`, `infrastructure/workloads`, `infrastructure/vault-config`:
 
@@ -258,8 +260,6 @@ Then `rm -f infrastructure/.acme-state ~/vault-init.json`.
 
 Whatever Phase 0 removes, Phase 1 redeploys in full — every tier removed and every tier above it (invariant 12). Tier 2 gone means tiers 2 and 3 both come back.
 
-**At an event, additionally** — these sit outside the stack's resource graph and survive `delete-stack`: the sim assets bucket (`cfn-sim-assets-<acct>-<region>`), the CFN state bucket (`cfn-sim-atevent-statebucket-*`), and the EKS access entry the sim added for the caller principal.
-
 ---
 
 ## Phase 1 — deploy
@@ -267,30 +267,7 @@ Whatever Phase 0 removes, Phase 1 redeploys in full — every tier removed and e
 **Self-paced** — walk the pages:
 **Run Pre-flight Checks** → **Deploy — Self-paced** → **Configure kubectl**.
 
-**At an event** — provisioning is CFN → Lambda → CodeBuild, exercised locally as the dev simulator:
-
-```bash
-bash workshop/cfn-wrapper/sim-workshop-studio.sh --yes
-```
-
-It backgrounds the deploy and prints two watch commands as it starts. Hand both over in chat immediately, alongside the walkthrough log:
-
-```bash
-aws logs tail /aws/codebuild/workshop-tier1 --follow --region us-east-1
-```
-
-That is the CodeBuild build itself — the log group is declared at `workshop/static/cfn/bootstrap.yaml:207`. The simulator's own local log is the second, printed as `tail -f <repo>/workshop/scripts/logs/<name>.log` when it starts; `bash workshop/cfn-wrapper/sim-workshop-studio.sh --status` reprints both at any time.
-
-It deploys **tier 1 only** (`workshop/assets/buildspec/buildspec.yml:91` runs `deploy-workshop.sh --tier 1`) and stages only `tier1/terraform.tfstate` and `tier1/terraform.tfvars`. The attendee runs tiers 2 and 3 themselves — that is the lesson.
-
-Judge progress by the **CodeBuild log, never the stack events** — CFN shows `CREATE_IN_PROGRESS` and nothing else for the whole build, by design. Tier 1 took ~18 min observed. The lines that matter at the end:
-
-```
-Tier-1 deploy complete.
-State staged to s3://<state-bucket>/tier1/
-```
-
-Then the attendee pages: **At an Event** → **Run Pre-flight Checks** → **Deploy — At an Event** → **Configure kubectl**.
+**At an event** — Workshop Studio built tier 1 (CFN → Lambda → CodeBuild, `deploy-workshop.sh --tier 1`) when the account was created, and staged its state to S3. Walk the attendee pages: **At an Event** → **Run Pre-flight Checks** → **Deploy — At an Event** (pull the staged tier-1 state, then run tiers 2 and 3) → **Configure kubectl**.
 
 **The four attendee-denial assertions cannot run at an event as the code stands.** They assert a 403 on `tier2-private/terraform.tfstate`, a readable sanitized `tier2/` copy, and a secret scan of it — none of those objects exist now, because CodeBuild never deploys tier 2. Do not report them as passing, and do not treat their absence as a deploy failure.
 
@@ -360,8 +337,10 @@ Check these before filing:
 
 **Per page:** every command on it run against live AWS, the real output seen, both the golden path and the obvious edge case tried — and the cell you covered stated (audience × environment, and which tab on a tabbed page).
 
-**Per full cycle:** every page's commands executed with the expected output, defects fixed and re-run, then a plain-English report — what works, what does not, what needs a decision. Nothing merges or closes on it.
+**Per full cycle:** every page's commands executed with the expected output and every browser page driven in Chrome, defects fixed and re-run, then a plain-English report — what works, what does not, what needs a decision. Nothing merges or closes on it.
 
-**Per changed-pages pass:** every changed page run end to end, the baseline commit named, and the report saying plainly that infrastructure was not re-tested.
+**Per changed-pages pass:** every changed page run end to end, its browser steps driven in Chrome, the baseline commit named, and the report saying plainly that infrastructure was not re-tested.
 
 **Per full content pass:** every page run end to end against the standing environment, every browser page driven in Chrome and what was seen recorded, the baseline commit named, and one precise line on the gap — which Terraform changes have never run from a fresh `init`.
+
+**Every self-paced run** ends with the hold for Bear's own checks, then **Cleanup** once he says he is done.
