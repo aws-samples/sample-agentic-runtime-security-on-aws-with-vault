@@ -115,8 +115,15 @@ Seed the run, then write state as it changes:
 |---|---|
 | `config/current` | `{runId}` — the pointer the page reads first |
 | `runs/<runId>` | `label, startedAt, updatedAt, branch, commit, cluster, region, identity, currentPhase, questionTitle, question, logPath` |
-| `runs/<runId>/phases/<id>` | `order, track` (`phase0`/`A`/`B`), `trackLabel` (first phase of a track only), `code, name, does, cmd, state` (`queued`/`running`/`done`/`failed`), `proof` (array of `{label, value}`), and `trackNoteTitle`/`trackNote` for a track's known-limitation callout |
+| `runs/<runId>/phases/<id>` | `order, track` (`phase0`/`A`/`B`), `trackLabel` (first phase of a track only), `code` (the **page title**), `step` (that page's **step heading**), `sub` (the **sub-task** under that step, `''` when the document is the whole step), `name` (`Page › Step › Sub-task`, for the log), `does, cmd, state` (`queued`/`running`/`done`/`failed`/`skipped`), `proof` (array of `{label, value}`), and `trackNoteTitle`/`trackNote` for a track's known-limitation callout |
 | `runs/<runId>/findings/<id>` | `order, tone` (`good`/`warn`/`info`), `title, body, proof` |
+
+**Group by the workshop, never by invention.** One phase document is one sub-task: one command block, or one browser action, under one of the page's steps. The dashboard nests them as **Page › Step › Sub-task**. Each page is a collapsible block with a done/total count, its steps are headings inside it, and the sub-task rows sit under each step. So the three names are copied, not written:
+- `code` is the page's `title:` front-matter.
+- `step` is the page's own `###` heading, verbatim, including its `Step N —` prefix when it has one.
+- `sub` is the page's words for the block under that heading: its `####` heading, or its lead-in sentence cut to a short imperative.
+
+A heading with a single command block gets one document with `sub: ''`. A step the cell does not run is seeded `skipped` with the reason as its proof — never deleted, because the count is only honest if every step the page has is on the board. Seed every page's documents at the start of the run, in page order, so `order` follows the workshop.
 
 Moving a phase is one `write_db` `update` on its phase document, with `currentPhase` and `updatedAt` on the run in the same batch.
 
@@ -128,7 +135,7 @@ Moving a phase is one `write_db` `update` on its phase document, with `currentPh
 
 **Before a step runs**, in chat — not only at phase boundaries:
 
-- **Page title / section**, spelled as the page spells it, plus its position in the phase (*page 3 of 6*).
+- **Where it is, as `Page › Step › Sub-task`**, each part spelled exactly as the page and the dashboard spell it (*Credential Revocation › Step 6 — Find the issuance event in the audit log (Athena) › Query recent issuances*), plus the page's position in the phase (*page 3 of 6*). Never a name of your own.
 - **The command lines that step will run, as bullets** — the actual commands, before they run, so they can be stopped if wrong. Never a prose summary of them.
 - **What it proves**, in one plain line.
 - **What is queued behind it.**
@@ -190,7 +197,7 @@ git diff --stat <baseline-commit>...HEAD -- workshop/content/ infrastructure/scr
 
 **Then run the changed pages.** For each one, in the workshop's own page order, with the same reporting and the same dashboard write as any other step: execute its commands verbatim, including the ones that did not change, because a page is tested as a page and not as a diff. A page whose only change is prose still gets read end to end in the browser against the rendered preview.
 
-The dashboard's phases for a changed-pages pass are the changed pages themselves, one row each — the data model takes any phase list. For a full content pass they are every page, in workshop order.
+The dashboard's phases for a changed-pages pass are the changed pages themselves, seeded Page › Step › Sub-task like any other run — the data model takes any phase list. For a full content pass they are every page, in workshop order.
 
 **Every invariant above still applies**, including that a break on the self-paced path is a finding rather than something fixed mid-run.
 
