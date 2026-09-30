@@ -232,7 +232,7 @@ git diff --stat <baseline-commit>...HEAD -- workshop/content/ infrastructure/scr
 
 **Then run the changed pages.** For each one, in the workshop's own page order, with the same reporting and the same dashboard write as any other step: execute its commands verbatim, including the ones that did not change, because a page is tested as a page and not as a diff. A page whose only change is prose still gets read end to end in the browser against the rendered preview.
 
-The dashboard's phases for a changed-pages pass are the changed pages themselves, seeded Page › Step › Sub-task like any other run — the data model takes any phase list. For a full content pass they are every page, in workshop order.
+The dashboard's phases for a changed-pages pass are the changed pages themselves, seeded Page › Step › Sub-task like any other run — the data model takes any phase list. The `changed--{sp,ae-cs,ae-ide}` templates hold exactly the pages that `git diff --name-only <baseline>...HEAD -- workshop/content` names, each mapped to its page title; rebuild them with `generator/build.py` (its `CHANGED_PAGES` list) whenever content changes. For a full content pass they are every page, in workshop order.
 
 **Every invariant above still applies**, including that a break on the self-paced path is a finding rather than something fixed mid-run.
 
