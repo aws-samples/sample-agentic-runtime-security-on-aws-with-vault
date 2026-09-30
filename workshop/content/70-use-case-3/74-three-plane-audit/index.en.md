@@ -123,9 +123,11 @@ it expires 300 seconds later whether or not anything else happens.
 
 **Why:** Same result without the CLI, if that is how your audit team works.
 
-**Step 1:** Navigate to **Athena** > **Query editor** and select the `workshop_logs` database from the dropdown.
+**Step 1:** Navigate to **Athena** > **Query editor**. The editor opens on the `primary` workgroup, which has no query result location, so **Run** stays disabled under the banner *Before you run your first query, you need to set up a query result location in Amazon S3*. Open the **Workgroup** dropdown at the top right of the query editor, switch it from `primary` to `workshop`, and click **Acknowledge** on the *Workgroup workshop settings* dialog. Do this before you type anything — switching workgroups clears the editor.
 
-**Step 2:** Find a recent `request_id` to investigate:
+**Step 2:** Select the `workshop_logs` database from the dropdown.
+
+**Step 3:** Find a recent `request_id` to investigate:
 
 ```sql
 SELECT request_id, user_identity, timestamp
@@ -137,7 +139,7 @@ LIMIT 5
 
 Copy the `request_id` of the refund you want to trace (the `user_identity` column tells you who approved each one).
 
-**Step 3:** Query the correlation VIEW. Paste the `request_id` you copied in place of the placeholder below:
+**Step 4:** Query the correlation VIEW. Paste the `request_id` you copied in place of the placeholder below:
 
 ```sql
 SELECT *
@@ -205,8 +207,19 @@ The entity id is deliberately opaque in the log. Ask Vault who it is:
 
 ```bash
 export VAULT_ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)
+
+# Capture the entity id from the same Vault audit record you just read
+HUMAN_ENTITY=$(athena_scalar "SELECT auth.entity_id
+FROM workshop_logs.vault_audit
+WHERE type = 'response'
+  AND request.path = 'database/creds/uc3-refund-writer'
+  AND (error IS NULL OR error = '')
+  AND element_at(element_at(request.headers, 'x-correlation-id'), 1) = '${REQUEST_ID}'
+LIMIT 1")
+echo "human_entity: ${HUMAN_ENTITY}"
+
 kubectl exec -n vault vault-0 -- \
-  sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read -format=json identity/entity/id/<human_entity from above>" \
+  sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read -format=json identity/entity/id/${HUMAN_ENTITY}" \
   | jq '{id: .data.id, name: .data.name}'
 ```
 
@@ -251,13 +264,34 @@ A complete row demonstrates that:
 4. The `vault_agent_registry_id` column shows the exact agent (`uc3-actor`) Vault resolved from the delegated token's `act.sub` against the Agent Registry, and `vault_rar_path` shows the exact path (`database/creds/uc3-refund-writer`) the per-request `vault:path_access` RAR narrowed the token to — the enforcement Vault applied at the point of use, provable and not assumed.
 
 :::alert{header="How the approved amount is proven — consent-bound by correlation" type="info"}
-The amount the user approved (e.g. `$88.30`) is **not** a column in this VIEW, and it is **not** a Vault-enforced token scope — ISVAOP 25.10 does not expose the consent-time RAR amount at the token-exchange stage (see the [RAR Ceiling](../72-configure-rar-ceiling/) page). Instead the amount is **consent-bound by the shared `request_id`**: there is exactly **one** CIBA approval and exactly **one** `banking.refunds` write under that `request_id`, and the refund row itself carries the amount. Because the correlation row proves a strict 1:1 binding between the user's out-of-band approval and a single, time-boxed, RAR-gated DB write, the amount written **is** the amount approved — an agent cannot write a different or additional amount under that approval without breaking the correlation. To read the dollar figure directly, query the `banking.refunds` row for that `request_id`. Note this is a **Postgres (RDS) table, not an Athena catalog** — run it with the `psql` debug-pod pattern from the [bypass test](../73-bypass-test/), not in the Athena editor:
+The amount the user approved (e.g. `$88.30`) is **not** a column in this VIEW, and it is **not** a Vault-enforced token scope — ISVAOP 25.10 does not expose the consent-time RAR amount at the token-exchange stage (see the [RAR Ceiling](../72-configure-rar-ceiling/) page). Instead the amount is **consent-bound by the shared `request_id`**: there is exactly **one** CIBA approval and exactly **one** `banking.refunds` write under that `request_id`, and the refund row itself carries the amount. Because the correlation row proves a strict 1:1 binding between the user's out-of-band approval and a single, time-boxed, RAR-gated DB write, the amount written **is** the amount approved — an agent cannot write a different or additional amount under that approval without breaking the correlation. To read the dollar figure directly, query the `banking.refunds` row for that `request_id`. Note this is a **Postgres (RDS) table, not an Athena catalog** — the command below reads it from a transient `postgres:16-alpine` pod, the same pattern as the [bypass test](../73-bypass-test/).
 
-```sql
-SELECT request_id, refund_id, account_id, transaction_id, amount, currency, approved_by, created_at
-FROM banking.refunds
-WHERE request_id = '${REQUEST_ID}';
+**Why:** `banking.refunds` is row-level-secured by owner, so the pod must act as the person who approved. The owner is the `user_approved_sub` from your correlation row. The command mints its own short-lived **read-only** credential (`uc3-readonly`, never the writer role), so it does not depend on any variable from an earlier page.
+
+```bash
+OWNER=$(athena_scalar "SELECT user_approved_sub FROM workshop_logs.audit_correlation
+  WHERE request_id = '${REQUEST_ID}' LIMIT 1")
+export VAULT_ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)
+CREDS_JSON=$(kubectl exec -n vault vault-0 -- \
+  sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read database/creds/uc3-readonly -format=json")
+PG_USER=$(echo "$CREDS_JSON" | jq -r '.data.username')
+PG_PASS=$(echo "$CREDS_JSON" | jq -r '.data.password')
+RDS_HOST=$(kubectl get configmap uc3-agent-config -n banking-app -o jsonpath='{.data.DB_HOST}')
+
+kubectl delete pod pg-refund-amount -n banking-app --ignore-not-found --now >/dev/null 2>&1
+kubectl run pg-refund-amount --restart=Never --image=postgres:16-alpine -n banking-app \
+  --env="PGPASSWORD=${PG_PASS}" \
+  --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop -c "
+    SELECT set_config('app.current_user_sub','${OWNER}',false);
+    SELECT request_id, refund_id, account_id, transaction_id, amount, currency, approved_by, created_at
+      FROM banking.refunds WHERE request_id = '${REQUEST_ID}';" >/dev/null
+kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-refund-amount -n banking-app --timeout=120s >/dev/null 2>&1 \
+  || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/pg-refund-amount -n banking-app --timeout=30s >/dev/null 2>&1
+kubectl logs pg-refund-amount -n banking-app
+kubectl delete pod pg-refund-amount -n banking-app --now >/dev/null 2>&1
 ```
+
+You should see exactly one row under the `request_id` you are tracing; its `amount` is the figure the user approved.
 :::
 
 This is the answer to the question the OscarVault International (OVI) demo poses: **"Who authorized this action, through which agent, against what system, for what class of action, and can we prove the credentials have since expired?"**
