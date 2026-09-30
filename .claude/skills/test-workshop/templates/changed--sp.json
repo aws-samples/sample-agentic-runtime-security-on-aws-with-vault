@@ -13,102 +13,287 @@
  },
  "phases": [
   {
-   "track": "B",
-   "code": "Validate Vault",
-   "sub": "Load the Vault root token into the shell",
-   "does": "The attendee is in the same shell and on the same machine that deployed Vault, and now holds administrator access for the checks that follow. If this fails, they know immediately they are in the wrong place rather than mid-way through a confusing failure.",
-   "cmd": "export VAULT_ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)",
-   "step": "",
+   "track": "C",
+   "code": "Verify Credentials and Enforcement",
+   "step": "Step 1 — Ask the agent (no sign-in)",
+   "does": "You have the real web address of your own deployment's chat page, rather than a hostname typed from somewhere else.",
+   "cmd": "source infrastructure/.acme-state && echo \"Ask page: https://${NIP_FQDN_BANKING}/ask\"",
+   "expected": "Prints \"Ask page: https://<your banking FQDN>/ask\".",
+   "sub": "",
    "state": "queued",
    "proof": [],
-   "trackNoteTitle": "Example pages",
-   "trackNote": "A changed-pages board lists only the pages changed since the last tested run, in workshop order, each run in full. These two pages stand in for whatever the diff names.",
+   "trackNoteTitle": "Changed pages",
+   "trackNote": "A changed-pages board lists only the pages changed since the last tested run, in workshop order, each run in full. These seven are the pages this branch changes.",
    "order": 1,
-   "trackLabel": "Phase 2 — Verify the foundation"
+   "trackLabel": "Phase 3 — Use Case 1: Non-Personalized Read-Only"
   },
   {
-   "track": "B",
-   "code": "Validate Vault",
-   "step": "Step 1 — Confirm pods are Running",
-   "does": "All three Vault servers are up, not one or two, so the cluster can pick a leader and hand out credentials. Knowing there are three also matters later, because only the server that handled a request will have written it down.",
-   "cmd": "kubectl get pods -n vault",
-   "expected": "vault-0, vault-1, vault-2 and vault-agent-injector all 1/1 Running",
-   "sub": "",
+   "track": "C",
+   "code": "Verify Credentials and Enforcement",
+   "step": "Step 1 — Ask the agent (no sign-in)",
+   "sub": "Open the ask page and ask a question",
+   "does": "Anyone can get a real answer grounded in the company documents without logging in, and the agent had none of the credentials it used until the moment you asked.",
+   "cmd": "Open the printed https://<banking FQDN>/ask URL in your browser.\nCheck for the lock icon in the address bar.\nWithout signing in, ask: \"Summarize the employee PTO policy, including accrual by tenure.\"",
+   "expected": "A lock icon (Let's Encrypt cert) and a Knowledge-Base-grounded answer: PTO accrual of 15 days at 0–2 years, 20 at 2–5, 25 at 5+. A \"Your connection is not private\" warning is a regression.",
+   "browser": true,
    "state": "queued",
    "proof": [],
    "order": 2
   },
   {
-   "track": "B",
-   "code": "Validate Vault",
-   "step": "Step 2 — Confirm KMS auto-unseal",
-   "does": "Vault is open and will answer requests, and it opened itself using AWS KMS — so nobody has to hold or type unseal keys during the workshop, and a restarted pod comes back on its own.",
-   "cmd": "kubectl exec -n vault vault-0 -- vault status",
-   "expected": "Seal Type awskms, Initialized true, Sealed false",
+   "track": "C",
+   "code": "Verify Credentials and Enforcement",
+   "step": "Step 2 — Inspect the credential metadata (CLI)",
+   "does": "You can reach the agent's own API directly instead of only the chat page, which is where the credential detail is visible.",
+   "cmd": "kubectl port-forward -n uc1 svc/uc1-agent-svc 8080:80",
    "sub": "",
    "state": "queued",
    "proof": [],
    "order": 3
   },
   {
-   "track": "B",
-   "code": "Validate Vault",
-   "step": "Step 3 — Confirm Raft peers",
-   "does": "The three servers formed one cluster with an elected leader rather than sitting alone, so the secrets they store are replicated and losing a single server does not take Vault down.",
-   "cmd": "kubectl exec -n vault vault-0 -- \\\n  sh -c \"VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault operator raft list-peers\"",
-   "expected": "three peers, vault-0 leader, vault-1 and vault-2 followers, all voters",
-   "sub": "",
+   "track": "C",
+   "code": "Verify Credentials and Enforcement",
+   "step": "Step 2 — Inspect the credential metadata (CLI)",
+   "sub": "Send the SQL-shaped question from a second terminal",
+   "does": "The pod proved who it was to Vault using its Kubernetes identity rather than a stored key, was handed a database credential good for fifteen minutes, and hands you back that credential's lease id to carry into the next step.",
+   "cmd": "curl -s http://localhost:8080/query \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"query\": \"Run a SQL query to list any tables in the database.\"}' \\\n  | jq '{answer: .answer, credential_metadata: .credential_metadata}'",
+   "expected": "JSON with an answer plus credential_metadata: vault_authenticated true, vault_role uc1, and one lease for database/creds/uc1-readonly with a lease_id and ttl_seconds 900.",
    "state": "queued",
    "proof": [],
    "order": 4
   },
   {
-   "track": "B",
-   "code": "Validate Vault",
-   "step": "Step 4 — Confirm audit device",
-   "does": "Vault is writing down every request it handles, so at the end of each use case the attendee can go and find their own request in the log. Without this there would be nothing to find.",
-   "cmd": "kubectl exec -n vault vault-0 -- \\\n  sh -c \"VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault audit list\"",
-   "expected": "at least one audit device listed",
+   "track": "C",
+   "code": "Verify Credentials and Enforcement",
+   "step": "Step 3 — Observe credential issuance in the Vault audit log",
+   "does": "The answer somebody read can be tied back to the exact credential Vault handed out for it, and to the ServiceAccount that asked — the same lease id appears on both sides.",
+   "cmd": "kubectl logs -n vault -l app.kubernetes.io/name=vault --since=15m --tail=-1 \\\n  | jq -c 'select(.type==\"response\" and .request.path==\"database/creds/uc1-readonly\")\n           | {time, path: .request.path,\n              display_name: .auth.display_name,\n              lease_id: .response.secret.lease_id}' \\\n  | tail -1",
+   "expected": "One JSON line: time, path database/creds/uc1-readonly, display_name kubernetes-uc1-uc1-retriever-sa, and the same lease_id Step 2 printed.",
    "sub": "",
    "state": "queued",
    "proof": [],
    "order": 5
   },
   {
-   "track": "B",
-   "code": "Validate Vault",
-   "step": "Step 5 — Confirm Vault Enterprise + the Agent Registry",
-   "does": "The running Vault is the Enterprise build, which is the only one that can give an AI agent its own identity. On a non-Enterprise binary nothing the workshop teaches about agent identity would work at all.",
-   "cmd": "kubectl exec -n vault vault-0 -- vault status | grep -i version",
-   "expected": "Version carries the +ent suffix, e.g. 2.1.1+ent",
+   "track": "C",
+   "code": "Verify Credentials and Enforcement",
+   "step": "Step 4 — ENFC-01 enforcement test (the thing that must NOT happen)",
+   "does": "The read-only agent cannot get the refund-writing credentials even when it asks with its own genuine identity — Vault refuses, and the refusal is the pass.",
+   "cmd": "kubectl exec -n uc1 deploy/uc1-agent -- python3 -c '\nfrom app.agent import _vault\n_vault.login()\ntry:\n    _vault.client.read(\"database/creds/uc3-refund-writer\")\n    print(\"BREACH — UC1 obtained UC3 write credentials\")\nexcept Exception as e:\n    print(\"DENIED (expected):\", type(e).__name__)\n'",
+   "expected": "DENIED (expected): Forbidden",
    "sub": "",
    "state": "queued",
    "proof": [],
    "order": 6
   },
   {
-   "track": "B",
-   "code": "Validate Vault",
-   "step": "Step 5 — Confirm Vault Enterprise + the Agent Registry",
-   "sub": "List the secrets engines",
-   "does": "The agent registry is mounted next to the engines that hand out short-lived database and AWS credentials, so the licence really does include the agent-identity feature and agents can be issued credentials on demand.",
-   "cmd": "kubectl exec -n vault vault-0 -- sh -c \"VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault secrets list\" | grep -E 'agent-registry|database|aws'",
-   "expected": "agent-registry/, aws/ and database/ all listed",
+   "track": "C",
+   "code": "Verify Credentials and Enforcement",
+   "step": "Step 5 — Run verify-uc1.sh",
+   "does": "Everything claimed on this page is checked in one command, including the parts there is never time to demonstrate by hand, and a failure tells you how to fix it.",
+   "cmd": "bash infrastructure/scripts/verify-uc1.sh",
+   "expected": "Ten PASS lines (pod, ServiceAccount, Vault role, JIT DB creds, JIT STS creds, /health, ENFC-01, Agent Registry, audit device, /query end-to-end) then \"✓ 10 check(s) passed\"; a failure prints a copy-paste Fix hint.",
+   "sub": "",
    "state": "queued",
    "proof": [],
    "order": 7
   },
   {
-   "track": "B",
-   "code": "Validate Vault",
-   "step": "Step 5 — Confirm Vault Enterprise + the Agent Registry",
-   "sub": "List the registered agents",
-   "does": "Each of the three use-case agents has a named identity in Vault the same way a person does, so the workshop can grant and audit what each one is allowed to do individually rather than treating them as one anonymous application.",
-   "cmd": "kubectl exec -n vault vault-0 -- sh -c \"VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault list agent-registry/registration/display-name\"",
-   "expected": "three keys: agent-uc2, uc1-agent, uc3-actor",
+   "track": "C",
+   "code": "Verify Credentials and Enforcement",
+   "step": "Platform/Security Track — Vault lease lifecycle: issuance, TTL, auto-revocation",
+   "sub": "Observe the active lease",
+   "does": "You can watch the database credential exist right after a query and then vanish on its own fifteen minutes later, with no password left to rotate.",
+   "cmd": "export VAULT_ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)\nkubectl exec -n vault vault-0 -- \\\n  sh -c \"VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault list sys/leases/lookup/database/creds/uc1-readonly\"",
+   "expected": "The list contains the last segment of the lease_id that Step 2 returned. Run it again after 15 minutes and that segment is gone, because Vault has revoked the lease and dropped the Postgres role.",
    "state": "queued",
    "proof": [],
    "order": 8
+  },
+  {
+   "track": "D",
+   "trackLabel": "Phase 3 — Use Case 2: OAuth Personalized Read-Only",
+   "code": "OAuth Login Flow",
+   "step": "Step 1 — Get the Banking UI URL",
+   "does": "You have the real address of your own banking site, read back from the deployment instead of typed from a guess.",
+   "cmd": "echo \"https://$(grep '^NIP_FQDN_BANKING=' infrastructure/.acme-state | cut -d= -f2)/\"",
+   "sub": "",
+   "state": "queued",
+   "proof": [],
+   "order": 9
+  },
+  {
+   "track": "D",
+   "code": "OAuth Login Flow",
+   "step": "Step 2 — Sign in at the IVIA login page",
+   "does": "Your password is only ever typed on the identity provider's page — the banking app never sees it and still ends up knowing who you are.",
+   "cmd": "Open the Banking UI URL in a fresh incognito / private window. The browser is redirected to the IVIA WebSEAL login page. Enter username `oscar` and password `WorkshopUser1!`, then click **Login**. This window is your **oscar window**. Leave it open.",
+   "expected": "WebSEAL redirects back through /isvaop/oauth2/authorize to the Banking UI's /callback?code=... and you land on /dashboard.",
+   "browser": true,
+   "sub": "",
+   "state": "queued",
+   "proof": [],
+   "order": 10
+  },
+  {
+   "track": "D",
+   "code": "OAuth Login Flow",
+   "step": "Step 3 — Inspect the Banking UI logs",
+   "does": "The banking app took delivery of a token it never minted and cannot forge — nothing in its own log shows it handling a password.",
+   "cmd": "kubectl logs -n banking-app -l app=banking-ui --tail=30",
+   "sub": "",
+   "state": "queued",
+   "proof": [],
+   "order": 11
+  },
+  {
+   "track": "D",
+   "code": "OAuth Login Flow",
+   "step": "Step 4 — Confirm personalized dashboard data",
+   "does": "The answer you get back is about you, and the numbers are yours.",
+   "cmd": "On /dashboard, click the **Show me my account balances** suggestion under the chat.",
+   "expected": "Balance figures specific to Oscar; the agent answers natural-language questions about Oscar's financial data.",
+   "browser": true,
+   "sub": "",
+   "state": "queued",
+   "proof": [],
+   "order": 12
+  },
+  {
+   "track": "D",
+   "code": "OAuth Login Flow",
+   "step": "Step 5 — Switch users: sign in as Jaime",
+   "does": "Who signed in decides which money you see — two people, one app, no overlap.",
+   "cmd": "Open a **second Incognito / Private browser window** (this is your **jaime window**; the window you signed in to in Step 2 is your **oscar window**), go to the Banking UI URL, sign in as username `jaime` / password `WorkshopUser1!`, then click **Show me my account balances** again.",
+   "expected": "The agent answers with Jaime's accounts, not Oscar's. Keep both windows open; the pages that follow reuse them.",
+   "browser": true,
+   "sub": "",
+   "state": "queued",
+   "proof": [],
+   "order": 13
+  },
+  {
+   "track": "D",
+   "code": "OAuth Login Flow",
+   "step": "Step 6 — Confirm the tool contract has nowhere to put an identity",
+   "does": "Nothing calling these tools can name which customer it wants to be, because there is no field to put a customer in.",
+   "cmd": "kubectl delete pod mcp-probe -n banking-app --ignore-not-found --now >/dev/null 2>&1\nkubectl run mcp-probe --restart=Never --image=curlimages/curl:8.11.1 -n banking-app \\\n  --command -- curl -s -X POST http://banking-mcp-svc:3001/mcp \\\n    -H 'Authorization: Bearer schema-probe' \\\n    -H 'Content-Type: application/json' \\\n    -H 'Accept: application/json, text/event-stream' \\\n    -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}' >/dev/null\nkubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/mcp-probe -n banking-app --timeout=120s >/dev/null 2>&1 \\\n  || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/mcp-probe -n banking-app --timeout=30s >/dev/null 2>&1\nkubectl logs mcp-probe -n banking-app \\\n  | jq '.result.tools[] | {name, properties: .inputSchema.properties, required: .inputSchema.required}'\nkubectl delete pod mcp-probe -n banking-app --now >/dev/null 2>&1",
+   "expected": "get_accounts: properties {} and required null; get_transactions: only an optional account_id, required null.",
+   "sub": "",
+   "state": "queued",
+   "proof": [],
+   "order": 14
+  },
+  {
+   "track": "D",
+   "code": "OAuth Login Flow",
+   "step": "Step 6 — Confirm the tool contract has nowhere to put an identity",
+   "sub": "Now prove it behaves that way",
+   "does": "The server really does act on the signed-in person's token from the request header and ignores any identity handed to it in the tool payload.",
+   "cmd": "kubectl delete pod mcp-probe -n banking-app --ignore-not-found --now >/dev/null 2>&1\nkubectl run mcp-probe --restart=Never --image=curlimages/curl:8.11.1 -n banking-app \\\n  --command -- curl -s -X POST http://banking-mcp-svc:3001/mcp \\\n    -H 'Authorization: Bearer not-a-jwt-at-all' \\\n    -H 'Content-Type: application/json' \\\n    -H 'Accept: application/json, text/event-stream' \\\n    -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"get_accounts\",\n         \"arguments\":{\"jwt\":\"eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJvc2NhciJ9.not-a-real-signature\"}}}' >/dev/null\nkubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/mcp-probe -n banking-app --timeout=120s >/dev/null 2>&1 \\\n  || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/mcp-probe -n banking-app --timeout=30s >/dev/null 2>&1\nkubectl logs mcp-probe -n banking-app\nkubectl delete pod mcp-probe -n banking-app --now >/dev/null 2>&1",
+   "expected": "Error fetching accounts: Invalid JWT format: expected header.payload.signature — isError true.",
+   "state": "queued",
+   "proof": [],
+   "order": 15
+  },
+  {
+   "track": "D",
+   "code": "OAuth Login Flow",
+   "step": "Platform Track — IVIA OAuth client configuration",
+   "sub": "Confirm both properties on the running cluster",
+   "does": "The app's login secret never travels to your browser and is held in exactly one place on the server.",
+   "cmd": "kubectl get configmap -n banking-app banking-ui-config -o yaml | grep -c CLIENT_SECRET; kubectl get secret -n banking-app banking-ui-oidc -o jsonpath='{.data.IVIA_CLIENT_SECRET}' | wc -c",
+   "expected": "First number 0 (no CLIENT_SECRET in the ConfigMap); second number non-zero (the Secret holds it).",
+   "state": "queued",
+   "proof": [],
+   "order": 16
+  },
+  {
+   "track": "D",
+   "code": "Verify Per-User Data Access",
+   "step": "Step 1 — Log in as Oscar, inspect accounts",
+   "sub": "Ask the chat",
+   "does": "The app answers with your accounts and nobody else's.",
+   "cmd": "Switch to your **oscar window** (the one you signed in to on the OAuth Login Flow page) and, in the chat, ask \"What are my account balances?\" (or \"show my accounts\"). If you closed that window, open a new Incognito / Private window, go to the Banking UI URL, and log in as `oscar` as before.",
+   "expected": "Accounts belonging to Oscar only.",
+   "browser": true,
+   "state": "queued",
+   "proof": [],
+   "order": 17
+  },
+  {
+   "track": "D",
+   "code": "Verify Per-User Data Access",
+   "step": "Step 1 — Log in as Oscar, inspect accounts",
+   "sub": "Issue a credential of your own",
+   "does": "You hold a real, freshly minted database credential in your own hand, so the next check does not depend on the web app being honest.",
+   "cmd": "export VAULT_ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)\n\nCREDS_JSON=$(kubectl exec -n vault vault-0 -- \\\n  sh -c \"VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read database/creds/uc2-personal-readonly -format=json\")\n\n# Show what Vault issued (so you can confirm it's a v-root-uc2-pers-... role)\necho \"$CREDS_JSON\" | jq '{username: .data.username, password: .data.password}'\n\n# Capture for Step 1.2 and Step 2 — no copy-paste needed\nexport PG_USER=$(echo \"$CREDS_JSON\" | jq -r '.data.username')\nexport PG_PASS=$(echo \"$CREDS_JSON\" | jq -r '.data.password')\nexport RDS_HOST=$(kubectl get configmap banking-mcp-config -n banking-app -o jsonpath='{.data.RDS_ADDRESS}')",
+   "expected": "The issued username and password printed as JSON; PG_USER, PG_PASS and RDS_HOST exported.",
+   "state": "queued",
+   "proof": [],
+   "order": 18
+  },
+  {
+   "track": "D",
+   "code": "Verify Per-User Data Access",
+   "step": "Step 1 — Log in as Oscar, inspect accounts",
+   "sub": "Query the database as Oscar",
+   "does": "The narrowing to one customer's accounts happens inside the database itself, not in the web page you were looking at.",
+   "cmd": "kubectl delete pod pg-client-oscar -n banking-app --ignore-not-found --now >/dev/null 2>&1\nkubectl run pg-client-oscar --restart=Never --image=postgres:16-alpine -n banking-app \\\n  --env=\"PGPASSWORD=${PG_PASS}\" \\\n  --command -- psql -h \"${RDS_HOST}\" -U \"${PG_USER}\" -d workshop \\\n    -c \"SET app.current_user_sub = 'oscar'; SELECT account_number, balance FROM banking.accounts;\" >/dev/null\nkubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-client-oscar -n banking-app --timeout=120s >/dev/null 2>&1 \\\n  || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/pg-client-oscar -n banking-app --timeout=30s >/dev/null 2>&1\nkubectl logs pg-client-oscar -n banking-app\nkubectl delete pod pg-client-oscar -n banking-app --now >/dev/null 2>&1",
+   "expected": "SET, then OVI-CHK-100001 4250.00 and OVI-SAV-100002 18750.50, (2 rows).",
+   "state": "queued",
+   "proof": [],
+   "order": 19
+  },
+  {
+   "track": "D",
+   "code": "Verify Per-User Data Access",
+   "step": "Step 2 — Switch to Jaime, confirm data isolation",
+   "sub": "Sign in as Jaime",
+   "does": "Two customers using the same application never see each other's money.",
+   "cmd": "Switch to your **jaime window** (the second window from the OAuth Login Flow page). If you closed it, open a new Incognito / Private window, go to the Banking UI URL, and sign in as `jaime` (password `WorkshopUser1!`). In the chat, ask \"What are my account balances?\" (or \"show my accounts\").",
+   "expected": "Jaime's accounts only — no rows from Oscar's data.",
+   "browser": true,
+   "state": "queued",
+   "proof": [],
+   "order": 20
+  },
+  {
+   "track": "D",
+   "code": "Verify Per-User Data Access",
+   "step": "Step 2 — Switch to Jaime, confirm data isolation",
+   "sub": "Query the database as Jaime",
+   "does": "The separation follows the signed-in person, not the database login — the same credential returns a different customer's rows.",
+   "cmd": "kubectl delete pod pg-client-jaime -n banking-app --ignore-not-found --now >/dev/null 2>&1\nkubectl run pg-client-jaime --restart=Never --image=postgres:16-alpine -n banking-app \\\n  --env=\"PGPASSWORD=${PG_PASS}\" \\\n  --command -- psql -h \"${RDS_HOST}\" -U \"${PG_USER}\" -d workshop \\\n    -c \"SET app.current_user_sub = 'jaime'; SELECT account_number, balance FROM banking.accounts;\" >/dev/null\nkubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-client-jaime -n banking-app --timeout=120s >/dev/null 2>&1 \\\n  || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/pg-client-jaime -n banking-app --timeout=30s >/dev/null 2>&1\nkubectl logs pg-client-jaime -n banking-app\nkubectl delete pod pg-client-jaime -n banking-app --now >/dev/null 2>&1",
+   "expected": "SET, then OVI-CHK-200001 7830.25 and OVI-SAV-200002 32100.00, (2 rows).",
+   "state": "queued",
+   "proof": [],
+   "order": 21
+  },
+  {
+   "track": "D",
+   "code": "Verify Per-User Data Access",
+   "step": "Step 3 — Inspect the Row-Level Security policy",
+   "does": "There is one written rule in the database that made the two results differ — and if nobody says who is asking, it returns nothing rather than everything.",
+   "cmd": "REGION=$(echo \"${RDS_HOST}\" | sed -E 's/.*\\.([a-z0-9-]+)\\.rds\\.amazonaws\\.com$/\\1/')\nSECRET_ARN=$(aws rds describe-db-instances --region \"${REGION}\" \\\n  --query 'DBInstances[0].MasterUserSecret.SecretArn' --output text)\nSECRET_JSON=$(aws secretsmanager get-secret-value --region \"${REGION}\" \\\n  --secret-id \"${SECRET_ARN}\" --query SecretString --output text)\nMASTER_USER=$(echo \"${SECRET_JSON}\" | jq -r '.username')\nMASTER_PASS=$(echo \"${SECRET_JSON}\" | jq -r '.password')\n\nkubectl create secret generic db-master -n banking-app \\\n  --from-literal=password=\"${MASTER_PASS}\" --dry-run=client -o yaml | kubectl apply -f -\n\nkubectl delete pod pg-client-policy -n banking-app --ignore-not-found --now >/dev/null 2>&1\nkubectl run pg-client-policy --restart=Never --image=postgres:16-alpine -n banking-app \\\n  --overrides=\"$(jq -n --arg host \"${RDS_HOST}\" --arg user \"${MASTER_USER}\" \\\n    --arg sql \"SELECT polname, polcmd, polroles, pg_get_expr(polqual, polrelid) AS policy_expr FROM pg_policy JOIN pg_class ON pg_class.oid = pg_policy.polrelid WHERE pg_class.relname = 'accounts';\" \\\n    '{spec:{containers:[{name:\"pg-client-policy\",image:\"postgres:16-alpine\",env:[{name:\"PGPASSWORD\",valueFrom:{secretKeyRef:{name:\"db-master\",key:\"password\"}}}],command:[\"psql\",\"-h\",$host,\"-U\",$user,\"-d\",\"workshop\",\"-c\",$sql]}],restartPolicy:\"Never\"}}')\" >/dev/null\nkubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-client-policy -n banking-app --timeout=120s >/dev/null 2>&1 \\\n  || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/pg-client-policy -n banking-app --timeout=30s >/dev/null 2>&1\nkubectl logs pg-client-policy -n banking-app\nkubectl delete pod pg-client-policy -n banking-app --now >/dev/null 2>&1\n\nkubectl delete secret db-master -n banking-app",
+   "expected": "secret/db-master created; one row — user_accounts | r | {0} | ((user_sub)::text = current_setting('app.current_user_sub'::text, true)); then secret deleted.",
+   "sub": "",
+   "state": "queued",
+   "proof": [],
+   "order": 22
+  },
+  {
+   "track": "D",
+   "code": "Verify Per-User Data Access",
+   "step": "Step 4 — Run verify-uc2.sh",
+   "does": "Every promise this use case makes — read-only, per-person, blocked outbound traffic, no identity in the tool arguments, a live lease — checks out in one command.",
+   "cmd": "bash infrastructure/scripts/verify-uc2.sh",
+   "expected": "21 check(s) passed.",
+   "sub": "",
+   "state": "queued",
+   "proof": [],
+   "order": 23
   },
   {
    "track": "D",
@@ -119,8 +304,7 @@
    "step": "",
    "state": "queued",
    "proof": [],
-   "order": 9,
-   "trackLabel": "Phase 3 — Use Case 2: OAuth Personalized Read-Only"
+   "order": 24
   },
   {
    "track": "D",
@@ -132,7 +316,7 @@
    "sub": "",
    "state": "queued",
    "proof": [],
-   "order": 10
+   "order": 25
   },
   {
    "track": "D",
@@ -144,7 +328,7 @@
    "sub": "",
    "state": "queued",
    "proof": [],
-   "order": 11
+   "order": 26
   },
   {
    "track": "D",
@@ -156,7 +340,7 @@
    "sub": "",
    "state": "queued",
    "proof": [],
-   "order": 12
+   "order": 27
   },
   {
    "track": "D",
@@ -168,7 +352,7 @@
    "sub": "",
    "state": "queued",
    "proof": [],
-   "order": 13
+   "order": 28
   },
   {
    "track": "D",
@@ -180,7 +364,7 @@
    "sub": "",
    "state": "queued",
    "proof": [],
-   "order": 14
+   "order": 29
   },
   {
    "track": "D",
@@ -192,7 +376,7 @@
    "expected": "Either \"No value found at sys/leases/lookup/database/creds/uc2-personal-readonly\" with exit code 2, or a Keys table of other live lease suffixes — never yours.",
    "state": "queued",
    "proof": [],
-   "order": 15
+   "order": 30
   },
   {
    "track": "D",
@@ -203,7 +387,7 @@
    "cmd": "# The Glue catalog + Athena 'workshop' workgroup were provisioned in YOUR deploy\n# region. Resolve it from the RDS endpoint (kubectl-sourced, so it works regardless\n# of your shell's default region or working directory) — never a hardcoded literal,\n# per the region contract.\nRDS_HOST=$(kubectl get configmap banking-mcp-config -n banking-app -o jsonpath='{.data.RDS_ADDRESS}')\nexport AWS_REGION=$(echo \"${RDS_HOST}\" | sed -E 's/.*\\.([a-z0-9-]+)\\.rds\\.amazonaws\\.com$/\\1/')\n\nathena_query() {\n  local Q=\"$1\"\n  local QID=$(aws athena start-query-execution --work-group workshop \\\n    --query-string \"$Q\" --query 'QueryExecutionId' --output text)\n  for i in $(seq 1 30); do\n    STATE=$(aws athena get-query-execution --query-execution-id \"$QID\" \\\n      --query 'QueryExecution.Status.State' --output text)\n    [ \"$STATE\" = \"SUCCEEDED\" ] && break\n    [ \"$STATE\" = \"FAILED\" ] && { aws athena get-query-execution \\\n      --query-execution-id \"$QID\" --query 'QueryExecution.Status.StateChangeReason' --output text; return 1; }\n    sleep 2\n  done\n  aws athena get-query-results --query-execution-id \"$QID\" --output json \\\n    | jq -r '.ResultSet.Rows[] | [.Data[] | (.VarCharValue // \"\" | if . == \"\" then \"-\" else . end)] | @tsv' \\\n    | column -t -s $'\\t'\n}\n\n# First value of the first data row only (capture into a variable; empty if none)\nathena_scalar() { athena_query \"$1\" | awk 'NR==2 {print ($1==\"-\" ? \"\" : $1)}'; }",
    "state": "queued",
    "proof": [],
-   "order": 16
+   "order": 31
   },
   {
    "track": "D",
@@ -215,7 +399,7 @@
    "expected": "Rows with identity=root and agent \"-\" for hand-issued reads, and identity=\"JWT Token with Unique Identifier: <jti>\" with agent=agent-uc2 plus a human_entity id for signed-in queries.",
    "state": "queued",
    "proof": [],
-   "order": 17
+   "order": 32
   },
   {
    "track": "D",
@@ -227,7 +411,7 @@
    "expected": "{\"id\": \"<entity id>\", \"name\": \"oscar\"}",
    "state": "queued",
    "proof": [],
-   "order": 18
+   "order": 33
   },
   {
    "track": "D",
@@ -239,7 +423,7 @@
    "sub": "",
    "state": "queued",
    "proof": [],
-   "order": 19
+   "order": 34
   },
   {
    "track": "D",
@@ -251,7 +435,7 @@
    "browser": true,
    "state": "queued",
    "proof": [],
-   "order": 20
+   "order": 35
   },
   {
    "track": "D",
@@ -263,7 +447,7 @@
    "expected": "vault_k8s_auth_success role=uc2 ttl_seconds=3600 and vault_lease_revoked lease_id=database/creds/uc2-personal-readonly/<suffix>.",
    "state": "queued",
    "proof": [],
-   "order": 21
+   "order": 36
   },
   {
    "track": "D",
@@ -275,7 +459,7 @@
    "expected": "PASS: lease <suffix> is no longer in the active-leases list. If the block finds no vault_lease_revoked line, it says so: ask the banking chat another question and re-run it.",
    "state": "queued",
    "proof": [],
-   "order": 22
+   "order": 37
   },
   {
    "track": "D",
@@ -287,7 +471,339 @@
    "expected": "Rows with revoked_by kubernetes-banking-app-uc2-mcp-server-sa for application revocations, and revoked_by root with the lease id in the path for your own Step 3 revoke.",
    "state": "queued",
    "proof": [],
-   "order": 23
+   "order": 38
+  },
+  {
+   "track": "E",
+   "code": "Test the Refund Flow",
+   "step": "1. Open the banking app",
+   "does": "You reach the banking app on your own deployment's hostname rather than a typed-in guess.",
+   "cmd": "source infrastructure/.acme-state && echo \"https://${NIP_FQDN_BANKING}/\"",
+   "expected": "Prints the https banking URL; switch to your jaime window (the second window from the OAuth Login Flow page), or open a new Incognito / Private window and sign in as jaime / WorkshopUser1!.",
+   "sub": "",
+   "state": "queued",
+   "proof": [],
+   "order": 39,
+   "trackLabel": "Phase 3 — Use Case 3: Privileged Action with CIBA"
+  },
+  {
+   "track": "E",
+   "code": "Test the Refund Flow",
+   "step": "2. Ask for a refund",
+   "does": "The agent can read your money but cannot move it on its own, and it checks your choice against the real charge before it asks anyone for permission.",
+   "cmd": "Click the red \"I need a refund for a recent transaction\" suggestion under the chat; when the app lists your transactions, type the number of a charge (money that went out) you have not refunded before — just the number — then confirm.",
+   "expected": "The agent lists your transactions and asks which number to refund; it refuses a deposit, an already-refunded charge, or more than what is left to refund, says why, sends nothing to your phone, and asks for another number.",
+   "browser": true,
+   "sub": "",
+   "state": "queued",
+   "proof": [],
+   "order": 40
+  },
+  {
+   "track": "E",
+   "code": "Test the Refund Flow",
+   "step": "3. Approve on your phone",
+   "does": "Nothing is written until a person taps on a device the agent cannot reach.",
+   "cmd": "Tap Approve in the IBM Verify app, then type `I approved` in the chat.",
+   "expected": "The approval push arrives on the enrolled phone and the chat carries on after you tap Approve.",
+   "browser": true,
+   "sub": "",
+   "state": "queued",
+   "proof": [],
+   "order": 41
+  },
+  {
+   "track": "E",
+   "code": "Test the Refund Flow",
+   "step": "4. Confirm the refund landed",
+   "does": "The refund you approved is the refund that was written, and the credential that wrote it was issued, used once and expired in the time it took to read the reply.",
+   "cmd": "Read the chat reply in the banking app.",
+   "expected": "The chat reports Status: approved, with the refund id, request id, amount and approver (your ids, amount and timestamp differ). The refund is stored in its own table, so the transaction list does not gain a new row.",
+   "browser": true,
+   "sub": "",
+   "state": "queued",
+   "proof": [],
+   "order": 42
+  },
+  {
+   "track": "E",
+   "code": "The Bypass Test",
+   "step": "Run the bypass test",
+   "does": "Four ways round the approval — a forged signature, the wrong agent, asking for something the approval did not name, and skipping the human entirely — all fail before any credential is handed out, and a genuine request still succeeds so you can tell a working guard from a broken one.",
+   "cmd": "bash infrastructure/scripts/verify-uc3.sh --bypass",
+   "expected": "Nine checks pass after a two-to-four-minute self-mint; Check 19 shows a WARN as SKIPPED, which is expected and not a failure.",
+   "sub": "",
+   "state": "queued",
+   "proof": [],
+   "order": 43
+  },
+  {
+   "track": "E",
+   "code": "The Bypass Test",
+   "step": "Row-level security holds on the read path too",
+   "sub": "In the browser",
+   "does": "Two customers on the same system never see each other's money, and knowing someone else's refund id gets you nothing.",
+   "cmd": "1. Switch to the jaime browser window you signed in with on the OAuth Login Flow page (Use Case 2). If you closed it, open a new Incognito / Private window, go to the banking application URL, and sign in as jaime on the IVIA login page.\n2. Open the Use Case 3 chat and send: List my recent transactions\n3. Confirm the response contains only Jaime's records.\n4. Switch to the oscar browser window you signed in with on the same page. If you closed it, open a new Incognito / Private window and sign in as oscar again. Repeat the same query and confirm you see only Oscar's records and zero of Jaime's.\n5. Signed in as Oscar, ask: What is the status of refund <jaime-refund-id>",
+   "expected": "Each persona sees only their own transactions and none of the other's; the cross-customer refund lookup answers \"Refund not found\" with no detail.",
+   "browser": true,
+   "state": "queued",
+   "proof": [],
+   "order": 44
+  },
+  {
+   "track": "E",
+   "code": "The Bypass Test",
+   "step": "Row-level security holds on the read path too",
+   "sub": "Get a read-only credential",
+   "does": "You now hold the same look-up credential the agent uses, so the next checks are yours rather than the application's.",
+   "cmd": "export VAULT_ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)\nCREDS_JSON=$(kubectl exec -n vault vault-0 -- \\\n  sh -c \"VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read database/creds/uc3-readonly -format=json\")\n\necho \"$CREDS_JSON\" | jq '{username: .data.username, password: .data.password}'\n\nexport PG_USER=$(echo \"$CREDS_JSON\" | jq -r '.data.username')\nexport PG_PASS=$(echo \"$CREDS_JSON\" | jq -r '.data.password')\nexport RDS_HOST=$(kubectl get configmap uc3-agent-config -n banking-app -o jsonpath='{.data.DB_HOST}')",
+   "expected": "Prints a freshly minted username and password; the credential expires after 15 minutes, and a password-authentication failure later means minting a new one.",
+   "state": "queued",
+   "proof": [],
+   "order": 45
+  },
+  {
+   "track": "E",
+   "code": "The Bypass Test",
+   "step": "Row-level security holds on the read path too",
+   "sub": "Count transactions as each persona",
+   "does": "The customer separation lives in the database, not in the app — take the agent out of the path entirely and each person still sees only their own rows.",
+   "cmd": "kubectl delete pod pg-rls-test -n banking-app --ignore-not-found --now >/dev/null 2>&1\nkubectl run pg-rls-test --restart=Never --image=postgres:16-alpine -n banking-app \\\n  --env=\"PGPASSWORD=${PG_PASS}\" \\\n  --command -- psql -h \"${RDS_HOST}\" -U \"${PG_USER}\" -d workshop -c \"\n    SELECT set_config('app.current_user_sub','jaime',false);\n    SELECT 'jaime' AS acting_as, count(*) AS tx_count FROM banking.transactions;\n    SELECT set_config('app.current_user_sub','oscar',false);\n    SELECT 'oscar' AS acting_as, count(*) AS tx_count FROM banking.transactions;\" >/dev/null\nkubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-rls-test -n banking-app --timeout=120s >/dev/null 2>&1 \\\n  || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/pg-rls-test -n banking-app --timeout=30s >/dev/null 2>&1\nkubectl logs pg-rls-test -n banking-app\nkubectl delete pod pg-rls-test -n banking-app --now >/dev/null 2>&1",
+   "expected": "Two different counts, one per persona: jaime 9 transactions, oscar 8, with each set_config line echoing the persona it activated.",
+   "state": "queued",
+   "proof": [],
+   "order": 46
+  },
+  {
+   "track": "E",
+   "code": "The Bypass Test",
+   "step": "The read-only credential cannot write",
+   "does": "The credential the agent uses to look things up cannot move money, so a bug in the agent could not quietly write a refund with it — the approval step is not theatre.",
+   "cmd": "kubectl delete pod pg-insert-uc3 -n banking-app --ignore-not-found --now >/dev/null 2>&1\nkubectl run pg-insert-uc3 --restart=Never --image=postgres:16-alpine -n banking-app \\\n  --env=\"PGPASSWORD=${PG_PASS}\" \\\n  --command -- psql -h \"${RDS_HOST}\" -U \"${PG_USER}\" -d workshop \\\n    -c \"INSERT INTO banking.refunds (account_id, transaction_id, amount, approved_by, request_id)\n         VALUES ('00000000-0000-0000-0000-000000000000', '00000000-0000-0000-0000-000000000000', 1.00, 'least-priv-test', gen_random_uuid());\" >/dev/null\nkubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-insert-uc3 -n banking-app --timeout=120s >/dev/null 2>&1 \\\n  || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/pg-insert-uc3 -n banking-app --timeout=30s >/dev/null 2>&1\nkubectl logs pg-insert-uc3 -n banking-app\nkubectl delete pod pg-insert-uc3 -n banking-app --now >/dev/null 2>&1",
+   "expected": "ERROR: permission denied for table refunds. The pod ends in Failed phase because psql exits non-zero — that non-zero exit is the write being correctly rejected.",
+   "sub": "",
+   "state": "queued",
+   "proof": [],
+   "order": 47
+  },
+  {
+   "track": "E",
+   "code": "The Bypass Test",
+   "step": "Knowing a refund id gets you nothing",
+   "sub": "Step 4.1 — Find a refund you created",
+   "does": "A refund is visible only to the person who owns it, so you have to look under each persona to find the ones you made.",
+   "cmd": "kubectl delete pod pg-find-refund -n banking-app --ignore-not-found --now >/dev/null 2>&1\nkubectl run pg-find-refund --restart=Never --image=postgres:16-alpine -n banking-app \\\n  --env=\"PGPASSWORD=${PG_PASS}\" \\\n  --command -- psql -h \"${RDS_HOST}\" -U \"${PG_USER}\" -d workshop -c \"\n    SELECT set_config('app.current_user_sub','oscar',false);\n    SELECT 'oscar' AS persona, refund_id, amount::float AS amount FROM banking.refunds;\n    SELECT set_config('app.current_user_sub','jaime',false);\n    SELECT 'jaime' AS persona, refund_id, amount::float AS amount FROM banking.refunds;\" >/dev/null\nkubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-find-refund -n banking-app --timeout=120s >/dev/null 2>&1 \\\n  || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/pg-find-refund -n banking-app --timeout=30s >/dev/null 2>&1\nREFUND_LIST=$(kubectl logs pg-find-refund -n banking-app)\necho \"$REFUND_LIST\"\nkubectl delete pod pg-find-refund -n banking-app --now >/dev/null 2>&1",
+   "expected": "The refund id and amount for each persona you ran a refund as; the ids and amounts are yours and differ from the page's example. Refunds are never seeded, so an empty result means you have not run the refund flow.",
+   "state": "queued",
+   "proof": [],
+   "order": 48
+  },
+  {
+   "track": "E",
+   "code": "The Bypass Test",
+   "step": "Knowing a refund id gets you nothing",
+   "sub": "Step 4.1 — Find a refund you created: set three variables",
+   "does": "The refund, its owner and the other persona are read from the listing you just printed, so the next check is against your own data and nothing is copied by hand.",
+   "cmd": "FIRST_ROW=$(echo \"$REFUND_LIST\" | awk -F'|' 'NF>=3 && $1 ~ /^ *(oscar|jaime) *$/ {gsub(/ /,\"\",$1); gsub(/ /,\"\",$2); print $1, $2; exit}')\nif [ -z \"$FIRST_ROW\" ]; then\n  echo \"No refund found under oscar or jaime. Complete a refund on the Test the Refund Flow page, then re-run Step 4.1.\"\nelse\n  export OWNER=\"${FIRST_ROW% *}\"\n  export REFUND_ID=\"${FIRST_ROW#* }\"\n  if [ \"$OWNER\" = \"oscar\" ]; then export ATTACKER=jaime; else export ATTACKER=oscar; fi\n  echo \"REFUND_ID=${REFUND_ID}  OWNER=${OWNER}  ATTACKER=${ATTACKER}\"\nfi",
+   "expected": "Prints REFUND_ID=<id>  OWNER=<persona>  ATTACKER=<the other persona> for the first refund listed. If no refund exists it tells you to complete a refund on the Test the Refund Flow page, then re-run Step 4.1.",
+   "state": "queued",
+   "proof": [],
+   "order": 49
+  },
+  {
+   "track": "E",
+   "code": "The Bypass Test",
+   "step": "Knowing a refund id gets you nothing",
+   "sub": "Step 4.2 — Cross-owner read returns nothing; owner read returns the row",
+   "does": "Handing the wrong customer a real refund id gets them the same empty answer as an id that never existed — nothing leaks, not even that the refund is real.",
+   "cmd": "kubectl delete pod pg-owner-test -n banking-app --ignore-not-found --now >/dev/null 2>&1\nkubectl run pg-owner-test --restart=Never --image=postgres:16-alpine -n banking-app \\\n  --env=\"PGPASSWORD=${PG_PASS}\" \\\n  --command -- psql -h \"${RDS_HOST}\" -U \"${PG_USER}\" -d workshop -c \"\n    SELECT set_config('app.current_user_sub','${ATTACKER}',false);\n    SELECT 'hostile cross-owner read' AS test, r.refund_id, r.amount::float AS amount\n      FROM banking.refunds r\n      JOIN banking.accounts a ON a.id = r.account_id\n     WHERE r.refund_id = '${REFUND_ID}' AND a.user_sub = '${ATTACKER}';\n    SELECT set_config('app.current_user_sub','${OWNER}',false);\n    SELECT 'owner read' AS test, r.refund_id, r.amount::float AS amount\n      FROM banking.refunds r\n      JOIN banking.accounts a ON a.id = r.account_id\n     WHERE r.refund_id = '${REFUND_ID}' AND a.user_sub = '${OWNER}';\" >/dev/null\nkubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-owner-test -n banking-app --timeout=120s >/dev/null 2>&1 \\\n  || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/pg-owner-test -n banking-app --timeout=30s >/dev/null 2>&1\nkubectl logs pg-owner-test -n banking-app\nkubectl delete pod pg-owner-test -n banking-app --now >/dev/null 2>&1",
+   "expected": "The hostile cross-owner read returns 0 rows; the owner read returns the single refund row.",
+   "state": "queued",
+   "proof": [],
+   "order": 50
+  },
+  {
+   "track": "E",
+   "code": "The Bypass Test",
+   "step": "One approval pays once",
+   "sub": "Get a write-capable credential",
+   "does": "You are holding the write credential yourself, with the approval machinery deliberately out of the picture, so what is on trial next is the database alone.",
+   "cmd": "export VAULT_ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)\nCREDS_JSON=$(kubectl exec -n vault vault-0 -- \\\n  sh -c \"VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read database/creds/uc3-refund-writer -format=json\")\n\nexport PG_USER=$(echo \"$CREDS_JSON\" | jq -r '.data.username')\nexport PG_PASS=$(echo \"$CREDS_JSON\" | jq -r '.data.password')\nexport RDS_HOST=$(kubectl get configmap uc3-agent-config -n banking-app -o jsonpath='{.data.DB_HOST}')\n\necho \"$CREDS_JSON\" | jq '{username: .data.username}'",
+   "expected": "Prints the minted username; this is the shortest-lived credential in the workshop at five minutes, so re-run it if a later step reports a password-authentication failure.",
+   "state": "queued",
+   "proof": [],
+   "order": 51
+  },
+  {
+   "track": "E",
+   "code": "The Bypass Test",
+   "step": "One approval pays once",
+   "sub": "Positive control — the credential really can write",
+   "does": "This credential really can write a refund row, so when the next step is refused you know it was the guard and not a missing privilege.",
+   "cmd": "kubectl delete pod pg-replay-uc3 -n banking-app --ignore-not-found --now >/dev/null 2>&1\nkubectl run pg-replay-uc3 --restart=Never --image=postgres:16-alpine -n banking-app \\\n  --env=\"PGPASSWORD=${PG_PASS}\" \\\n  --command -- psql -h \"${RDS_HOST}\" -U \"${PG_USER}\" -d workshop -c \"\n    SELECT set_config('app.current_user_sub','jaime',false);\n    BEGIN;\n    INSERT INTO banking.refunds (account_id, transaction_id, amount, approved_by, request_id)\n    SELECT account_id, transaction_id, amount, approved_by, gen_random_uuid()\n      FROM banking.refunds ORDER BY created_at DESC LIMIT 1;\n    ROLLBACK;\" >/dev/null\nkubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-replay-uc3 -n banking-app --timeout=120s >/dev/null 2>&1 \\\n  || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/pg-replay-uc3 -n banking-app --timeout=30s >/dev/null 2>&1\nkubectl logs pg-replay-uc3 -n banking-app\nkubectl delete pod pg-replay-uc3 -n banking-app --now >/dev/null 2>&1",
+   "expected": "BEGIN, INSERT 0 1, ROLLBACK — the write is accepted and then discarded, leaving nothing behind. If banking.refunds is empty you see INSERT 0 0 and nothing was tested.",
+   "state": "queued",
+   "proof": [],
+   "order": 52
+  },
+  {
+   "track": "E",
+   "code": "The Bypass Test",
+   "step": "One approval pays once",
+   "sub": "The replay — same approval, second refund",
+   "does": "One tap on a phone pays exactly one refund — the database itself refuses a second payment under the same approval, even with a valid credential and no agent in the way.",
+   "cmd": "kubectl delete pod pg-replay-uc3 -n banking-app --ignore-not-found --now >/dev/null 2>&1\nkubectl run pg-replay-uc3 --restart=Never --image=postgres:16-alpine -n banking-app \\\n  --env=\"PGPASSWORD=${PG_PASS}\" \\\n  --command -- psql -h \"${RDS_HOST}\" -U \"${PG_USER}\" -d workshop -c \"\n    SELECT set_config('app.current_user_sub','jaime',false);\n    INSERT INTO banking.refunds (account_id, transaction_id, amount, approved_by, request_id)\n    SELECT account_id, transaction_id, amount, approved_by, request_id\n      FROM banking.refunds ORDER BY created_at DESC LIMIT 1;\" >/dev/null\nkubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-replay-uc3 -n banking-app --timeout=120s >/dev/null 2>&1 \\\n  || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/pg-replay-uc3 -n banking-app --timeout=30s >/dev/null 2>&1\nkubectl logs pg-replay-uc3 -n banking-app\nkubectl delete pod pg-replay-uc3 -n banking-app --now >/dev/null 2>&1",
+   "expected": "ERROR: duplicate key value violates unique constraint \"refunds_request_id_key\". The error arrives on stderr so it may interleave with the table; the pod ends Failed because psql exits non-zero, and that non-zero exit is the replay being correctly rejected.",
+   "state": "queued",
+   "proof": [],
+   "order": 53
+  },
+  {
+   "track": "E",
+   "code": "Three-Plane Audit Correlation",
+   "step": "Set up the query helpers",
+   "sub": "Define the helpers",
+   "does": "The rest of the page reads as one command per question, pointed at the log catalog in your own deploy region.",
+   "cmd": "# The Glue catalog + Athena 'workshop' workgroup were provisioned in YOUR deploy\n# region (resolved from Terraform state — never a hardcoded literal, per the region\n# contract). Point the CLI at that region so the workgroup and the workshop_logs\n# database resolve regardless of your shell's default region.\nexport AWS_REGION=\"$(terraform -chdir=infrastructure output -raw region)\"\n\n# Run a query in the 'workshop' workgroup, wait for it, echo the execution id\nathena_run() {\n  local QID=$(aws athena start-query-execution --work-group workshop \\\n    --query-string \"$1\" --query 'QueryExecutionId' --output text)\n  for i in $(seq 1 30); do\n    local S=$(aws athena get-query-execution --query-execution-id \"$QID\" \\\n      --query 'QueryExecution.Status.State' --output text)\n    [ \"$S\" = \"SUCCEEDED\" ] && { echo \"$QID\"; return 0; }\n    [ \"$S\" = \"FAILED\" ] && { aws athena get-query-execution --query-execution-id \"$QID\" \\\n      --query 'QueryExecution.Status.StateChangeReason' --output text >&2; return 1; }\n    sleep 2\n  done\n}\n\n# Multi-row aligned table\nathena_query() { aws athena get-query-results --query-execution-id \"$(athena_run \"$1\")\" \\\n  --output json | jq -r '.ResultSet.Rows[] | [.Data[] | (.VarCharValue // \"-\")] | @tsv' | column -t -s $'\\t'; }\n\n# Single row, vertical (field -> value)\nathena_record() { aws athena get-query-results --query-execution-id \"$(athena_run \"$1\")\" \\\n  --output json | jq -r '.ResultSet.Rows as $r | range(0; ($r[0].Data|length)) as $i\n    | \"\\($r[0].Data[$i].VarCharValue)\\t\\($r[1].Data[$i].VarCharValue // \"-\")\"' | column -t -s $'\\t'; }\n\n# First value only (capture into a variable)\nathena_scalar() { aws athena get-query-results --query-execution-id \"$(athena_run \"$1\")\" \\\n  --query 'ResultSet.Rows[1].Data[0].VarCharValue' --output text; }",
+   "state": "queued",
+   "proof": [],
+   "order": 54
+  },
+  {
+   "track": "E",
+   "code": "Three-Plane Audit Correlation",
+   "step": "Set up the query helpers",
+   "sub": "Step 1 — Capture a request_id",
+   "does": "Every approved refund leaves a record of the approval, and you now hold the id of the one you just made.",
+   "cmd": "REQUEST_ID=$(athena_scalar \"SELECT request_id FROM workshop_logs.ivia_decisions\n  WHERE request_id <> '' ORDER BY timestamp DESC LIMIT 1\")\necho \"request_id: ${REQUEST_ID}\"",
+   "expected": "Prints request_id: followed by the id of your most recent approval.",
+   "state": "queued",
+   "proof": [],
+   "order": 55
+  },
+  {
+   "track": "E",
+   "code": "Three-Plane Audit Correlation",
+   "step": "Set up the query helpers",
+   "sub": "List recent approvals to trace a different refund",
+   "does": "You can pick out any earlier refund and see who approved it, so you are not limited to tracing the last one.",
+   "cmd": "athena_query \"SELECT request_id, user_identity, substr(timestamp,1,19) AS time\n  FROM workshop_logs.ivia_decisions\n  WHERE request_id <> ''\n  ORDER BY timestamp DESC LIMIT 5\"\n# REQUEST_ID=2f50b532-2ea2-4eef-b591-71250b5470c3   # <- set to the id you want",
+   "expected": "Up to five recent approvals with the id, who approved each, and the time.",
+   "state": "queued",
+   "proof": [],
+   "order": 56
+  },
+  {
+   "track": "E",
+   "code": "Three-Plane Audit Correlation",
+   "step": "Set up the query helpers",
+   "sub": "Step 2 — Run the correlation query",
+   "does": "Three systems that knew nothing about each other line up on one id, so you can answer who approved this, which software acted for them, what it was allowed to touch, when the money moved, and how long the credential lived.",
+   "cmd": "athena_record \"SELECT\n  request_id,\n  substr(approval_time,1,19)   AS approval_time,\n  user_approved_sub,\n  ciba_binding_message,\n  substr(vault_auth_time,1,19) AS vault_auth_time,\n  vault_principal,\n  vault_human_entity_id,\n  vault_agent_registry_id,\n  vault_rar_path,\n  substr(db_write_time,1,19)   AS db_write_time,\n  db_command,\n  db_credential_ttl\nFROM workshop_logs.audit_correlation WHERE request_id = '${REQUEST_ID}' LIMIT 1\"",
+   "expected": "One row printed vertically: the approver, the approval and authorization and write times about a second apart, the agent and the exact path it was narrowed to, and a credential lifetime of 300 seconds. Your ids and timestamps differ; the shape does not.",
+   "state": "queued",
+   "proof": [],
+   "order": 57
+  },
+  {
+   "track": "E",
+   "code": "Three-Plane Audit Correlation",
+   "step": "The same query in the Athena console",
+   "sub": "Step 1 — Switch to the workshop workgroup",
+   "does": "Your console queries have somewhere to save their results, so Run works without any setup of your own.",
+   "cmd": "In the AWS console, go to Athena > Query editor. The editor opens on the `primary` workgroup, which has no query result location, so **Run** stays disabled. Open the **Workgroup** dropdown at the top right of the query editor, switch it from `primary` to `workshop`, and click **Acknowledge** on the *Workgroup workshop settings* dialog. Do this before you type anything — switching workgroups clears the editor.",
+   "expected": "The editor is on the workshop workgroup, so Run is no longer disabled.",
+   "browser": true,
+   "state": "queued",
+   "proof": [],
+   "order": 58
+  },
+  {
+   "track": "E",
+   "code": "Three-Plane Audit Correlation",
+   "step": "The same query in the Athena console",
+   "sub": "Step 2 — Select the workshop_logs database",
+   "does": "The same evidence is available to an audit team that works in the console rather than a terminal.",
+   "cmd": "Select the `workshop_logs` database from the dropdown.",
+   "expected": "The query editor shows workshop_logs selected.",
+   "browser": true,
+   "state": "queued",
+   "proof": [],
+   "order": 59
+  },
+  {
+   "track": "E",
+   "code": "Three-Plane Audit Correlation",
+   "step": "The same query in the Athena console",
+   "sub": "Step 3 — Find a recent request_id",
+   "does": "You can see the recent approvals, and who approved each, from the console alone; the next query finds the latest refund itself, so no copy is needed unless you trace a different one.",
+   "cmd": "SELECT request_id, user_identity, timestamp\nFROM ivia_decisions\nWHERE request_id <> ''\nORDER BY timestamp DESC\nLIMIT 5",
+   "expected": "Five recent approvals. The next query needs no copy; copy a request_id only to trace a different refund.",
+   "browser": true,
+   "state": "queued",
+   "proof": [],
+   "order": 60
+  },
+  {
+   "track": "E",
+   "code": "Three-Plane Audit Correlation",
+   "step": "The same query in the Athena console",
+   "sub": "Step 4 — Query the correlation VIEW",
+   "does": "The joined forensic row comes back in the console exactly as it did from the command line.",
+   "cmd": "SELECT *\nFROM audit_correlation\nWHERE request_id = (\n  SELECT request_id FROM ivia_decisions\n  WHERE request_id <> ''\n  ORDER BY timestamp DESC LIMIT 1)",
+   "expected": "The single correlation row for the latest approved refund, with nothing pasted.",
+   "browser": true,
+   "state": "queued",
+   "proof": [],
+   "order": 61
+  },
+  {
+   "track": "E",
+   "code": "Three-Plane Audit Correlation",
+   "step": "Read the Vault record yourself",
+   "does": "The summary row is not somebody's write-up — the underlying record shows both the person and the software named on the same decision, checked against your own login provider, and narrowed to the one thing it was allowed to fetch.",
+   "cmd": "echo \"tracing: ${REQUEST_ID}\"\n\nathena_record \"SELECT\n  auth.entity_id                                  AS human_entity,\n  auth.metadata['actor_entity_name']              AS agent,\n  auth.metadata['jwt_audience_claim']             AS audience,\n  auth.metadata['jwt_issuer']                     AS issuer,\n  auth.metadata['jwt_unique_id']                  AS jti,\n  auth.metadata['jwt_authorization_details']      AS authorization_details,\n  element_at(element_at(request.headers, 'x-correlation-id'), 1) AS correlation_id\nFROM workshop_logs.vault_audit\nWHERE type = 'response'\n  AND request.path = 'database/creds/uc3-refund-writer'\n  AND (error IS NULL OR error = '')\n  AND element_at(element_at(request.headers, 'x-correlation-id'), 1) = '${REQUEST_ID}'\nLIMIT 1;\"",
+   "expected": "One record showing the human's identity id, the agent name, who the token was meant for, your own issuer, the token's unique id, the exact path it was narrowed to, and the refund id as the correlation value. The filter on error picks the one Vault node that actually issued the credential; drop that line and re-run to see both hops.",
+   "sub": "",
+   "state": "queued",
+   "proof": [],
+   "order": 62
+  },
+  {
+   "track": "E",
+   "code": "Three-Plane Audit Correlation",
+   "step": "Read the Vault record yourself",
+   "sub": "Resolve the human entity to a name",
+   "does": "The opaque id in the log is read from the same Vault audit record and resolves to the person who tapped Approve on their phone — the audit trail names the human, not just the software.",
+   "cmd": "export VAULT_ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)\n\n# Capture the entity id from the same Vault audit record you just read\nHUMAN_ENTITY=$(athena_scalar \"SELECT auth.entity_id\nFROM workshop_logs.vault_audit\nWHERE type = 'response'\n  AND request.path = 'database/creds/uc3-refund-writer'\n  AND (error IS NULL OR error = '')\n  AND element_at(element_at(request.headers, 'x-correlation-id'), 1) = '${REQUEST_ID}'\nLIMIT 1\")\n\n# An empty result or \"None\" means the audit row has not landed yet\nif [ -z \"${HUMAN_ENTITY}\" ] || [ \"${HUMAN_ENTITY}\" = \"None\" ]; then\n  echo \"The audit row has not landed yet. Wait about a minute and run this step again.\"\nelse\n  echo \"human_entity: ${HUMAN_ENTITY}\"\n  kubectl exec -n vault vault-0 -- \\\n    sh -c \"VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read -format=json identity/entity/id/${HUMAN_ENTITY}\" \\\n    | jq '{id: .data.id, name: .data.name}'\nfi",
+   "expected": "A JSON object with the id and the name of the approver, for example jaime.",
+   "state": "queued",
+   "proof": [],
+   "order": 63
+  },
+  {
+   "track": "E",
+   "code": "Three-Plane Audit Correlation",
+   "step": "Read the Vault record yourself",
+   "sub": "Look up the agent entity by name",
+   "does": "The agent has an identity of its own, so one decision carries a named person and a named piece of software together — which is what an incident responder needs.",
+   "cmd": "kubectl exec -n vault vault-0 -- \\\n  sh -c \"VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read -format=json identity/entity/name/uc3-actor\" \\\n  | jq '{id: .data.id, name: .data.name}'",
+   "expected": "A JSON object with the id and the name uc3-actor.",
+   "state": "queued",
+   "proof": [],
+   "order": 64
+  },
+  {
+   "track": "E",
+   "code": "Three-Plane Audit Correlation",
+   "step": "How the approved amount is proven — consent-bound by correlation",
+   "sub": "Read the refund amount from Postgres",
+   "does": "The dollar figure the person approved is read straight from the refund row under the same request_id, so the amount is shown rather than assumed.",
+   "cmd": "OWNER=$(athena_scalar \"SELECT user_approved_sub FROM workshop_logs.audit_correlation\n  WHERE request_id = '${REQUEST_ID}' LIMIT 1\")\n\n# An empty result or \"None\" means the audit row has not landed yet\nif [ -z \"${OWNER}\" ] || [ \"${OWNER}\" = \"None\" ]; then\n  echo \"The audit row has not landed yet. Wait about a minute and run this step again.\"\nelse\n  export VAULT_ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)\n  CREDS_JSON=$(kubectl exec -n vault vault-0 -- \\\n    sh -c \"VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read database/creds/uc3-readonly -format=json\")\n  PG_USER=$(echo \"$CREDS_JSON\" | jq -r '.data.username')\n  PG_PASS=$(echo \"$CREDS_JSON\" | jq -r '.data.password')\n  RDS_HOST=$(kubectl get configmap uc3-agent-config -n banking-app -o jsonpath='{.data.DB_HOST}')\n\n  kubectl delete pod pg-refund-amount -n banking-app --ignore-not-found --now >/dev/null 2>&1\n  kubectl run pg-refund-amount --restart=Never --image=postgres:16-alpine -n banking-app \\\n    --env=\"PGPASSWORD=${PG_PASS}\" \\\n    --command -- psql -h \"${RDS_HOST}\" -U \"${PG_USER}\" -d workshop -c \"\n      SELECT set_config('app.current_user_sub','${OWNER}',false);\n      SELECT request_id, refund_id, account_id, transaction_id, amount, currency, approved_by, created_at\n        FROM banking.refunds WHERE request_id = '${REQUEST_ID}';\" >/dev/null\n  kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-refund-amount -n banking-app --timeout=120s >/dev/null 2>&1 \\\n    || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/pg-refund-amount -n banking-app --timeout=30s >/dev/null 2>&1\n  kubectl logs pg-refund-amount -n banking-app\n  kubectl delete pod pg-refund-amount -n banking-app --now >/dev/null 2>&1\nfi",
+   "expected": "Exactly one row under the request_id you are tracing; its amount is the figure the user approved.",
+   "state": "queued",
+   "proof": [],
+   "order": 65
   },
   {
    "track": "V",
@@ -300,7 +816,7 @@
    "proof": [],
    "expected": "Bear says he is done verifying.",
    "browser": true,
-   "order": 24,
+   "order": 66,
    "trackLabel": "Hold — Bear verifies"
   },
   {
@@ -316,7 +832,7 @@
    "proof": [],
    "trackNoteTitle": "Runs once Bear says he is done",
    "trackNote": "Self-paced testing ends here — the teardown and all four spot-checks, verbatim — but only after Bear says he is done verifying. Until then the environment stays up for fixes. The account is left empty.",
-   "order": 25
+   "order": 67
   },
   {
    "track": "F",
@@ -328,7 +844,7 @@
    "expected": "ResourceNotFoundException",
    "state": "queued",
    "proof": [],
-   "order": 26
+   "order": 68
   },
   {
    "track": "F",
@@ -340,7 +856,7 @@
    "expected": "empty output",
    "state": "queued",
    "proof": [],
-   "order": 27
+   "order": 69
   },
   {
    "track": "F",
@@ -352,7 +868,7 @@
    "expected": "empty output",
    "state": "queued",
    "proof": [],
-   "order": 28
+   "order": 70
   },
   {
    "track": "F",
@@ -364,7 +880,7 @@
    "expected": "no output",
    "state": "queued",
    "proof": [],
-   "order": 29
+   "order": 71
   }
  ]
 }

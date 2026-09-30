@@ -214,12 +214,15 @@ def phase1_sp_content():
             skip(o, "Read, not executed", "tools and account were checked when this environment was deployed")
     return out
 
-EXAMPLE = ("Validate Vault", "Credential Revocation")
+# The pages this branch changes: `git diff --name-only <baseline>...HEAD -- workshop/content`,
+# each file mapped to its page title. Update this tuple whenever content changes.
+CHANGED_PAGES = ("Verify Credentials and Enforcement", "OAuth Login Flow", "Verify Per-User Data Access",
+                 "Credential Revocation", "Test the Refund Flow", "The Bypass Test", "Three-Plane Audit Correlation")
 def changed(env):
-    out = [copy.deepcopy(o) for o in shared_for(env) if o["code"] in EXAMPLE]
-    out[0]["trackNoteTitle"] = "Example pages"
+    out = [copy.deepcopy(o) for o in shared_for(env) if o["code"] in CHANGED_PAGES]
+    out[0]["trackNoteTitle"] = "Changed pages"
     out[0]["trackNote"] = ("A changed-pages board lists only the pages changed since the last tested run, in workshop order, "
-                           "each run in full. These two pages stand in for whatever the diff names.")
+                           "each run in full. These seven are the pages this branch changes.")
     return out
 
 LOG_LOCAL = "~/Documents/sample-agentic-runtime-security-on-aws-with-vault/infrastructure/scripts/logs/walkthrough-<epoch>.log"
