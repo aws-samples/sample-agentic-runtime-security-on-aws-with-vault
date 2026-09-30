@@ -1792,7 +1792,7 @@
    "step": "The same query in the Athena console",
    "sub": "Step 4 — Query the correlation VIEW",
    "does": "The joined forensic row comes back in the console exactly as it did from the command line.",
-   "cmd": "SELECT *\nFROM audit_correlation\nWHERE request_id = 'PASTE_REQUEST_ID_HERE'",
+   "cmd": "SELECT *\nFROM audit_correlation\nWHERE request_id = (\n  SELECT request_id FROM ivia_decisions\n  WHERE request_id <> ''\n  ORDER BY timestamp DESC LIMIT 1)",
    "expected": "The single correlation row for that refund.",
    "browser": true,
    "state": "queued",

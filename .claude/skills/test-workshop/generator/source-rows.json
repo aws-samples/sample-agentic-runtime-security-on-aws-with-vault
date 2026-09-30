@@ -2916,7 +2916,7 @@
  },
  {
   "browser": true,
-  "cmd": "SELECT *\nFROM audit_correlation\nWHERE request_id = 'PASTE_REQUEST_ID_HERE'",
+  "cmd": "SELECT *\nFROM audit_correlation\nWHERE request_id = (\n  SELECT request_id FROM ivia_decisions\n  WHERE request_id <> ''\n  ORDER BY timestamp DESC LIMIT 1)",
   "code": "Three-Plane Audit Correlation",
   "does": "The joined forensic row comes back in the console exactly as it did from the command line.",
   "expected": "The single correlation row for that refund.",
