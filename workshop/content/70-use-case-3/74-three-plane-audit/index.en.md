@@ -216,11 +216,16 @@ WHERE type = 'response'
   AND (error IS NULL OR error = '')
   AND element_at(element_at(request.headers, 'x-correlation-id'), 1) = '${REQUEST_ID}'
 LIMIT 1")
-echo "human_entity: ${HUMAN_ENTITY}"
 
-kubectl exec -n vault vault-0 -- \
-  sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read -format=json identity/entity/id/${HUMAN_ENTITY}" \
-  | jq '{id: .data.id, name: .data.name}'
+# An empty result or "None" means the audit row has not landed yet
+if [ -z "${HUMAN_ENTITY}" ] || [ "${HUMAN_ENTITY}" = "None" ]; then
+  echo "The audit row has not landed yet. Wait about a minute and run this step again."
+else
+  echo "human_entity: ${HUMAN_ENTITY}"
+  kubectl exec -n vault vault-0 -- \
+    sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read -format=json identity/entity/id/${HUMAN_ENTITY}" \
+    | jq '{id: .data.id, name: .data.name}'
+fi
 ```
 
 Expected output — the person who tapped Approve on their phone:
@@ -271,24 +276,30 @@ The amount the user approved (e.g. `$88.30`) is **not** a column in this VIEW, a
 ```bash
 OWNER=$(athena_scalar "SELECT user_approved_sub FROM workshop_logs.audit_correlation
   WHERE request_id = '${REQUEST_ID}' LIMIT 1")
-export VAULT_ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)
-CREDS_JSON=$(kubectl exec -n vault vault-0 -- \
-  sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read database/creds/uc3-readonly -format=json")
-PG_USER=$(echo "$CREDS_JSON" | jq -r '.data.username')
-PG_PASS=$(echo "$CREDS_JSON" | jq -r '.data.password')
-RDS_HOST=$(kubectl get configmap uc3-agent-config -n banking-app -o jsonpath='{.data.DB_HOST}')
 
-kubectl delete pod pg-refund-amount -n banking-app --ignore-not-found --now >/dev/null 2>&1
-kubectl run pg-refund-amount --restart=Never --image=postgres:16-alpine -n banking-app \
-  --env="PGPASSWORD=${PG_PASS}" \
-  --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop -c "
-    SELECT set_config('app.current_user_sub','${OWNER}',false);
-    SELECT request_id, refund_id, account_id, transaction_id, amount, currency, approved_by, created_at
-      FROM banking.refunds WHERE request_id = '${REQUEST_ID}';" >/dev/null
-kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-refund-amount -n banking-app --timeout=120s >/dev/null 2>&1 \
-  || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/pg-refund-amount -n banking-app --timeout=30s >/dev/null 2>&1
-kubectl logs pg-refund-amount -n banking-app
-kubectl delete pod pg-refund-amount -n banking-app --now >/dev/null 2>&1
+# An empty result or "None" means the audit row has not landed yet
+if [ -z "${OWNER}" ] || [ "${OWNER}" = "None" ]; then
+  echo "The audit row has not landed yet. Wait about a minute and run this step again."
+else
+  export VAULT_ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)
+  CREDS_JSON=$(kubectl exec -n vault vault-0 -- \
+    sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read database/creds/uc3-readonly -format=json")
+  PG_USER=$(echo "$CREDS_JSON" | jq -r '.data.username')
+  PG_PASS=$(echo "$CREDS_JSON" | jq -r '.data.password')
+  RDS_HOST=$(kubectl get configmap uc3-agent-config -n banking-app -o jsonpath='{.data.DB_HOST}')
+
+  kubectl delete pod pg-refund-amount -n banking-app --ignore-not-found --now >/dev/null 2>&1
+  kubectl run pg-refund-amount --restart=Never --image=postgres:16-alpine -n banking-app \
+    --env="PGPASSWORD=${PG_PASS}" \
+    --command -- psql -h "${RDS_HOST}" -U "${PG_USER}" -d workshop -c "
+      SELECT set_config('app.current_user_sub','${OWNER}',false);
+      SELECT request_id, refund_id, account_id, transaction_id, amount, currency, approved_by, created_at
+        FROM banking.refunds WHERE request_id = '${REQUEST_ID}';" >/dev/null
+  kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-refund-amount -n banking-app --timeout=120s >/dev/null 2>&1 \
+    || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/pg-refund-amount -n banking-app --timeout=30s >/dev/null 2>&1
+  kubectl logs pg-refund-amount -n banking-app
+  kubectl delete pod pg-refund-amount -n banking-app --now >/dev/null 2>&1
+fi
 ```
 
 You should see exactly one row under the `request_id` you are tracing; its `amount` is the figure the user approved.
