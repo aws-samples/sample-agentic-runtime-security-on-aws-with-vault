@@ -137,7 +137,7 @@ ORDER BY timestamp DESC
 LIMIT 5
 ```
 
-Copy the `request_id` of the refund you want to trace (the `user_identity` column tells you who approved each one).
+The next query needs no copy: it finds the latest approved refund itself. Copy a `request_id` only to trace a different refund (the `user_identity` column tells you who approved each one).
 
 **Step 4:** Query the correlation VIEW. The query finds the latest approved refund itself, so there is nothing to paste; to trace a different refund, replace the subquery in parentheses with that refund's `request_id` in quotes:
 
