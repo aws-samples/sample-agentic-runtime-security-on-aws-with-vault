@@ -284,7 +284,7 @@ All six `33-verify-deployment` pages, in order:
 ## Phase 3 — the three use cases (both audiences)
 
 - **Use Case 1 — Non-Personalized Read-Only:** **Request Flow**, **Configure Vault Auth for Use Case 1**, **Verify Credentials and Enforcement**.
-- **Use Case 2 — OAuth Personalized Read-only:** **OAuth Login Flow**, **Configure the OAuth Resource Server**, **Verify Per-User Data Access**, **Scope Enforcement (Layer 2)**, **Credential Revocation**. Start the first sign-in in a **fresh incognito window**; switch personas with a *new* incognito window, never Log out — IVIA keeps its own SSO cookie. **Log out** lives in the persona menu: click your photo and name at the bottom left of the dashboard.
+- **Use Case 2 — OAuth Personalized Read-only:** **OAuth Login Flow**, **Configure the OAuth Resource Server**, **Verify Per-User Data Access**, **Scope Enforcement (Layer 2)**, **Credential Revocation**. Start the first sign-in in a **fresh incognito window**; sign in as the second persona in a *second* incognito window, never Log out — IVIA keeps its own SSO cookie. Keep both windows open: **Verify Per-User Data Access**, **Test the Refund Flow** and **The Bypass Test** switch back to them instead of signing in again. **Log out** lives in the persona menu: click your photo and name at the bottom left of the dashboard.
 - **Use Case 3 — Privileged Action with CIBA:** all six pages, see below.
 
 **Then hold — Bear verifies before anything is torn down.** The run stops with the environment standing. Bear checks what he wants, including the CIBA refund in the browser with his own phone; the run waits for him to say he is done.
@@ -300,7 +300,7 @@ All six `33-verify-deployment` pages, in order:
 The CIBA approval runs through the virtual authenticator:
 
 ```bash
-cd infrastructure/scripts && ./verify-uc3.sh --no-phone
+bash infrastructure/scripts/verify-uc3.sh --no-phone
 ```
 
 It enrolls over the same OAuth + SCIM endpoints and signs the user-presence challenge, so no IBM Verify phone is needed, and it produces a real refund row.
@@ -310,8 +310,8 @@ It enrolls over the same OAuth + SCIM endpoints and signs the user-presence chal
 - **Test the Refund Flow** — the banking URL from `.acme-state`; the `mmfa_push_fired` log check (`--tail=-1` is load-bearing with `-l`).
 - **CIBA Out-of-Band Approval** — uc3-agent pod Running; the OIDC discovery probe from `vault-0` returning `backchannel_authentication_endpoint`; the `mmfa_push_fired|ciba_status_polled` log grep.
 - **Vault Enforces the RAR Ceiling** — port-forward plus `VAULT_ADDR` / `VAULT_TOKEN`; `vault read agent-registry/registration/display-name/uc3-actor`; `vault policy read uc3-agent-ceiling`; then the three `kubectl exec` reads (registration, `database/roles/uc3-refund-writer`, `database/creds/...` showing a 5-minute lease).
-- **The Bypass Test** — `./verify-uc3.sh --bypass`, then the four transient `psql` pods: RLS scoping by sub, INSERT denied (`permission denied for table refunds`), find-refund, and a cross-owner read returning 0 rows while the owner read returns the row.
-- **Three-Plane Audit Correlation** — `AWS_REGION` from Terraform output, the `athena_run` / `athena_query` / `athena_record` / `athena_scalar` helpers, capture `REQUEST_ID`, then the correlation row. Athena calls need `--work-group workshop`.
+- **The Bypass Test** — `bash infrastructure/scripts/verify-uc3.sh --bypass` (from the repo root; the page does not change folder), then the four transient `psql` pods: RLS scoping by sub, INSERT denied (`permission denied for table refunds`), find-refund, and a cross-owner read returning 0 rows while the owner read returns the row.
+- **Three-Plane Audit Correlation** — `AWS_REGION` from Terraform output, the `athena_run` / `athena_query` / `athena_record` / `athena_scalar` helpers, capture `REQUEST_ID`, then the correlation row. Athena calls need `--work-group workshop`; in the Athena console, switch the Workgroup dropdown from `primary` to `workshop` and acknowledge its settings dialog before typing a query.
 
 **Hazard:** `verify-uc3.sh` fires the push at the *first* enrolled device, so `--no-phone` must never race a real enrolled phone. Clean on a from-scratch build.
 
