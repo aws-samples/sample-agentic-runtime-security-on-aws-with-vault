@@ -1,0 +1,489 @@
+<meta charset="utf-8">
+<title>Run Dashboard Templates</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+  /* IBM Carbon tokens — copied verbatim from the live run dashboard. */
+  :root {
+    --ground:#f4f4f4; --surface:#ffffff; --surface-sub:#f9f9f9;
+    --ink:#161616; --ink-mid:#525252; --ink-dim:#6f6f6f;
+    --rule:#e0e0e0; --rule-strong:#c6c6c6;
+    --accent:#0f62fe; --accent-soft:#edf5ff;
+    --pass:#198038; --pass-soft:#defbe6;
+    --run:#8e6a00;  --run-soft:#fcf4d6;
+    --fail:#da1e28; --fail-soft:#fff1f1;
+    --wait:#6f6f6f; --wait-soft:#f4f4f4;
+    --skip:#8a3ffc; --skip-soft:#f6f2ff;
+    --na:#8d8d8d;   --na-soft:#f4f4f4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --ground:#161616; --surface:#262626; --surface-sub:#1c1c1c;
+      --ink:#f4f4f4; --ink-mid:#c6c6c6; --ink-dim:#8d8d8d;
+      --rule:#393939; --rule-strong:#525252;
+      --accent:#78a9ff; --accent-soft:#001d6c;
+      --pass:#42be65; --pass-soft:#022d0d;
+      --run:#f1c21b;  --run-soft:#302400;
+      --fail:#ff8389; --fail-soft:#520408;
+      --wait:#8d8d8d; --wait-soft:#333333;
+      --skip:#be95ff; --skip-soft:#1c0f30;
+      --na:#6f6f6f;   --na-soft:#262626;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --ground:#161616; --surface:#262626; --surface-sub:#1c1c1c;
+    --ink:#f4f4f4; --ink-mid:#c6c6c6; --ink-dim:#8d8d8d;
+    --rule:#393939; --rule-strong:#525252;
+    --accent:#78a9ff; --accent-soft:#001d6c;
+    --pass:#42be65; --pass-soft:#022d0d;
+    --run:#f1c21b;  --run-soft:#302400;
+    --fail:#ff8389; --fail-soft:#520408;
+    --wait:#8d8d8d; --wait-soft:#333333;
+    --skip:#be95ff; --skip-soft:#1c0f30;
+    --na:#6f6f6f;   --na-soft:#262626;
+  }
+
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body {
+    background: var(--ground); color: var(--ink);
+    font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 15px; line-height: 1.5;
+    padding-block: 28px 64px; padding-left: 16px; padding-right: 16px; margin: 0;
+  }
+  .wrap { max-width: 1060px; margin: 0 auto; display: flex; flex-direction: column; gap: 28px; }
+  code, .mono { font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace; }
+
+  /* Template picker — the only thing this preview adds to the live page. */
+  .picker { background: var(--surface); border: 1px solid var(--rule); border-radius: 2px;
+            padding: 14px 15px; display: flex; flex-direction: column; gap: 12px; }
+  .picker-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .picker-head b { font-size: 14px; font-weight: 600; }
+  .picker-head span { font-size: 12.5px; color: var(--ink-dim); }
+  .pick-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .pick-label { font-family: "IBM Plex Mono", monospace; font-size: 10.5px; font-weight: 500;
+                letter-spacing: .1em; text-transform: uppercase; color: var(--ink-dim);
+                width: 44px; flex: none; }
+  .seg { display: flex; flex-wrap: wrap; gap: 6px; }
+  .seg button { font: inherit; font-size: 13.5px; padding: 6px 12px; border-radius: 2px;
+                border: 1px solid var(--rule-strong); background: var(--surface-sub);
+                color: var(--ink); cursor: pointer; }
+  .seg button:hover:not(:disabled) { border-color: var(--accent); }
+  .seg button[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent);
+                                     color: var(--accent); font-weight: 600; }
+  .seg button:disabled { cursor: not-allowed; color: var(--ink-dim); text-decoration: line-through;
+                         background: var(--surface); }
+  .seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .pick-note { font-size: 12.5px; color: var(--ink-dim); margin: 0; }
+
+  .mast { display: flex; flex-direction: column; gap: 10px; }
+  .eyebrow { font-family: "IBM Plex Mono", monospace; font-size: 11px; font-weight: 500;
+             letter-spacing: .12em; text-transform: uppercase; color: var(--ink-dim); }
+  h1 { font-size: clamp(26px,4.2vw,36px); font-weight: 600; letter-spacing: -.02em;
+       line-height: 1.12; margin: 0; text-wrap: balance; }
+  .standfirst { font-size: 16px; color: var(--ink-mid); margin: 0; max-width: 64ch; }
+
+  .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px,1fr));
+           gap: 1px; background: var(--rule); border: 1px solid var(--rule);
+           border-radius: 2px; overflow: hidden; margin: 0; }
+  .fact { background: var(--surface); padding: 10px 13px; display: flex;
+          flex-direction: column; gap: 2px; }
+  .fact dt { font-family: "IBM Plex Mono", monospace; font-size: 10px; font-weight: 500;
+             letter-spacing: .1em; text-transform: uppercase; color: var(--ink-dim); margin: 0; }
+  .fact dd { margin: 0; font-family: "IBM Plex Mono", monospace; font-size: 13px;
+             font-weight: 500; color: var(--ink); overflow-wrap: anywhere; }
+
+  section { display: flex; flex-direction: column; gap: 14px; }
+  .sec-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+              border-bottom: 2px solid var(--ink); padding-bottom: 7px; }
+  .sec-head h2 { font-size: 19px; font-weight: 600; margin: 0; letter-spacing: -.01em; }
+  .note { font-size: 12.5px; color: var(--ink-dim); margin-left: auto;
+          font-family: "IBM Plex Mono", monospace; white-space: nowrap; }
+
+  .page { background: var(--surface); border: 1px solid var(--rule); border-radius: 2px;
+          overflow: hidden; }
+  .page > summary { list-style: none; cursor: pointer; display: flex; align-items: baseline;
+                    gap: 12px; flex-wrap: wrap; padding: 12px 15px;
+                    border-bottom: 1px solid var(--rule); }
+  .page > summary::-webkit-details-marker { display: none; }
+  .page > summary::before { content: "▸"; color: var(--ink-dim); font-size: 12px; }
+  .page[open] > summary::before { content: "▾"; }
+  .page:not([open]) > summary { border-bottom: 0; }
+  .page-title { font-size: 16.5px; font-weight: 600; letter-spacing: -.01em; }
+  .page[data-state="failed"]  > summary { background: var(--fail-soft); }
+  .page[data-state="running"] > summary { background: var(--run-soft); }
+
+  .step { border-top: 1px solid var(--rule); }
+  .step:first-of-type { border-top: 0; }
+  .step-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+               padding: 10px 15px 6px 15px; }
+  .step-title { font-size: 14.5px; font-weight: 600; color: var(--ink); }
+
+  .rows { display: flex; flex-direction: column; padding: 0 15px 10px 29px; gap: 6px; }
+  .row { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 0 14px;
+         padding: 8px 10px; border-left: 2px solid var(--rule-strong);
+         background: var(--surface-sub); border-radius: 2px; align-items: start; }
+  .row[data-state="done"]    { border-left-color: var(--pass); }
+  .row[data-state="running"] { border-left-color: var(--run); background: var(--run-soft); }
+  .row[data-state="failed"]  { border-left-color: var(--fail); background: var(--fail-soft); }
+  .row[data-state="skipped"] { border-left-color: var(--skip); }
+  .row[data-state="na"]      { border-left: 2px dashed var(--na); background: var(--surface); }
+  .row[data-state="na"] .sub, .row[data-state="na"] .does { color: var(--ink-dim); }
+  .row .body { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+  .row .sub { font-weight: 600; font-size: 14px; line-height: 1.3; }
+  .row .does { font-size: 13.5px; color: var(--ink-mid); margin: 0; }
+  .row .cmd { font-family: "IBM Plex Mono", monospace; font-size: 12.5px;
+              background: var(--surface); border: 1px solid var(--rule);
+              padding: 5px 8px; border-radius: 2px; color: var(--ink);
+              overflow-x: auto; white-space: pre; max-width: 100%; }
+  .proof { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--ink-mid);
+           display: flex; flex-wrap: wrap; gap: 4px 14px; }
+  .proof b { font-weight: 600; color: var(--ink); }
+
+  .chip { font-family: "IBM Plex Mono", monospace; font-size: 10.5px; font-weight: 600;
+          letter-spacing: .08em; text-transform: uppercase; padding: 3px 8px;
+          border-radius: 2px; white-space: nowrap; border: 1px solid transparent;
+          align-self: start; }
+  .chip.done    { color: var(--pass); background: var(--pass-soft); border-color: var(--pass); }
+  .chip.running { color: var(--run);  background: var(--run-soft);  border-color: var(--run); }
+  .chip.failed  { color: var(--fail); background: var(--fail-soft); border-color: var(--fail); }
+  .chip.queued  { color: var(--wait); background: var(--wait-soft); border-color: var(--rule-strong); }
+  .chip.skipped { color: var(--skip); background: var(--skip-soft); border-color: var(--skip); }
+  .chip.na      { color: var(--ink-dim); background: var(--na-soft); border: 1px dashed var(--na); }
+
+  .callout { border: 1px solid var(--rule); border-left: 3px solid var(--accent);
+             background: var(--surface); padding: 13px 15px; border-radius: 2px;
+             display: flex; flex-direction: column; gap: 7px; }
+  .callout[data-tone="good"] { border-left-color: var(--pass); }
+  .callout[data-tone="warn"] { border-left-color: var(--fail); }
+  .callout h3 { margin: 0; font-size: 14px; font-weight: 600; }
+  .callout p  { margin: 0; font-size: 13.5px; color: var(--ink-mid); }
+
+  .tailbox { background: var(--ink); color: var(--ground); border: 1px solid var(--rule-strong);
+             border-radius: 2px; padding: 12px 14px; font-family: "IBM Plex Mono", monospace;
+             font-size: 12.5px; overflow-x: auto; white-space: pre; line-height: 1.6; }
+
+  .state-note { font-size: 13.5px; color: var(--ink-mid); font-style: italic; }
+
+  footer { font-size: 12.5px; color: var(--ink-dim); border-top: 1px solid var(--rule);
+           padding-top: 14px; }
+
+  @media (max-width: 560px) {
+    .rows { padding-left: 15px; }
+    .row { grid-template-columns: minmax(0,1fr); }
+    .row .chip { justify-self: start; margin-top: 6px; }
+    .note { margin-left: 0; }
+    .pick-label { width: 100%; }
+  }
+</style>
+
+<div class="wrap">
+
+  <div class="picker" role="group" aria-label="Choose a template">
+    <div class="picker-head">
+      <b>Dashboard templates</b>
+      <span>What the live run dashboard is seeded with at the start of each run — nothing here has run.</span>
+    </div>
+    <div class="pick-row">
+      <span class="pick-label">Mode</span>
+      <div class="seg" id="seg-mode"></div>
+    </div>
+    <div class="pick-row">
+      <span class="pick-label">Path</span>
+      <div class="seg" id="seg-path"></div>
+    </div>
+    <p class="pick-note" id="pick-note"></p>
+  </div>
+
+  <header class="mast">
+    <div class="eyebrow" id="eyebrow">Agentic Runtime Security on AWS · template</div>
+    <h1 id="run-title"></h1>
+    <p class="standfirst" id="standfirst"></p>
+    <dl class="facts" id="facts"></dl>
+  </header>
+
+  <section id="question-sec" hidden>
+    <div class="sec-head"><h2>The question this run answers</h2></div>
+    <div class="callout" id="question-box"></div>
+  </section>
+
+  <section id="findings-sec" hidden>
+    <div class="sec-head">
+      <h2>Findings so far</h2>
+      <span class="note">measured, not predicted</span>
+    </div>
+    <div id="findings" style="display:flex;flex-direction:column;gap:12px"></div>
+  </section>
+
+  <div id="tracks" style="display:flex;flex-direction:column;gap:28px"></div>
+
+  <section id="log-sec" hidden>
+    <div class="sec-head"><h2>Watch it happen</h2></div>
+    <p class="standfirst">Everything this run executes streams into one log as it happens.</p>
+    <div class="tailbox" id="logbox"></div>
+  </section>
+
+  <footer>
+    Grouped the way the workshop is written: each workshop page, then that page&rsquo;s own
+    steps, then the sub-tasks under each step. Every row starts queued; a step the path does not
+    run is seeded Not Applicable with its reason, never left off, so each count stays honest.
+  </footer>
+
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var TEMPLATES = __TEMPLATES__;
+  var MODES = [
+    { id: "full-cycle",   label: "Full cycle" },
+    { id: "full-content", label: "Full content pass" },
+    { id: "changed",      label: "Changed-pages pass" }
+  ];
+  var PATHS = [
+    { id: "sp",     label: "Self-paced · your account · IDE" },
+    { id: "ae-cs",  label: "At an event · CloudShell" },
+    { id: "ae-ide", label: "At an event · own IDE" }
+  ];
+  var NOTES = {
+    "full-cycle":   "Something below the pages changed, or nothing is deployed. Self-paced only — an event account is never torn down.",
+    "full-content": "Every page, in order, no teardown. Every at-event run is this mode.",
+    "changed":      "Only page text, page commands or script messages changed, and the last tested environment is still up."
+  };
+
+  var STATE_LABEL = { na: "Not Applicable" };
+  var runDoc = null, phases = [], findings = [];
+  var mode = "full-cycle", path = "sp";
+  var closed = {};
+  try { closed = JSON.parse(localStorage.getItem("tplClosedPages") || "{}") || {}; } catch (e) { closed = {}; }
+  function saveClosed() { try { localStorage.setItem("tplClosedPages", JSON.stringify(closed)); } catch (e) {} }
+
+  function el(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined && text !== null) n.textContent = String(text);
+    return n;
+  }
+
+  // ---- Rendering: identical to the live dashboard, except the standfirst reads from the run record. ----
+
+  function renderFacts() {
+    var dl = document.getElementById("facts");
+    dl.textContent = "";
+    if (!runDoc) return;
+    var rows = [
+      ["Run started", runDoc.startedAt],
+      ["Updated", runDoc.updatedAt],
+      ["Commit", runDoc.commit],
+      ["Cluster", runDoc.cluster],
+      ["Identity", runDoc.identity],
+      ["Phase now", runDoc.currentPhase]
+    ];
+    rows.forEach(function (r) {
+      if (!r[1]) return;
+      var d = el("div", "fact");
+      d.appendChild(el("dt", null, r[0]));
+      d.appendChild(el("dd", null, r[1]));
+      dl.appendChild(d);
+    });
+    document.getElementById("run-title").textContent = runDoc.label || "";
+    document.getElementById("standfirst").textContent = runDoc.standfirst || "";
+  }
+
+  function renderQuestion() {
+    var sec = document.getElementById("question-sec");
+    var box = document.getElementById("question-box");
+    if (!runDoc || !runDoc.question) { sec.hidden = true; return; }
+    box.textContent = "";
+    if (runDoc.questionTitle) box.appendChild(el("h3", null, runDoc.questionTitle));
+    String(runDoc.question).split("\n\n").forEach(function (para) {
+      if (para.trim()) box.appendChild(el("p", null, para.trim()));
+    });
+    sec.hidden = false;
+  }
+
+  function renderFindings() {
+    var sec = document.getElementById("findings-sec");
+    var host = document.getElementById("findings");
+    host.textContent = "";
+    if (!findings.length) { sec.hidden = true; return; }
+    sec.hidden = false;
+  }
+
+  function proofRow(items) {
+    var p = el("div", "proof");
+    items.forEach(function (it) {
+      var s = el("span");
+      if (it && typeof it === "object") {
+        s.appendChild(document.createTextNode((it.label || "") + " "));
+        s.appendChild(el("b", null, it.value));
+      } else {
+        s.textContent = String(it);
+      }
+      p.appendChild(s);
+    });
+    return p;
+  }
+
+  function byOrder(a, b) { return (a.order || 0) - (b.order || 0); }
+
+  function groupInOrder(list, keyOf) {
+    var map = {}, keys = [];
+    list.forEach(function (p) {
+      var k = keyOf(p);
+      if (!(k in map)) { map[k] = []; keys.push(k); }
+      map[k].push(p);
+    });
+    return keys.map(function (k) { return [k, map[k]]; });
+  }
+
+  function tally(list) {
+    var t = { total: list.length, done: 0, skipped: 0, na: 0, failed: 0, running: 0 };
+    list.forEach(function (p) {
+      var s = p.state || "queued";
+      if (s in t) t[s] += 1;
+    });
+    return t;
+  }
+
+  function tallyText(t) {
+    var s = t.done + " / " + t.total + " done";
+    if (t.skipped) s += " · " + t.skipped + " skipped";
+    if (t.na) s += " · " + t.na + " not applicable";
+    if (t.failed) s += " · " + t.failed + " failed";
+    if (t.running) s += " · running";
+    return s;
+  }
+
+  function worst(t) {
+    if (t.failed) return "failed";
+    if (t.running) return "running";
+    return "";
+  }
+
+  function stepOf(p) { return p.step || p.name || ""; }
+
+  function renderRow(p) {
+    var state = p.state || "queued";
+    var row = el("div", "row");
+    row.setAttribute("data-state", state);
+    var body = el("div", "body");
+    var label = p.step !== undefined ? (p.sub || "") : "";
+    if (label) body.appendChild(el("span", "sub", label));
+    if (p.does) body.appendChild(el("p", "does", p.does));
+    if (p.cmd) body.appendChild(el("div", "cmd", p.cmd));
+    if (p.proof && p.proof.length) body.appendChild(proofRow(p.proof));
+    row.appendChild(body);
+    row.appendChild(el("span", "chip " + state, STATE_LABEL[state] || state));
+    return row;
+  }
+
+  function renderTracks() {
+    var host = document.getElementById("tracks");
+    host.textContent = "";
+    if (!phases.length) {
+      host.appendChild(el("p", "state-note", "No steps recorded for this run yet."));
+      return;
+    }
+    var sorted = phases.slice().sort(byOrder);
+    groupInOrder(sorted, function (p) { return p.track || "A"; }).forEach(function (tg) {
+      var list = tg[1];
+      var sec = el("section");
+      var head = el("div", "sec-head");
+      var labelled = list.filter(function (p) { return p.trackLabel; })[0];
+      head.appendChild(el("h2", null, labelled ? labelled.trackLabel : tg[0]));
+      head.appendChild(el("span", "note", tallyText(tally(list))));
+      sec.appendChild(head);
+
+      groupInOrder(list, function (p) { return p.code || ""; }).forEach(function (pg) {
+        var pageKey = mode + "/" + path + "|" + tg[0] + "|" + pg[0];
+        var pt = tally(pg[1]);
+        var page = el("details", "page");
+        if (!closed[pageKey]) page.open = true;
+        var w = worst(pt);
+        if (w) page.setAttribute("data-state", w);
+        var sum = el("summary");
+        sum.appendChild(el("span", "page-title", pg[0] || "Untitled page"));
+        sum.appendChild(el("span", "note", tallyText(pt)));
+        page.appendChild(sum);
+        page.addEventListener("toggle", function () {
+          if (page.open) delete closed[pageKey]; else closed[pageKey] = 1;
+          saveClosed();
+        });
+
+        groupInOrder(pg[1], stepOf).forEach(function (sg) {
+          var step = el("div", "step");
+          var sh = el("div", "step-head");
+          sh.appendChild(el("span", "step-title", sg[0]));
+          if (sg[1].length > 1) sh.appendChild(el("span", "note", tallyText(tally(sg[1]))));
+          step.appendChild(sh);
+          var rows = el("div", "rows");
+          sg[1].forEach(function (p) { rows.appendChild(renderRow(p)); });
+          step.appendChild(rows);
+          page.appendChild(step);
+        });
+        sec.appendChild(page);
+      });
+
+      var noted = list.filter(function (p) { return p.trackNote; })[0];
+      if (noted) {
+        var c = el("div", "callout");
+        c.setAttribute("data-tone", "warn");
+        c.appendChild(el("h3", null, noted.trackNoteTitle || "Known limitation"));
+        c.appendChild(el("p", null, noted.trackNote));
+        sec.appendChild(c);
+      }
+      host.appendChild(sec);
+    });
+  }
+
+  function renderLog() {
+    var sec = document.getElementById("log-sec");
+    if (!runDoc || !runDoc.logPath) { sec.hidden = true; return; }
+    document.getElementById("logbox").textContent = "tail -f " + runDoc.logPath;
+    sec.hidden = false;
+  }
+
+  function renderAll() {
+    renderFacts(); renderQuestion(); renderFindings(); renderTracks(); renderLog();
+  }
+
+  // ---- Template picker ----
+
+  function available(m, p) { return !!TEMPLATES[m + "/" + p]; }
+
+  function buildSeg(hostId, items, current, isOn, onPick) {
+    var host = document.getElementById(hostId);
+    host.textContent = "";
+    items.forEach(function (it) {
+      var b = el("button", null, it.label);
+      b.type = "button";
+      b.id = hostId + "-" + it.id;
+      b.setAttribute("aria-pressed", it.id === current ? "true" : "false");
+      if (!isOn(it.id)) {
+        b.disabled = true;
+        b.title = "A full cycle never runs at an event — Workshop Studio owns that account.";
+      }
+      b.addEventListener("click", function () { onPick(it.id); });
+      host.appendChild(b);
+    });
+  }
+
+  function show() {
+    if (!available(mode, path)) path = "sp";
+    buildSeg("seg-mode", MODES, mode, function () { return true; }, function (id) { mode = id; show(); });
+    buildSeg("seg-path", PATHS, path, function (id) { return available(mode, id); }, function (id) { path = id; show(); });
+    document.getElementById("pick-note").textContent = NOTES[mode];
+    var t = TEMPLATES[mode + "/" + path];
+    runDoc = t.run; phases = t.phases; findings = [];
+    renderAll();
+    try { history.replaceState(null, "", "#" + mode + "--" + path); } catch (e) {}
+  }
+
+  var h = (location.hash || "").replace(/^#/, "").split("--");
+  if (h.length === 2 && available(h[0], h[1])) { mode = h[0]; path = h[1]; }
+  show();
+})();
+</script>
