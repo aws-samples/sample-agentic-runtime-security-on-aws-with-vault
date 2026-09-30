@@ -49,9 +49,12 @@ Everything from `30-deploy-foundation/32-configure-kubectl` — **Configure kube
 
 ## Setup
 
-1. Work from a fork of `https://github.com/aws-samples/sample-agentic-runtime-security-on-aws-with-vault`.
-2. Sync your fork's `main` with upstream before each session.
-3. Clone it where you will run the workshop — the pre-flight page does this for you, and the block is idempotent.
+1. **Clone fresh from GitHub `main`, into a directory that is not the dev checkout** — see invariant 1 below, which is not negotiable. The pre-flight page's own clone block is the command to use, and it is idempotent:
+   ```bash
+   cd ~ && { [ -d sample-agentic-runtime-security-on-aws-with-vault ] || git clone https://github.com/aws-samples/sample-agentic-runtime-security-on-aws-with-vault.git; } && cd sample-agentic-runtime-security-on-aws-with-vault && pwd
+   ```
+2. Sync `main` with upstream before each session, and record the commit the run is testing.
+3. Everything the run produces — the walkthrough log, Terraform state, `.acme-state` — lives under that clone, never under the dev checkout.
 
 **Region — everything is `us-east-1`.** `workshop/contentspec.yaml` declares `accessibleRegions` and `deployableRegions` as `us-east-1` only, with `maxAccessibleRegions: 1`, and `infrastructure/terraform.tfvars` sets both `region` and `kb_region` to it. The Nova 2 embedding model the Knowledge Base needs exists only there. There is no second region to get wrong.
 
@@ -61,16 +64,17 @@ Everything from `30-deploy-foundation/32-configure-kubectl` — **Configure kube
 
 ## Invariants — these are what make it a test and not a demo
 
-1. **Run the page verbatim.** Never author a script or a convenience wrapper. The only exception is a clearly-labelled ad-hoc diagnostic while actively troubleshooting a failure.
-2. **Verify the cluster context before any `kubectl`, `helm`, or Kubernetes-provider `terraform` call.** This repo is AWS: the context is `workshop` or an `arn:aws:eks:*` ARN. Never a `gke_*` context.
-3. **Keep full, untruncated output.** A trimmed log is not evidence. Redact before anything leaves the terminal: AWS account IDs, ARNs, access keys, JWTs and bearer tokens, private IPs, and the **Vault root token** — several pages print it to stdout by design.
-4. **Stream every command to one tail-able log**, and hand over its `tail -f` before anything runs — see *Start of run* below. Output nobody can watch does not count as evidence.
-5. **Keep the dashboard true, writing after every step** — see *Start of run* and *Reporting every step* below. A stale board reads as no progress and is worse than no board.
-6. **Say which step is running, for every step**, before it runs — see *Reporting every step* below.
-7. **Never mark a page done on evidence you have not just seen.** The commands must be in *this* run's log. A log from an earlier run does not count. Re-running a passing page costs minutes; a false green costs the workshop.
-8. **The self-paced run is measured, not repaired — no fixes mid-run.** Self-paced is the proof that someone on a laptop gets through with nothing but the pages. Patch a script or hand-run a command the page does not contain and you stop measuring that. A break is a **finding**: logged, filed, reported. Fixes happen after the run ends.
-9. **Everywhere else, a defect gets fixed, not worked around** — fix the page or the script, one atomic commit, then re-run that page. Never "pre-existing", never a cheat path.
-10. **Nothing merges or closes on a green test run.** A passing run means *ready to verify*, nothing more.
+1. **NEVER test from the dev repo. Ever.** The run clones fresh from GitHub `main` into its own directory — using the clone block the pre-flight page itself gives the attendee — and every command of the run executes from that clone. The dev repo is where the code is edited and committed; it is never where it is tested. Testing from the working tree measures the wrong thing: it carries uncommitted edits, leftover local state, gitignored artifacts and branch drift, so a green run proves the working directory works, not that what is published on `main` works. An attendee has none of that — they have a clone and the pages. If you find yourself `cd`-ing into the dev checkout mid-run, that is the violation; stop and start the run again from the clone. The walkthrough log, the Terraform state and every artifact the run produces live under the clone too.
+2. **Run the page verbatim.** Never author a script or a convenience wrapper. The only exception is a clearly-labelled ad-hoc diagnostic while actively troubleshooting a failure. A verbatim command run in the wrong directory is not verbatim — see invariant 1.
+3. **Verify the cluster context before any `kubectl`, `helm`, or Kubernetes-provider `terraform` call.** This repo is AWS: the context is `workshop` or an `arn:aws:eks:*` ARN. Never a `gke_*` context.
+4. **Keep full, untruncated output.** A trimmed log is not evidence. Redact before anything leaves the terminal: AWS account IDs, ARNs, access keys, JWTs and bearer tokens, private IPs, and the **Vault root token** — several pages print it to stdout by design.
+5. **Stream every command to one tail-able log**, and hand over its `tail -f` before anything runs — see *Start of run* below. Output nobody can watch does not count as evidence.
+6. **MUST UPDATE THE DASHBOARD AFTER EVERY EXECUTION.** Not after every page, not at phase boundaries, not when there is something interesting to say — after **every command that runs**. A command executed with no dashboard write after it did not happen as far as anyone watching is concerned. This includes: each command of a multi-command page, each step of a script, a re-run, a recovery deploy, a diagnostic, and a command that failed. One `write_db` immediately after, carrying what that command actually printed. And the dashboard link goes in the chat message alongside it, unasked, every time — together with the `tail -f`. A stale board reads as no progress and is worse than no board. (Bear has asked for this repeatedly and is tired of asking; treat a missed write as a defect in the run, not an omission in the report.)
+7. **Say which step is running, for every step**, before it runs — see *Reporting every step* below.
+8. **Never mark a page done on evidence you have not just seen.** The commands must be in *this* run's log. A log from an earlier run does not count. Re-running a passing page costs minutes; a false green costs the workshop.
+9. **The self-paced run is measured, not repaired — no fixes mid-run.** Self-paced is the proof that someone on a laptop gets through with nothing but the pages. Patch a script or hand-run a command the page does not contain and you stop measuring that. A break is a **finding**: logged, filed, reported. Fixes happen after the run ends.
+10. **Everywhere else, a defect gets fixed, not worked around** — fix the page or the script, one atomic commit, then re-run that page. Never "pre-existing", never a cheat path.
+11. **Nothing merges or closes on a green test run.** A passing run means *ready to verify*, nothing more.
 
 ---
 
@@ -93,7 +97,7 @@ page is worse than no entry: it is the first thing anyone reads, and it sends co
 chasing a defect that does not exist. (Stated 2026-09-28, after I filed the CloudShell
 licence upload as a finding when the upload does exactly what the page says.)
 
-## Start of run — three things, in this order, before Phase 0
+## Start of run — four things, in this order, before Phase 0
 
 **1. Open the walkthrough log and hand over its `tail -f` immediately.** This is the first thing said in a run, before Phase 0 and before any command:
 
@@ -129,7 +133,19 @@ A heading with a single command block gets one document with `sub: ''`. A step t
 
 Moving a phase is one `write_db` `update` on its phase document, with `currentPhase` and `updatedAt` on the run in the same batch.
 
-**3. Then Phase 0.**
+**3. On any run from your own terminal or IDE, prove `~/vault-init.json` is absent before Phase 0.**
+
+```bash
+ls -l ~/vault-init.json 2>/dev/null && echo "STALE — remove it before starting" || echo "absent — good"
+```
+
+If it is there, delete it: `rm -f ~/vault-init.json`.
+
+**Why this is an entry check and not only an exit one.** `teardown.sh` removes the file at the end of its run (issue #48), and that is correct — but it only ever fires for an environment that was torn down *on this machine*. A laptop accumulates the file from anywhere: a run against a different account, a copy pulled out of CloudShell, an environment destroyed from another shell. None of those leave a teardown behind to clean up after them. CloudShell does not have this problem — the file lives in that account's `$HOME` and dies with it — so this check belongs to the local cell specifically.
+
+A stale file is worse than a missing one. The missing-file guard fails loudly and correctly (`ERROR: no root token in ~/vault-init.json — the Tier-2 deploy has not run on this machine`). A stale file sails straight past it and hands every Vault page a root token for a Vault that no longer exists, so the run fails later, somewhere else, looking like a workshop defect rather than a dirty machine.
+
+**4. Then Phase 0.**
 
 ---
 
