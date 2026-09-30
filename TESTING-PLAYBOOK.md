@@ -49,9 +49,16 @@ Everything from `30-deploy-foundation/32-configure-kubectl` — **Configure kube
 
 ## Setup
 
-1. **Clone fresh from GitHub `main`, into a directory that is not the dev checkout** — see invariant 1 below, which is not negotiable. The pre-flight page's own clone block is the command to use, and it is idempotent:
+1. **Clone fresh from GitHub `main`, into the test location — never under `~/git-repos`, never the dev checkout** — see invariant 1 below, which is not negotiable. Every mode, every run:
+
+   | Where the run happens | The clone lives at |
+   |---|---|
+   | Your own terminal / IDE (every self-paced run, and at an event from your own terminal) | `~/Documents/sample-agentic-runtime-security-on-aws-with-vault` |
+   | AWS CloudShell | `~/sample-agentic-runtime-security-on-aws-with-vault` — the page's own location; CloudShell has no `~/git-repos` and no dev checkout |
+
+   The pages' clone block (**Run Pre-flight Checks** Step 2, **Deploy — At an Event** Step 1) starts with `cd ~`. On your own terminal, run it with `cd ~/Documents` in place of `cd ~` — nothing else in the command changes. It is idempotent:
    ```bash
-   cd ~ && { [ -d sample-agentic-runtime-security-on-aws-with-vault ] || git clone https://github.com/aws-samples/sample-agentic-runtime-security-on-aws-with-vault.git; } && cd sample-agentic-runtime-security-on-aws-with-vault && pwd
+   cd ~/Documents && { [ -d sample-agentic-runtime-security-on-aws-with-vault ] || git clone https://github.com/aws-samples/sample-agentic-runtime-security-on-aws-with-vault.git; } && cd sample-agentic-runtime-security-on-aws-with-vault && pwd
    ```
 2. Sync `main` with upstream before each session, and record the commit the run is testing.
 3. Everything the run produces — the walkthrough log, Terraform state, `.acme-state` — lives under that clone, never under the dev checkout.
@@ -64,8 +71,8 @@ Everything from `30-deploy-foundation/32-configure-kubectl` — **Configure kube
 
 ## Invariants — these are what make it a test and not a demo
 
-1. **NEVER test from the dev repo. Ever.** The run clones fresh from GitHub `main` into its own directory — using the clone block the pre-flight page itself gives the attendee — and every command of the run executes from that clone. The dev repo is where the code is edited and committed; it is never where it is tested. Testing from the working tree measures the wrong thing: it carries uncommitted edits, leftover local state, gitignored artifacts and branch drift, so a green run proves the working directory works, not that what is published on `main` works. An attendee has none of that — they have a clone and the pages. If you find yourself `cd`-ing into the dev checkout mid-run, that is the violation; stop and start the run again from the clone. The walkthrough log, the Terraform state and every artifact the run produces live under the clone too.
-2. **Run the page verbatim.** Never author a script or a convenience wrapper. The only exception is a clearly-labelled ad-hoc diagnostic while actively troubleshooting a failure. A verbatim command run in the wrong directory is not verbatim — see invariant 1.
+1. **NEVER test from the dev repo. Ever.** The run clones fresh from GitHub `main` into the test location — `~/Documents/sample-agentic-runtime-security-on-aws-with-vault` on your own terminal, never anywhere under `~/git-repos` (see *Setup*) — using the clone block the pre-flight page itself gives the attendee, and every command of the run executes from that clone. The dev repo is where the code is edited and committed; it is never where it is tested. Testing from the working tree measures the wrong thing: it carries uncommitted edits, leftover local state, gitignored artifacts and branch drift, so a green run proves the working directory works, not that what is published on `main` works. An attendee has none of that — they have a clone and the pages. If you find yourself `cd`-ing into the dev checkout mid-run, that is the violation; stop and start the run again from the clone. The walkthrough log, the Terraform state and every artifact the run produces live under the clone too.
+2. **Run the page verbatim.** Never author a script or a convenience wrapper. The only exceptions are a clearly-labelled ad-hoc diagnostic while actively troubleshooting a failure, and the clone block's `cd ~` becoming `cd ~/Documents` on your own terminal (see *Setup*). A verbatim command run in the wrong directory is not verbatim — see invariant 1.
 3. **Verify the cluster context before any `kubectl`, `helm`, or Kubernetes-provider `terraform` call.** This repo is AWS: the context is `workshop` or an `arn:aws:eks:*` ARN. Never a `gke_*` context.
 4. **Keep full, untruncated output.** A trimmed log is not evidence. Redact before anything leaves the terminal: AWS account IDs, ARNs, access keys, JWTs and bearer tokens, private IPs, and the **Vault root token** — several pages print it to stdout by design.
 5. **Stream every command to one tail-able log**, and hand over its `tail -f` before anything runs — see *Start of run* below. Output nobody can watch does not count as evidence.
@@ -75,6 +82,7 @@ Everything from `30-deploy-foundation/32-configure-kubectl` — **Configure kube
 9. **The self-paced run is measured, not repaired — no fixes mid-run.** Self-paced is the proof that someone on a laptop gets through with nothing but the pages. Patch a script or hand-run a command the page does not contain and you stop measuring that. A break is a **finding**: logged, filed, reported. Fixes happen after the run ends.
 10. **Everywhere else, a defect gets fixed, not worked around** — fix the page or the script, one atomic commit, then re-run that page. Never "pre-existing", never a cheat path.
 11. **Nothing merges or closes on a green test run.** A passing run means *ready to verify*, nothing more.
+12. **HARD RULE — tear down a tier, and every tier above it is redeployed.** Tier 3 (the Use Case workloads) runs on tier 2 (Vault + IVIA), and both run on tier 1 (the foundation). **If tier 2 is torn down, tier 3 MUST be redeployed** — never redeploy tier 2 alone and carry on against the tier 3 that was standing on the old one. Tear down tier 1 and all three go, and all three are redeployed. It never runs the other way: tearing down tier 3 leaves tiers 1 and 2 standing. (Bear, 2026-09-30.)
 
 ---
 
@@ -113,7 +121,7 @@ Every command from then on streams to that one file with `tee -a`, and its `tail
 
 Read it first, then republish onto what comes back. Keep the title `Clean-Slate Provisioning Run` and the 🧪 favicon stable — the tab is found by its icon. The page is a static shell published with `capabilities: {db: {}}` that renders from the artifact's own database via `onSnapshot`: a `write_db` updates the open tab instantly with no republish. **Structure is data, not markup** — a new workshop page is one more document, never a page edit. Republish the HTML only to change the design.
 
-The dashboard is Bear's own tool. He uses it, as the workshop's admin and author, to follow a test run step by step; attendees never see it. Work on the dashboard or on this playbook gets no GitHub issue. Once Bear approves a change, commit it and push the branch without asking.
+The dashboard is Bear's own tool. He uses it, as the workshop's admin and author, to follow a test run step by step; attendees never see it. Work on the dashboard or on this playbook gets a GitHub issue, and the PR closes it. Once Bear approves a change, commit it and push the branch without asking.
 
 Seed the run, then write state as it changes:
 
@@ -129,7 +137,7 @@ Seed the run, then write state as it changes:
 - `step` is the page's own `###` heading, verbatim, including its `Step N —` prefix when it has one.
 - `sub` is the page's words for the block under that heading: its `####` heading, or its lead-in sentence cut to a short imperative.
 
-A heading with a single command block gets one document with `sub: ''`. A step the cell does not run is seeded `skipped` with the reason as its proof — never deleted, because the count is only honest if every step the page has is on the board. Seed every page's documents at the start of the run, in page order, so `order` follows the workshop.
+A heading with a single command block gets one document with `sub: ''`. A step the cell does not run is seeded `na` — shown as **Not Applicable** — with the reason as its proof, never deleted, because the count is only honest if every step the page has is on the board. Seed every run from its template, `.claude/skills/test-workshop/templates/<mode>--<path>.json` (`full-cycle--sp`, `full-content--{sp,ae-cs,ae-ide}`, `changed--{sp,ae-cs,ae-ide}`), at the start of the run, in page order, so `order` follows the workshop.
 
 Moving a phase is one `write_db` `update` on its phase document, with `currentPhase` and `updatedAt` on the run in the same batch.
 
@@ -181,6 +189,8 @@ The tail shows raw output; it does not say where in the plan the run is. Both ar
 
 When in doubt it is a full cycle. **Neither content mode proves a clean-slate deploy, and neither substitutes for one.** The failures that only surface on a fresh `terraform init` / `apply` — a `removed` block, a `required_version` raise, a provider constraint, a first-time resource ordering — cannot be reached from a standing environment at all. A content pass that should have been a full cycle reports green on infrastructure nobody tested; a content pass that is *honest about that gap* is a legitimate pre-PR gate on the pages.
 
+**Every mode, every page — follow the published workshop in the browser, as the attendee.** Open each page as published, follow its steps in order, and do its browser steps in Chrome. A CLI-only pass does not test a page. Every page whose step is something a person does in a browser gets opened, clicked through and seen: the sign-in, the transactions card, the persona menu at the lower left and what it opens, the token views, the refund chat's typed row number, the Security Flow's Story and Technical views, and where **Log out** actually is. Record what you saw, not that you looked. (Bear, 2026-09-30.)
+
 ---
 
 ## Full content pass — every page, standing environment
@@ -192,7 +202,7 @@ When in doubt it is a full cycle. **Neither content mode proves a clean-slate de
 1. **Phase 1's pages, read only.** **Run Pre-flight Checks**, the **Deploy** page for your audience, and **Configure kubectl** are already satisfied by the standing environment. Read them end to end against the rendered preview and re-run only the commands that are safe to repeat on a live cluster — the clone block, `aws sts get-caller-identity`, the kubeconfig write. Never re-run a deploy. Say in the report that these pages were read, not executed.
 2. **Phase 2 and Phase 3 in full** — every page, every command, verbatim, in order. A page is tested as a page, not as a diff.
 
-**Browser pages are driven in Chrome, by you, before they reach anybody.** A CLI-only pass does not test them. Every page whose step is something a person does in a browser gets opened, clicked through and seen: the sign-in, the transactions card, the persona menu at the lower left and what it opens, the token views, the refund chat's typed row number, the Security Flow's Story and Technical views, and where **Log out** actually is. Record what you saw, not that you looked.
+**Browser pages** — driven in Chrome, as in every mode (see *Every mode, every page* above).
 
 **The report names the gap in one line, precisely.** Not "infrastructure was not tested" — that is usually false, because the infrastructure changes were exercised live. The true statement is narrower: *no clean-slate deploy ran, so the fresh-`init` behaviour of the Terraform changes is unproven*. Name which changes those are.
 
@@ -246,6 +256,8 @@ rm -f terraform.tfstate* && rm -rf .terraform/
 
 Then `rm -f infrastructure/.acme-state ~/vault-init.json`.
 
+Whatever Phase 0 removes, Phase 1 redeploys in full — every tier removed and every tier above it (invariant 12). Tier 2 gone means tiers 2 and 3 both come back.
+
 **At an event, additionally** — these sit outside the stack's resource graph and survive `delete-stack`: the sim assets bucket (`cfn-sim-assets-<acct>-<region>`), the CFN state bucket (`cfn-sim-atevent-statebucket-*`), and the EKS access entry the sim added for the caller principal.
 
 ---
@@ -298,7 +310,11 @@ All six `33-verify-deployment` pages, in order:
 - **Use Case 2 — OAuth Personalized Read-only:** **OAuth Login Flow**, **Configure the OAuth Resource Server**, **Verify Per-User Data Access**, **Scope Enforcement (Layer 2)**, **Credential Revocation**. Start the first sign-in in a **fresh incognito window**; switch personas with a *new* incognito window, never Log out — IVIA keeps its own SSO cookie. **Log out** lives in the persona menu: click your photo and name at the bottom left of the dashboard.
 - **Use Case 3 — Privileged Action with CIBA:** all six pages, see below.
 
-**Stop before Cleanup** unless the run is explicitly a teardown test.
+**Then hold — Bear verifies before anything is torn down.** The run stops with the environment standing. Bear checks what he wants, including the CIBA refund in the browser with his own phone; the run waits for him to say he is done.
+
+**Self-paced: the testing ends with Cleanup — when Bear says he is done, not before.** If his checks find something, the environment stays up: the fix is tested on it with a content pass or a changed-pages pass, and the run comes back to his hold. Once he says he is done, walk the **Cleanup** page verbatim — `teardown.sh` and all four spot-checks — and the account is left empty. A content pass or changed-pages pass never tears anything down first; it runs on the environment already standing. (Bear, 2026-09-30.)
+
+**At an event: never Cleanup** — Workshop Studio owns the account.
 
 ---
 
@@ -328,7 +344,7 @@ It enrolls over the same OAuth + SCIM endpoints and signs the user-presence chal
 
 Check these before filing:
 
-- **The clone block does nothing the second and third time.** It appears on three pages — **Run Pre-flight Checks** Step 2, **Self-paced AWS Account** Step 1, and **Deploy — At an Event** Step 1 — and is deliberately idempotent. Running it inside the repo is a no-op that exits 0.
+- **The clone block does nothing the second time.** It appears on two pages — **Run Pre-flight Checks** Step 2 and **Deploy — At an Event** Step 1 — and is deliberately idempotent. Running it again is a no-op that exits 0. On your own terminal that holds only when it is run with `cd ~/Documents` (see *Setup*): run as written, its `cd ~` finds no clone there, makes a second one in `~`, and moves the run into it.
 - **`ERROR: no root token in ~/vault-init.json — the Tier-2 deploy has not run on this machine`** is the correct output when you reach a Vault page before tier 2 has run. It replaced a line that printed success on a missing file.
 - **At an event, the pre-flight IAM simulation reports `implicitDeny`** on `iam:CreateRole`, `eks:CreateCluster`, `rds:CreateDBInstance`. The page tells you to re-run with `--skip-iam-sim` (add `--skip-quotas` if the quota section also denies). The authoritative permissions test is the deploy itself.
 - **`terraform: command not found` in CloudShell after an idle disconnect.** Tools installed outside `$HOME` live on a non-persistent overlay. Re-run pre-flight Step 2. The license you uploaded and `~/vault-init.json` are in `$HOME` and survive.
