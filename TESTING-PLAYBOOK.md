@@ -109,6 +109,8 @@ Every command from then on streams to that one file with `tee -a`, and its `tail
 
 Read it first, then republish onto what comes back. Keep the title `Clean-Slate Provisioning Run` and the 🧪 favicon stable — the tab is found by its icon. The page is a static shell published with `capabilities: {db: {}}` that renders from the artifact's own database via `onSnapshot`: a `write_db` updates the open tab instantly with no republish. **Structure is data, not markup** — a new workshop page is one more document, never a page edit. Republish the HTML only to change the design.
 
+The dashboard is Bear's own tool. He uses it, as the workshop's admin and author, to follow a test run step by step; attendees never see it. Work on the dashboard or on this playbook gets no GitHub issue. Once Bear approves a change, commit it and push the branch without asking.
+
 Seed the run, then write state as it changes:
 
 | Document | Carries |
@@ -141,6 +143,13 @@ Moving a phase is one `write_db` `update` on its phase document, with `currentPh
 - **What is queued behind it.**
 
 **After a step runs**: its full untruncated output, and one `write_db` to the dashboard — immediately, not batched, not at the phase boundary. A phase of six pages gets six writes, each carrying that page's own proof. A long-running step gets one write at `running` and another when it lands.
+
+**Never ask before a dashboard write.** Keeping the board true is part of the run, not a change that needs approval. The four ways a row goes stale, and the rule against each:
+
+- **A skipped step's reason goes in `proof`.** The page renders `proof` and nothing else, so a reason left in `note` or any other field is invisible and the row reads as skipped for no reason.
+- **Never assign a step to Bear unless he said he will do it.** A row that says "for Bear" or "Bear confirms by hand" about a step he never took on is false.
+- **A re-run updates its row in the same turn.** When a page command is run again later — for example the correlation query after a new refund — append that result to the row's `proof` with a label saying what triggered the re-run. Never leave the earlier result standing alone.
+- **`currentPhase` names what was skipped.** "All steps done" is only true when nothing is `skipped`. Otherwise it says which steps were skipped and why, in a few words.
 
 The tail shows raw output; it does not say where in the plan the run is. Both are required, and neither substitutes for the other.
 
