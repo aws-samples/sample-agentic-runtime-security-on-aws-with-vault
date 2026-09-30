@@ -356,12 +356,16 @@ LEASE_SUFFIX=$(kubectl logs -n banking-app -l app=banking-mcp-server --tail=50 \
   | grep 'vault_lease_revoked' | tail -1 | sed -E 's|.*lease_id=.*/([^/ ]+).*|\1|')
 echo "LEASE_SUFFIX=${LEASE_SUFFIX}"
 
-kubectl exec -n vault vault-0 -- \
-  sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' \
-  vault list sys/leases/lookup/database/creds/uc2-personal-readonly" 2>&1 \
-  | grep -F "${LEASE_SUFFIX}" \
-  && echo "FAIL: lease ${LEASE_SUFFIX} is still active" \
-  || echo "PASS: lease ${LEASE_SUFFIX} is no longer in the active-leases list"
+if [ -z "${LEASE_SUFFIX}" ]; then
+  echo "No vault_lease_revoked line in the last 50 log lines. Ask the banking chat another question, then re-run this block."
+else
+  kubectl exec -n vault vault-0 -- \
+    sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' \
+    vault list sys/leases/lookup/database/creds/uc2-personal-readonly" 2>&1 \
+    | grep -F "${LEASE_SUFFIX}" \
+    && echo "FAIL: lease ${LEASE_SUFFIX} is still active" \
+    || echo "PASS: lease ${LEASE_SUFFIX} is no longer in the active-leases list"
+fi
 ```
 
 Expected output:
