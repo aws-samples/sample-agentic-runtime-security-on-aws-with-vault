@@ -15,7 +15,7 @@ This is the whole point of Use Case 3. Watch an agent ask for permission it does
 source infrastructure/.acme-state && echo "https://${NIP_FQDN_BANKING}/"
 ```
 
-Open the printed URL, incognito window, sign in `jaime` / `WorkshopUser1!`.
+Switch to your **jaime window** (the second window you opened on the OAuth Login Flow page). If you closed it, open the printed URL in a new Incognito / Private window and sign in `jaime` / `WorkshopUser1!`. **Log out** ends the IVIA session for the whole window, so each persona needs its own window.
 
 ### 2. Ask for a refund
 

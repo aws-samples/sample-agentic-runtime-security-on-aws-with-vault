@@ -135,7 +135,7 @@ The `sub` claim in the `access_token` (e.g. `oscar`) flows to:
 ### Step 1 — Get the Banking UI URL
 
 :::alert{header="Use an incognito / private browser window" type="info"}
-Open the Banking UI in a fresh incognito / private window. Stale WebSEAL/IVIA session cookies from a previous login can prevent a clean sign-in, and this workshop has you log in as more than one user. Open a new incognito window for each user (Oscar, then Jaime) so each login starts from a clean session.
+Open the Banking UI in a fresh incognito / private window. Stale WebSEAL/IVIA session cookies from a previous login can prevent a clean sign-in, and this workshop has you log in as more than one user. You will end up with two windows: an **oscar window** (Step 2) and a **jaime window** (Step 5). Keep both open for the rest of the workshop. Later pages tell you to switch to one or the other instead of signing in again.
 :::
 
 At the end of `bash infrastructure/scripts/deploy-workshop.sh`, the script prints `NIP_FQDN_BANKING` — the banking-UI URL backed by a Let's Encrypt certificate served on the shared workshop ALB. Print the full HTTPS URL (read back from `infrastructure/.acme-state`) and open it in your browser:
@@ -160,6 +160,8 @@ Enter the pre-created test user credentials:
 - **Password:** `WorkshopUser1!`
 
 Click **Login**. WebSEAL performs an LDAP bind against OpenLDAP and, on success, redirects you back through `/isvaop/oauth2/authorize` to the Banking UI's `/callback?code=...` URL. The Banking UI exchanges the code for an access token and lands you on `/dashboard`.
+
+This window is your **oscar window**. Leave it open.
 
 :::alert{header="Where do these users come from?" type="info"}
 This workshop uses OpenLDAP as the user registry, with two pre-provisioned users (Oscar and Jaime) created by the `verify_access` Terraform module. WebSEAL authenticates them via LDAP bind. The IVIA OIDC Provider then issues JWTs that the MCP Server uses to obtain user-scoped database credentials from Vault.
@@ -186,16 +188,18 @@ After login you land on the dashboard, the **Banking Agent** chat. Click the **S
 
 ### Step 5 — Switch users: sign in as Jaime
 
-To act as a different user, open a **new Incognito / Private browser window** and go to the Banking UI URL again. Sign in as:
+To act as a different user, open a **second Incognito / Private browser window** (this is your **jaime window**; the window you signed in to in Step 2 is your **oscar window**) and go to the Banking UI URL again. Sign in as:
 
 - **Username:** `jaime`
 - **Password:** `WorkshopUser1!`
 
 :::alert{type="info" header="Why a second window here?"}
-**Log out** (click your name at the bottom of the navigation, then **Log out**) fully signs you out: the Banking UI `/logout` handler clears its session cookies and then redirects to IVIA's `/pkmslogout`, which terminates the WebSEAL single sign-on session as well — so clicking **Log out** and signing back in as Jaime in the *same* window works and lands you on a fresh credential prompt. We open a **separate Incognito / Private window** here only so your Oscar session stays live in the first window and you can compare the two personas side-by-side.
+**Log out** (click your name at the bottom of the navigation, then **Log out**) fully signs you out: the Banking UI `/logout` handler clears its session cookies and then redirects to IVIA's `/pkmslogout`, which terminates the WebSEAL single sign-on session as well — so clicking **Log out** and signing back in as Jaime in the *same* window works and lands you on a fresh credential prompt. We open a **separate Incognito / Private window** here so your Oscar session stays live in the oscar window while you sign in as Jaime in the jaime window, and every later page can switch between the two personas without signing in again.
 :::
 
 Click **Show me my account balances** again. The agent now answers with Jaime's accounts — not Oscar's. The `sub` claim changed, activating a different RLS filter in PostgreSQL.
+
+Keep both windows open. You now have an oscar window and a jaime window, and the pages that follow reuse them.
 
 ### Step 6 — Confirm the tool contract has nowhere to put an identity
 
