@@ -7,9 +7,13 @@
   carry is written "not in the stream", in the boards' style for it, never guessed.
 -->
 <script lang="ts">
-	import type { CardLayout, CardValue } from '$lib/answer-cards';
+	import type { CardLayout, CardValue, RefundDetails } from '$lib/answer-cards';
+	import RefundDetailsModal from './RefundDetailsModal.svelte';
 
 	let { layout }: { layout: CardLayout } = $props();
+
+	/** The refund whose details popup is open, from a Refund row's link. */
+	let openRefund: RefundDetails | null = $state(null);
 </script>
 
 {#snippet value(v: CardValue)}{#if v === undefined}<span class="nis">not in the stream</span>{:else}{v}{/if}{/snippet}
@@ -36,10 +40,12 @@
 				</thead>
 				<tbody>
 					{#each layout.table.rows as row, r (r)}
-						<tr>
+						<tr class:refund-row={layout.table.refundRows?.[r]}>
 							{#each row as cell, c (c)}
 								{#if cell.value === undefined}
 									<td>{@render value(undefined)}</td>
+								{:else if cell.refund}
+									<td><button type="button" class="refund-link" onclick={() => (openRefund = cell.refund ?? null)}>Refund</button> · {cell.value}</td>
 								{:else}
 									<td class:mono={cell.style === 'mono'} class:num={cell.style === 'num'}>{cell.value}</td>
 								{/if}
@@ -64,6 +70,9 @@
 				{/each}
 			</tbody>
 		</table>
+	{/if}
+	{#if openRefund}
+		<RefundDetailsModal refund={openRefund} onclose={() => (openRefund = null)} />
 	{/if}
 	<div class="card-footer">
 		{#each layout.footer as half, h (h)}
@@ -199,6 +208,28 @@
 		font: 12px var(--ovi-font-mono);
 		color: var(--ovi-text-helper);
 		overflow-wrap: anywhere;
+	}
+
+	/* A refund already issued: tinted like the approved status, its amount in green. */
+	tr.refund-row td {
+		background: var(--ovi-ok-bg);
+	}
+
+	tr.refund-row td.num {
+		color: #047857;
+		font-weight: 600;
+	}
+
+	.refund-link {
+		padding: 0;
+		border: 0;
+		background: none;
+		cursor: pointer;
+		color: var(--ovi-teal-deep);
+		font: inherit;
+		font-weight: 600;
+		text-decoration: underline;
+		text-underline-offset: 2px;
 	}
 
 	.nis {

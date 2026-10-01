@@ -49,7 +49,27 @@ export interface CardCredential {
 	ttlSeconds?: number;
 }
 
+/** What the stored record of one issued refund holds: the Refund details popup shows it. */
+export interface RefundDetails {
+	refundId?: string;
+	amount?: string;
+	currency?: string;
+	approvedBy?: string;
+	/** created_at as the database stored it, e.g. "2026-10-01 14:07:22". */
+	approvedAt?: string;
+	requestId?: string;
+	chargeId?: string;
+	chargeDescription?: string;
+	chargeMerchant?: string;
+	chargeAmount?: string;
+	accountId?: string;
+	accountType?: string;
+}
+
 export interface TransactionRow {
+	/** 'refund' for a refund already issued (shown, never numbered); anything else is a charge. */
+	kind?: 'charge' | 'refund';
+	refund?: RefundDetails;
 	/** The date part of created_at, e.g. "2026-09-25". */
 	date?: string;
 	description?: string;
@@ -178,7 +198,25 @@ function transactionRows(result: JsonValue | undefined): TransactionRow[] | null
 	const rows: TransactionRow[] = [];
 	for (const item of result) {
 		if (!isObject(item)) return null;
+		const isRefund = item.kind === 'refund';
 		rows.push({
+			kind: isRefund ? 'refund' : 'charge',
+			refund: isRefund
+				? {
+						refundId: text(item.refund_id),
+						amount: text(item.amount),
+						currency: text(item.currency),
+						approvedBy: text(item.approved_by),
+						approvedAt: text(item.created_at),
+						requestId: text(item.request_id),
+						chargeId: text(item.transaction_id),
+						chargeDescription: text(item.description),
+						chargeMerchant: text(item.merchant),
+						chargeAmount: text(item.charge_amount),
+						accountId: text(item.account_id),
+						accountType: text(item.account_type)
+					}
+				: undefined,
 			date: datePart(text(item.created_at)),
 			description: text(item.description),
 			merchant: text(item.merchant),
@@ -245,6 +283,20 @@ function queryTable(result: JsonValue | undefined): { rowCount: number; columns:
 	};
 }
 
+/**
+ * The rows of the list the agent re-sent after a refund was issued: the last successful
+ * `list_transactions` call marked `args.refresh` in `events`, or null when there is none.
+ */
+export function listRefreshOf(events: AgentEvent[]): TransactionRow[] | null {
+	let latest: TransactionRow[] | null = null;
+	for (const event of events) {
+		if (event.type !== 'tool_call' || event.status !== 'success' || event.name !== 'list_transactions') continue;
+		if (!isObject(event.args) || event.args.refresh !== true) continue;
+		latest = transactionRows(event.result) ?? latest;
+	}
+	return latest;
+}
+
 // ---------------------------------------------------------------------------------- cards
 
 /** Every card of the turn, in the order their calls started. See the module comment. */
@@ -255,6 +307,8 @@ export function answerCardsOf(events: AgentEvent[]): AnswerCardView[] {
 	events.forEach((event, index) => {
 		if (event.type !== 'tool_call' || event.status !== 'success') return;
 		const call: ToolCallEvent = event;
+		// The list re-sent after a refund updates the list already open (listRefreshOf); it is no card.
+		if (call.name === 'list_transactions' && isObject(call.args) && call.args.refresh === true) return;
 		const key = call.toolCallId;
 		const start = startOf(events, key);
 		let card: AnswerCardView | null = null;
@@ -315,6 +369,8 @@ export interface CardColumn {
 
 export interface CardCell {
 	value: CardValue;
+	/** A link that opens this refund's details popup. */
+	refund?: RefundDetails;
 	/** mono: IBM Plex Mono, left; num: IBM Plex Mono, right-aligned, never wrapped. */
 	style?: 'mono' | 'num';
 }
@@ -334,7 +390,7 @@ export interface CardLayout {
 	/** 'wait' is the amber tag of a refund waiting for approval; otherwise teal. */
 	tone?: 'wait';
 	/** A table of rows… */
-	table?: { columns: CardColumn[]; rows: CardCell[][] };
+	table?: { columns: CardColumn[]; rows: CardCell[][]; refundRows?: boolean[] };
 	/** …or a single record as label/value rows. */
 	record?: CardRecordRow[];
 	/** The footer's two halves, each a run of text and values. */
@@ -382,18 +438,28 @@ export function cardLayout(card: Exclude<AnswerCardView, { kind: 'get_accounts' 
 			const columns: CardColumn[] = numbered
 				? [{ label: '#' }, { label: 'Date' }, { label: 'Description' }, { label: 'Merchant' }, { label: 'Account' }, { label: 'Amount', right: true }]
 				: [{ label: 'Date' }, { label: 'Description' }, { label: 'Merchant' }, { label: 'Category' }, { label: 'Account' }, { label: 'Amount', right: true }];
-			const rows = card.rows.map((row, i): CardCell[] => {
+			// Only charges are numbered; a refund row carries a dash and is never a row a person can pick.
+			let charge = 0;
+			const rows = card.rows.map((row): CardCell[] => {
+				const isRefund = numbered && row.kind === 'refund';
 				const shared: CardCell[] = [{ value: row.date }, { value: row.description }, { value: row.merchant }];
-				const amount: CardCell = { value: row.amount === undefined ? undefined : formatBalance(row.amount), style: 'num' };
-				return numbered
-					? [{ value: String(i + 1), style: 'mono' }, ...shared, { value: row.accountType === undefined ? undefined : formatAccountType(row.accountType) }, amount]
-					: [...shared, { value: row.category === undefined ? undefined : formatAccountType(row.category) }, { value: row.accountId, style: 'mono' }, amount];
+				if (isRefund) shared[1] = { value: row.description, refund: row.refund };
+				const amount: CardCell = {
+					value: row.amount === undefined ? undefined : `${isRefund ? '+' : ''}${formatBalance(row.amount)}`,
+					style: 'num'
+				};
+				if (!numbered) {
+					return [...shared, { value: row.category === undefined ? undefined : formatAccountType(row.category) }, { value: row.accountId, style: 'mono' }, amount];
+				}
+				const number: CardCell = { value: isRefund ? '–' : String(++charge), style: 'mono' };
+				return [number, ...shared, { value: row.accountType === undefined ? undefined : formatAccountType(row.accountType) }, amount];
 			});
+			const chargeCount = numbered ? card.rows.filter((row) => row.kind !== 'refund').length : card.rows.length;
 			return {
 				title: 'Your recent transactions',
-				subtitle: `${count(card.rows.length, 'transaction', 'transactions')}${forOwner}`,
+				subtitle: `${count(chargeCount, 'transaction', 'transactions')}${forOwner}`,
 				tag: 'Row-level security',
-				table: { columns, rows },
+				table: { columns, rows, refundRows: numbered ? card.rows.map((row) => row.kind === 'refund') : undefined },
 				footer: dbFooter(card.credential)
 			};
 		}
