@@ -216,6 +216,9 @@ athena_query() {
     | jq -r '.ResultSet.Rows[] | [.Data[] | (.VarCharValue // "" | if . == "" then "-" else . end)] | @tsv' \
     | column -t -s $'\t'
 }
+
+# First value of the first data row only (capture into a variable; empty if none)
+athena_scalar() { athena_query "$1" | awk 'NR==2 {print ($1=="-" ? "" : $1)}'; }
 ```
 
 Find the most recent issuance events for `uc2-personal-readonly`. Under the native OAuth resource server model there are no hand-mapped `user_sub` / `role` claim-mappings. Vault's audit device records the delegated OAuth token by its unique **JTI** in `auth.display_name`, and the **Agent Registry** identity it resolved from that token in `auth.metadata['actor_entity_name']` (the `substr(timestamp, 1, 19)` trims nanoseconds for readable display — second precision is plenty for audit correlation):
@@ -255,10 +258,22 @@ Note the `human_entity` column on those rows. It is Vault's own identity entity 
 **Why:** The entity id above is Vault's own record of the human. Resolve it to a name so the audit row reads as a person rather than a hash.
 
 ```bash
+# Most recent issuance that carries a human entity (skips the root rows)
+HUMAN_ENTITY=$(athena_scalar "SELECT auth.entity_id
+FROM workshop_logs.vault_audit
+WHERE type = 'response'
+  AND request.path = 'database/creds/uc2-personal-readonly'
+  AND auth.entity_id IS NOT NULL AND auth.entity_id <> ''
+ORDER BY timestamp DESC
+LIMIT 1")
+echo "human_entity: ${HUMAN_ENTITY}"
+
 kubectl exec -n vault vault-0 -- \
-  sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read -format=json identity/entity/id/<human_entity from above>" \
+  sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault read -format=json identity/entity/id/${HUMAN_ENTITY}" \
   | jq '{id: .data.id, name: .data.name}'
 ```
+
+If `HUMAN_ENTITY` is empty, no signed-in query has run yet — only `root` rows exist. Sign in through the Banking UI, run a query, wait 60 seconds for Firehose, and re-run the block.
 
 ```json
 {
@@ -332,19 +347,25 @@ vault_lease_revoked lease_id=database/creds/uc2-personal-readonly/vMLGghj7dj6JbX
 
 `role=uc2` is the Kubernetes auth role bound to `uc2-mcp-server-sa` — the pod's own ServiceAccount, not the user's OAuth token. Your `lease_id` suffix will differ.
 
-**Confirm Vault agrees.** Take the suffix from your own `vault_lease_revoked` line and check it is not in the active-leases list:
+**Confirm Vault agrees.** Take the suffix from the newest `vault_lease_revoked` line (the block extracts it for you) and check it is not in the active-leases list:
 
 **Why:** Take the suffix out of the server's own log line and check Vault agrees it is gone. The log is the claim; the lease list is the confirmation.
 
 ```bash
-LEASE_SUFFIX=<the suffix from your log line>
+LEASE_SUFFIX=$(kubectl logs -n banking-app -l app=banking-mcp-server --tail=50 \
+  | grep 'vault_lease_revoked' | tail -1 | sed -E 's|.*lease_id=.*/([^/ ]+).*|\1|')
+echo "LEASE_SUFFIX=${LEASE_SUFFIX}"
 
-kubectl exec -n vault vault-0 -- \
-  sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' \
-  vault list sys/leases/lookup/database/creds/uc2-personal-readonly" 2>&1 \
-  | grep -F "${LEASE_SUFFIX}" \
-  && echo "FAIL: lease ${LEASE_SUFFIX} is still active" \
-  || echo "PASS: lease ${LEASE_SUFFIX} is no longer in the active-leases list"
+if [ -z "${LEASE_SUFFIX}" ]; then
+  echo "No vault_lease_revoked line in the last 50 log lines. Ask the banking chat another question, then re-run this block."
+else
+  kubectl exec -n vault vault-0 -- \
+    sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' \
+    vault list sys/leases/lookup/database/creds/uc2-personal-readonly" 2>&1 \
+    | grep -F "${LEASE_SUFFIX}" \
+    && echo "FAIL: lease ${LEASE_SUFFIX} is still active" \
+    || echo "PASS: lease ${LEASE_SUFFIX} is no longer in the active-leases list"
+fi
 ```
 
 Expected output:

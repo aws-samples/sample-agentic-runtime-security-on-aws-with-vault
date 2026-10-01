@@ -184,11 +184,17 @@ T+900s  Lease expiry fires — Vault runs: DROP ROLE IF EXISTS "v-kubernet-uc1-r
         Any open connection using that credential fails on its next query
 ```
 
-Observe the active lease right after a query, then watch it disappear after 15 minutes:
+Observe the active lease right after a query, then watch it disappear after 15 minutes.
+
+**Why:** Your shell has no Vault address or token, so a bare `vault` command has nothing to talk to. Run it inside the Vault pod with the root token you saved at deploy time, the same way the Use Case 2 and Use Case 3 pages do. Re-exporting the token is harmless if it is already set.
 
 ```bash
-vault list sys/leases/lookup/database/creds/uc1-readonly
+export VAULT_ROOT_TOKEN=$(jq -r '.root_token' ~/vault-init.json)
+kubectl exec -n vault vault-0 -- \
+  sh -c "VAULT_TOKEN='${VAULT_ROOT_TOKEN}' vault list sys/leases/lookup/database/creds/uc1-readonly"
 ```
+
+Run it within 15 minutes of the Step 2 query. The list contains the last segment of the `lease_id` that Step 2 returned (the part after `database/creds/uc1-readonly/`). Run the same command again after 15 minutes and that segment is gone, because Vault has revoked the lease and dropped the Postgres role.
 
 Why this matters for OBJ-2: if the pod is compromised at T+800s, the attacker has at most 100 seconds of Postgres access before the credential self-destructs — no long-lived password to rotate, no rotation job to run.
 :::

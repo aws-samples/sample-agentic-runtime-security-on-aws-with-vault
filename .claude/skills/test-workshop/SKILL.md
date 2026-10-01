@@ -1,24 +1,23 @@
 ---
 name: test-workshop
-description: 'Run a full clean-slate test of this workshop end to end, following TESTING-PLAYBOOK.md. Invoke when Bear says "let''s test the workshop", "/test-workshop", or names a path to test (self-paced, at-event, CloudShell, laptop). Asks which cell of the 2x2 to run when he has not already said.'
+description: 'Test this workshop end to end — full cycle, full content pass or changed-pages pass — following TESTING-PLAYBOOK.md. Invoke when Bear says "let''s test the workshop", "/test-workshop", or names a path to test (self-paced, at-event, CloudShell, laptop). Asks which audience, environment and options to run, every time.'
 ---
 
 ## The playbook is the authority — read it first
 
 Read `TESTING-PLAYBOOK.md` at the repo root **before doing anything else**, and follow it. It is the only description of how this workshop is tested: the invariants, the start-of-run order, the phases, the Use Case 3 command inventory, and the behaviours that look like failures and are not. Do not restate it here and do not work from memory of it — read the file, because it changes.
 
-This skill exists to do two things the playbook cannot: settle **which mode** and **which cell of the 2×2** are being run, before the run starts.
+This skill exists to do two things the playbook cannot: settle **which mode** and **which path** are being run, before the run starts.
 
 ## Step 1 — settle the mode
 
-The playbook's *Two modes* table decides it. Do not ask before checking:
+The playbook's *Three modes* table decides it:
 
-- Is an environment standing? `kubectl config current-context` and `kubectl get nodes`.
-- What changed since the last validated run? Its commit is on the dashboard at `runs/<runId>.commit`; diff `workshop/content/` and `infrastructure/scripts/` against it.
+- **Full cycle** — self-paced only. Tear down, redeploy all three tiers from the pages, walk every page. Required when anything below the pages changed (Terraform, Helm values, images, deploy/teardown script behaviour) or nothing is standing.
+- **Full content pass** — walk every page on the environment already standing. No teardown, no deploy; the deploy pages are read, not executed — except at an event, where **Deploy — At an Event** runs tiers 2 and 3.
+- **Changed-pages pass** — walk only the pages changed since the last tested run, on the environment already standing.
 
-If nothing is standing, or the diff touches Terraform, Helm values, images, or deploy/teardown script **behaviour**, it is a **full cycle** — say so and do not offer the shorter one. If the environment is up and the diff is pages and message strings only, say which pages changed and offer the **content pass**, with the full cycle as the other option.
-
-Never tear down a standing, validated environment without Bear saying to.
+Check before offering: is an environment standing (`kubectl config current-context`, `kubectl get nodes`), and what changed since the last validated run (its commit is on the dashboard at `runs/<runId>.commit`). A content pass or changed-pages pass **never tears anything down first**. Never tear down a standing environment without Bear saying to.
 
 ## Step 2 — ASK which path. Always.
 
@@ -28,28 +27,28 @@ compacted summary, or from what happens to be standing in the account. Bear's di
 2026-09-28: *"you need to AALWAYS ASK THAT DAMN IT"* — after a run was started on the
 wrong environment and had to be abandoned mid-flight.
 
-Four independent choices. Put all four to him in one call.
+Put these to him in one call:
 
-| Choice | Values | How it is usually phrased |
-|---|---|---|
-| **Audience** | At an event · Self-paced | "at-event", "at an event", "ws", "workshop studio" · "self-paced", "selfpaced", "my account" |
-| **Environment** | AWS CloudShell · Own terminal or IDE | "cloudshell", "cs" · "laptop", "local", "terminal", "ide", "mac" |
-| **Image source** | `ecr` (default: build the five images, push to your own ECR, needs a container runtime) · `ghcr` (`--image-source=ghcr`, pre-built public images, no build) | "build", "ecr" · "ghcr", "prebuilt", "no build" |
-| **Use Case 3 enrollment** | Real phone (scan the QR, tap Approve) · `--no-phone` substitute | "phone", "real" · "no-phone", "skip the phone" |
+| Choice | Values |
+|---|---|
+| **Audience** | At an event — always a real Workshop Studio account, tier 1 already built · Self-paced — always Bear's own AWS account |
+| **Environment** (at an event only) | AWS CloudShell · Own terminal or IDE. Self-paced is always his own terminal — never CloudShell, never asked. |
+| **Image source** (self-paced only) | `ecr` (default: build the five images, push to your own ECR) · `ghcr` (`--image-source=ghcr`, pre-built public images) |
+| **Use Case 3 enrollment** | Real phone (scan the QR, tap Approve) · `--no-phone` substitute |
 
 Ask with `AskUserQuestion` — one question per choice, all in the same call. Never as a prose list.
 
-Ask all four every run, even the ones he named last time. The only choices you may carry
+Ask every run, even the ones he named last time. The only choices you may carry
 forward are ones he stated **in this session's own messages**.
 
 ## Step 3 — confirm the base before anything runs
 
-State in one line, and stop if any of it is wrong:
+Every command of the run executes in the **test clone**, a fresh clone of GitHub `main` — never the dev checkout, never under `~/git-repos`. Own terminal: `~/Documents/sample-agentic-runtime-security-on-aws-with-vault`. CloudShell: `~/sample-agentic-runtime-security-on-aws-with-vault`. State in one line, from inside the clone, and stop if any of it is wrong:
 
-- The branch and its HEAD commit — `git rev-parse --abbrev-ref HEAD` and `git log --oneline -1`.
-- That the working tree is clean — `git status --short` must be empty.
-- The cluster context — `kubectl config current-context` must be `workshop` or an `arn:aws:eks:*` ARN, never a `gke_*` one.
-- The caller identity and region — `aws sts get-caller-identity` and the region, which is `us-east-1`.
+- `pwd` is the test clone; its branch and HEAD — `git rev-parse --abbrev-ref HEAD` and `git log --oneline -1`.
+- The clone's working tree is clean — `git status --short` is empty.
+- The cluster context, when one is standing — `workshop` or an `arn:aws:eks:*` ARN, never `gke_*`.
+- The caller identity and region — `aws sts get-caller-identity`, region `us-east-1`.
 
 A test of the wrong branch, or of a dirty tree, measures nothing.
 
@@ -63,9 +62,11 @@ collected and put to him at the end, not raised mid-run.
 
 ## Step 4 — run the playbook
 
-Start of run, in the playbook's order: hand over the `tail -f` first, publish and seed the dashboard second, Phase 0 third. Then, for a full cycle, Phase 0 through Phase 3 for the cell chosen in Step 2 — or, for a content pass, the changed pages only.
+Start of run, in the playbook's order: hand over the `tail -f` first, then publish the dashboard and seed it from its template, `.claude/skills/test-workshop/templates/<mode>--<path>.json`, then the mode's first phase. The templates are rebuilt with `python3 .claude/skills/test-workshop/generator/build.py` — never edited by hand.
 
-Report every step as *Reporting every step* specifies, and write the dashboard after each one.
+Follow the published workshop in the browser, as the attendee, in every mode; drive its browser steps in Chrome. Report every step as *Reporting every step* specifies, and write the dashboard after each one.
+
+**Self-paced ends with a hold.** After the last page, stop with everything standing. Bear checks what he wants, including the CIBA refund in the browser. If he finds something, the environment stays up and the fix is tested on it with a content or changed-pages pass. Once he says he is done, walk **Cleanup** verbatim. At an event, never Cleanup.
 
 ## What this skill must never do
 
@@ -74,3 +75,4 @@ Report every step as *Reporting every step* specifies, and write the dashboard a
 - **Never fix anything mid-run on the self-paced path** — that path is measured, not repaired. A break is a finding.
 - **Never close, merge, or open a PR** on the strength of the run. A green run means ready for Bear to test, and nothing more.
 - **Never run Phase 0 against a standing, validated environment** because the playbook opens with it. Settle the mode first.
+- **Never run Cleanup before Bear says he is done verifying.**

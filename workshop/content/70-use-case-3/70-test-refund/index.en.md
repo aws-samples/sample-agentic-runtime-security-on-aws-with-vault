@@ -15,7 +15,7 @@ This is the whole point of Use Case 3. Watch an agent ask for permission it does
 source infrastructure/.acme-state && echo "https://${NIP_FQDN_BANKING}/"
 ```
 
-Open the printed URL, incognito window, sign in `jaime` / `WorkshopUser1!`.
+Switch to your **jaime window** (the second window you opened on the OAuth Login Flow page). If you closed it, open the printed URL in a new Incognito / Private window and sign in `jaime` / `WorkshopUser1!`. **Log out** ends the IVIA session for the whole window, so each persona needs its own window.
 
 ### 2. Ask for a refund
 
@@ -33,9 +33,9 @@ Tap **Approve** in the IBM Verify app, then type `I approved` in the chat.
 
 ### 4. Confirm the refund landed
 
-**Why:** The chat's answer and the transaction list should agree. If they do, a credential was issued, used once, and expired — all inside the time it took you to read the reply.
+**Why:** The chat's reply is the agent reporting that the refund was written. If it says `Status: approved`, a credential was issued, used once, and expired — all inside the time it took you to read the reply.
 
-The chat reports the refund succeeded and the transaction list shows the new row.
+The chat reports the refund as approved, with the details shown below. The refund is stored in its own table, separate from your transactions, so the transaction list does not gain a new row. You read the refund row itself on the [Bypass Test](../73-bypass-test/) page.
 
 Sample output:
 
@@ -51,7 +51,7 @@ Sample output:
 > - **Status:** approved
 > - **Created At:** 2026-06-03T17:50:15.788006+00:00
 
-Your IDs, amount, and timestamp will differ. What matters is that the chat returns `Status: approved` and the new row appears in your transaction list.
+Your IDs, amount, and timestamp will differ. What matters is that the chat returns `Status: approved`.
 
 ::::expand{header="If the approval push never arrives"}
 

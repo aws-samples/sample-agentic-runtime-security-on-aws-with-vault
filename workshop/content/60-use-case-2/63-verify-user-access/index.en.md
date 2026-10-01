@@ -9,7 +9,9 @@ In this module you log in as Oscar and then as Jaime and confirm that each user 
 
 ### Step 1 — Log in as Oscar, inspect accounts
 
-Open the Banking UI URL in your browser and log in as `oscar`. The Banking UI is a chat interface — ask it a banking question such as "What are my account balances?" (or "show my accounts"). You should see accounts belonging to Oscar only.
+Switch to your **oscar window** (the one you signed in to on the OAuth Login Flow page). The Banking UI is a chat interface — ask it a banking question such as "What are my account balances?" (or "show my accounts"). You should see accounts belonging to Oscar only.
+
+If you closed that window, open a new Incognito / Private window, go to the Banking UI URL, and log in as `oscar` as before.
 
 To confirm from the cluster, run a query using Vault-vended credentials with Oscar's RLS session variable set.
 
@@ -66,10 +68,10 @@ SET
 
 ### Step 2 — Switch to Jaime, confirm data isolation
 
-Open a **new Incognito / Private browser window**, go to the Banking UI URL, and sign in as `jaime` (password `WorkshopUser1!`). In the chat, ask "What are my account balances?" (or "show my accounts"). You should see Jaime's accounts only — no rows from Oscar's data.
+Switch to your **jaime window** (the second window from the OAuth Login Flow page). If you closed it, open a new Incognito / Private window, go to the Banking UI URL, and sign in as `jaime` (password `WorkshopUser1!`). In the chat, ask "What are my account balances?" (or "show my accounts"). You should see Jaime's accounts only — no rows from Oscar's data.
 
 :::alert{type="info" header="Why a second window here?"}
-**Log out** (click your name at the bottom of the navigation, then **Log out**) fully signs you out: the Banking UI clears its session cookies and redirects to IVIA's `/pkmslogout`, which ends the WebSEAL single sign-on session too — so logging out and back in as Jaime in the *same* window gives you a clean credential prompt. We open a **separate Incognito / Private window** here only so your Oscar session stays live in the first window for a side-by-side comparison.
+**Log out** (click your name at the bottom of the navigation, then **Log out**) fully signs you out: the Banking UI clears its session cookies and redirects to IVIA's `/pkmslogout`, which ends the WebSEAL single sign-on session too — so logging out and back in as Jaime in the *same* window gives you a clean credential prompt. Each persona keeps its own window so the Oscar session stays live in the oscar window for a side-by-side comparison.
 :::
 
 Run the same manual query with `app.current_user_sub = 'jaime'` (you can reuse the same Vault-vended credential — RLS isolation is driven entirely by the session variable, not by the Postgres user):

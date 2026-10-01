@@ -11,8 +11,10 @@ Every page so far built the approval path. This one tries to get round it — an
 
 **Why:** Everything so far has been the happy path. Now we attack it four ways: forge the signature, act as the wrong agent, ask for a path the token does not name, and skip the approval by using the agent's own login. All four have to fail before any credential is issued.
 
+Every command on this page runs from the repository root, and none of them changes your folder.
+
 ```bash
-cd infrastructure/scripts && ./verify-uc3.sh --bypass
+bash infrastructure/scripts/verify-uc3.sh --bypass
 ```
 
 The script first **self-mints a real delegated token** — it drives an actual CIBA approval with a
@@ -82,13 +84,13 @@ A compromised agent pod with its service account JWT intact could initiate a CIB
 
 #### In the browser
 
-1. Open an **Incognito / Private browser window**, go to the banking application URL, and sign in as **jaime** using the IVIA login page.
+1. Switch to the **jaime** browser window you signed in with on the OAuth Login Flow page (Use Case 2). If you closed it, open a new Incognito / Private window, go to the banking application URL, and sign in as **jaime** using the IVIA login page.
 2. Navigate to the Use Case 3 chat interface and send the message: `List my recent transactions`.
 3. Confirm the response contains only Jaime's transaction records (amounts, merchants, account references).
-4. Open a **fresh Incognito / Private window**, sign in as **oscar**, and repeat the same query — confirm you see only Oscar's records and zero of Jaime's.
+4. Switch to the **oscar** browser window you signed in with on the same page. If you closed it, open a new Incognito / Private window and sign in as **oscar** again. Repeat the same query — confirm you see only Oscar's records and zero of Jaime's.
 
 :::alert{type="info" header="One window per persona"}
-**Log out** clears the banking app's cookies and ends your IVIA session through `/pkmslogout`. Still use a separate Incognito / Private window per persona, so each keeps its own session side by side.
+**Log out** clears the banking app's cookies and ends your IVIA session through `/pkmslogout`. Keep switching between the two windows rather than logging out, so each persona keeps its own session side by side.
 :::
 
 A refund lookup works the same way: ask `What is the status of refund <jaime-refund-id>` while signed in as Oscar — the agent returns "Refund not found" with no detail about Jaime's refund (no information disclosure).
@@ -216,7 +218,8 @@ kubectl run pg-find-refund --restart=Never --image=postgres:16-alpine -n banking
     SELECT 'jaime' AS persona, refund_id, amount::float AS amount FROM banking.refunds;" >/dev/null
 kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-find-refund -n banking-app --timeout=120s >/dev/null 2>&1 \
   || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/pg-find-refund -n banking-app --timeout=30s >/dev/null 2>&1
-kubectl logs pg-find-refund -n banking-app
+REFUND_LIST=$(kubectl logs pg-find-refund -n banking-app)
+echo "$REFUND_LIST"
 kubectl delete pod pg-find-refund -n banking-app --now >/dev/null 2>&1
 ```
 
@@ -234,13 +237,23 @@ kubectl delete pod pg-find-refund -n banking-app --now >/dev/null 2>&1
 (1 row)
 ```
 
-Pick **one** `refund_id`, note which persona owns it, and set three variables (paste **your** values):
+The rule is simple: the test uses the **first refund listed**. `OWNER` is the persona that refund appeared under, and `ATTACKER` is the other persona.
+
+**Why:** You would otherwise copy an id and a persona name out of the listing by hand. This reads them from the listing you just printed, so they always match your run.
 
 ```bash
-export REFUND_ID=<a refund_id from the output above>
-export OWNER=<the persona it appeared under: oscar or jaime>
-export ATTACKER=<the other persona>
+FIRST_ROW=$(echo "$REFUND_LIST" | awk -F'|' 'NF>=3 && $1 ~ /^ *(oscar|jaime) *$/ {gsub(/ /,"",$1); gsub(/ /,"",$2); print $1, $2; exit}')
+if [ -z "$FIRST_ROW" ]; then
+  echo "No refund found under oscar or jaime. Complete a refund on the Test the Refund Flow page, then re-run Step 4.1."
+else
+  export OWNER="${FIRST_ROW% *}"
+  export REFUND_ID="${FIRST_ROW#* }"
+  if [ "$OWNER" = "oscar" ]; then export ATTACKER=jaime; else export ATTACKER=oscar; fi
+  echo "REFUND_ID=${REFUND_ID}  OWNER=${OWNER}  ATTACKER=${ATTACKER}"
+fi
 ```
+
+With the example output above, this prints `REFUND_ID=c2e9db60-f785-4498-b3a5-5109f99eae30  OWNER=oscar  ATTACKER=jaime`.
 
 ##### Step 4.2 — Cross-owner read returns nothing; owner read returns the row
 
