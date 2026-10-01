@@ -11,6 +11,13 @@
 #                                  RDS, Vault, IVIA, Bedrock KB, S3, ECR, KMS,
 #                                  IAM, in-cluster workloads + their PVCs)
 #   teardown.sh --post-destroy-only  Skip terraform destroy, run full orphan sweep
+#   teardown.sh --tier N           Tear down tier N and every tier above it (N = 1, 2 or 3);
+#                                  the tiers below keep standing.
+#                                    --tier 3  workloads only
+#                                    --tier 2  workloads, Vault native resources, then services
+#                                    --tier 1  same as the full nuke
+#                                  Mutually exclusive with --aws-only, --post-destroy-only
+#                                  and --keep-eks.
 #   teardown.sh --aws-only         Only AWS resources (K8s drain + tag-scoped sweep)
 #   teardown.sh --dry-run          Preview without executing
 #   teardown.sh --yes              Non-interactive: auto-confirm every prompt the
@@ -88,6 +95,7 @@ DRY_RUN=false
 AWS_ONLY=false
 POST_DESTROY_ONLY=false
 KEEP_EKS=false
+TIER=""
 # --yes: non-interactive contract for automated callers. Today's script
 # has no interactive prompts (verified via `grep -nE 'read -[pr]|confirm' teardown.sh`
 # returning only false positives inside `while IFS= read` loops), so ASSUME_YES is
@@ -96,7 +104,7 @@ KEEP_EKS=false
 ASSUME_YES=false
 
 usage() {
-    sed -n '2,28p' "$0"
+    sed -n '2,35p' "$0"
     exit 0
 }
 
@@ -106,6 +114,14 @@ while [ $# -gt 0 ]; do
         --aws-only)           AWS_ONLY=true ;;
         --post-destroy-only)  POST_DESTROY_ONLY=true ;;
         --keep-eks)           KEEP_EKS=true ;;
+        --tier)
+            TIER="${2:-}"
+            case "$TIER" in
+                1|2|3) : ;;
+                *) echo -e "${RED}ERROR: --tier must be 1, 2, or 3 (got: '${TIER}')${NC}" >&2; exit 1 ;;
+            esac
+            shift
+            ;;
         --dry-run)            DRY_RUN=true ;;
         --yes|-y)             ASSUME_YES=true ;;
         --help|-h)  usage ;;
@@ -125,6 +141,15 @@ if [ "$local_exclusive" -gt 1 ]; then
     echo -e "${RED}Error: --aws-only, --post-destroy-only, and --keep-eks are mutually exclusive${NC}" >&2
     exit 1
 fi
+if [ -n "$TIER" ] && [ "$local_exclusive" -gt 0 ]; then
+    echo -e "${RED}Error: --tier is mutually exclusive with --aws-only, --post-destroy-only, and --keep-eks${NC}" >&2
+    exit 1
+fi
+# --tier 2 and --tier 3 are partial teardowns: the tiers below keep standing, so
+# their local state (terraform state, ACME cache, Vault credentials) must stay
+# consistent with what is still running. --tier 1 is the full nuke.
+TIER_PARTIAL=false
+if [ "$TIER" = 2 ] || [ "$TIER" = 3 ]; then TIER_PARTIAL=true; fi
 
 #-------------------------------------------------------------------------------
 # Region resolution (canonical contract: terraform.tfvars carries the literal
@@ -2111,6 +2136,80 @@ phase_verify_keep_eks() {
 }
 
 #===============================================================================
+# --tier N MODE — partial teardown: tier N and every tier above it
+#
+# Tier 3 = workloads root, tier 2 = services root (Vault + IVIA), tier 1 =
+# infrastructure root. Destroying a tier destroys everything above it, never the
+# other way round (TESTING-PLAYBOOK invariant 12). Only the terraform roots of the
+# torn-down tiers are destroyed; the tag-scoped AWS sweeps are deliberately NOT
+# reused here — they delete every workshop-tagged EBS volume and force-detach it,
+# which would take down the tiers that must keep standing.
+#===============================================================================
+# Resources a root's terraform state tracks. 0 when the root was never
+# initialized (nothing was ever applied from it) or its state is empty.
+_root_resource_count() {
+    local dir="$1" out
+    [ -d "${dir}/.terraform" ] || { echo 0; return 0; }
+    out=$(terraform -chdir="$dir" state list 2>/dev/null) || { echo 0; return 0; }
+    printf '%s\n' "$out" | grep -c . || true
+}
+
+# Pods and PVCs left in a namespace. A namespace that is gone counts as zero.
+_ns_leftovers() {
+    local ns="$1"
+    kubectl get namespace "$ns" &>/dev/null || { echo 0; return 0; }
+    kubectl get pods,pvc -n "$ns" --no-headers 2>/dev/null | grep -c . || true
+}
+
+phase_verify_tier() {
+    local n="$1" failed=0 cnt ns status
+    phase_header "Verify: tier ${n} and above are gone, the tiers below still stand"
+
+    if [ "$DRY_RUN" = true ]; then
+        print_info "[DRY-RUN] Would verify: tier ${n}+ terraform state empty and namespaces drained; lower tiers' state and the EKS cluster intact"
+        return 0
+    fi
+
+    # Gone: tier 3 always, tier 2 when n = 2.
+    cnt=$(_root_resource_count "$TIER3_DIR")
+    if [ "$cnt" -eq 0 ]; then print_success "Tier 3 (workloads): terraform state empty"
+    else print_error "Tier 3 (workloads): ${cnt} resource(s) still in terraform state"; failed=1; fi
+    for ns in uc1 banking-app; do
+        cnt=$(_ns_leftovers "$ns")
+        if [ "$cnt" -eq 0 ]; then print_success "Namespace ${ns}: no pods or PVCs left"
+        else print_error "Namespace ${ns}: ${cnt} pod(s)/PVC(s) still present"; failed=1; fi
+    done
+    if [ "$n" = 2 ]; then
+        cnt=$(_root_resource_count "$TIER2_DIR")
+        if [ "$cnt" -eq 0 ]; then print_success "Tier 2 (services): terraform state empty"
+        else print_error "Tier 2 (services): ${cnt} resource(s) still in terraform state"; failed=1; fi
+        for ns in vault verify-access; do
+            cnt=$(_ns_leftovers "$ns")
+            if [ "$cnt" -eq 0 ]; then print_success "Namespace ${ns}: no pods or PVCs left"
+            else print_error "Namespace ${ns}: ${cnt} pod(s)/PVC(s) still present"; failed=1; fi
+        done
+    fi
+
+    # Standing: the EKS cluster always; tier 2 when n = 3; tier 1 always.
+    status=$(aws eks describe-cluster --name "$DEFAULT_CLUSTER" --region "$REGION" \
+        --query 'cluster.status' --output text 2>/dev/null || echo "")
+    if [ "$status" = "ACTIVE" ]; then print_success "EKS cluster ${DEFAULT_CLUSTER}: ACTIVE"
+    else print_error "EKS cluster ${DEFAULT_CLUSTER}: status '${status:-not found}' — tier 1 must still stand"; failed=1; fi
+    cnt=$(_root_resource_count "$TIER1_DIR")
+    if [ "$cnt" -gt 0 ]; then print_success "Tier 1 (infrastructure): ${cnt} resource(s) still tracked"
+    else print_error "Tier 1 (infrastructure): terraform state is empty — tier 1 must still stand"; failed=1; fi
+    if [ "$n" = 3 ]; then
+        cnt=$(_root_resource_count "$TIER2_DIR")
+        if [ "$cnt" -gt 0 ]; then print_success "Tier 2 (services): ${cnt} resource(s) still tracked"
+        else print_error "Tier 2 (services): terraform state is empty — tier 2 must still stand"; failed=1; fi
+        cnt=$(kubectl get pods -n vault --no-headers 2>/dev/null | grep -c ' Running ' || true)
+        if [ "$cnt" -gt 0 ]; then print_success "Vault: ${cnt} pod(s) Running"
+        else print_error "Vault: no Running pods in namespace vault — tier 2 must still stand"; failed=1; fi
+    fi
+    return "$failed"
+}
+
+#===============================================================================
 # MAIN
 #===============================================================================
 echo ""
@@ -2187,6 +2286,43 @@ elif [ "$KEEP_EKS" = true ]; then
 
     # Step 5: Verify zero workshop residuals (EKS preserved)
     phase_verify_keep_eks || VERIFY_FAILED=true
+elif [ "$TIER_PARTIAL" = true ]; then
+    print_info "Mode: TIER ${TIER} (tier ${TIER} and every tier above it; the tiers below keep standing)"
+
+    # Sanity: tier 1 (the EKS cluster) must be live — it is what keeps standing, and
+    # the tier roots' kubernetes/helm providers dial it to uninstall their releases.
+    if ! aws eks describe-cluster --name "$DEFAULT_CLUSTER" --region "$REGION" &>/dev/null; then
+        print_error "EKS cluster $DEFAULT_CLUSTER not found — --tier ${TIER} requires a live tier 1 to keep standing."
+        print_error "For a full removal run teardown.sh with no --tier."
+        exit 1
+    fi
+    if [ "$DRY_RUN" != true ]; then
+        aws eks update-kubeconfig --name "$DEFAULT_CLUSTER" --region "$REGION" \
+            --alias "$DEFAULT_CLUSTER" >/dev/null 2>&1 || {
+            print_error "Could not update kubeconfig for $DEFAULT_CLUSTER"; exit 1
+        }
+        kubectl config use-context "$DEFAULT_CLUSTER" >/dev/null 2>&1 || true
+        print_success "Kubeconfig set to $DEFAULT_CLUSTER"
+    fi
+
+    step_header "Terraform destroy (tier ${TIER} and above, reverse order)..."
+    _destroy_root "Tier 3 (workloads)" "$TIER3_DIR"
+    if [ "$TIER" = 2 ]; then
+        # Vault must still be reachable for the native-resource cleanup, so it runs
+        # before the tier-2 destroy that tears Vault down.
+        cleanup_vault_native_resources
+        _destroy_root "Tier 2 (services)" "$TIER2_DIR"
+        # Helm leaves the Vault Raft StatefulSet's PVCs behind; the namespace is gone
+        # or about to be, so this only touches the torn-down tier.
+        step_header "Vault PVCs (Raft StatefulSet — Helm leaves these behind)"
+        if [ "$DRY_RUN" = true ]; then
+            print_info "[DRY-RUN] Would delete the PVCs left in namespace vault"
+        else
+            sweep_vault_pvcs || true
+        fi
+    fi
+
+    phase_verify_tier "$TIER" || VERIFY_FAILED=true
 else
     print_info "Mode: FULL (terraform destroy + AWS sweep)"
 
@@ -2214,7 +2350,9 @@ echo ""
 # deploy-workshop.sh Step 4 to skip re-issuance and bake a stale FQDN.
 acme_state="$REPO_ROOT/infrastructure/.acme-state"
 acme_rerun="$REPO_ROOT/infrastructure/.acme-rerun-marker"
-if [ "$DRY_RUN" = true ]; then
+if [ "$TIER" = 3 ]; then
+    : # --tier 3 leaves tier 2 (ACME-issued FQDN, Vault) standing — keep its local files
+elif [ "$DRY_RUN" = true ]; then
     [ -f "$acme_state" ] && print_info "[DRY-RUN] Would remove $acme_state"
     [ -f "$acme_rerun" ] && print_info "[DRY-RUN] Would remove $acme_rerun"
 else
@@ -2229,7 +2367,9 @@ fi
 # live — so the file must not outlive its server. Runs after the last reader
 # (cleanup_vault_native_resources).
 vault_init_file="${HOME}/vault-init.json"
-if [ "$DRY_RUN" = true ]; then
+if [ "$TIER" = 3 ]; then
+    : # --tier 3 leaves the Vault server standing — its credentials must stay
+elif [ "$DRY_RUN" = true ]; then
     [ -f "$vault_init_file" ] && print_info "[DRY-RUN] Would remove $vault_init_file"
 elif [ -f "$vault_init_file" ]; then
     rm -f "$vault_init_file"
@@ -2258,7 +2398,9 @@ _reset_local_state() {
     echo "$moved"
 }
 
-if [ "$DRY_RUN" = true ]; then
+if [ "$TIER_PARTIAL" = true ]; then
+    : # --tier 2/3 — the destroyed roots' state is empty and valid, and the roots below keep tracking what stands
+elif [ "$DRY_RUN" = true ]; then
     print_info "[DRY-RUN] Would archive the three roots' terraform.tfstate files"
 elif [ "$AWS_ONLY" = true ] || [ "$POST_DESTROY_ONLY" = true ] || [ "$KEEP_EKS" = true ]; then
     : # partial mode — the surviving infrastructure must stay tracked
