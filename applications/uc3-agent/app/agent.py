@@ -763,24 +763,15 @@ def _describe_token_exchange(claims: dict) -> str:
 # ---------------------------------------------------------------------------
 
 
-@tool
-def list_transactions() -> list:
-    """List the authenticated user's recent transactions (read-only).
+def _read_listing(authenticated_sub: str) -> list:
+    """The member's recent charges and the refunds issued against them, newest first.
 
-    Scoped to the verified id_token `sub` via JOIN on banking.accounts.user_sub.
-    The LLM has no input into the user-filter — identity flows from the
-    _AUTHENTICATED_SUB ContextVar set by main.py /chat.
-
-    Returns:
-        List of dicts with transaction details: id, account_id, amount,
-        description, transaction_type, merchant, category, created_at, account_type.
+    Charges come from banking.transactions and refunds from banking.refunds, both read
+    with the uc3-readonly credential and scoped to `authenticated_sub` through
+    banking.accounts.user_sub (plus row-level security). Every row carries `kind`:
+    'charge' (numbered by the card and the only kind a refund can be requested against) or
+    'refund' (shown, never numbered, never selectable).
     """
-    global _vault_client
-    if _vault_client is None:
-        raise RuntimeError("UC3 vault client not initialized")
-
-    authenticated_sub = _AUTHENTICATED_SUB.get()
-
     creds = _vault_client.get_readonly_credentials()
 
     logger.info(
@@ -805,7 +796,7 @@ def list_transactions() -> list:
                 )
                 cur.execute(
                     """
-                    SELECT t.id, t.account_id, t.amount::float,
+                    SELECT 'charge' AS kind, t.id, t.account_id, t.amount::float,
                            t.description, t.transaction_type, t.merchant,
                            t.category,
                            t.created_at AT TIME ZONE 'UTC' AS created_at,
@@ -818,17 +809,60 @@ def list_transactions() -> list:
                     """,
                     (authenticated_sub,),
                 )
-                rows = cur.fetchall()
+                charges = cur.fetchall()
+                cur.execute(
+                    """
+                    SELECT 'refund' AS kind, r.refund_id AS id, r.refund_id, r.account_id,
+                           r.transaction_id, r.amount::float, r.currency, r.approved_by,
+                           r.request_id,
+                           'refund' AS transaction_type, 'refund' AS category,
+                           t.description, t.merchant, t.amount::float AS charge_amount,
+                           r.created_at AT TIME ZONE 'UTC' AS created_at,
+                           a.account_type
+                    FROM banking.refunds r
+                    JOIN banking.accounts a ON a.id = r.account_id
+                    JOIN banking.transactions t ON t.id = r.transaction_id
+                    WHERE a.user_sub = %s
+                    ORDER BY r.created_at DESC
+                    LIMIT 20
+                    """,
+                    (authenticated_sub,),
+                )
+                refunds = cur.fetchall()
     except Exception as exc:
         logger.error("list_transactions_db_error: %s", str(exc))
         raise
 
     results = []
-    for row in rows:
+    for row in [*charges, *refunds]:
         r = dict(row)
         r["created_at"] = str(r.get("created_at", ""))
+        for key in ("id", "refund_id", "account_id", "transaction_id", "request_id"):
+            if r.get(key) is not None:
+                r[key] = str(r[key])
         results.append(r)
+    results.sort(key=lambda r: r["created_at"], reverse=True)
     return results
+
+
+@tool
+def list_transactions() -> list:
+    """List the authenticated user's recent transactions and the refunds issued against them (read-only).
+
+    Scoped to the verified id_token `sub` via JOIN on banking.accounts.user_sub.
+    The LLM has no input into the user-filter — identity flows from the
+    _AUTHENTICATED_SUB ContextVar set by main.py /chat.
+
+    Returns:
+        List of dicts, newest first. Every dict has `kind`: 'charge' or 'refund'. Charges carry
+        id, account_id, amount, description, transaction_type, merchant, category, created_at,
+        account_type. Refund rows describe a refund already issued; they are not transactions a
+        refund can be requested for.
+    """
+    global _vault_client
+    if _vault_client is None:
+        raise RuntimeError("UC3 vault client not initialized")
+    return _read_listing(_AUTHENTICATED_SUB.get())
 
 
 @tool(context=True)
@@ -1008,6 +1042,32 @@ def initiate_refund(
         "details": rar_desc,
         "message": "An approval request was pushed to the user's IBM Verify app.",
     }
+
+
+def _emit_listing_refresh(authenticated_sub: str, request_id: str, refund_id: str) -> None:
+    """Send the member's list, read again, on the turn stream once a refund has been written.
+
+    The banking UI redraws the transaction list the member already has open from this
+    event, so the new refund row appears with no further question. It is reported as a
+    `list_transactions` tool call marked `args.refresh`: the browser updates the open list
+    with it and draws no card of its own. It runs inside the same verified turn as the
+    write, with the same read-only credential `list_transactions` uses, and it is
+    best-effort: the refund is already committed, so a failure here is logged and the
+    refund result is returned unchanged.
+    """
+    tool_call_id = f"refresh-{refund_id}"
+    try:
+        activity.emit(
+            "tool_call", toolCallId=tool_call_id, name="list_transactions",
+            status="in_progress", args={"refresh": True}, requestId=request_id,
+        )
+        rows = _read_listing(authenticated_sub)
+        activity.emit(
+            "tool_call", toolCallId=tool_call_id, name="list_transactions",
+            status="success", args={"refresh": True}, result=rows, requestId=request_id,
+        )
+    except Exception as exc:  # noqa: BLE001 — the refund is committed; never fail it over a redraw
+        logger.warning("uc3_listing_refresh_failed", extra={"error_type": type(exc).__name__, "request_id": request_id})
 
 
 @tool(context=True)
@@ -1390,6 +1450,8 @@ def complete_refund(auth_req_id: str, request_id: str, tool_context: ToolContext
         },
     )
 
+    _emit_listing_refresh(authenticated_sub, request_id, refund_id)
+
     return {
         "refund_id": refund_id,
         "request_id": request_id,
@@ -1556,7 +1618,9 @@ def _listing_rows(tool_result: dict) -> list | None:
         return None
     if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
         return None
-    return rows
+    # Only charges are numbered. A refund row is shown on the card but is never a row a
+    # person can pick; a row with no `kind` (a listing from before refunds were shown) is a charge.
+    return [row for row in rows if row.get("kind", "charge") == "charge"]
 
 
 def _terms_refusal(tool_result: dict) -> str | None:
@@ -1818,8 +1882,9 @@ def build_uc3_agent(vault_client=None, session_id: str = "default") -> Agent:
         "3. After the first list_transactions call of a conversation, the app itself asks the user\n"
         "   which transaction number they want to refund. If you call list_transactions again\n"
         "   later, do not list the transactions in your reply either; go on with the user's request.\n"
-        "   Transaction number N is the Nth transaction in the list_transactions result, in the\n"
-        "   order it was returned.\n"
+        "   Transaction number N is the Nth row whose kind is 'charge' in the list_transactions\n"
+        "   result, in the order it was returned. Rows whose kind is 'refund' are refunds already\n"
+        "   issued: they are not numbered and cannot be refunded.\n"
         "4. When the user selects a number, confirm the transaction details and ask 'Shall I proceed?'\n"
         "   When a number the user sends selects a transaction, the app attaches that transaction\n"
         "   to their message; confirm that transaction.\n"

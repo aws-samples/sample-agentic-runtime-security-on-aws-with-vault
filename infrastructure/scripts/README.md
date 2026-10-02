@@ -148,6 +148,8 @@ Single nuke command — wipes everything the workshop provisioned.
 ./teardown.sh                    # Full: terraform destroy + AWS sweep
 ./teardown.sh --aws-only         # Just AWS resources (K8s drain + tag-scoped sweep)
 ./teardown.sh --post-destroy-only  # Skip terraform destroy, run full orphan sweep
+./teardown.sh --tier 3           # Workloads only; tiers 1 and 2 keep standing
+./teardown.sh --tier 2           # Workloads, Vault native resources, then services; tier 1 keeps standing
 ./teardown.sh --dry-run          # Preview without executing
 ./teardown.sh --help             # Usage
 ```
@@ -155,6 +157,8 @@ Single nuke command — wipes everything the workshop provisioned.
 Discovery: `Workshop=agentic-runtime-security` tag + the well-known names this workshop uses (cluster `agentic-runtime-usw2`, S3 buckets prefixed `workshop-kb-corpus`, Glue DB `workshop_logs`, Athena workgroup `workshop`, CW log groups `/workshop/*`, RDS instance `<cluster>-pg`).
 
 Sweeps EKS pod-identity associations, node groups, cluster, RDS, AOSS, S3, Bedrock KB, Glue/Athena, CW log groups, KMS, IAM roles, EKS cluster IAM OIDC, and per-VPC: ELBs, endpoints, ENIs, SGs, NAT/EIP/IGW/subnets/RTs/VPC.
+
+**Partial teardown (`--tier N`).** Removes tier N and every tier above it, never the reverse: `--tier 3` removes the workloads root; `--tier 2` removes the workloads, the Vault native resources, then the services root and the Vault PVCs; `--tier 1` is the full nuke. Redeploy with `deploy-workshop.sh --tier N` and every tier above it. `N` must be 1, 2 or 3, and the flag is mutually exclusive with `--aws-only`, `--post-destroy-only` and `--keep-eks`; it works with `--dry-run` and `--yes`. It destroys only the torn-down tiers' terraform roots and does not run the tag-scoped AWS sweeps, which would delete the volumes of the tiers that must keep standing. It ends by checking that the torn-down tiers' terraform state and namespaces are empty and that the tiers below still stand, and exits 1 if not. `--tier 3` leaves `~/vault-init.json` and the ACME cache (`infrastructure/.acme-state`) alone; `--tier 2` removes them, since they belong to the Vault server and the ACME-issued FQDN it destroys. Neither partial tier archives terraform state.
 
 **Local state.** A full nuke that verifies zero residuals also archives the three roots' `terraform.tfstate` files as `terraform.tfstate.pre-teardown-<epoch>`, so the next deploy starts from empty state exactly like an attendee's fresh clone. Without this, tier-1 state keeps `helm_release` entries whose provider dials the destroyed cluster and the next refresh dies on `Kubernetes cluster unreachable` before it can plan. The partial modes (`--keep-eks`, `--aws-only`, `--post-destroy-only`) never archive — the infrastructure they deliberately keep alive must stay tracked — and neither does a run whose verification found residuals, since that state is the only record of them.
 

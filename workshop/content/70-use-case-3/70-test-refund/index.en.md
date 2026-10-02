@@ -35,7 +35,7 @@ Tap **Approve** in the IBM Verify app, then type `I approved` in the chat.
 
 **Why:** The chat's reply is the agent reporting that the refund was written. If it says `Status: approved`, a credential was issued, used once, and expired — all inside the time it took you to read the reply.
 
-The chat reports the refund as approved, with the details shown below. The refund is stored in its own table, separate from your transactions, so the transaction list does not gain a new row. You read the refund row itself on the [Bypass Test](../73-bypass-test/) page.
+The chat reports the refund as approved, with the details shown below. The refund is stored in its own table, separate from your transactions. The transaction list in the chat redraws by itself and shows it as a green **Refund** row, with a dash instead of a number, so the numbers still count charges only. Click **Refund** to open the stored record. You also read the refund row itself on the [Bypass Test](../73-bypass-test/) page.
 
 Sample output:
 

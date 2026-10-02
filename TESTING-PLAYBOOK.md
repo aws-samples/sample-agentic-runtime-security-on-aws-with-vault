@@ -248,7 +248,7 @@ At an event, never — Workshop Studio owns the account. A content pass or chang
 bash infrastructure/scripts/teardown.sh --yes
 ```
 
-This removes all three tiers — `teardown.sh` has no `--tier N` option yet. Because every self-paced run ends with **Cleanup**, Phase 0 normally finds nothing, and its job is to prove that: `aws eks list-clusters` empty, no workshop S3 buckets, no workshop ACM cert, no orphan ALB.
+This removes all three tiers; `teardown.sh --tier N` removes tier N and every tier above it when only part of the environment must be redone (invariant 12). Because every self-paced run ends with **Cleanup**, Phase 0 normally finds nothing, and its job is to prove that: `aws eks list-clusters` empty, no workshop S3 buckets, no workshop ACM cert, no orphan ALB.
 
 Wipe all **four** Terraform roots — `infrastructure`, `infrastructure/services`, `infrastructure/workloads`, `infrastructure/vault-config`:
 

@@ -37,7 +37,7 @@
 	import { countEntries } from '$lib/agent-log';
 	import { createTurnLog } from '$lib/turn-events.svelte';
 	import { toolCallsOf } from '$lib/accounts-turn';
-	import { answerCardsOf } from '$lib/answer-cards';
+	import { answerCardsOf, listRefreshOf } from '$lib/answer-cards';
 
 	let { data }: { data: PageData } = $props();
 
@@ -159,7 +159,14 @@
 		const turnId = turn.msgs.find((msg) => msg.turnId)?.turnId;
 		const logTurn = turnId ? log.turns.find((t) => t.id === turnId) : undefined;
 		if (!logTurn) return null;
-		return { tools: toolCallsOf(logTurn.events, logTurn.done), cards: answerCardsOf(logTurn.events) };
+		// A list the member has open is redrawn from the list the agent re-sent when a later turn issued
+		// a refund, so the new Refund row appears with no further question.
+		let refreshed = null;
+		for (const later of log.turns.slice(log.turns.indexOf(logTurn) + 1)) refreshed = listRefreshOf(later.events) ?? refreshed;
+		const cards = answerCardsOf(logTurn.events).map((card) =>
+			refreshed && card.kind === 'list_transactions' ? { ...card, rows: refreshed } : card
+		);
+		return { tools: toolCallsOf(logTurn.events, logTurn.done), cards };
 	}
 
 	function extractConsent(text: string, agent: AgentName) {
