@@ -1,6 +1,6 @@
 # AWS Workshop Studio v2 manifest for the Agentic Runtime Security on AWS workshop.
 # Schema: https://docs.aws.amazon.com/workshop-studio/latest/
-# rebuild marker: 2026-09-30 (PR#92 psql proof blocks + Validate Vault fixes)
+# rebuild marker: 2026-10-03 (PR#102 #103 + sslip.io cert fallback)
 
 version: 2.0
 
