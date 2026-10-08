@@ -19,7 +19,7 @@
   <!-- IVIA row 2 — OAuth Auth Code + PKCE -->
   <rect x="70" y="325" width="620" height="110" rx="8" fill="#161b22" stroke="#3b82f6" stroke-width="1.5"/>
   <text x="380" y="360" text-anchor="middle" font-size="17" font-weight="600" fill="#e6edf3">OAuth: Authorization Code + PKCE</text>
-  <text x="380" y="395" text-anchor="middle" font-size="13" fill="#8b949e">scopes (read:own, write:own), code_verifier</text>
+  <text x="380" y="395" text-anchor="middle" font-size="13" fill="#8b949e">require_pkce, code_verifier, no refresh grant</text>
 
   <!-- IVIA row 3 — CIBA -->
   <rect x="70" y="450" width="620" height="110" rx="8" fill="#161b22" stroke="#3b82f6" stroke-width="1.5"/>
@@ -29,7 +29,7 @@
   <!-- IVIA row 4 — RAR authorization_details -->
   <rect x="70" y="575" width="620" height="110" rx="8" fill="#161b22" stroke="#3b82f6" stroke-width="1.5"/>
   <text x="380" y="610" text-anchor="middle" font-size="17" font-weight="600" fill="#e6edf3">RAR authorization_details</text>
-  <text x="380" y="645" text-anchor="middle" font-size="13" fill="#8b949e">RFC 9396 fine-grained intent (refund, amount, order)</text>
+  <text x="380" y="645" text-anchor="middle" font-size="13" fill="#8b949e">RFC 9396 intent (refund, amount, transaction)</text>
 
   <!-- IVIA row 5 — JWT signing key issuance -->
   <rect x="70" y="700" width="620" height="110" rx="8" fill="#161b22" stroke="#3b82f6" stroke-width="1.5"/>
@@ -49,22 +49,22 @@
   <!-- Vault row 2 — OAuth resource server (bound to Verify OIDC) -->
   <rect x="850" y="325" width="620" height="110" rx="8" fill="#161b22" stroke="#f59e0b" stroke-width="1.5"/>
   <text x="1160" y="360" text-anchor="middle" font-size="17" font-weight="600" fill="#e6edf3">OAuth resource server (Verify OIDC)</text>
-  <text x="1160" y="395" text-anchor="middle" font-size="13" fill="#8b949e">jwks_url, act.sub via Agent Registry, vault:path_access RAR</text>
+  <text x="1160" y="395" text-anchor="middle" font-size="13" fill="#8b949e">JWKS, act.sub → Agent Registry ceiling, path RAR</text>
 
   <!-- Vault row 3 — Postgres database secrets engine -->
   <rect x="850" y="450" width="620" height="110" rx="8" fill="#161b22" stroke="#f59e0b" stroke-width="1.5"/>
   <text x="1160" y="485" text-anchor="middle" font-size="17" font-weight="600" fill="#e6edf3">Postgres database secrets engine</text>
-  <text x="1160" y="520" text-anchor="middle" font-size="13" fill="#8b949e">creation_statements, revocation_statements, TTL=15m</text>
+  <text x="1160" y="520" text-anchor="middle" font-size="13" fill="#8b949e">creation / revocation statements, TTL 5–15m</text>
 
   <!-- Vault row 4 — AWS secrets engine (STS) -->
   <rect x="850" y="575" width="620" height="110" rx="8" fill="#161b22" stroke="#f59e0b" stroke-width="1.5"/>
   <text x="1160" y="610" text-anchor="middle" font-size="17" font-weight="600" fill="#e6edf3">AWS secrets engine (STS)</text>
-  <text x="1160" y="645" text-anchor="middle" font-size="13" fill="#8b949e">assumed_role, scoped Bedrock policies, TTL=15m</text>
+  <text x="1160" y="645" text-anchor="middle" font-size="13" fill="#8b949e">assumed_role, scoped Bedrock policy, ephemeral</text>
 
   <!-- Vault row 5 — audit device → fluent-bit → CloudWatch -->
   <rect x="850" y="700" width="620" height="110" rx="8" fill="#161b22" stroke="#f59e0b" stroke-width="1.5"/>
   <text x="1160" y="735" text-anchor="middle" font-size="17" font-weight="600" fill="#e6edf3">audit device → fluent-bit → CloudWatch</text>
-  <text x="1160" y="770" text-anchor="middle" font-size="13" fill="#8b949e">JSON-line audit trail, request_id propagated</text>
+  <text x="1160" y="770" text-anchor="middle" font-size="13" fill="#8b949e">JSON audit trail, X-Correlation-Id = request_id</text>
 
   <!-- ============================== TRUST ARROW (IVIA → Vault, bridges row 2) ============================== -->
   <defs>
@@ -76,8 +76,8 @@
   <!-- Connector arrow: from right edge of IVIA row 2 to left edge of Vault row 2, at row-2 vertical center (y=380) -->
   <line x1="690" y1="380" x2="850" y2="380" stroke="#f59e0b" stroke-width="3" marker-end="url(#arrowhead)"/>
 
-  <!-- Top label above arrow: OIDC discovery URL trust -->
-  <text x="770" y="360" text-anchor="middle" font-size="13" font-weight="600" fill="#fbbf24">OIDC discovery URL trust</text>
+  <!-- Top label above arrow: JWKS trust -->
+  <text x="770" y="360" text-anchor="middle" font-size="13" font-weight="600" fill="#fbbf24">JWKS trust (issuer_id)</text>
   <!-- Bottom label below arrow: JWT signing key handoff -->
   <text x="770" y="406" text-anchor="middle" font-size="12" fill="#f59e0b" font-style="italic">JWT signing key handoff</text>
 
