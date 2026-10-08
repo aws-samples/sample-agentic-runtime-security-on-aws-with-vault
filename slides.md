@@ -48,7 +48,7 @@ revealOptions:
   <img src="assets/aws-logo.png" style="width: 130px;" alt="AWS" />
 </div>
 
-**Presenter:** _<presenter name placeholder>_
+**Presenter:** Oscar Medina
 
 Note:
 This is a real, deployable reference implementation, not a concept deck. Thesis in one line: no agent in this system ever holds a standing database grant or a static cloud key — every credential is brokered just-in-time, scoped to the exact action, and expires on a short TTL. IBM Verify Identity Access (IVIA) owns user identity; HashiCorp Vault owns workload identity and credential vending; AWS-native services (EKS, RDS, Bedrock, Athena, KMS) are the runtime and the enforcement-and-audit surface. Three use cases layer strictly: UC1 workload-only, UC2 user-scoped, UC3 privileged + delegated + audited. UC3 is where we'll spend most of our time.
@@ -484,9 +484,9 @@ This deck's patterns — verifiable agent identity, JIT short-lived scoped crede
 
 ### Q&A
 
-**Workshop URL:** _<workshop URL placeholder>_
+**Workshop URL:** [catalog.us-east-1.prod.workshops.aws/workshops/9d6a0b3d-…](https://catalog.us-east-1.prod.workshops.aws/workshops/9d6a0b3d-9ea2-47a2-8ca4-40168cadd531/en-US)
 
-**Repo:** _<repo URL placeholder>_
+**Repo:** [github.com/aws-samples/sample-agentic-runtime-security-on-aws-with-vault](https://github.com/aws-samples/sample-agentic-runtime-security-on-aws-with-vault)
 
 Note:
 Three takeaways. One — every agent needs a verifiable identity traceable to a signing authority, never a shared secret; UC1 proves it with K8s SA + TokenReview. Two — every credential must be JIT, scoped, and short-lived, with the privileged path additionally gated on delegated claims and a tested bypass; UC3's 5-minute write role behind RFC 8693 + 9396 is the model. Three — audit evidence is only useful if it correlates across trust planes; one Athena view ties user approval, agent identity, and the database write together. IBM Verify + HashiCorp Vault on AWS-native services delivers all three — and you just deployed it.
