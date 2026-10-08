@@ -38,6 +38,18 @@ revealOptions:
 .reveal section .tight li { margin: 2px 0; }
 .reveal .slides section { overflow: hidden; }
 .reveal section pre { max-width: 100%; }
+/* PDF export only: theme-toggle.js shows the brand gradients as fixed overlays ABOVE
+   the content, on the first and last slide only. In print, fixed elements repeat on
+   every page, so the stripes drew over text on all 20 pages. Hide the overlays and
+   paint the same gradients as a page background (behind the text) on the first and
+   last pages only, matching the live deck. */
+html.print-pdf img[src$="brand_right_gradient.png"],
+html.print-pdf img[src$="brand_left_gradient.png"] { display: none !important; }
+html.print-pdf .reveal .slides .pdf-page:first-child,
+html.print-pdf .reveal .slides .pdf-page:last-child {
+  background: url(assets/brand_right_gradient.png) right top / auto 100% no-repeat,
+              url(assets/brand_left_gradient.png) left bottom / auto 100% no-repeat !important;
+}
 </style>
 
 # Agentic Runtime Security on AWS
@@ -93,7 +105,7 @@ This table is the whole thesis made concrete, and the numbers are exact from `va
 
 ## Two brokers, one OIDC seam
 
-<img src="assets/verify-vault-split.svg" style="max-height: 360px;" />
+<img src="assets/verify-vault-split.svg" style="max-height: 250px;" />
 
 **IBM Verify** brokers human identity — OAuth/OIDC, PKCE, CIBA. **HashiCorp Vault** brokers workload identity & credentials — K8s auth, OAuth resource server, dynamic DB roles, STS. They meet at exactly **one** seam: Vault's **OAuth resource server** profile trusts IVIA's JWKS and pins `issuer_id`, so an IVIA-minted JWT authorizes Vault **directly** via `X-Vault-Token`.
 
